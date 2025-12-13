@@ -456,7 +456,7 @@ app.post('/api/ai/parse', async (req, res) => {
 
 // Catch-all handler for SPA in production - must be after API routes
 if (process.env.NODE_ENV === 'production') {
-    app.get('*', (req, res) => {
+    app.get('/*', (req, res) => {
         res.sendFile(path.join(__dirname, '../client/dist/index.html'));
     });
 }
