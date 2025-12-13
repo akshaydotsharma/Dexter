@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-slate-100 text-gray-900 antialiased selection:bg-indigo-500/30;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  @keyframes border-spin {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  .animate-border-spin {
+    background-size: 200% 200%;
+    animation: border-spin 3s ease infinite;
+  }
+}

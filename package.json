@@ -1,0 +1,14 @@
+{
+    "name": "personal-dashboard-root",
+    "version": "1.0.0",
+    "scripts": {
+        "install:all": "npm install && npm install --prefix client && npm install --prefix server",
+        "start": "npx concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+        "dev": "npm start",
+        "build": "npm install --prefix client && npm install --prefix server && npm run build --prefix client",
+        "start:prod": "cd server && NODE_ENV=production node index.js"
+    },
+    "devDependencies": {
+        "concurrently": "^9.1.2"
+    }
+}
