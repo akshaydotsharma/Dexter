@@ -74,7 +74,9 @@ function App() {
         );
       case 'todos':
         return (
-          <div className="max-w-3xl mx-auto w-full h-[calc(100vh-10rem)]">
+          <div
+            className="max-w-3xl mx-auto w-full h-[calc(100vh-12rem)] md:h-[calc(100vh-10rem)]"
+          >
             <TodoWidget fullHeight />
           </div>
         );
@@ -86,13 +88,17 @@ function App() {
         );
       case 'notes':
         return (
-          <div className="max-w-3xl mx-auto w-full h-[calc(100vh-10rem)]">
+          <div
+            className="max-w-3xl mx-auto w-full h-[calc(100vh-12rem)] md:h-[calc(100vh-10rem)]"
+          >
             <NotesWidget fullHeight />
           </div>
         );
       case 'lists':
         return (
-          <div className="max-w-3xl mx-auto w-full h-[calc(100vh-10rem)]">
+          <div
+            className="max-w-3xl mx-auto w-full h-[calc(100vh-12rem)] md:h-[calc(100vh-10rem)]"
+          >
             <ListsWidget fullHeight />
           </div>
         );
@@ -190,7 +196,7 @@ function App() {
           </button>
         )}
 
-        <div className="p-4 pt-20 md:p-8">
+        <div className="p-4 pt-20 pb-20 md:p-8 md:pb-8">
           {/* Desktop Header - hidden on mobile */}
           {currentView !== 'chatbot' && (
             <header className="hidden md:block mb-8">
