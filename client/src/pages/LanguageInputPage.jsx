@@ -208,11 +208,11 @@ function LanguageInputPage() {
                 )}
 
                 {/* Input Area - with dynamic padding for mobile browser nav bars */}
-                {/* Mobile: 5rem (80px) base padding for browser nav bar + dynamic offset */}
+                {/* Mobile: 7rem (112px) base padding for browser nav bar + dynamic offset */}
                 {/* Desktop: just 1rem base + dynamic offset */}
                 <div
                     className="z-20 p-4 w-full transition-all duration-500"
-                    style={{ paddingBottom: isMobile ? `calc(5rem + ${bottomOffset}px)` : `calc(1rem + ${bottomOffset}px)` }}
+                    style={{ paddingBottom: isMobile ? `calc(7rem + ${bottomOffset}px)` : `calc(1rem + ${bottomOffset}px)` }}
                 >
                     {/* Helper text - above input on mobile */}
                     {!hasStarted && (
