@@ -501,9 +501,9 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
         <Card
             title="Notes"
             hideTitle={fullHeight}
-            className={`flex flex-col overflow-hidden ${fullHeight ? 'h-full' : 'max-h-[515px]'}`}
+            className={`flex flex-col ${fullHeight ? 'h-full' : 'max-h-[515px]'}`}
         >
-            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+            <div className="flex flex-col flex-1 min-h-0">
                 {loading ? (
                     <div className="flex justify-center items-center py-10 text-indigo-500">
                         <Loader2 className="animate-spin" />
@@ -511,11 +511,11 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
                 ) : (
                     <>
                         {/* Desktop View - Two columns side by side */}
-                        <div className="hidden md:flex gap-4 flex-1 min-h-0 overflow-hidden">
-                            <div className="flex flex-col w-1/3 border-r border-slate-100 pr-4 min-h-0 overflow-hidden">
+                        <div className="hidden md:flex gap-4 flex-1 min-h-0">
+                            <div className="flex flex-col w-1/3 border-r border-slate-100 pr-4 min-h-0">
                                 {renderFoldersPanel(false)}
                             </div>
-                            <div className="flex flex-col w-2/3 min-h-0 overflow-hidden">
+                            <div className="flex flex-col w-2/3 min-h-0">
                                 {renderNotesPanel(false)}
                             </div>
                         </div>
@@ -527,11 +527,11 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
                                 style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
                             >
                                 {/* Notes Panel - Mobile (shown first/default) */}
-                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0 overflow-hidden">
+                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
                                     {renderNotesPanel(true)}
                                 </div>
                                 {/* Folders Panel - Mobile */}
-                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0 overflow-hidden">
+                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
                                     {renderFoldersPanel(true)}
                                 </div>
                             </div>
