@@ -494,9 +494,11 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
         </div>
     );
 
-    // Determine height class: fullHeight uses h-full, maxHeightPx uses inline style, otherwise max-h-[515px]
-    const heightClass = fullHeight ? 'h-full' : (!maxHeightPx ? 'max-h-[515px]' : '');
-    const cardStyle = maxHeightPx && !fullHeight ? { height: maxHeightPx } : {};
+    // Determine height: fullHeight uses h-full, maxHeightPx uses inline style (desktop only), otherwise max-h-[515px]
+    // On mobile, always use max-h-[515px] even if maxHeightPx is provided
+    const useMaxHeightPx = maxHeightPx && !fullHeight && !isMobileView;
+    const heightClass = fullHeight ? 'h-full' : (useMaxHeightPx ? '' : 'max-h-[515px]');
+    const cardStyle = useMaxHeightPx ? { height: maxHeightPx } : {};
 
     return (
         <Card
