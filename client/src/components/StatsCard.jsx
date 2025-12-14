@@ -1,11 +1,11 @@
 import { TrendingUp, TrendingDown } from 'lucide-react';
 
-export default function StatsCard({ title, value, trend, icon: Icon }) {
+export default function StatsCard({ title, value, trend, icon: Icon, className = '' }) {
     const isPositiveTrend = trend && trend > 0;
     const isNegativeTrend = trend && trend < 0;
 
     return (
-        <div className="group relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-indigo-100 hover:shadow-xl hover:border-indigo-200 transition-all duration-300 hover:-translate-y-1">
+        <div className={`group relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-indigo-100 hover:shadow-xl hover:border-indigo-200 transition-all duration-300 hover:-translate-y-1 ${className}`}>
             {/* Gradient overlay on hover */}
             <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
 

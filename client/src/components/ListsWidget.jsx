@@ -26,13 +26,15 @@ export default function ListsWidget({ fullHeight = false }) {
         try {
             const { data } = await getLists();
             // Ensure items is parsed if it comes as string (though pg usually parses jsonb)
-            const parsed = data.map(l => ({
+            const dataArray = Array.isArray(data) ? data : [];
+            const parsed = dataArray.map(l => ({
                 ...l,
                 items: typeof l.items === 'string' ? JSON.parse(l.items) : l.items
             }));
             setLists(parsed);
         } catch (error) {
             console.error('Error fetching lists:', error);
+            setLists([]);
         } finally {
             setLoading(false);
         }

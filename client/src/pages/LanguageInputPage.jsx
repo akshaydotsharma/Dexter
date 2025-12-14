@@ -120,28 +120,31 @@ function LanguageInputPage() {
     return (
         <div className="flex flex-col h-full bg-slate-50 relative overflow-hidden transition-all duration-500">
             {/* Content Container */}
-            <div className={`flex flex-col w-full h-full transition-all duration-500 ${hasStarted ? 'justify-between' : 'justify-center items-center'}`}>
+            {/* Mobile: input always at bottom (justify-between), Desktop: centered when not started */}
+            <div className={`flex flex-col w-full h-full transition-all duration-500 justify-between ${!hasStarted ? 'md:justify-center md:items-center' : ''}`}>
 
                 {/* Hero Text (Only visible when no chat logs) */}
                 {!hasStarted && (
-                    <div className="text-center space-y-6 mb-10 animate-in fade-in zoom-in duration-500 flex flex-col items-center">
-                        <div className="relative group p-4">
-                            <div className="absolute inset-0 bg-indigo-100 rounded-full blur-xl opacity-50 group-hover:opacity-100 animate-pulse transition-opacity" />
-                            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-indigo-500 relative z-10 animate-bounce" style={{ animationDuration: '3s' }}>
-                                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                                <path d="M8 10h.01" />
-                                <path d="M12 10h.01" />
-                                <path d="M16 10h.01" />
-                            </svg>
-                        </div>
+                    <div className="flex-1 md:flex-initial flex items-center justify-center">
+                        <div className="text-center space-y-6 animate-in fade-in zoom-in duration-500 flex flex-col items-center px-8 md:px-4 md:mb-10">
+                            <div className="relative group p-4">
+                                <div className="absolute inset-0 bg-indigo-100 rounded-full blur-xl opacity-50 group-hover:opacity-100 animate-pulse transition-opacity" />
+                                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-indigo-500 relative z-10 animate-bounce" style={{ animationDuration: '3s' }}>
+                                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                                    <path d="M8 10h.01" />
+                                    <path d="M12 10h.01" />
+                                    <path d="M16 10h.01" />
+                                </svg>
+                            </div>
 
-                        <div className="space-y-2">
-                            <h1 className="text-3xl font-semibold text-slate-700 tracking-tight">
-                                What can I help you organize?
-                            </h1>
-                            <p className="text-base text-slate-400 max-w-lg mx-auto font-medium">
-                                Try saying "Remind me to call John tomorrow" or "Create a grocery list with milk and eggs".
-                            </p>
+                            <div className="space-y-2">
+                                <h1 className="text-3xl font-semibold text-slate-700 tracking-tight">
+                                    What can I help you organize?
+                                </h1>
+                                <p className="hidden md:block text-base text-slate-400 max-w-lg mx-auto font-medium">
+                                    Try saying "Remind me to call John tomorrow" or "Create a grocery list with milk and eggs".
+                                </p>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -182,22 +185,22 @@ function LanguageInputPage() {
                 {/* Input Area */}
                 <div className={`z-20 p-4 w-full transition-all duration-500 ${hasStarted ? 'pb-8 md:pb-10' : ''}`}>
                     <div className="max-w-3xl mx-auto relative group">
-                        {/* The Shiny Gradient Border */}
-                        <div className="absolute -inset-[3px] rounded-2xl bg-linear-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-70 blur-sm group-hover:opacity-100 transition duration-500 animate-border-spin" />
+                        {/* The Shiny Gradient Border - hidden on mobile */}
+                        <div className="hidden md:block absolute -inset-[3px] rounded-2xl bg-linear-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-70 blur-sm group-hover:opacity-100 transition duration-500 animate-border-spin" />
 
                         {/* The Actual Input Container */}
-                        <div className="relative bg-white rounded-xl flex items-center p-2 shadow-xl">
+                        <div className="relative bg-white rounded-full md:rounded-xl flex items-center p-2 border border-slate-200 md:border-0 md:shadow-xl">
                             <textarea
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={handleKeyDown}
                                 placeholder="Add a new Task, Note or to do"
-                                className="flex-1 max-h-32 min-h-[56px] py-3 px-4 bg-transparent outline-none text-slate-800 placeholder:text-slate-400 resize-none font-medium"
+                                className="flex-1 max-h-32 min-h-[40px] md:min-h-[56px] py-1 md:py-3 px-4 md:px-4 bg-transparent outline-none text-slate-800 placeholder:text-slate-400 resize-none font-medium text-base md:text-base leading-[38px] md:leading-normal"
                                 rows={1}
                             />
 
                             {/* Actions */}
-                            <div className="flex items-center gap-2 pr-2">
+                            <div className="flex items-center gap-1 md:gap-2 pr-1 md:pr-2">
                                 <button
                                     onClick={toggleListening}
                                     className={`p-2 rounded-full transition-colors ${isListening
@@ -227,6 +230,12 @@ function LanguageInputPage() {
                             </div>
                         </div>
                     </div>
+                    {/* Helper text - only on mobile */}
+                    {!hasStarted && (
+                        <p className="md:hidden text-xs text-slate-400 text-center mt-3 px-4">
+                            Try "Remind me to call Mom tomorrow" or "Create a shopping list with milk and eggs"
+                        </p>
+                    )}
                 </div>
             </div>
         </div>

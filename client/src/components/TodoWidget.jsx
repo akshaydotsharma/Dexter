@@ -135,9 +135,10 @@ export default function TodoWidget({ fullHeight = false }) {
     const fetchTodos = async () => {
         try {
             const { data } = await getTodos();
-            setTodos(data);
+            setTodos(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching todos:', error);
+            setTodos([]);
         } finally {
             setLoading(false);
         }
@@ -1117,27 +1118,24 @@ export default function TodoWidget({ fullHeight = false }) {
                         </div>
                     </div>
 
-                    <div className="text-xs text-gray-500 flex items-center justify-between pt-1">
-                        <span>Press <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-xs font-mono">Enter</kbd> to add or <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-xs font-mono">Esc</kbd> to cancel</span>
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setIsAddFormExpanded(false);
-                                    resetForm();
-                                }}
-                                className="text-xs px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors text-slate-600"
-                            >
-                                Cancel
-                            </button>
-                            <Button
-                                type="submit"
-                                variant="primary"
-                                className="text-xs px-3 py-1"
-                            >
-                                Add
-                            </Button>
-                        </div>
+                    <div className="flex items-center gap-2 pt-1">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setIsAddFormExpanded(false);
+                                resetForm();
+                            }}
+                            className="flex-1 text-sm py-2 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors text-slate-600"
+                        >
+                            Cancel
+                        </button>
+                        <Button
+                            type="submit"
+                            variant="primary"
+                            className="flex-1 text-sm py-2"
+                        >
+                            Add
+                        </Button>
                     </div>
                 </div>
             )}

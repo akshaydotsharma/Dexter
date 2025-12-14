@@ -142,9 +142,10 @@ export default function TodoWidgetV2() {
     const fetchTodos = async () => {
         try {
             const { data } = await getTodos();
-            setTodos(data);
+            setTodos(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching todos:', error);
+            setTodos([]);
         } finally {
             setLoading(false);
         }

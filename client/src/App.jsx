@@ -15,6 +15,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState('chatbot');
   const [isChatPopoverOpen, setIsChatPopoverOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [stats, setStats] = useState({
     todos: { total: 0, trend: 0 },
     notes: { total: 0, trend: 0 },
@@ -61,13 +62,13 @@ function App() {
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-indigo-600 bg-slate-50">Loading...</div>;
 
-  const visibleWidgets = config?.layout_preference?.widgets || [];
+  const visibleWidgets = config?.layout_preference?.widgets || ["todos", "notes", "lists"];
 
   const renderContent = () => {
     switch (currentView) {
       case 'chatbot':
         return (
-          <div className="max-w-4xl mx-auto w-full h-[calc(100vh-8rem)]">
+          <div className="max-w-4xl mx-auto w-full h-[calc(100vh-5rem)] md:h-[calc(100vh-8rem)]">
             <LanguageInputPage />
           </div>
         );
@@ -100,21 +101,22 @@ function App() {
         return (
           <div className="container mx-auto px-4 max-w-7xl">
             {/* Stats Tiles Section */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-8">
               <StatsCard
                 title="Total Tasks"
-                value={stats.todos.total}
-                trend={stats.todos.trend}
+                value={stats?.todos?.total ?? 0}
+                trend={stats?.todos?.trend ?? 0}
               />
               <StatsCard
                 title="Total Notes"
-                value={stats.notes.total}
-                trend={stats.notes.trend}
+                value={stats?.notes?.total ?? 0}
+                trend={stats?.notes?.trend ?? 0}
               />
               <StatsCard
                 title="Total Lists"
-                value={stats.lists.total}
-                trend={stats.lists.trend}
+                value={stats?.lists?.total ?? 0}
+                trend={stats?.lists?.trend ?? 0}
+                className="col-span-2 md:col-span-1"
               />
             </div>
 
@@ -143,21 +145,62 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex overflow-hidden">
-      <Sidebar currentView={currentView} setCurrentView={setCurrentView} />
+      <Sidebar
+        currentView={currentView}
+        setCurrentView={setCurrentView}
+        isMobileOpen={isMobileSidebarOpen}
+        setIsMobileOpen={setIsMobileSidebarOpen}
+      />
 
       <main className="flex-1 relative overflow-auto h-screen">
-        <div className="p-8">
+        {/* Mobile Header Bar - for non-chatbot pages */}
+        {currentView !== 'chatbot' && (
+          <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-white/80 backdrop-blur-sm border-b border-slate-200 px-4 py-3 flex items-center">
+            <button
+              onClick={() => setIsMobileSidebarOpen(true)}
+              className="p-2 -ml-2 rounded-lg hover:bg-slate-100"
+              aria-label="Open menu"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-600">
+                <line x1="4" x2="20" y1="12" y2="12"/>
+                <line x1="4" x2="20" y1="6" y2="6"/>
+                <line x1="4" x2="20" y1="18" y2="18"/>
+              </svg>
+            </button>
+            <h1 className="ml-2 text-lg font-semibold text-slate-800">
+              {currentView === 'dashboard' ? 'Personal Dashboard' :
+               currentView === 'todos' ? 'Tasks' :
+               currentView === 'todos-v2' ? 'Tasks V2' : currentView.charAt(0).toUpperCase() + currentView.slice(1)}
+            </h1>
+          </div>
+        )}
+
+        {/* Mobile Hamburger Button - for chatbot page only (no header bar) */}
+        {currentView === 'chatbot' && (
+          <button
+            onClick={() => setIsMobileSidebarOpen(true)}
+            className="md:hidden fixed top-4 left-4 z-40 p-2 bg-white/80 backdrop-blur-sm rounded-lg shadow-sm border border-slate-200 hover:bg-slate-100"
+            aria-label="Open menu"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-600">
+              <line x1="4" x2="20" y1="12" y2="12"/>
+              <line x1="4" x2="20" y1="6" y2="6"/>
+              <line x1="4" x2="20" y1="18" y2="18"/>
+            </svg>
+          </button>
+        )}
+
+        <div className="p-4 pt-20 md:p-8">
+          {/* Desktop Header - hidden on mobile */}
           {currentView !== 'chatbot' && (
-            <header className="mb-8">
+            <header className="hidden md:block mb-8">
               <h1 className="text-2xl font-bold text-slate-800 capitalize">
                 {currentView === 'dashboard' ? 'Personal Dashboard' :
                  currentView === 'todos' ? 'Tasks' :
                  currentView === 'todos-v2' ? 'Tasks V2' : currentView}
               </h1>
               <p className="text-slate-500">
-                {currentView === 'dashboard'
-                  ? 'Your personal organization snapshot'
-                  : currentView === 'todos' || currentView === 'todos-v2'
+                {currentView === 'todos' || currentView === 'todos-v2'
                   ? 'Manage your tasks here.'
                   : `Manage your ${currentView} here.`}
               </p>
