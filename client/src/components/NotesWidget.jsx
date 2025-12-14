@@ -512,11 +512,11 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                 ) : (
                     <>
                         {/* Desktop View - Two columns side by side */}
-                        <div className="hidden md:flex gap-4 overflow-hidden flex-1 min-h-0">
-                            <div className="flex flex-col overflow-hidden w-1/3 border-r border-slate-100 pr-4">
+                        <div className="hidden md:flex gap-4 flex-1 min-h-0">
+                            <div className="flex flex-col w-1/3 border-r border-slate-100 pr-4 min-h-0">
                                 {renderFoldersPanel(false)}
                             </div>
-                            <div className="flex flex-col overflow-hidden w-2/3">
+                            <div className="flex flex-col w-2/3 min-h-0">
                                 {renderNotesPanel(false)}
                             </div>
                         </div>
