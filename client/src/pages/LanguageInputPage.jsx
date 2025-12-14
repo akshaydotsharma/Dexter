@@ -7,13 +7,17 @@ function LanguageInputPage() {
     const [isListening, setIsListening] = useState(false);
     const [logs, setLogs] = useState([]);
     const [bottomOffset, setBottomOffset] = useState(0);
+    const [isMobile, setIsMobile] = useState(false);
 
     const recognitionRef = useRef(null);
     const scrollRef = useRef(null);
     const containerRef = useRef(null);
 
-    // Detect browser bottom UI (nav bar) using visualViewport API
+    // Detect mobile viewport and browser bottom UI (nav bar)
     useEffect(() => {
+        const checkMobile = () => setIsMobile(window.innerWidth < 768);
+        checkMobile();
+
         const updateBottomOffset = () => {
             if (window.visualViewport) {
                 // Calculate the difference between window height and visual viewport height
@@ -29,6 +33,7 @@ function LanguageInputPage() {
             window.visualViewport.addEventListener('scroll', updateBottomOffset);
         }
         window.addEventListener('resize', updateBottomOffset);
+        window.addEventListener('resize', checkMobile);
 
         return () => {
             if (window.visualViewport) {
@@ -36,6 +41,7 @@ function LanguageInputPage() {
                 window.visualViewport.removeEventListener('scroll', updateBottomOffset);
             }
             window.removeEventListener('resize', updateBottomOffset);
+            window.removeEventListener('resize', checkMobile);
         };
     }, []);
 
@@ -202,9 +208,11 @@ function LanguageInputPage() {
                 )}
 
                 {/* Input Area - with dynamic padding for mobile browser nav bars */}
+                {/* Mobile: 5rem (80px) base padding for browser nav bar + dynamic offset */}
+                {/* Desktop: just 1rem base + dynamic offset */}
                 <div
                     className="z-20 p-4 w-full transition-all duration-500"
-                    style={{ paddingBottom: `calc(1.5rem + ${bottomOffset}px)` }}
+                    style={{ paddingBottom: isMobile ? `calc(5rem + ${bottomOffset}px)` : `calc(1rem + ${bottomOffset}px)` }}
                 >
                     {/* Helper text - above input on mobile */}
                     {!hasStarted && (
