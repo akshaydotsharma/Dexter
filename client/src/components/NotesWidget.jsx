@@ -278,9 +278,6 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
         }
     };
 
-    // Two-column list view - only apply maxHeightPx on desktop (md+)
-    const cardStyle = maxHeightPx && !isMobileView ? { height: maxHeightPx } : {};
-
     // Render folders panel content - returns a flex container for proper scrolling
     const renderFoldersPanel = (isMobile) => (
         <div className={`flex flex-col ${isMobile ? 'h-full' : 'flex-1 min-h-0'}`}>
@@ -497,13 +494,18 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
         </div>
     );
 
+    // Determine height class: fullHeight uses h-full, maxHeightPx uses inline style, otherwise max-h-[515px]
+    const heightClass = fullHeight ? 'h-full' : (!maxHeightPx ? 'max-h-[515px]' : '');
+    const cardStyle = maxHeightPx && !fullHeight ? { height: maxHeightPx } : {};
+
     return (
         <Card
             title="Notes"
             hideTitle={fullHeight}
-            className={`flex flex-col ${fullHeight ? 'h-full' : 'max-h-[515px]'}`}
+            className={`flex flex-col ${heightClass}`}
+            style={cardStyle}
         >
-            <div className="flex flex-col flex-1 min-h-0">
+            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
                 {loading ? (
                     <div className="flex justify-center items-center py-10 text-indigo-500">
                         <Loader2 className="animate-spin" />
