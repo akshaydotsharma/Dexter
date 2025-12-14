@@ -281,9 +281,9 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
     // Two-column list view - only apply maxHeightPx on desktop (md+)
     const cardStyle = maxHeightPx && !isMobileView ? { height: maxHeightPx } : {};
 
-    // Render folders panel content (inline to avoid re-mounting on state changes)
+    // Render folders panel content - returns a flex container for proper scrolling
     const renderFoldersPanel = (isMobile) => (
-        <>
+        <div className="flex flex-col flex-1 min-h-0">
             {isMobile && (
                 <div className="flex items-center justify-between mb-4 flex-shrink-0">
                     <h3 className="text-sm font-semibold text-slate-700">Folders</h3>
@@ -362,12 +362,12 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
                     ))
                 )}
             </div>
-        </>
+        </div>
     );
 
-    // Render notes panel content (inline to avoid re-mounting on state changes)
+    // Render notes panel content - returns a flex container for proper scrolling
     const renderNotesPanel = (isMobile) => (
-        <>
+        <div className="flex flex-col flex-1 min-h-0">
             {/* Mobile: Always show header with Folders button */}
             {isMobile && (
                 <div className="flex justify-between items-center mb-3 flex-shrink-0">
@@ -494,7 +494,7 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
                     <span>No Notes</span>
                 </div>
             )}
-        </>
+        </div>
     );
 
     return (
