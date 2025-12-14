@@ -1263,6 +1263,7 @@ export default function TodoWidget({ fullHeight = false }) {
 
             <Card
                 title="Tasks"
+                hideTitle={fullHeight}
                 className={`flex flex-col ${fullHeight ? 'h-full' : 'max-h-[515px]'}`}
             >
                 {renderAddForm()}

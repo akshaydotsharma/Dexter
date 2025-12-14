@@ -193,6 +193,7 @@ export default function ListsWidget({ fullHeight = false }) {
     return (
         <Card
             title="Lists"
+            hideTitle={fullHeight}
             className={`flex flex-col ${fullHeight ? 'h-full' : 'max-h-[515px]'}`}
         >
             <div className="flex flex-col flex-1 min-h-0">
