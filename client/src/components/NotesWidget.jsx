@@ -503,40 +503,190 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
             hideTitle={fullHeight}
             className={`flex flex-col ${fullHeight ? 'h-full' : 'max-h-[515px]'}`}
         >
-            {loading ? (
-                <div className="flex justify-center items-center py-10 text-indigo-500">
-                    <Loader2 className="animate-spin" />
-                </div>
-            ) : (
-                <>
-                    {/* Desktop View - Two columns side by side */}
-                    <div className="hidden md:flex gap-4 flex-1 min-h-0">
-                        <div className="flex flex-col w-1/3 border-r border-slate-100 pr-4 min-h-0">
-                            {renderFoldersPanel(false)}
-                        </div>
-                        <div className="flex flex-col w-2/3 min-h-0">
-                            {renderNotesPanel(false)}
-                        </div>
+            <div className="flex flex-col flex-1 min-h-0">
+                {loading ? (
+                    <div className="flex justify-center items-center py-10 text-indigo-500">
+                        <Loader2 className="animate-spin" />
                     </div>
+                ) : (
+                    <>
+                        {/* Desktop View - Two columns side by side */}
+                        <div className="hidden md:flex gap-4 flex-1 min-h-0">
+                            <div className="w-1/3 border-r border-slate-100 pr-4 flex flex-col min-h-0">
+                                <form onSubmit={handleCreateFolder} className="flex gap-2 mb-3 flex-shrink-0">
+                                    <Input
+                                        value={newFolderName}
+                                        onChange={(e) => setNewFolderName(e.target.value)}
+                                        placeholder="New folder..."
+                                        className="!py-1.5 text-sm"
+                                    />
+                                    <Button type="submit" variant="primary" className="!px-2 !py-1.5">
+                                        <Plus size={16} />
+                                    </Button>
+                                </form>
+                                <div className="overflow-y-auto custom-scrollbar space-y-1 pr-1 flex-1 min-h-0">
+                                    {folders.length === 0 ? (
+                                        <div className="text-center text-gray-400 text-sm mt-4">No folders yet.</div>
+                                    ) : (
+                                        folders.map((folder) => (
+                                            <div
+                                                key={folder.id}
+                                                onClick={() => editingFolderId !== folder.id && setSelectedFolderId(folder.id)}
+                                                className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                                                    selectedFolderId === folder.id
+                                                        ? 'bg-indigo-50 border border-indigo-200'
+                                                        : 'hover:bg-slate-50'
+                                                }`}
+                                            >
+                                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                    {selectedFolderId === folder.id ? (
+                                                        <FolderOpen size={16} className="text-indigo-500 flex-shrink-0" />
+                                                    ) : (
+                                                        <Folder size={16} className="text-slate-400 flex-shrink-0" />
+                                                    )}
+                                                    {editingFolderId === folder.id ? (
+                                                        <input
+                                                            ref={editFolderInputRef}
+                                                            type="text"
+                                                            value={editingFolderName}
+                                                            onChange={(e) => setEditingFolderName(e.target.value)}
+                                                            onBlur={() => saveEditFolder(folder.id)}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter') saveEditFolder(folder.id);
+                                                                if (e.key === 'Escape') setEditingFolderId(null);
+                                                            }}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="flex-1 text-sm bg-white border border-indigo-300 rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                            autoFocus
+                                                        />
+                                                    ) : (
+                                                        <span
+                                                            onClick={(e) => { e.stopPropagation(); startEditFolder(e, folder); }}
+                                                            className="text-sm font-medium text-gray-700 truncate cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                                            title="Click to edit"
+                                                        >
+                                                            {folder.name}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <button
+                                                    onClick={(e) => handleDeleteFolder(e, folder.id)}
+                                                    className="text-slate-400 hover:text-rose-500 transition-all p-1 cursor-pointer opacity-0 group-hover:opacity-100"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                            <div className="w-2/3 flex flex-col min-h-0">
+                                {selectedFolderId ? (
+                                    <>
+                                        <div className="flex justify-end mb-3 flex-shrink-0">
+                                            <Button onClick={handleCreateNote} variant="primary" className="!px-2 !py-1.5">
+                                                <Plus size={16} />
+                                            </Button>
+                                        </div>
+                                        <div className="overflow-y-auto custom-scrollbar space-y-2 pr-1 flex-1 min-h-0">
+                                            {notes.length === 0 ? (
+                                                <div className="flex-1 flex items-center justify-center h-full min-h-[120px]">
+                                                    <span className="text-gray-400 text-sm">No Notes</span>
+                                                </div>
+                                            ) : (
+                                                notes.map((note) => (
+                                                    <div
+                                                        key={note.id}
+                                                        className="group p-3 bg-slate-50 hover:bg-white rounded-xl border border-transparent hover:border-indigo-100 hover:shadow-md transition-all relative"
+                                                    >
+                                                        {inlineEditingNoteId === note.id && inlineEditingField === 'title' ? (
+                                                            <input
+                                                                ref={inlineEditRef}
+                                                                type="text"
+                                                                value={inlineEditValue}
+                                                                onChange={(e) => setInlineEditValue(e.target.value)}
+                                                                onBlur={() => saveInlineEdit(note.id)}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') { e.preventDefault(); saveInlineEdit(note.id); }
+                                                                    else if (e.key === 'Escape') { cancelInlineEdit(); }
+                                                                }}
+                                                                className="w-full font-semibold text-gray-800 text-sm bg-white border border-indigo-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
+                                                                placeholder="Note title..."
+                                                                autoFocus
+                                                            />
+                                                        ) : (
+                                                            <h3
+                                                                onClick={(e) => startInlineEdit(e, note, 'title')}
+                                                                className="font-semibold text-gray-800 text-sm truncate pr-8 cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                                                title="Click to edit title"
+                                                            >
+                                                                {note.title || 'Untitled Note'}
+                                                            </h3>
+                                                        )}
+                                                        {inlineEditingNoteId === note.id && inlineEditingField === 'content' ? (
+                                                            <textarea
+                                                                ref={inlineEditRef}
+                                                                value={inlineEditValue}
+                                                                onChange={(e) => setInlineEditValue(e.target.value)}
+                                                                onBlur={() => saveInlineEdit(note.id)}
+                                                                onKeyDown={(e) => { if (e.key === 'Escape') { cancelInlineEdit(); } }}
+                                                                className="w-full text-xs text-gray-500 bg-white border border-indigo-300 rounded px-2 py-1 mt-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                                                                rows={3}
+                                                                placeholder="Note content..."
+                                                                autoFocus
+                                                            />
+                                                        ) : (
+                                                            <p
+                                                                onClick={(e) => startInlineEdit(e, note, 'content')}
+                                                                className="text-xs text-gray-500 line-clamp-2 mt-1 cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                                                title="Click to edit content"
+                                                            >
+                                                                {note.content || 'No content'}
+                                                            </p>
+                                                        )}
+                                                        <div className="flex items-center justify-between mt-2">
+                                                            <span className="text-xs text-gray-400">{formatDate(note.updated_at)}</span>
+                                                            <div className="flex gap-1">
+                                                                <button onClick={() => handleEditNote(note)} className="text-slate-400 hover:text-indigo-500 transition-all p-1 cursor-pointer" title="Open full editor">
+                                                                    <Edit2 size={14} />
+                                                                </button>
+                                                                <button onClick={(e) => handleDeleteNote(e, note.id)} className="text-slate-400 hover:text-rose-500 transition-all p-1 cursor-pointer" title="Delete">
+                                                                    <Trash2 size={14} />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm gap-2 min-h-[120px]">
+                                        <span>No Notes</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
 
-                    {/* Mobile View - Sliding panels */}
-                    <div className="md:hidden flex-1 min-h-0 overflow-hidden relative">
-                        <div
-                            className="flex transition-transform duration-300 ease-in-out h-full"
-                            style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
-                        >
-                            {/* Notes Panel - Mobile (shown first/default) */}
-                            <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
-                                {renderNotesPanel(true)}
-                            </div>
-                            {/* Folders Panel - Mobile */}
-                            <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
-                                {renderFoldersPanel(true)}
+                        {/* Mobile View - Sliding panels */}
+                        <div className="md:hidden flex-1 min-h-0 overflow-hidden relative">
+                            <div
+                                className="flex transition-transform duration-300 ease-in-out h-full"
+                                style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
+                            >
+                                {/* Notes Panel - Mobile (shown first/default) */}
+                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
+                                    {renderNotesPanel(true)}
+                                </div>
+                                {/* Folders Panel - Mobile */}
+                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
+                                    {renderFoldersPanel(true)}
+                                </div>
                             </div>
                         </div>
-                    </div>
-                </>
-            )}
+                    </>
+                )}
+            </div>
         </Card>
     );
 }
