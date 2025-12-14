@@ -285,7 +285,7 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
     const renderFoldersPanel = (isMobile) => (
         <>
             {isMobile && (
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-4 flex-shrink-0">
                     <h3 className="text-sm font-semibold text-slate-700">Folders</h3>
                     <button
                         onClick={() => setMobileView('notes')}
@@ -295,7 +295,7 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                     </button>
                 </div>
             )}
-            <form onSubmit={handleCreateFolder} className="flex gap-2 mb-3">
+            <form onSubmit={handleCreateFolder} className="flex gap-2 mb-3 flex-shrink-0">
                 <Input
                     value={newFolderName}
                     onChange={(e) => setNewFolderName(e.target.value)}
@@ -307,7 +307,7 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                 </Button>
             </form>
 
-            <div className="overflow-y-auto custom-scrollbar space-y-1 flex-1 min-h-0">
+            <div className="overflow-y-auto custom-scrollbar space-y-1 flex-1 min-h-0 pr-1">
                 {folders.length === 0 ? (
                     <div className="text-center text-gray-400 text-sm mt-4">No folders yet.</div>
                 ) : (
@@ -370,7 +370,7 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
         <>
             {/* Mobile: Always show header with Folders button */}
             {isMobile && (
-                <div className="flex justify-between items-center mb-3">
+                <div className="flex justify-between items-center mb-3 flex-shrink-0">
                     <button
                         onClick={() => setMobileView('folders')}
                         className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
@@ -388,14 +388,14 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                 <>
                     {/* Desktop: Just the add button */}
                     {!isMobile && (
-                        <div className="flex justify-end mb-3">
+                        <div className="flex justify-end mb-3 flex-shrink-0">
                             <Button onClick={handleCreateNote} variant="primary" className="!px-2 !py-1.5">
                                 <Plus size={16} />
                             </Button>
                         </div>
                     )}
 
-                    <div className="overflow-y-auto custom-scrollbar space-y-2 flex-1 min-h-0">
+                    <div className="overflow-y-auto custom-scrollbar space-y-2 flex-1 min-h-0 pr-1">
                         {notes.length === 0 ? (
                             <div className="flex-1 flex items-center justify-center h-full min-h-[120px]">
                                 <span className="text-gray-400 text-sm">No Notes</span>
@@ -528,11 +528,11 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                                 style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
                             >
                                 {/* Notes Panel - Mobile (shown first/default) */}
-                                <div className="w-full flex-shrink-0 h-full overflow-hidden flex flex-col">
+                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
                                     {renderNotesPanel(true)}
                                 </div>
                                 {/* Folders Panel - Mobile */}
-                                <div className="w-full flex-shrink-0 h-full overflow-hidden flex flex-col">
+                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
                                     {renderFoldersPanel(true)}
                                 </div>
                             </div>
