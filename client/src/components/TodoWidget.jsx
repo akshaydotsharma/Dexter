@@ -133,9 +133,10 @@ export default function TodoWidget({ fullHeight = false }) {
     const handleTagButtonClick = () => {
         if (!showTagDropdown && tagButtonRef.current) {
             const rect = tagButtonRef.current.getBoundingClientRect();
+            // Use viewport coordinates directly since dropdown is position:fixed
             setTagDropdownPosition({
-                top: rect.bottom + window.scrollY,
-                left: rect.left + window.scrollX,
+                top: rect.bottom,
+                left: rect.left,
                 width: rect.width
             });
         }
