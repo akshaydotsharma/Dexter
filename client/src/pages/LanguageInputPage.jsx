@@ -12,6 +12,7 @@ function LanguageInputPage() {
     const recognitionRef = useRef(null);
     const scrollRef = useRef(null);
     const containerRef = useRef(null);
+    const inputRef = useRef(null);
 
     // Detect mobile viewport and browser bottom UI (nav bar)
     useEffect(() => {
@@ -51,6 +52,13 @@ function LanguageInputPage() {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [logs]);
+
+    // Auto-focus input on page load
+    useEffect(() => {
+        if (inputRef.current) {
+            inputRef.current.focus();
+        }
+    }, []);
 
     useEffect(() => {
         if ('webkitSpeechRecognition' in window) {
@@ -208,11 +216,11 @@ function LanguageInputPage() {
                 )}
 
                 {/* Input Area - with dynamic padding for mobile browser nav bars */}
-                {/* Mobile: 7rem (112px) base padding for browser nav bar + dynamic offset */}
+                {/* Mobile: 8rem (128px) base padding for browser nav bar + dynamic offset */}
                 {/* Desktop: just 1rem base + dynamic offset */}
                 <div
                     className="z-20 p-4 w-full transition-all duration-500"
-                    style={{ paddingBottom: isMobile ? `calc(7rem + ${bottomOffset}px)` : `calc(1rem + ${bottomOffset}px)` }}
+                    style={{ paddingBottom: isMobile ? `calc(8rem + ${bottomOffset}px)` : `calc(1rem + ${bottomOffset}px)` }}
                 >
                     {/* Helper text - above input on mobile */}
                     {!hasStarted && (
@@ -227,6 +235,7 @@ function LanguageInputPage() {
                         {/* The Actual Input Container */}
                         <div className="relative bg-white rounded-full md:rounded-xl flex items-center p-2 border border-slate-200 md:border-0 md:shadow-xl">
                             <textarea
+                                ref={inputRef}
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={handleKeyDown}
