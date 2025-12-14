@@ -499,15 +499,14 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
 
     // Height handling:
     // - fullHeight: fill parent container (for dedicated Notes page)
-    // - maxHeightPx: dynamic pixel height from parent (for dashboard sync)
-    // - default: use max-h-[515px] like other widgets
-    const useFixedHeight = !fullHeight && !maxHeightPx;
+    // - maxHeightPx: dynamic pixel height from parent (for dashboard sync with right column)
+    // - default: no maxHeightPx, use natural height (right column sets the reference)
 
     return (
         <Card
             title="Notes"
             hideTitle={fullHeight}
-            className={`flex flex-col overflow-hidden ${fullHeight ? 'h-full' : ''} ${useFixedHeight ? 'max-h-[515px]' : ''}`}
+            className={`flex flex-col overflow-hidden ${fullHeight ? 'h-full' : ''}`}
             style={cardStyle}
         >
             <div className="flex flex-col flex-1 min-h-0">
