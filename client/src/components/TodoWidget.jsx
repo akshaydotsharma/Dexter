@@ -16,10 +16,12 @@ export default function TodoWidget({ fullHeight = false }) {
     const [editingTodo, setEditingTodo] = useState(null);
     const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
     const [showTagDropdown, setShowTagDropdown] = useState(false);
+    const [tagDropdownPosition, setTagDropdownPosition] = useState({ top: 0, left: 0, width: 0 });
     const [customTagInput, setCustomTagInput] = useState('');
     const [isAddingCustomTag, setIsAddingCustomTag] = useState(false);
     const popoverRef = useRef(null);
     const tagDropdownRef = useRef(null);
+    const tagButtonRef = useRef(null);
     const addInputRef = useRef(null);
     const [titleError, setTitleError] = useState('');
     const [inlineTagEditId, setInlineTagEditId] = useState(null);
@@ -129,6 +131,14 @@ export default function TodoWidget({ fullHeight = false }) {
     }, [editingId, isAddFormExpanded, showTagDropdown, formData.title]);
 
     const handleTagButtonClick = () => {
+        if (!showTagDropdown && tagButtonRef.current) {
+            const rect = tagButtonRef.current.getBoundingClientRect();
+            setTagDropdownPosition({
+                top: rect.bottom + window.scrollY,
+                left: rect.left + window.scrollX,
+                width: rect.width
+            });
+        }
         setShowTagDropdown(!showTagDropdown);
     };
 
@@ -821,9 +831,103 @@ export default function TodoWidget({ fullHeight = false }) {
     };
 
     const renderTagDropdown = () => {
+        const dropdownContent = showTagDropdown && createPortal(
+            <div
+                ref={tagDropdownRef}
+                className="fixed z-[9999] bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-auto"
+                style={{
+                    top: tagDropdownPosition.top + 4,
+                    left: tagDropdownPosition.left,
+                    width: Math.max(tagDropdownPosition.width, 160)
+                }}
+            >
+                <div className="p-1">
+                    {/* None option */}
+                    <button
+                        type="button"
+                        onClick={() => handleTagSelect('')}
+                        className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-gray-500"
+                    >
+                        None
+                    </button>
+
+                    {/* Predefined tags */}
+                    {predefinedTags.map((tag) => (
+                        <button
+                            key={tag}
+                            type="button"
+                            onClick={() => handleTagSelect(tag)}
+                            className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors flex items-center gap-2"
+                        >
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${getTagColor(tag)}`}>
+                                <TagIcon size={10} />
+                                {tag}
+                            </span>
+                        </button>
+                    ))}
+
+                    {/* Divider */}
+                    <div className="border-t border-slate-200 my-1"></div>
+
+                    {/* Add custom tag */}
+                    {!isAddingCustomTag ? (
+                        <button
+                            type="button"
+                            onClick={() => setIsAddingCustomTag(true)}
+                            className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-indigo-600 font-medium whitespace-nowrap"
+                        >
+                            + Add custom tag
+                        </button>
+                    ) : (
+                        <div className="p-2 space-y-2" data-custom-tag-input>
+                            <input
+                                type="text"
+                                value={customTagInput}
+                                onChange={(e) => setCustomTagInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        handleAddCustomTag();
+                                    } else if (e.key === 'Escape') {
+                                        setIsAddingCustomTag(false);
+                                        setCustomTagInput('');
+                                    }
+                                }}
+                                placeholder="Enter tag name"
+                                className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                autoFocus
+                            />
+                            <div className="flex gap-1">
+                                <button
+                                    type="button"
+                                    onClick={handleAddCustomTag}
+                                    className="flex-1 px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
+                                >
+                                    Add
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsAddingCustomTag(false);
+                                        setCustomTagInput('');
+                                    }}
+                                    className="flex-1 px-2 py-1 text-xs bg-slate-200 text-slate-700 rounded hover:bg-slate-300 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>,
+            document.body
+        );
+
         return (
-            <div ref={tagDropdownRef} className="relative">
+            <div className="relative">
                 <button
+                    ref={tagButtonRef}
                     type="button"
                     onClick={handleTagButtonClick}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm text-left flex items-center justify-between bg-white hover:bg-slate-50 transition-colors"
@@ -833,92 +937,7 @@ export default function TodoWidget({ fullHeight = false }) {
                     </span>
                     <ChevronDown size={16} className="text-gray-400 flex-shrink-0 ml-2" />
                 </button>
-
-                {showTagDropdown && (
-                    <div
-                        className="absolute top-full left-0 right-0 mt-1 z-[100] bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-auto min-w-40"
-                    >
-                        <div className="p-1">
-                            {/* None option */}
-                            <button
-                                type="button"
-                                onClick={() => handleTagSelect('')}
-                                className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-gray-500"
-                            >
-                                None
-                            </button>
-
-                            {/* Predefined tags */}
-                            {predefinedTags.map((tag) => (
-                                <button
-                                    key={tag}
-                                    type="button"
-                                    onClick={() => handleTagSelect(tag)}
-                                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors flex items-center gap-2"
-                                >
-                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${getTagColor(tag)}`}>
-                                        <TagIcon size={10} />
-                                        {tag}
-                                    </span>
-                                </button>
-                            ))}
-
-                            {/* Divider */}
-                            <div className="border-t border-slate-200 my-1"></div>
-
-                            {/* Add custom tag */}
-                            {!isAddingCustomTag ? (
-                                <button
-                                    type="button"
-                                    onClick={() => setIsAddingCustomTag(true)}
-                                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-indigo-600 font-medium whitespace-nowrap"
-                                >
-                                    + Add custom tag
-                                </button>
-                            ) : (
-                                <div className="p-2 space-y-2" data-custom-tag-input>
-                                    <input
-                                        type="text"
-                                        value={customTagInput}
-                                        onChange={(e) => setCustomTagInput(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                handleAddCustomTag();
-                                            } else if (e.key === 'Escape') {
-                                                setIsAddingCustomTag(false);
-                                                setCustomTagInput('');
-                                            }
-                                        }}
-                                        placeholder="Enter tag name"
-                                        className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                        autoFocus
-                                    />
-                                    <div className="flex gap-1">
-                                        <button
-                                            type="button"
-                                            onClick={handleAddCustomTag}
-                                            className="flex-1 px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
-                                        >
-                                            Add
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setIsAddingCustomTag(false);
-                                                setCustomTagInput('');
-                                            }}
-                                            className="flex-1 px-2 py-1 text-xs bg-slate-200 text-slate-700 rounded hover:bg-slate-300 transition-colors"
-                                        >
-                                            Cancel
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                )}
+                {dropdownContent}
             </div>
         );
     };
