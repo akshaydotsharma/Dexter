@@ -5,7 +5,7 @@ import Button from './Button';
 import { getNotes, createNote, updateNote, deleteNote, getNoteFolders, createNoteFolder, updateNoteFolder, deleteNoteFolder } from '../services/api';
 import { Plus, Trash2, Loader2, Save, Folder, FolderOpen, ChevronRight, ChevronLeft, Edit2 } from 'lucide-react';
 
-export default function NotesWidget({ fullHeight = false, maxHeight = null, maxHeightPx = null }) {
+export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) {
     const [folders, setFolders] = useState([]);
     const [notes, setNotes] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -497,14 +497,20 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
         </>
     );
 
-    // Default max height for dashboard widget (matches TodoWidget and ListsWidget)
-    // Apply on mobile even when maxHeightPx is passed (since we ignore maxHeightPx on mobile)
-    const shouldUseDefaultMaxHeight = !fullHeight && !maxHeight && (!maxHeightPx || isMobileView);
-    const defaultMaxHeight = shouldUseDefaultMaxHeight ? 'max-h-[515px]' : '';
+    // Height handling:
+    // - fullHeight: fill parent container (for dedicated Notes page)
+    // - maxHeightPx: dynamic pixel height from parent (for dashboard sync)
+    // - default: use max-h-[515px] like other widgets
+    const useFixedHeight = !fullHeight && !maxHeightPx;
 
     return (
-        <Card title="Notes" hideTitle={fullHeight} className={`flex flex-col overflow-hidden ${fullHeight ? 'h-full' : ''} ${maxHeight ? maxHeight : ''} ${defaultMaxHeight}`} style={cardStyle}>
-            <div className={`flex flex-col ${fullHeight || maxHeight || maxHeightPx || shouldUseDefaultMaxHeight ? 'flex-1 min-h-0' : ''}`}>
+        <Card
+            title="Notes"
+            hideTitle={fullHeight}
+            className={`flex flex-col overflow-hidden ${fullHeight ? 'h-full' : ''} ${useFixedHeight ? 'max-h-[515px]' : ''}`}
+            style={cardStyle}
+        >
+            <div className="flex flex-col flex-1 min-h-0">
                 {loading ? (
                     <div className="flex justify-center items-center py-10 text-indigo-500">
                         <Loader2 className="animate-spin" />
