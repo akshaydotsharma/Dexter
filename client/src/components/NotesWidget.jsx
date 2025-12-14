@@ -503,42 +503,40 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
             hideTitle={fullHeight}
             className={`flex flex-col ${fullHeight ? 'h-full' : 'max-h-[515px]'}`}
         >
-            <div className="flex flex-col flex-1 min-h-0">
-                {loading ? (
-                    <div className="flex justify-center items-center py-10 text-indigo-500">
-                        <Loader2 className="animate-spin" />
+            {loading ? (
+                <div className="flex justify-center items-center py-10 text-indigo-500">
+                    <Loader2 className="animate-spin" />
+                </div>
+            ) : (
+                <>
+                    {/* Desktop View - Two columns side by side */}
+                    <div className="hidden md:flex gap-4 flex-1 min-h-0">
+                        <div className="flex flex-col w-1/3 border-r border-slate-100 pr-4 min-h-0">
+                            {renderFoldersPanel(false)}
+                        </div>
+                        <div className="flex flex-col w-2/3 min-h-0">
+                            {renderNotesPanel(false)}
+                        </div>
                     </div>
-                ) : (
-                    <>
-                        {/* Desktop View - Two columns side by side */}
-                        <div className="hidden md:flex gap-4 flex-1 min-h-0">
-                            <div className="flex flex-col w-1/3 border-r border-slate-100 pr-4 min-h-0">
-                                {renderFoldersPanel(false)}
-                            </div>
-                            <div className="flex flex-col w-2/3 min-h-0">
-                                {renderNotesPanel(false)}
-                            </div>
-                        </div>
 
-                        {/* Mobile View - Sliding panels */}
-                        <div className="md:hidden flex-1 min-h-0 overflow-hidden relative">
-                            <div
-                                className="flex transition-transform duration-300 ease-in-out h-full"
-                                style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
-                            >
-                                {/* Notes Panel - Mobile (shown first/default) */}
-                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
-                                    {renderNotesPanel(true)}
-                                </div>
-                                {/* Folders Panel - Mobile */}
-                                <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
-                                    {renderFoldersPanel(true)}
-                                </div>
+                    {/* Mobile View - Sliding panels */}
+                    <div className="md:hidden flex-1 min-h-0 overflow-hidden relative">
+                        <div
+                            className="flex transition-transform duration-300 ease-in-out h-full"
+                            style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
+                        >
+                            {/* Notes Panel - Mobile (shown first/default) */}
+                            <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
+                                {renderNotesPanel(true)}
+                            </div>
+                            {/* Folders Panel - Mobile */}
+                            <div className="w-full flex-shrink-0 h-full flex flex-col min-h-0">
+                                {renderFoldersPanel(true)}
                             </div>
                         </div>
-                    </>
-                )}
-            </div>
+                    </div>
+                </>
+            )}
         </Card>
     );
 }
