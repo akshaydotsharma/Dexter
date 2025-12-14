@@ -183,7 +183,13 @@ function LanguageInputPage() {
                 )}
 
                 {/* Input Area - with extra padding for mobile browser nav bars */}
-                <div className="z-20 p-4 pb-20 md:pb-4 w-full transition-all duration-500">
+                <div className="z-20 p-4 pb-16 md:pb-4 w-full transition-all duration-500">
+                    {/* Helper text - above input on mobile */}
+                    {!hasStarted && (
+                        <p className="md:hidden text-xs text-slate-400 text-center mb-3 px-4">
+                            Try "Remind me to call Mom tomorrow" or "Create a shopping list with milk and eggs"
+                        </p>
+                    )}
                     <div className="max-w-3xl mx-auto relative group">
                         {/* The Shiny Gradient Border - hidden on mobile */}
                         <div className="hidden md:block absolute -inset-[3px] rounded-2xl bg-linear-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-70 blur-sm group-hover:opacity-100 transition duration-500 animate-border-spin" />
@@ -230,12 +236,6 @@ function LanguageInputPage() {
                             </div>
                         </div>
                     </div>
-                    {/* Helper text - only on mobile */}
-                    {!hasStarted && (
-                        <p className="md:hidden text-xs text-slate-400 text-center mt-3 px-4">
-                            Try "Remind me to call Mom tomorrow" or "Create a shopping list with milk and eggs"
-                        </p>
-                    )}
                 </div>
             </div>
         </div>
