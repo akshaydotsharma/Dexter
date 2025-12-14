@@ -672,21 +672,13 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
                             </div>
                         </div>
 
-                        {/* Mobile View - Sliding panels */}
-                        <div className="md:hidden flex-1 min-h-0 relative" style={{ minHeight: 0 }}>
-                            <div
-                                className="absolute inset-0 flex transition-transform duration-300 ease-in-out"
-                                style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
-                            >
-                                {/* Notes Panel - Mobile (shown first/default) */}
-                                <div className="w-full flex-shrink-0 flex flex-col overflow-hidden">
-                                    {renderNotesPanel(true)}
-                                </div>
-                                {/* Folders Panel - Mobile */}
-                                <div className="w-full flex-shrink-0 flex flex-col overflow-hidden">
-                                    {renderFoldersPanel(true)}
-                                </div>
-                            </div>
+                        {/* Mobile View - Single panel (no sliding, just show one at a time) */}
+                        <div className="md:hidden flex flex-col flex-1 min-h-0">
+                            {mobileView === 'notes' ? (
+                                renderNotesPanel(true)
+                            ) : (
+                                renderFoldersPanel(true)
+                            )}
                         </div>
                     </>
                 )}
