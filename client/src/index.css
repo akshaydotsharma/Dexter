@@ -1,9 +1,17 @@
 @import "tailwindcss";
 
 @layer base {
+  html {
+    /* Enable safe area insets for iOS devices */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
   body {
     @apply bg-slate-100 text-gray-900 antialiased selection:bg-indigo-500/30;
     font-feature-settings: "cv11", "ss01";
+    /* Ensure body fills the safe area */
+    min-height: 100vh;
+    min-height: -webkit-fill-available;
   }
 
   @keyframes border-spin {

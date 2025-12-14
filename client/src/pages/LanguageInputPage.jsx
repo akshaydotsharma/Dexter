@@ -182,8 +182,11 @@ function LanguageInputPage() {
                     </div>
                 )}
 
-                {/* Input Area */}
-                <div className={`z-20 p-4 w-full transition-all duration-500 ${hasStarted ? 'pb-8 md:pb-10' : ''}`}>
+                {/* Input Area - with safe area inset for mobile browser nav bars */}
+                <div
+                    className="z-20 p-4 w-full transition-all duration-500"
+                    style={{ paddingBottom: `calc(1rem + env(safe-area-inset-bottom, 0px))` }}
+                >
                     <div className="max-w-3xl mx-auto relative group">
                         {/* The Shiny Gradient Border - hidden on mobile */}
                         <div className="hidden md:block absolute -inset-[3px] rounded-2xl bg-linear-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-70 blur-sm group-hover:opacity-100 transition duration-500 animate-border-spin" />
