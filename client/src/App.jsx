@@ -75,7 +75,7 @@ function App() {
       case 'todos':
         return (
           <div
-            className="max-w-3xl mx-auto w-full h-[calc(100vh-12rem)] md:h-[calc(100vh-10rem)]"
+            className="max-w-3xl mx-auto w-full h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]"
           >
             <TodoWidget fullHeight />
           </div>
@@ -89,7 +89,7 @@ function App() {
       case 'notes':
         return (
           <div
-            className="max-w-3xl mx-auto w-full h-[calc(100vh-12rem)] md:h-[calc(100vh-10rem)]"
+            className="max-w-3xl mx-auto w-full h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]"
           >
             <NotesWidget fullHeight />
           </div>
@@ -97,7 +97,7 @@ function App() {
       case 'lists':
         return (
           <div
-            className="max-w-3xl mx-auto w-full h-[calc(100vh-12rem)] md:h-[calc(100vh-10rem)]"
+            className="max-w-3xl mx-auto w-full h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]"
           >
             <ListsWidget fullHeight />
           </div>
@@ -196,20 +196,12 @@ function App() {
           </button>
         )}
 
-        <div className="p-4 pt-20 pb-20 md:p-8 md:pb-8">
-          {/* Desktop Header - hidden on mobile */}
-          {currentView !== 'chatbot' && (
+        <div className="p-4 pt-16 md:p-8">
+          {/* Desktop Header - only for dashboard */}
+          {currentView === 'dashboard' && (
             <header className="hidden md:block mb-8">
-              <h1 className="text-2xl font-bold text-slate-800 capitalize">
-                {currentView === 'dashboard' ? 'Personal Dashboard' :
-                 currentView === 'todos' ? 'Tasks' :
-                 currentView === 'todos-v2' ? 'Tasks V2' : currentView}
-              </h1>
-              <p className="text-slate-500">
-                {currentView === 'todos' || currentView === 'todos-v2'
-                  ? 'Manage your tasks here.'
-                  : `Manage your ${currentView} here.`}
-              </p>
+              <h1 className="text-2xl font-bold text-slate-800 capitalize">Personal Dashboard</h1>
+              <p className="text-slate-500">Overview of your tasks, notes, and lists.</p>
             </header>
           )}
 
