@@ -6,19 +6,38 @@ function LanguageInputPage() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [isListening, setIsListening] = useState(false);
     const [logs, setLogs] = useState([]);
-
-    // Initial system message removed as per request to have a clean centered start
-    // useEffect(() => {
-    //     if (logs.length === 0) {
-    //         setLogs([{
-    //             role: 'system',
-    //             content: "Hi! I'm your AI assistant. You can ask me to create todos, notes, or lists. Try saying 'todo Buy milk'!"
-    //         }]);
-    //     }
-    // }, []);
+    const [bottomOffset, setBottomOffset] = useState(0);
 
     const recognitionRef = useRef(null);
     const scrollRef = useRef(null);
+    const containerRef = useRef(null);
+
+    // Detect browser bottom UI (nav bar) using visualViewport API
+    useEffect(() => {
+        const updateBottomOffset = () => {
+            if (window.visualViewport) {
+                // Calculate the difference between window height and visual viewport height
+                const offset = window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop;
+                setBottomOffset(Math.max(0, offset));
+            }
+        };
+
+        updateBottomOffset();
+
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', updateBottomOffset);
+            window.visualViewport.addEventListener('scroll', updateBottomOffset);
+        }
+        window.addEventListener('resize', updateBottomOffset);
+
+        return () => {
+            if (window.visualViewport) {
+                window.visualViewport.removeEventListener('resize', updateBottomOffset);
+                window.visualViewport.removeEventListener('scroll', updateBottomOffset);
+            }
+            window.removeEventListener('resize', updateBottomOffset);
+        };
+    }, []);
 
     // Auto-scroll to bottom of logs
     useEffect(() => {
@@ -182,8 +201,11 @@ function LanguageInputPage() {
                     </div>
                 )}
 
-                {/* Input Area - with extra padding for mobile browser nav bars */}
-                <div className="z-20 p-4 pb-24 md:pb-4 w-full transition-all duration-500">
+                {/* Input Area - with dynamic padding for mobile browser nav bars */}
+                <div
+                    className="z-20 p-4 w-full transition-all duration-500"
+                    style={{ paddingBottom: `calc(1rem + ${bottomOffset}px)` }}
+                >
                     {/* Helper text - above input on mobile */}
                     {!hasStarted && (
                         <p className="md:hidden text-xs text-slate-400 text-center mb-3 px-4">
