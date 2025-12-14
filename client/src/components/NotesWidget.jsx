@@ -19,6 +19,16 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
     // Mobile view state: 'notes' or 'folders'
     const [mobileView, setMobileView] = useState('notes');
 
+    // Mobile detection - moved here to avoid re-renders
+    const [isMobileView, setIsMobileView] = useState(false);
+
+    useEffect(() => {
+        const checkMobile = () => setIsMobileView(window.innerWidth < 768);
+        checkMobile();
+        window.addEventListener('resize', checkMobile);
+        return () => window.removeEventListener('resize', checkMobile);
+    }, []);
+
     // Inline editing state for notes
     const [inlineEditingNoteId, setInlineEditingNoteId] = useState(null);
     const [inlineEditingField, setInlineEditingField] = useState(null); // 'title' or 'content'
@@ -217,13 +227,26 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
         return (
             <Card
                 title={currentNote.isNew ? 'New Note' : 'Edit Note'}
-                className="flex flex-col min-h-0 flex-1"
+                hideTitle={fullHeight}
+                className={`flex flex-col min-h-0 flex-1 ${fullHeight ? 'h-full' : ''}`}
                 actions={
                     <Button onClick={() => setCurrentNote(null)} variant="secondary" className="!px-3 !py-1 text-sm">
                         <ChevronRight size={16} className="rotate-180" /> Back
                     </Button>
                 }
             >
+                {/* Mobile: Back button when title is hidden */}
+                {fullHeight && (
+                    <div className="flex items-center justify-between mb-4 md:hidden">
+                        <Button onClick={() => setCurrentNote(null)} variant="secondary" className="!px-3 !py-1 text-sm">
+                            <ChevronLeft size={16} /> Back
+                        </Button>
+                        <span className="text-sm font-medium text-slate-600">
+                            {currentNote.isNew ? 'New Note' : 'Edit Note'}
+                        </span>
+                        <div className="w-16" /> {/* Spacer for centering */}
+                    </div>
+                )}
                 <form onSubmit={handleSaveNote} className="flex-1 flex flex-col gap-4">
                     <Input
                         value={currentNote.title}
@@ -256,21 +279,11 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
     };
 
     // Two-column list view - only apply maxHeightPx on desktop (md+)
-    // On mobile, we use the default max-h-[515px] class
-    const [isMobileView, setIsMobileView] = useState(false);
-
-    useEffect(() => {
-        const checkMobile = () => setIsMobileView(window.innerWidth < 768);
-        checkMobile();
-        window.addEventListener('resize', checkMobile);
-        return () => window.removeEventListener('resize', checkMobile);
-    }, []);
-
     const cardStyle = maxHeightPx && !isMobileView ? { height: maxHeightPx } : {};
 
-    // Folders panel component (shared between mobile and desktop)
-    const FoldersPanel = ({ isMobile = false }) => (
-        <div className={`flex flex-col overflow-hidden ${isMobile ? 'w-full' : 'w-1/3 border-r border-slate-100 pr-4'}`}>
+    // Render folders panel content (inline to avoid re-mounting on state changes)
+    const renderFoldersPanel = (isMobile) => (
+        <>
             {isMobile && (
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-slate-700">Folders</h3>
@@ -349,12 +362,12 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                     ))
                 )}
             </div>
-        </div>
+        </>
     );
 
-    // Notes panel component (shared between mobile and desktop)
-    const NotesPanel = ({ isMobile = false }) => (
-        <div className={`flex flex-col overflow-hidden ${isMobile ? 'w-full' : 'w-2/3'}`}>
+    // Render notes panel content (inline to avoid re-mounting on state changes)
+    const renderNotesPanel = (isMobile) => (
+        <>
             {/* Mobile: Always show header with Folders button */}
             {isMobile && (
                 <div className="flex justify-between items-center mb-3">
@@ -481,7 +494,7 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                     <span>No Notes</span>
                 </div>
             )}
-        </div>
+        </>
     );
 
     // Default max height for dashboard widget (matches TodoWidget and ListsWidget)
@@ -500,8 +513,12 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                     <>
                         {/* Desktop View - Two columns side by side */}
                         <div className="hidden md:flex gap-4 overflow-hidden flex-1 min-h-0">
-                            <FoldersPanel isMobile={false} />
-                            <NotesPanel isMobile={false} />
+                            <div className="flex flex-col overflow-hidden w-1/3 border-r border-slate-100 pr-4">
+                                {renderFoldersPanel(false)}
+                            </div>
+                            <div className="flex flex-col overflow-hidden w-2/3">
+                                {renderNotesPanel(false)}
+                            </div>
                         </div>
 
                         {/* Mobile View - Sliding panels */}
@@ -511,12 +528,12 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
                                 style={{ transform: mobileView === 'notes' ? 'translateX(0)' : 'translateX(-100%)' }}
                             >
                                 {/* Notes Panel - Mobile (shown first/default) */}
-                                <div className="w-full flex-shrink-0 h-full overflow-hidden">
-                                    <NotesPanel isMobile={true} />
+                                <div className="w-full flex-shrink-0 h-full overflow-hidden flex flex-col">
+                                    {renderNotesPanel(true)}
                                 </div>
                                 {/* Folders Panel - Mobile */}
-                                <div className="w-full flex-shrink-0 h-full overflow-hidden">
-                                    <FoldersPanel isMobile={true} />
+                                <div className="w-full flex-shrink-0 h-full overflow-hidden flex flex-col">
+                                    {renderFoldersPanel(true)}
                                 </div>
                             </div>
                         </div>
