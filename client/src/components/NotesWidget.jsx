@@ -503,7 +503,7 @@ export default function NotesWidget({ fullHeight = false, maxHeight = null, maxH
     const defaultMaxHeight = shouldUseDefaultMaxHeight ? 'max-h-[515px]' : '';
 
     return (
-        <Card title="Notes" hideTitle={fullHeight} className={`flex flex-col ${fullHeight ? 'h-full' : ''} ${maxHeight ? maxHeight : ''} ${defaultMaxHeight}`} style={cardStyle}>
+        <Card title="Notes" hideTitle={fullHeight} className={`flex flex-col overflow-hidden ${fullHeight ? 'h-full' : ''} ${maxHeight ? maxHeight : ''} ${defaultMaxHeight}`} style={cardStyle}>
             <div className={`flex flex-col ${fullHeight || maxHeight || maxHeightPx || shouldUseDefaultMaxHeight ? 'flex-1 min-h-0' : ''}`}>
                 {loading ? (
                     <div className="flex justify-center items-center py-10 text-indigo-500">
