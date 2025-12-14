@@ -183,7 +183,7 @@ function LanguageInputPage() {
                 )}
 
                 {/* Input Area - with extra padding for mobile browser nav bars */}
-                <div className="z-20 p-4 pb-16 md:pb-4 w-full transition-all duration-500">
+                <div className="z-20 p-4 pb-24 md:pb-4 w-full transition-all duration-500">
                     {/* Helper text - above input on mobile */}
                     {!hasStarted && (
                         <p className="md:hidden text-xs text-slate-400 text-center mb-3 px-4">
