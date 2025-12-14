@@ -204,7 +204,7 @@ function LanguageInputPage() {
                 {/* Input Area - with dynamic padding for mobile browser nav bars */}
                 <div
                     className="z-20 p-4 w-full transition-all duration-500"
-                    style={{ paddingBottom: `calc(1rem + ${bottomOffset}px)` }}
+                    style={{ paddingBottom: `calc(1.5rem + ${bottomOffset}px)` }}
                 >
                     {/* Helper text - above input on mobile */}
                     {!hasStarted && (
