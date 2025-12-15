@@ -33,37 +33,43 @@ const initDb = async () => {
 
 // Helper function to log todo history
 const logTodoHistory = async (todoId, action, fieldChanged = null, oldValue = null, newValue = null) => {
+    console.log(`[HISTORY] Logging todo history: todoId=${todoId}, action=${action}`);
     try {
-        await db.query(
-            'INSERT INTO todo_history (todo_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5)',
+        const result = await db.query(
+            'INSERT INTO todo_history (todo_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5) RETURNING id',
             [todoId, action, fieldChanged, oldValue, newValue]
         );
+        console.log(`[HISTORY] Todo history logged successfully, id=${result.rows[0]?.id}`);
     } catch (err) {
-        console.error('Error logging todo history:', err);
+        console.error('[HISTORY] Error logging todo history:', err.message, err.stack);
     }
 };
 
 // Helper function to log note history
 const logNoteHistory = async (noteId, action, fieldChanged = null, oldValue = null, newValue = null) => {
+    console.log(`[HISTORY] Logging note history: noteId=${noteId}, action=${action}`);
     try {
-        await db.query(
-            'INSERT INTO note_history (note_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5)',
+        const result = await db.query(
+            'INSERT INTO note_history (note_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5) RETURNING id',
             [noteId, action, fieldChanged, oldValue, newValue]
         );
+        console.log(`[HISTORY] Note history logged successfully, id=${result.rows[0]?.id}`);
     } catch (err) {
-        console.error('Error logging note history:', err);
+        console.error('[HISTORY] Error logging note history:', err.message, err.stack);
     }
 };
 
 // Helper function to log list history
 const logListHistory = async (listId, action, fieldChanged = null, oldValue = null, newValue = null) => {
+    console.log(`[HISTORY] Logging list history: listId=${listId}, action=${action}`);
     try {
-        await db.query(
-            'INSERT INTO list_history (list_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5)',
+        const result = await db.query(
+            'INSERT INTO list_history (list_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5) RETURNING id',
             [listId, action, fieldChanged, oldValue, newValue]
         );
+        console.log(`[HISTORY] List history logged successfully, id=${result.rows[0]?.id}`);
     } catch (err) {
-        console.error('Error logging list history:', err);
+        console.error('[HISTORY] Error logging list history:', err.message, err.stack);
     }
 };
 
