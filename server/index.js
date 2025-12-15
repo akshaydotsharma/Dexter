@@ -45,17 +45,17 @@ const logTodoHistory = async (todoId, action, fieldChanged = null, oldValue = nu
     }
 };
 
-// Helper function to log note history
-const logNoteHistory = async (noteId, action, fieldChanged = null, oldValue = null, newValue = null) => {
-    console.log(`[HISTORY] Logging note history: noteId=${noteId}, action=${action}`);
+// Helper function to log note history (supports both notes and folders)
+const logNoteHistory = async (entityId, action, fieldChanged = null, oldValue = null, newValue = null, entityType = 'note') => {
+    console.log(`[HISTORY] Logging ${entityType} history: id=${entityId}, action=${action}`);
     try {
         const result = await db.query(
-            'INSERT INTO note_history (note_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-            [noteId, action, fieldChanged, oldValue, newValue]
+            'INSERT INTO note_history (note_id, entity_type, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+            [entityId, entityType, action, fieldChanged, oldValue, newValue]
         );
-        console.log(`[HISTORY] Note history logged successfully, id=${result.rows[0]?.id}`);
+        console.log(`[HISTORY] ${entityType} history logged successfully, id=${result.rows[0]?.id}`);
     } catch (err) {
-        console.error('[HISTORY] Error logging note history:', err.message, err.stack);
+        console.error(`[HISTORY] Error logging ${entityType} history:`, err.message, err.stack);
     }
 };
 
@@ -269,7 +269,12 @@ app.post('/api/note-folders', async (req, res) => {
     try {
         const { name } = req.body;
         const { rows } = await db.query('INSERT INTO note_folders (name) VALUES ($1) RETURNING *', [name]);
-        res.status(201).json(rows[0]);
+        const folder = rows[0];
+
+        // Log folder creation
+        await logNoteHistory(folder.id, 'created', null, null, JSON.stringify({ name }), 'folder');
+
+        res.status(201).json(folder);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -279,7 +284,18 @@ app.put('/api/note-folders/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { name } = req.body;
+
+        // Get current folder for history
+        const { rows: currentRows } = await db.query('SELECT * FROM note_folders WHERE id = $1', [id]);
+        const oldName = currentRows.length > 0 ? currentRows[0].name : null;
+
         const { rows } = await db.query('UPDATE note_folders SET name = $1 WHERE id = $2 RETURNING *', [name, id]);
+
+        // Log folder rename
+        if (oldName !== name) {
+            await logNoteHistory(parseInt(id), 'updated', 'name', oldName, name, 'folder');
+        }
+
         res.json(rows[0]);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -289,7 +305,16 @@ app.put('/api/note-folders/:id', async (req, res) => {
 app.delete('/api/note-folders/:id', async (req, res) => {
     try {
         const { id } = req.params;
+
+        // Get folder name before deletion
+        const { rows: folderRows } = await db.query('SELECT name FROM note_folders WHERE id = $1', [id]);
+        const folderName = folderRows.length > 0 ? folderRows[0].name : null;
+
         await db.query('DELETE FROM note_folders WHERE id = $1', [id]);
+
+        // Log folder deletion
+        await logNoteHistory(parseInt(id), 'deleted', null, folderName, null, 'folder');
+
         res.status(204).send();
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -321,9 +346,9 @@ app.get('/api/notes/:id/history', async (req, res) => {
     try {
         const { id } = req.params;
         const { rows } = await db.query(
-            `SELECT id, note_id, action, field_changed, old_value, new_value,
+            `SELECT id, note_id, entity_type, action, field_changed, old_value, new_value,
                     to_char(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp
-             FROM note_history WHERE note_id = $1 ORDER BY timestamp DESC`,
+             FROM note_history WHERE note_id = $1 AND entity_type = 'note' ORDER BY timestamp DESC`,
             [id]
         );
         res.json(rows);
@@ -332,16 +357,20 @@ app.get('/api/notes/:id/history', async (req, res) => {
     }
 });
 
-// Get all note history (for dashboard/analytics)
+// Get all note history (for dashboard/analytics) - includes both notes and folders
 app.get('/api/note-history', async (req, res) => {
     try {
         const { limit = 50 } = req.query;
         const { rows } = await db.query(
-            `SELECT h.id, h.note_id, h.action, h.field_changed, h.old_value, h.new_value,
+            `SELECT h.id, h.note_id, h.entity_type, h.action, h.field_changed, h.old_value, h.new_value,
                     to_char(h.timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp,
-                    n.title as note_title
+                    CASE
+                        WHEN h.entity_type = 'folder' THEN f.name
+                        ELSE n.title
+                    END as note_title
              FROM note_history h
-             LEFT JOIN notes n ON h.note_id = n.id
+             LEFT JOIN notes n ON h.note_id = n.id AND h.entity_type = 'note'
+             LEFT JOIN note_folders f ON h.note_id = f.id AND h.entity_type = 'folder'
              ORDER BY h.timestamp DESC
              LIMIT $1`,
             [parseInt(limit)]

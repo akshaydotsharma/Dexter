@@ -32,16 +32,25 @@ CREATE TABLE IF NOT EXISTS todo_history (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Note history/audit log table
+-- Note history/audit log table (tracks both notes and folders)
 CREATE TABLE IF NOT EXISTS note_history (
     id SERIAL PRIMARY KEY,
-    note_id INTEGER NOT NULL,
+    note_id INTEGER NOT NULL, -- note_id or folder_id depending on entity_type
+    entity_type TEXT DEFAULT 'note', -- 'note' or 'folder'
     action TEXT NOT NULL, -- 'created', 'updated', 'deleted', 'moved'
     field_changed TEXT, -- which field was changed (null for create/delete)
     old_value TEXT, -- previous value (null for create)
     new_value TEXT, -- new value (null for delete)
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add entity_type column if it doesn't exist (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'note_history' AND column_name = 'entity_type') THEN
+        ALTER TABLE note_history ADD COLUMN entity_type TEXT DEFAULT 'note';
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS note_folders (
     id SERIAL PRIMARY KEY,
