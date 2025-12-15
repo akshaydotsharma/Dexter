@@ -5,7 +5,42 @@ CREATE TABLE IF NOT EXISTS todos (
     completed BOOLEAN DEFAULT FALSE,
     due_date TIMESTAMP,
     tag TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP DEFAULT NULL
+);
+
+-- Add updated_at and deleted_at columns if they don't exist (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'todos' AND column_name = 'updated_at') THEN
+        ALTER TABLE todos ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'todos' AND column_name = 'deleted_at') THEN
+        ALTER TABLE todos ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL;
+    END IF;
+END $$;
+
+-- Task history/audit log table
+CREATE TABLE IF NOT EXISTS todo_history (
+    id SERIAL PRIMARY KEY,
+    todo_id INTEGER NOT NULL,
+    action TEXT NOT NULL, -- 'created', 'updated', 'completed', 'uncompleted', 'deleted', 'restored'
+    field_changed TEXT, -- which field was changed (null for create/delete)
+    old_value TEXT, -- previous value (null for create)
+    new_value TEXT, -- new value (null for delete)
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Note history/audit log table
+CREATE TABLE IF NOT EXISTS note_history (
+    id SERIAL PRIMARY KEY,
+    note_id INTEGER NOT NULL,
+    action TEXT NOT NULL, -- 'created', 'updated', 'deleted', 'moved'
+    field_changed TEXT, -- which field was changed (null for create/delete)
+    old_value TEXT, -- previous value (null for create)
+    new_value TEXT, -- new value (null for delete)
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS note_folders (
@@ -39,6 +74,17 @@ CREATE TABLE IF NOT EXISTS lists (
     title TEXT NOT NULL,
     items JSONB DEFAULT '[]',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- List history/audit log table
+CREATE TABLE IF NOT EXISTS list_history (
+    id SERIAL PRIMARY KEY,
+    list_id INTEGER NOT NULL,
+    action TEXT NOT NULL, -- 'created', 'updated', 'deleted', 'item_added', 'item_removed', 'item_checked', 'item_unchecked'
+    field_changed TEXT, -- which field was changed (null for create/delete)
+    old_value TEXT, -- previous value (null for create)
+    new_value TEXT, -- new value (null for delete)
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS dashboard_config (

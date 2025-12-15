@@ -31,10 +31,82 @@ const initDb = async () => {
 
 // API Routes
 
+// Helper function to log todo history
+const logTodoHistory = async (todoId, action, fieldChanged = null, oldValue = null, newValue = null) => {
+    try {
+        await db.query(
+            'INSERT INTO todo_history (todo_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5)',
+            [todoId, action, fieldChanged, oldValue, newValue]
+        );
+    } catch (err) {
+        console.error('Error logging todo history:', err);
+    }
+};
+
+// Helper function to log note history
+const logNoteHistory = async (noteId, action, fieldChanged = null, oldValue = null, newValue = null) => {
+    try {
+        await db.query(
+            'INSERT INTO note_history (note_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5)',
+            [noteId, action, fieldChanged, oldValue, newValue]
+        );
+    } catch (err) {
+        console.error('Error logging note history:', err);
+    }
+};
+
+// Helper function to log list history
+const logListHistory = async (listId, action, fieldChanged = null, oldValue = null, newValue = null) => {
+    try {
+        await db.query(
+            'INSERT INTO list_history (list_id, action, field_changed, old_value, new_value) VALUES ($1, $2, $3, $4, $5)',
+            [listId, action, fieldChanged, oldValue, newValue]
+        );
+    } catch (err) {
+        console.error('Error logging list history:', err);
+    }
+};
+
 // TODOS
 app.get('/api/todos', async (req, res) => {
     try {
-        const { rows } = await db.query('SELECT * FROM todos ORDER BY created_at DESC');
+        const { rows } = await db.query('SELECT * FROM todos WHERE deleted_at IS NULL ORDER BY created_at DESC');
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get todo history
+app.get('/api/todos/:id/history', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rows } = await db.query(
+            `SELECT id, todo_id, action, field_changed, old_value, new_value,
+                    to_char(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp
+             FROM todo_history WHERE todo_id = $1 ORDER BY timestamp DESC`,
+            [id]
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get all todo history (for dashboard/analytics)
+app.get('/api/todo-history', async (req, res) => {
+    try {
+        const { limit = 50 } = req.query;
+        const { rows } = await db.query(
+            `SELECT h.id, h.todo_id, h.action, h.field_changed, h.old_value, h.new_value,
+                    to_char(h.timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp,
+                    t.title as todo_title
+             FROM todo_history h
+             LEFT JOIN todos t ON h.todo_id = t.id
+             ORDER BY h.timestamp DESC
+             LIMIT $1`,
+            [parseInt(limit)]
+        );
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -48,7 +120,12 @@ app.post('/api/todos', async (req, res) => {
             'INSERT INTO todos (title, description, due_date, tag) VALUES ($1, $2, $3, $4) RETURNING *',
             [title, description || null, due_date || null, tag || null]
         );
-        res.status(201).json(rows[0]);
+        const todo = rows[0];
+
+        // Log creation
+        await logTodoHistory(todo.id, 'created', null, null, JSON.stringify({ title, description, due_date, tag }));
+
+        res.status(201).json(todo);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -59,51 +136,70 @@ app.put('/api/todos/:id', async (req, res) => {
         const { id } = req.params;
         const { title, description, completed, due_date, tag } = req.body;
 
-        console.log('=== UPDATE TODO REQUEST ===');
-        console.log('ID:', id);
-        console.log('Request body:', req.body);
-        console.log('due_date value:', due_date);
-        console.log('due_date type:', typeof due_date);
+        // Get current todo state for history logging
+        const { rows: currentRows } = await db.query('SELECT * FROM todos WHERE id = $1', [id]);
+        if (currentRows.length === 0) {
+            return res.status(404).json({ error: 'Todo not found' });
+        }
+        const currentTodo = currentRows[0];
 
         // Build dynamic update query based on provided fields
-        const updates = [];
+        const updates = ['updated_at = CURRENT_TIMESTAMP'];
         const values = [];
         let paramCount = 1;
+        const changes = [];
 
-        if (title !== undefined) {
+        if (title !== undefined && title !== currentTodo.title) {
             updates.push(`title = $${paramCount++}`);
             values.push(title);
+            changes.push({ field: 'title', old: currentTodo.title, new: title });
         }
-        if (description !== undefined) {
+        if (description !== undefined && description !== currentTodo.description) {
             updates.push(`description = $${paramCount++}`);
             values.push(description);
+            changes.push({ field: 'description', old: currentTodo.description, new: description });
         }
-        if (completed !== undefined) {
+        if (completed !== undefined && completed !== currentTodo.completed) {
             updates.push(`completed = $${paramCount++}`);
             values.push(completed);
+            changes.push({ field: 'completed', old: currentTodo.completed, new: completed });
         }
         if (due_date !== undefined) {
-            updates.push(`due_date = $${paramCount++}`);
-            values.push(due_date);
-            console.log('Adding due_date to update:', due_date);
+            const oldDueDate = currentTodo.due_date ? currentTodo.due_date.toISOString() : null;
+            if (due_date !== oldDueDate) {
+                updates.push(`due_date = $${paramCount++}`);
+                values.push(due_date);
+                changes.push({ field: 'due_date', old: oldDueDate, new: due_date });
+            }
         }
-        if (tag !== undefined) {
+        if (tag !== undefined && tag !== currentTodo.tag) {
             updates.push(`tag = $${paramCount++}`);
             values.push(tag);
+            changes.push({ field: 'tag', old: currentTodo.tag, new: tag });
         }
 
-        if (updates.length === 0) {
-            return res.status(400).json({ error: 'No fields to update' });
+        if (values.length === 0) {
+            return res.json(currentTodo); // No actual changes
         }
 
         values.push(id);
         const query = `UPDATE todos SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`;
-        console.log('SQL Query:', query);
-        console.log('Values:', values);
-
         const { rows } = await db.query(query, values);
-        console.log('Updated todo:', rows[0]);
-        console.log('=== END UPDATE ===\n');
+
+        // Log each change to history
+        for (const change of changes) {
+            let action = 'updated';
+            if (change.field === 'completed') {
+                action = change.new ? 'completed' : 'uncompleted';
+            }
+            await logTodoHistory(
+                id,
+                action,
+                change.field,
+                change.old !== null ? String(change.old) : null,
+                change.new !== null ? String(change.new) : null
+            );
+        }
 
         res.json(rows[0]);
     } catch (err) {
@@ -115,8 +211,39 @@ app.put('/api/todos/:id', async (req, res) => {
 app.delete('/api/todos/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        await db.query('DELETE FROM todos WHERE id = $1', [id]);
+        const { permanent } = req.query;
+
+        if (permanent === 'true') {
+            // Permanent delete
+            await db.query('DELETE FROM todos WHERE id = $1', [id]);
+            await logTodoHistory(id, 'permanently_deleted');
+        } else {
+            // Soft delete
+            await db.query('UPDATE todos SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [id]);
+            await logTodoHistory(id, 'deleted');
+        }
+
         res.status(204).send();
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Restore a soft-deleted todo
+app.post('/api/todos/:id/restore', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rows } = await db.query(
+            'UPDATE todos SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *',
+            [id]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'Todo not found' });
+        }
+
+        await logTodoHistory(id, 'restored');
+        res.json(rows[0]);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -183,6 +310,42 @@ app.get('/api/notes', async (req, res) => {
     }
 });
 
+// Get note history
+app.get('/api/notes/:id/history', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rows } = await db.query(
+            `SELECT id, note_id, action, field_changed, old_value, new_value,
+                    to_char(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp
+             FROM note_history WHERE note_id = $1 ORDER BY timestamp DESC`,
+            [id]
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get all note history (for dashboard/analytics)
+app.get('/api/note-history', async (req, res) => {
+    try {
+        const { limit = 50 } = req.query;
+        const { rows } = await db.query(
+            `SELECT h.id, h.note_id, h.action, h.field_changed, h.old_value, h.new_value,
+                    to_char(h.timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp,
+                    n.title as note_title
+             FROM note_history h
+             LEFT JOIN notes n ON h.note_id = n.id
+             ORDER BY h.timestamp DESC
+             LIMIT $1`,
+            [parseInt(limit)]
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/notes', async (req, res) => {
     try {
         const { title, content, folder_id } = req.body;
@@ -190,7 +353,12 @@ app.post('/api/notes', async (req, res) => {
             'INSERT INTO notes (title, content, folder_id, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING *',
             [title, content, folder_id || null]
         );
-        res.status(201).json(rows[0]);
+        const note = rows[0];
+
+        // Log creation
+        await logNoteHistory(note.id, 'created', null, null, JSON.stringify({ title, content, folder_id: folder_id || null }));
+
+        res.status(201).json(note);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -200,12 +368,47 @@ app.put('/api/notes/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { title, content, folder_id } = req.body;
+
+        // Get current note state for history logging
+        const { rows: currentRows } = await db.query('SELECT * FROM notes WHERE id = $1', [id]);
+        if (currentRows.length === 0) {
+            return res.status(404).json({ error: 'Note not found' });
+        }
+        const currentNote = currentRows[0];
+
+        // Track changes
+        const changes = [];
+        if (title !== undefined && title !== currentNote.title) {
+            changes.push({ field: 'title', old: currentNote.title, new: title });
+        }
+        if (content !== undefined && content !== currentNote.content) {
+            changes.push({ field: 'content', old: currentNote.content, new: content });
+        }
+        const newFolderId = folder_id !== undefined ? folder_id : null;
+        if (newFolderId !== currentNote.folder_id) {
+            changes.push({ field: 'folder_id', old: currentNote.folder_id, new: newFolderId, action: 'moved' });
+        }
+
         const { rows } = await db.query(
             'UPDATE notes SET title = $1, content = $2, folder_id = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *',
-            [title, content, folder_id !== undefined ? folder_id : null, id]
+            [title, content, newFolderId, id]
         );
+
+        // Log each change to history
+        for (const change of changes) {
+            const action = change.action || 'updated';
+            await logNoteHistory(
+                id,
+                action,
+                change.field,
+                change.old !== null ? String(change.old) : null,
+                change.new !== null ? String(change.new) : null
+            );
+        }
+
         res.json(rows[0]);
     } catch (err) {
+        console.error('Error updating note:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -213,7 +416,16 @@ app.put('/api/notes/:id', async (req, res) => {
 app.delete('/api/notes/:id', async (req, res) => {
     try {
         const { id } = req.params;
+
+        // Get note info before deletion for logging
+        const { rows: noteRows } = await db.query('SELECT title FROM notes WHERE id = $1', [id]);
+        const noteTitle = noteRows.length > 0 ? noteRows[0].title : null;
+
         await db.query('DELETE FROM notes WHERE id = $1', [id]);
+
+        // Log deletion
+        await logNoteHistory(id, 'deleted', null, noteTitle, null);
+
         res.status(204).send();
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -230,11 +442,52 @@ app.get('/api/lists', async (req, res) => {
     }
 });
 
+// Get list history
+app.get('/api/lists/:id/history', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rows } = await db.query(
+            `SELECT id, list_id, action, field_changed, old_value, new_value,
+                    to_char(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp
+             FROM list_history WHERE list_id = $1 ORDER BY timestamp DESC`,
+            [id]
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get all list history (for dashboard/analytics)
+app.get('/api/list-history', async (req, res) => {
+    try {
+        const { limit = 50 } = req.query;
+        const { rows } = await db.query(
+            `SELECT h.id, h.list_id, h.action, h.field_changed, h.old_value, h.new_value,
+                    to_char(h.timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as timestamp,
+                    l.title as list_title
+             FROM list_history h
+             LEFT JOIN lists l ON h.list_id = l.id
+             ORDER BY h.timestamp DESC
+             LIMIT $1`,
+            [parseInt(limit)]
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/lists', async (req, res) => {
     try {
         const { title, items } = req.body;
         const { rows } = await db.query('INSERT INTO lists (title, items) VALUES ($1, $2) RETURNING *', [title, JSON.stringify(items)]);
-        res.status(201).json(rows[0]);
+        const list = rows[0];
+
+        // Log creation
+        await logListHistory(list.id, 'created', null, null, JSON.stringify({ title, items }));
+
+        res.status(201).json(list);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -244,9 +497,87 @@ app.put('/api/lists/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { title, items } = req.body;
+
+        // Get current list state for history logging
+        const { rows: currentRows } = await db.query('SELECT * FROM lists WHERE id = $1', [id]);
+        if (currentRows.length === 0) {
+            return res.status(404).json({ error: 'List not found' });
+        }
+        const currentList = currentRows[0];
+
+        // Track changes
+        const changes = [];
+        if (title !== undefined && title !== currentList.title) {
+            changes.push({ field: 'title', old: currentList.title, new: title });
+        }
+
+        // Compare items arrays
+        const currentItems = currentList.items || [];
+        const newItems = items || [];
+        const currentItemsStr = JSON.stringify(currentItems);
+        const newItemsStr = JSON.stringify(newItems);
+
+        if (currentItemsStr !== newItemsStr) {
+            // Detect specific item changes
+            const currentItemTexts = currentItems.map(i => i.text || i);
+            const newItemTexts = newItems.map(i => i.text || i);
+
+            // Check for added items
+            newItems.forEach(newItem => {
+                const itemText = newItem.text || newItem;
+                if (!currentItemTexts.includes(itemText)) {
+                    changes.push({ field: 'items', action: 'item_added', old: null, new: itemText });
+                }
+            });
+
+            // Check for removed items
+            currentItems.forEach(oldItem => {
+                const itemText = oldItem.text || oldItem;
+                if (!newItemTexts.includes(itemText)) {
+                    changes.push({ field: 'items', action: 'item_removed', old: itemText, new: null });
+                }
+            });
+
+            // Check for checked/unchecked items
+            newItems.forEach(newItem => {
+                if (typeof newItem === 'object' && newItem.text) {
+                    const oldItem = currentItems.find(i => (i.text || i) === newItem.text);
+                    if (oldItem && typeof oldItem === 'object') {
+                        if (oldItem.checked !== newItem.checked) {
+                            changes.push({
+                                field: 'items',
+                                action: newItem.checked ? 'item_checked' : 'item_unchecked',
+                                old: newItem.text,
+                                new: newItem.checked ? 'checked' : 'unchecked'
+                            });
+                        }
+                    }
+                }
+            });
+
+            // If no specific changes detected, log general items update
+            if (changes.filter(c => c.field === 'items').length === 0) {
+                changes.push({ field: 'items', old: currentItemsStr, new: newItemsStr });
+            }
+        }
+
         const { rows } = await db.query('UPDATE lists SET title = $1, items = $2 WHERE id = $3 RETURNING *', [title, JSON.stringify(items), id]);
+
+        // Log each change to history
+        for (const change of changes) {
+            const action = change.action || 'updated';
+            await logListHistory(
+                id,
+                action,
+                change.field,
+                change.old !== null ? String(change.old) : null,
+                change.new !== null ? String(change.new) : null
+            );
+        }
+
         res.json(rows[0]);
     } catch (err) {
+        console.error('Error updating list:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -254,7 +585,16 @@ app.put('/api/lists/:id', async (req, res) => {
 app.delete('/api/lists/:id', async (req, res) => {
     try {
         const { id } = req.params;
+
+        // Get list info before deletion for logging
+        const { rows: listRows } = await db.query('SELECT title FROM lists WHERE id = $1', [id]);
+        const listTitle = listRows.length > 0 ? listRows[0].title : null;
+
         await db.query('DELETE FROM lists WHERE id = $1', [id]);
+
+        // Log deletion
+        await logListHistory(id, 'deleted', null, listTitle, null);
+
         res.status(204).send();
     } catch (err) {
         res.status(500).json({ error: err.message });

@@ -10,7 +10,10 @@ const api = axios.create({
 export const getTodos = () => api.get('/todos');
 export const createTodo = (todoData) => api.post('/todos', todoData);
 export const updateTodo = (id, updates) => api.put(`/todos/${id}`, updates);
-export const deleteTodo = (id) => api.delete(`/todos/${id}`);
+export const deleteTodo = (id, permanent = false) => api.delete(`/todos/${id}${permanent ? '?permanent=true' : ''}`);
+export const restoreTodo = (id) => api.post(`/todos/${id}/restore`);
+export const getTodoHistory = (id) => api.get(`/todos/${id}/history`);
+export const getAllTodoHistory = (limit = 50) => api.get(`/todo-history?limit=${limit}`);
 
 // Note Folders
 export const getNoteFolders = () => api.get('/note-folders');
@@ -23,11 +26,16 @@ export const getNotes = (folderId) => api.get('/notes', { params: folderId ? { f
 export const createNote = (title, content, folderId) => api.post('/notes', { title, content, folder_id: folderId });
 export const updateNote = (id, title, content, folderId) => api.put(`/notes/${id}`, { title, content, folder_id: folderId });
 export const deleteNote = (id) => api.delete(`/notes/${id}`);
+export const getNoteHistory = (id) => api.get(`/notes/${id}/history`);
+export const getAllNoteHistory = (limit = 50) => api.get(`/note-history?limit=${limit}`);
 
+// Lists
 export const getLists = () => api.get('/lists');
 export const createList = (title, items) => api.post('/lists', { title, items });
 export const updateList = (id, title, items) => api.put(`/lists/${id}`, { title, items });
 export const deleteList = (id) => api.delete(`/lists/${id}`);
+export const getListHistory = (id) => api.get(`/lists/${id}/history`);
+export const getAllListHistory = (limit = 50) => api.get(`/list-history?limit=${limit}`);
 
 export const getConfig = () => api.get('/config');
 export const updateConfig = (layout_preference) => api.put('/config', { layout_preference });

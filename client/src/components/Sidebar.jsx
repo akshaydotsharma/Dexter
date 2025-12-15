@@ -5,7 +5,6 @@ export default function Sidebar({ currentView, setCurrentView, isMobileOpen, set
         { id: 'chatbot', icon: Bot, label: 'AI Assistant' },
         { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
         { id: 'todos', icon: CheckSquare, label: 'Tasks' },
-        { id: 'todos-v2', icon: CheckSquare, label: 'Tasks V2' },
         { id: 'notes', icon: FileText, label: 'Notes' },
         { id: 'lists', icon: ListIcon, label: 'Lists' },
     ];

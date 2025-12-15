@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import DashboardGrid from './components/DashboardGrid';
 import { getConfig, getStats } from './services/api';
 import TodoWidget from './components/TodoWidget';
-import TodoWidgetV2 from './components/TodoWidgetV2';
 import NotesWidget from './components/NotesWidget';
 import ChatPopover from './components/ChatPopover';
 import ListsWidget from './components/ListsWidget';
@@ -74,32 +72,38 @@ function App() {
         );
       case 'todos':
         return (
-          <div
-            className="max-w-3xl mx-auto w-full h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]"
-          >
-            <TodoWidget fullHeight />
-          </div>
-        );
-      case 'todos-v2':
-        return (
           <div className="max-w-3xl mx-auto w-full">
-            <TodoWidgetV2 />
+            <header className="hidden md:block mb-6">
+              <h1 className="text-2xl font-bold text-slate-800">Tasks</h1>
+              <p className="text-slate-500">Manage your tasks and to-dos.</p>
+            </header>
+            <div className="h-[calc(100vh-6rem)] md:h-[calc(100vh-12rem)]">
+              <TodoWidget fullHeight />
+            </div>
           </div>
         );
       case 'notes':
         return (
-          <div
-            className="max-w-3xl mx-auto w-full h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]"
-          >
-            <NotesWidget fullHeight />
+          <div className="max-w-3xl mx-auto w-full">
+            <header className="hidden md:block mb-6">
+              <h1 className="text-2xl font-bold text-slate-800">Notes</h1>
+              <p className="text-slate-500">Organize your thoughts and ideas.</p>
+            </header>
+            <div className="h-[calc(100vh-6rem)] md:h-[calc(100vh-12rem)]">
+              <NotesWidget fullHeight />
+            </div>
           </div>
         );
       case 'lists':
         return (
-          <div
-            className="max-w-3xl mx-auto w-full h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]"
-          >
-            <ListsWidget fullHeight />
+          <div className="max-w-3xl mx-auto w-full">
+            <header className="hidden md:block mb-6">
+              <h1 className="text-2xl font-bold text-slate-800">Lists</h1>
+              <p className="text-slate-500">Create and manage your lists.</p>
+            </header>
+            <div className="h-[calc(100vh-6rem)] md:h-[calc(100vh-12rem)]">
+              <ListsWidget fullHeight />
+            </div>
           </div>
         );
       case 'dashboard':

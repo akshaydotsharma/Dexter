@@ -67,6 +67,10 @@ export default function TodoWidget({ fullHeight = false }) {
             if (popoverRef.current && !popoverRef.current.contains(event.target) && editingId) {
                 // Check if click is not on an edit button
                 if (!event.target.closest('[data-edit-button]')) {
+                    // Don't close if clicking inside MUI DateTimePicker popup
+                    if (event.target.closest('.MuiPopper-root') || event.target.closest('.MuiPickersPopper-root') || event.target.closest('.MuiDialog-root')) {
+                        return;
+                    }
                     resetEditForm();
                 }
             }
