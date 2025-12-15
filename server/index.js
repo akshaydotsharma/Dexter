@@ -355,17 +355,20 @@ app.get('/api/note-history', async (req, res) => {
 app.post('/api/notes', async (req, res) => {
     try {
         const { title, content, folder_id } = req.body;
+        console.log(`[NOTES] Creating note: title="${title}", folder_id=${folder_id}`);
         const { rows } = await db.query(
             'INSERT INTO notes (title, content, folder_id, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING *',
             [title, content, folder_id || null]
         );
         const note = rows[0];
+        console.log(`[NOTES] Note created with id=${note.id}`);
 
         // Log creation
         await logNoteHistory(note.id, 'created', null, null, JSON.stringify({ title, content, folder_id: folder_id || null }));
 
         res.status(201).json(note);
     } catch (err) {
+        console.error('[NOTES] Error creating note:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -374,6 +377,7 @@ app.put('/api/notes/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { title, content, folder_id } = req.body;
+        console.log(`[NOTES] Updating note id=${id}: title="${title}", folder_id=${folder_id}`);
 
         // Get current note state for history logging
         const { rows: currentRows } = await db.query('SELECT * FROM notes WHERE id = $1', [id]);
@@ -381,6 +385,7 @@ app.put('/api/notes/:id', async (req, res) => {
             return res.status(404).json({ error: 'Note not found' });
         }
         const currentNote = currentRows[0];
+        console.log(`[NOTES] Current note state: title="${currentNote.title}", folder_id=${currentNote.folder_id}`);
 
         // Track changes
         const changes = [];
@@ -394,6 +399,7 @@ app.put('/api/notes/:id', async (req, res) => {
         if (newFolderId !== currentNote.folder_id) {
             changes.push({ field: 'folder_id', old: currentNote.folder_id, new: newFolderId, action: 'moved' });
         }
+        console.log(`[NOTES] Detected ${changes.length} changes:`, JSON.stringify(changes.map(c => c.field)));
 
         const { rows } = await db.query(
             'UPDATE notes SET title = $1, content = $2, folder_id = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *',
@@ -414,7 +420,7 @@ app.put('/api/notes/:id', async (req, res) => {
 
         res.json(rows[0]);
     } catch (err) {
-        console.error('Error updating note:', err);
+        console.error('[NOTES] Error updating note:', err);
         res.status(500).json({ error: err.message });
     }
 });
