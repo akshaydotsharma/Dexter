@@ -193,7 +193,7 @@ app.put('/api/todos/:id', async (req, res) => {
                 action = change.new ? 'completed' : 'uncompleted';
             }
             await logTodoHistory(
-                id,
+                parseInt(id),
                 action,
                 change.field,
                 change.old !== null ? String(change.old) : null,
@@ -216,11 +216,11 @@ app.delete('/api/todos/:id', async (req, res) => {
         if (permanent === 'true') {
             // Permanent delete
             await db.query('DELETE FROM todos WHERE id = $1', [id]);
-            await logTodoHistory(id, 'permanently_deleted');
+            await logTodoHistory(parseInt(id), 'permanently_deleted');
         } else {
             // Soft delete
             await db.query('UPDATE todos SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [id]);
-            await logTodoHistory(id, 'deleted');
+            await logTodoHistory(parseInt(id), 'deleted');
         }
 
         res.status(204).send();
@@ -242,7 +242,7 @@ app.post('/api/todos/:id/restore', async (req, res) => {
             return res.status(404).json({ error: 'Todo not found' });
         }
 
-        await logTodoHistory(id, 'restored');
+        await logTodoHistory(parseInt(id), 'restored');
         res.json(rows[0]);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -398,7 +398,7 @@ app.put('/api/notes/:id', async (req, res) => {
         for (const change of changes) {
             const action = change.action || 'updated';
             await logNoteHistory(
-                id,
+                parseInt(id),
                 action,
                 change.field,
                 change.old !== null ? String(change.old) : null,
@@ -424,7 +424,7 @@ app.delete('/api/notes/:id', async (req, res) => {
         await db.query('DELETE FROM notes WHERE id = $1', [id]);
 
         // Log deletion
-        await logNoteHistory(id, 'deleted', null, noteTitle, null);
+        await logNoteHistory(parseInt(id), 'deleted', null, noteTitle, null);
 
         res.status(204).send();
     } catch (err) {
@@ -567,7 +567,7 @@ app.put('/api/lists/:id', async (req, res) => {
         for (const change of changes) {
             const action = change.action || 'updated';
             await logListHistory(
-                id,
+                parseInt(id),
                 action,
                 change.field,
                 change.old !== null ? String(change.old) : null,
@@ -593,7 +593,7 @@ app.delete('/api/lists/:id', async (req, res) => {
         await db.query('DELETE FROM lists WHERE id = $1', [id]);
 
         // Log deletion
-        await logListHistory(id, 'deleted', null, listTitle, null);
+        await logListHistory(parseInt(id), 'deleted', null, listTitle, null);
 
         res.status(204).send();
     } catch (err) {
@@ -742,6 +742,8 @@ app.post('/api/ai/parse', async (req, res) => {
                     [todoData.title, todoData.description || null, todoData.due_date || null, todoData.tag || null]
                 );
                 dbResult = todoRows[0];
+                // Log creation to history
+                await logTodoHistory(dbResult.id, 'created', null, null, JSON.stringify({ title: todoData.title, description: todoData.description, due_date: todoData.due_date, tag: todoData.tag }));
                 return res.json({
                     success: true,
                     action: 'CREATE_TODO',
@@ -757,6 +759,8 @@ app.post('/api/ai/parse', async (req, res) => {
                     [noteData.title, noteData.content]
                 );
                 dbResult = noteRows[0];
+                // Log creation to history
+                await logNoteHistory(dbResult.id, 'created', null, null, JSON.stringify({ title: noteData.title, content: noteData.content }));
                 return res.json({
                     success: true,
                     action: 'CREATE_NOTE',
@@ -772,6 +776,8 @@ app.post('/api/ai/parse', async (req, res) => {
                     [listData.title, JSON.stringify(listData.items)]
                 );
                 dbResult = listRows[0];
+                // Log creation to history
+                await logListHistory(dbResult.id, 'created', null, null, JSON.stringify({ title: listData.title, items: listData.items }));
                 return res.json({
                     success: true,
                     action: 'CREATE_LIST',
