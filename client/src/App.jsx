@@ -72,36 +72,36 @@ function App() {
         );
       case 'todos':
         return (
-          <div className="max-w-3xl mx-auto w-full">
-            <header className="hidden md:block mb-6">
+          <div className="max-w-3xl mx-auto w-full md:h-[calc(100vh-4rem)] md:flex md:flex-col">
+            <header className="hidden md:block mb-6 flex-shrink-0">
               <h1 className="text-2xl font-bold text-slate-800">Tasks</h1>
               <p className="text-slate-500">Manage your tasks and to-dos.</p>
             </header>
-            <div className="h-[calc(100vh-6rem)] md:h-[calc(100vh-12rem)]">
+            <div className="h-[calc(100vh-6rem)] md:h-auto md:flex-1 md:min-h-0">
               <TodoWidget fullHeight />
             </div>
           </div>
         );
       case 'notes':
         return (
-          <div className="max-w-3xl mx-auto w-full">
-            <header className="hidden md:block mb-6">
+          <div className="max-w-3xl mx-auto w-full md:h-[calc(100vh-4rem)] md:flex md:flex-col">
+            <header className="hidden md:block mb-6 flex-shrink-0">
               <h1 className="text-2xl font-bold text-slate-800">Notes</h1>
               <p className="text-slate-500">Organize your thoughts and ideas.</p>
             </header>
-            <div className="h-[calc(100vh-6rem)] md:h-[calc(100vh-12rem)]">
+            <div className="h-[calc(100vh-6rem)] md:h-auto md:flex-1 md:min-h-0">
               <NotesWidget fullHeight />
             </div>
           </div>
         );
       case 'lists':
         return (
-          <div className="max-w-3xl mx-auto w-full">
-            <header className="hidden md:block mb-6">
+          <div className="max-w-3xl mx-auto w-full md:h-[calc(100vh-4rem)] md:flex md:flex-col">
+            <header className="hidden md:block mb-6 flex-shrink-0">
               <h1 className="text-2xl font-bold text-slate-800">Lists</h1>
               <p className="text-slate-500">Create and manage your lists.</p>
             </header>
-            <div className="h-[calc(100vh-6rem)] md:h-[calc(100vh-12rem)]">
+            <div className="h-[calc(100vh-6rem)] md:h-auto md:flex-1 md:min-h-0">
               <ListsWidget fullHeight />
             </div>
           </div>
