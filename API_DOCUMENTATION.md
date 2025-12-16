@@ -6,85 +6,499 @@
 
 ---
 
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CLIENT (React)                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+│  │ TodoWidget  │  │ NotesWidget │  │ ListsWidget │  │ Dashboard/Chatbot   │ │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘ │
+│         │                │                │                     │            │
+│         └────────────────┴────────────────┴─────────────────────┘            │
+│                                   │                                          │
+│                          api.js (Axios)                                      │
+└──────────────────────────────────┬───────────────────────────────────────────┘
+                                   │ HTTP/REST
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           SERVER (Express.js)                                │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                         API Routes                                    │   │
+│  │  /api/todos    /api/notes    /api/lists    /api/stats    /api/ai     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                                   │                                          │
+│                          db.js (pg Pool)                                     │
+└──────────────────────────────────┬───────────────────────────────────────────┘
+                                   │ SQL Queries
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         DATABASE (PostgreSQL)                                │
+│                                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+│  │    todos    │  │    notes    │  │    lists    │  │  dashboard_config   │ │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └─────────────────────┘ │
+│         │                │                │                                  │
+│  ┌──────┴──────┐  ┌──────┴──────┐  ┌──────┴──────┐                          │
+│  │ todo_history│  │ note_history│  │ list_history│                          │
+│  └─────────────┘  └─────────────┘  └─────────────┘                          │
+│                          │                                                   │
+│                   ┌──────┴──────┐                                            │
+│                   │ note_folders│                                            │
+│                   └─────────────┘                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Database Schema
 
+### Entity Relationship Diagram
+
+```
+┌─────────────────────┐
+│       todos         │
+├─────────────────────┤
+│ PK id               │
+│    title            │
+│    description      │
+│    completed        │
+│    due_date         │
+│    tag              │
+│    created_at       │
+│    updated_at       │
+│    deleted_at       │
+└──────────┬──────────┘
+           │ 1:N
+           ▼
+┌─────────────────────┐
+│    todo_history     │
+├─────────────────────┤
+│ PK id               │
+│ FK todo_id          │
+│    action           │
+│    field_changed    │
+│    old_value        │
+│    new_value        │
+│    timestamp        │
+└─────────────────────┘
+
+
+┌─────────────────────┐       ┌─────────────────────┐
+│    note_folders     │       │       notes         │
+├─────────────────────┤       ├─────────────────────┤
+│ PK id               │◄──┐   │ PK id               │
+│    name             │   │   │ FK folder_id ───────┘
+│    created_at       │   │   │    title            │
+└──────────┬──────────┘   │   │    content          │
+           │              │   │    created_at       │
+           │              │   │    updated_at       │
+           │              │   └──────────┬──────────┘
+           │              │              │
+           │    1:N       │    1:N       │
+           ▼              │              ▼
+┌─────────────────────────┴──────────────────────────┐
+│                   note_history                      │
+├────────────────────────────────────────────────────┤
+│ PK id                                              │
+│    note_id (references notes.id OR note_folders.id)│
+│    entity_type ('note' | 'folder')                 │
+│    action                                          │
+│    field_changed                                   │
+│    old_value                                       │
+│    new_value                                       │
+│    timestamp                                       │
+└────────────────────────────────────────────────────┘
+
+
+┌─────────────────────┐
+│       lists         │
+├─────────────────────┤
+│ PK id               │
+│    title            │
+│    items (JSONB)    │
+│    created_at       │
+└──────────┬──────────┘
+           │ 1:N
+           ▼
+┌─────────────────────┐
+│    list_history     │
+├─────────────────────┤
+│ PK id               │
+│ FK list_id          │
+│    action           │
+│    field_changed    │
+│    old_value        │
+│    new_value        │
+│    timestamp        │
+└─────────────────────┘
+
+
+┌─────────────────────┐
+│  dashboard_config   │
+├─────────────────────┤
+│ PK id (always 1)    │
+│    layout_preference│
+└─────────────────────┘
+```
+
+---
+
+## Table Descriptions
+
+### Core Data Tables
+
+| Table | Purpose | Records |
+|-------|---------|---------|
+| `todos` | Stores user tasks with due dates, tags, and soft-delete support | Active and deleted tasks |
+| `notes` | Stores user notes with optional folder organization | All notes |
+| `note_folders` | Organizes notes into folders/categories | Folder metadata |
+| `lists` | Stores checklists with items as JSONB | All checklists |
+| `dashboard_config` | Single-row table for user preferences | 1 row always |
+
+### Audit/History Tables
+
+| Table | Tracks | Purpose |
+|-------|--------|---------|
+| `todo_history` | All changes to `todos` | Audit trail for task changes |
+| `note_history` | Changes to `notes` AND `note_folders` | Unified audit for notes system |
+| `list_history` | All changes to `lists` | Audit trail for list changes |
+
+---
+
+## Detailed Table Schemas
+
 ### `todos` - Task Management
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key |
-| `title` | TEXT | NOT NULL | Task title |
-| `description` | TEXT | NULL | Optional task description |
-| `completed` | BOOLEAN | FALSE | Whether task is completed |
-| `due_date` | TIMESTAMP | NULL | Optional due date/time |
-| `tag` | TEXT | NULL | Optional tag/category (e.g., "work", "personal") |
-| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | Creation timestamp |
-| `updated_at` | TIMESTAMP | CURRENT_TIMESTAMP | Last update timestamp |
-| `deleted_at` | TIMESTAMP | NULL | Soft delete timestamp (NULL = active) |
+
+**Description:** Primary table for storing user tasks/todos. Supports soft-delete pattern where deleted tasks have `deleted_at` set instead of being permanently removed, allowing for task restoration.
+
+**Relationships:**
+- One-to-Many with `todo_history` (each todo can have multiple history entries)
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key, unique identifier |
+| `title` | TEXT | - | NO | Task title (required) |
+| `description` | TEXT | NULL | YES | Optional detailed description |
+| `completed` | BOOLEAN | FALSE | NO | Task completion status |
+| `due_date` | TIMESTAMP | NULL | YES | Optional due date and time |
+| `tag` | TEXT | NULL | YES | Category tag (e.g., "work", "personal", "urgent") |
+| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | NO | When the task was created |
+| `updated_at` | TIMESTAMP | CURRENT_TIMESTAMP | NO | Last modification time |
+| `deleted_at` | TIMESTAMP | NULL | YES | Soft delete timestamp (NULL = active, set = deleted) |
+
+**Indexes:** Primary key on `id`
+
+**Example Row:**
+```json
+{
+  "id": 1,
+  "title": "Complete quarterly report",
+  "description": "Include sales figures and projections",
+  "completed": false,
+  "due_date": "2025-12-20T17:00:00.000Z",
+  "tag": "work",
+  "created_at": "2025-12-15T10:30:00.000Z",
+  "updated_at": "2025-12-16T14:22:00.000Z",
+  "deleted_at": null
+}
+```
+
+---
 
 ### `todo_history` - Task Audit Log
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key |
-| `todo_id` | INTEGER | NOT NULL | Reference to todo |
-| `action` | TEXT | NOT NULL | Action type: `created`, `updated`, `completed`, `uncompleted`, `deleted`, `restored`, `permanently_deleted` |
-| `field_changed` | TEXT | NULL | Field that was changed (NULL for create/delete) |
-| `old_value` | TEXT | NULL | Previous value (NULL for create) |
-| `new_value` | TEXT | NULL | New value (NULL for delete) |
-| `timestamp` | TIMESTAMP | CURRENT_TIMESTAMP | When the action occurred (RFC 3339 format in responses) |
+
+**Description:** Audit trail table that tracks all changes made to todos. Every create, update, delete, and restore action is logged with before/after values for complete change tracking.
+
+**Relationships:**
+- Many-to-One with `todos` (multiple history entries per todo)
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key, unique identifier |
+| `todo_id` | INTEGER | - | NO | Reference to the todo that was changed |
+| `action` | TEXT | - | NO | Action type: `created`, `updated`, `completed`, `uncompleted`, `deleted`, `restored`, `permanently_deleted` |
+| `field_changed` | TEXT | NULL | YES | Which field was modified (NULL for create/delete actions) |
+| `old_value` | TEXT | NULL | YES | Previous value before change (NULL for create) |
+| `new_value` | TEXT | NULL | YES | New value after change (NULL for delete) |
+| `timestamp` | TIMESTAMP | CURRENT_TIMESTAMP | NO | When the action occurred |
+
+**Indexes:** Primary key on `id`
+
+**Action Types:**
+| Action | Trigger | field_changed | old_value | new_value |
+|--------|---------|---------------|-----------|-----------|
+| `created` | New todo created | NULL | NULL | JSON of created todo |
+| `updated` | Field modified | Field name | Old field value | New field value |
+| `completed` | completed → true | `completed` | `false` | `true` |
+| `uncompleted` | completed → false | `completed` | `true` | `false` |
+| `deleted` | Soft delete | NULL | JSON of todo | NULL |
+| `restored` | Restore from trash | NULL | NULL | JSON of restored todo |
+| `permanently_deleted` | Hard delete | NULL | JSON of todo | NULL |
+
+**Example Row:**
+```json
+{
+  "id": 15,
+  "todo_id": 3,
+  "action": "completed",
+  "field_changed": "completed",
+  "old_value": "false",
+  "new_value": "true",
+  "timestamp": "2025-12-17T14:30:00Z"
+}
+```
 
 ### `note_folders` - Note Organization
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key |
-| `name` | TEXT | NOT NULL | Folder name |
-| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | Creation timestamp |
+
+**Description:** Organizational structure for grouping related notes. Folders provide a hierarchical way to categorize notes. Deleting a folder cascades to delete all notes within it.
+
+**Relationships:**
+- One-to-Many with `notes` (each folder can contain multiple notes)
+- One-to-Many with `note_history` (folder changes are tracked via entity_type='folder')
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key, unique identifier |
+| `name` | TEXT | - | NO | Folder name (required, displayed in UI) |
+| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | NO | When the folder was created |
+
+**Indexes:** Primary key on `id`
+
+**Cascade Behavior:** When a folder is deleted, all notes with that `folder_id` are also deleted (ON DELETE CASCADE).
+
+**Example Row:**
+```json
+{
+  "id": 1,
+  "name": "Work Projects",
+  "created_at": "2025-12-10T09:00:00.000Z"
+}
+```
 
 ### `notes` - Notes Storage
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key |
-| `folder_id` | INTEGER | NULL | Foreign key to `note_folders` (CASCADE on delete) |
-| `title` | TEXT | NULL | Note title |
-| `content` | TEXT | NULL | Note content (supports markdown) |
-| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | Creation timestamp |
-| `updated_at` | TIMESTAMP | CURRENT_TIMESTAMP | Last update timestamp |
+
+**Description:** Primary table for storing user notes. Notes can optionally belong to a folder for organization. Both title and content support free-form text, and content can include markdown formatting.
+
+**Relationships:**
+- Many-to-One with `note_folders` (each note can belong to one folder, or none)
+- One-to-Many with `note_history` (note changes are tracked via entity_type='note')
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key, unique identifier |
+| `folder_id` | INTEGER | NULL | YES | Foreign key to `note_folders` (NULL = unfiled note) |
+| `title` | TEXT | NULL | YES | Note title (optional, displayed in note list) |
+| `content` | TEXT | NULL | YES | Note content body (supports markdown formatting) |
+| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | NO | When the note was created |
+| `updated_at` | TIMESTAMP | CURRENT_TIMESTAMP | NO | Last modification time |
+
+**Indexes:** Primary key on `id`, Foreign key on `folder_id`
+
+**Foreign Key Constraint:** `folder_id` REFERENCES `note_folders(id)` ON DELETE CASCADE
+
+**Example Row:**
+```json
+{
+  "id": 5,
+  "folder_id": 1,
+  "title": "Project Requirements",
+  "content": "# Requirements\n\n## Must Have\n- User authentication\n- Dashboard view\n\n## Nice to Have\n- Dark mode",
+  "created_at": "2025-12-12T11:00:00.000Z",
+  "updated_at": "2025-12-16T15:45:00.000Z"
+}
+```
 
 ### `note_history` - Note & Folder Audit Log
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key |
-| `note_id` | INTEGER | NOT NULL | Reference to note or folder (based on entity_type) |
-| `entity_type` | TEXT | 'note' | Entity type: `note` or `folder` |
-| `action` | TEXT | NOT NULL | Action type: `created`, `updated`, `deleted`, `moved` |
-| `field_changed` | TEXT | NULL | Field that was changed (NULL for create/delete) |
-| `old_value` | TEXT | NULL | Previous value (NULL for create) |
-| `new_value` | TEXT | NULL | New value (NULL for delete) |
-| `timestamp` | TIMESTAMP | CURRENT_TIMESTAMP | When the action occurred (RFC 3339 format in responses) |
+
+**Description:** Unified audit trail table that tracks all changes made to both notes and folders. Uses the `entity_type` column to differentiate between note and folder history entries. This polymorphic design allows a single table to track history for the entire notes system.
+
+**Relationships:**
+- Many-to-One with `notes` (when entity_type='note')
+- Many-to-One with `note_folders` (when entity_type='folder')
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key, unique identifier |
+| `note_id` | INTEGER | - | NO | Reference ID (note ID when entity_type='note', folder ID when entity_type='folder') |
+| `entity_type` | TEXT | 'note' | NO | Discriminator: `note` or `folder` |
+| `action` | TEXT | - | NO | Action type: `created`, `updated`, `deleted`, `moved` |
+| `field_changed` | TEXT | NULL | YES | Which field was modified (NULL for create/delete) |
+| `old_value` | TEXT | NULL | YES | Previous value before change (NULL for create) |
+| `new_value` | TEXT | NULL | YES | New value after change (NULL for delete) |
+| `timestamp` | TIMESTAMP | CURRENT_TIMESTAMP | NO | When the action occurred |
+
+**Indexes:** Primary key on `id`
+
+**Entity Type Values:**
+| entity_type | note_id references | Tracked entity |
+|-------------|-------------------|----------------|
+| `note` | `notes.id` | Individual notes |
+| `folder` | `note_folders.id` | Note folders |
+
+**Action Types:**
+| Action | Trigger | field_changed | old_value | new_value |
+|--------|---------|---------------|-----------|-----------|
+| `created` | New note/folder created | NULL | NULL | JSON of created entity |
+| `updated` | Field modified | Field name | Old field value | New field value |
+| `deleted` | Note/folder deleted | NULL | JSON of entity | NULL |
+| `moved` | Note moved to different folder | `folder_id` | Old folder ID | New folder ID |
+
+**Example Rows:**
+```json
+// Note history entry
+{
+  "id": 8,
+  "note_id": 5,
+  "entity_type": "note",
+  "action": "updated",
+  "field_changed": "content",
+  "old_value": "Old content here",
+  "new_value": "Updated content with more details",
+  "timestamp": "2025-12-16T15:45:00Z"
+}
+
+// Folder history entry
+{
+  "id": 12,
+  "note_id": 1,
+  "entity_type": "folder",
+  "action": "updated",
+  "field_changed": "name",
+  "old_value": "Work",
+  "new_value": "Work Projects",
+  "timestamp": "2025-12-17T09:30:00Z"
+}
+```
 
 ### `lists` - Checklist Storage
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key |
-| `title` | TEXT | NOT NULL | List title |
-| `items` | JSONB | '[]' | Array of list items: `[{text: string, checked: boolean}]` |
-| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | Creation timestamp |
+
+**Description:** Primary table for storing checklists/lists. Items within a list are stored as a JSONB array, allowing flexible item management without separate table joins. Each item has text content and a checked status for tracking completion.
+
+**Relationships:**
+- One-to-Many with `list_history` (list changes are tracked in history)
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key, unique identifier |
+| `title` | TEXT | - | NO | List title (required, displayed in list header) |
+| `items` | JSONB | '[]' | NO | Array of list items with structure `[{text: string, checked: boolean}]` |
+| `created_at` | TIMESTAMP | CURRENT_TIMESTAMP | NO | When the list was created |
+
+**Indexes:** Primary key on `id`
+
+**JSONB Items Structure:**
+```json
+[
+  {"text": "Item description", "checked": false},
+  {"text": "Completed item", "checked": true}
+]
+```
+
+**Example Row:**
+```json
+{
+  "id": 3,
+  "title": "Weekly Groceries",
+  "items": [
+    {"text": "Milk", "checked": true},
+    {"text": "Bread", "checked": true},
+    {"text": "Eggs", "checked": false},
+    {"text": "Cheese", "checked": false}
+  ],
+  "created_at": "2025-12-14T08:00:00.000Z"
+}
+```
 
 ### `list_history` - List Audit Log
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key |
-| `list_id` | INTEGER | NOT NULL | Reference to list |
-| `action` | TEXT | NOT NULL | Action type: `created`, `updated`, `deleted`, `item_added`, `item_removed`, `item_checked`, `item_unchecked` |
-| `field_changed` | TEXT | NULL | Field that was changed |
-| `old_value` | TEXT | NULL | Previous value |
-| `new_value` | TEXT | NULL | New value |
-| `timestamp` | TIMESTAMP | CURRENT_TIMESTAMP | When the action occurred (RFC 3339 format in responses) |
+
+**Description:** Audit trail table that tracks all changes made to lists, including list-level operations (create, update, delete) and item-level operations (add, remove, check, uncheck). Provides granular tracking of checklist modifications.
+
+**Relationships:**
+- Many-to-One with `lists` (multiple history entries per list)
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key, unique identifier |
+| `list_id` | INTEGER | - | NO | Reference to the list that was changed |
+| `action` | TEXT | - | NO | Action type (see Action Types below) |
+| `field_changed` | TEXT | NULL | YES | Which field was modified (NULL for create/delete) |
+| `old_value` | TEXT | NULL | YES | Previous value before change (NULL for create) |
+| `new_value` | TEXT | NULL | YES | New value after change (NULL for delete) |
+| `timestamp` | TIMESTAMP | CURRENT_TIMESTAMP | NO | When the action occurred |
+
+**Indexes:** Primary key on `id`
+
+**Action Types:**
+| Action | Trigger | field_changed | old_value | new_value |
+|--------|---------|---------------|-----------|-----------|
+| `created` | New list created | NULL | NULL | JSON of created list |
+| `updated` | Title modified | `title` | Old title | New title |
+| `deleted` | List deleted | NULL | JSON of list | NULL |
+| `item_added` | New item added to list | `items` | NULL | Item text |
+| `item_removed` | Item removed from list | `items` | Item text | NULL |
+| `item_checked` | Item marked complete | `items` | Item text | `checked` |
+| `item_unchecked` | Item unmarked | `items` | Item text | `unchecked` |
+
+**Example Rows:**
+```json
+// List creation
+{
+  "id": 1,
+  "list_id": 3,
+  "action": "created",
+  "field_changed": null,
+  "old_value": null,
+  "new_value": "{\"title\":\"Weekly Groceries\",\"items\":[]}",
+  "timestamp": "2025-12-14T08:00:00Z"
+}
+
+// Item checked
+{
+  "id": 5,
+  "list_id": 3,
+  "action": "item_checked",
+  "field_changed": "items",
+  "old_value": "Milk",
+  "new_value": "checked",
+  "timestamp": "2025-12-15T10:30:00Z"
+}
+```
 
 ### `dashboard_config` - User Preferences
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | SERIAL | Auto-increment | Primary key (always 1 for single-user) |
-| `layout_preference` | JSONB | NULL | Widget layout configuration |
+
+**Description:** Single-row configuration table storing user preferences for the dashboard. Currently stores widget layout order. Designed as a singleton table where id=1 always exists and is the only row.
+
+**Relationships:**
+- None (standalone configuration table)
+
+| Column | Type | Default | Nullable | Description |
+|--------|------|---------|----------|-------------|
+| `id` | SERIAL | Auto-increment | NO | Primary key (always 1 for single-user app) |
+| `layout_preference` | JSONB | NULL | YES | Widget layout and order configuration |
+
+**Indexes:** Primary key on `id`
+
+**Singleton Pattern:** This table always contains exactly one row with `id=1`. The schema includes an INSERT statement that creates this row if it doesn't exist.
+
+**JSONB layout_preference Structure:**
+```json
+{
+  "widgets": ["todos", "notes", "lists"]
+}
+```
+- `widgets`: Array of widget identifiers in display order
+
+**Example Row:**
+```json
+{
+  "id": 1,
+  "layout_preference": {
+    "widgets": ["notes", "todos", "lists"]
+  }
+}
+```
 
 ---
 

@@ -1099,21 +1099,26 @@ export default function TodoWidget({ fullHeight = false }) {
                 }
             }}
         >
-            <div>
-                <Input
-                    ref={addInputRef}
-                    value={formData.title}
-                    onChange={(e) => {
-                        setFormData({ ...formData, title: e.target.value });
-                        if (titleError) setTitleError('');
-                    }}
-                    onFocus={() => setIsAddFormExpanded(true)}
-                    placeholder="Add a new task..."
-                    className={`w-full ${titleError ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`}
-                />
-                {titleError && (
-                    <p className="text-red-500 text-xs mt-1">{titleError}</p>
-                )}
+            <div className="flex gap-2">
+                <div className="flex-1">
+                    <Input
+                        ref={addInputRef}
+                        value={formData.title}
+                        onChange={(e) => {
+                            setFormData({ ...formData, title: e.target.value });
+                            if (titleError) setTitleError('');
+                        }}
+                        onFocus={() => setIsAddFormExpanded(true)}
+                        placeholder="Add a new task..."
+                        className={`w-full ${titleError ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`}
+                    />
+                    {titleError && (
+                        <p className="text-red-500 text-xs mt-1">{titleError}</p>
+                    )}
+                </div>
+                <Button type="submit" variant="primary" className="!px-3">
+                    <Plus size={20} />
+                </Button>
             </div>
 
             {isAddFormExpanded && (
@@ -1153,13 +1158,6 @@ export default function TodoWidget({ fullHeight = false }) {
                         >
                             Cancel
                         </button>
-                        <Button
-                            type="submit"
-                            variant="primary"
-                            className="flex-1 text-sm py-2"
-                        >
-                            Add
-                        </Button>
                     </div>
                 </div>
             )}
