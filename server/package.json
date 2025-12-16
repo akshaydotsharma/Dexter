@@ -1,6 +1,7 @@
 {
-  "name": "server",
+  "name": "personal-dashboard-server",
   "version": "1.0.0",
+  "description": "Personal Dashboard API Server",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

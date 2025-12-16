@@ -1,6 +1,7 @@
 {
-    "name": "personal-dashboard-root",
+    "name": "personal-dashboard",
     "version": "1.0.0",
+    "description": "Personal Dashboard - A unified interface for managing tasks, notes, and lists",
     "engines": {
         "node": ">=20.0.0"
     },

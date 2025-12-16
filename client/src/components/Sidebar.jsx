@@ -1,5 +1,7 @@
 import { LayoutDashboard, CheckSquare, FileText, List as ListIcon, Settings, LogOut, Bot, X } from 'lucide-react';
 
+const APP_VERSION = '1.0.0';
+
 export default function Sidebar({ currentView, setCurrentView, isMobileOpen, setIsMobileOpen }) {
     const menuItems = [
         { id: 'chatbot', icon: Bot, label: 'AI Assistant' },
@@ -98,6 +100,10 @@ export default function Sidebar({ currentView, setCurrentView, isMobileOpen, set
                                 <p className="text-xs text-slate-500 truncate">akshay@example.com</p>
                             </div>
                         </div>
+
+                        <div className="mt-4 px-3">
+                            <p className="text-xs text-slate-400">v{APP_VERSION}</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -164,6 +170,10 @@ export default function Sidebar({ currentView, setCurrentView, isMobileOpen, set
                                     <p className="text-sm font-medium text-slate-900 truncate">Akshay Sharma</p>
                                     <p className="text-xs text-slate-500 truncate">akshay@example.com</p>
                                 </div>
+                            </div>
+
+                            <div className="mt-4 px-3">
+                                <p className="text-xs text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75">v{APP_VERSION}</p>
                             </div>
                         </div>
                     </div>

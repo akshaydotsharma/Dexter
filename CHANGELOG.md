@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2025-12-17
+
+### Added
+- **Dashboard**: Main dashboard view with stats tiles and widget grid
+- **Tasks (TodoWidget)**: Full task management with inline editing, due dates, tags, filtering, and completion tracking
+- **Notes (NotesWidget)**: Two-panel notes interface with folder organization
+- **Lists (ListsWidget)**: Checklist manager with expandable items
+- **AI Assistant**: Chat interface with OpenAI/Gemini integration
+- **Responsive Design**: Mobile-first design with hamburger menu and touch-optimized interfaces
+- **Audit Logging**: History tables tracking all changes to todos, notes, and lists
+- **Soft Deletes**: Todos support soft deletion for data recovery
+- **Stats Overview**: Dashboard statistics showing totals and trends
+- **Widget Visibility**: Configurable widget display on dashboard
+- **Version Display**: App version shown in sidebar
+
+### Technical
+- React 19 with Vite 7 build system
+- Express 5 backend with PostgreSQL database
+- Tailwind CSS 4 for styling
+- MUI components for date pickers
+- Railway deployment configuration
+- Node.js 20+ requirement
+
 ## [0.1.0] - 2025-12-10
 
 ### Added
