@@ -49,11 +49,15 @@ if (process.env.FRONTEND_URL) {
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests in dev)
-        if (!origin && process.env.NODE_ENV !== 'production') {
+        // Allow requests with no origin (same-origin requests, mobile apps, curl)
+        if (!origin) {
             return callback(null, true);
         }
         if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        // In production, also allow the Railway app's own domain
+        if (process.env.NODE_ENV === 'production' && origin.includes('.up.railway.app')) {
             return callback(null, true);
         }
         callback(new Error('Not allowed by CORS'));
