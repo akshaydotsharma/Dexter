@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { createPortal } from 'react-dom';
 import Card from './Card';
 import Input from './Input';
@@ -7,7 +7,7 @@ import DateTimePicker from './DateTimePicker';
 import { getTodos, createTodo, updateTodo, deleteTodo } from '../services/api';
 import { Trash2, Plus, Check, Loader2, X, Tag as TagIcon, Edit2, ChevronDown, ChevronRight, Filter } from 'lucide-react';
 
-export default function TodoWidget({ fullHeight = false }) {
+const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
     const [todos, setTodos] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isExpanded, setIsExpanded] = useState(false);
@@ -60,6 +60,11 @@ export default function TodoWidget({ fullHeight = false }) {
     useEffect(() => {
         fetchTodos();
     }, []);
+
+    // Expose refresh method to parent via ref
+    useImperativeHandle(ref, () => ({
+        refresh: () => fetchTodos()
+    }));
 
     // Close popover when clicking outside or pressing ESC
     useEffect(() => {
@@ -1700,4 +1705,6 @@ export default function TodoWidget({ fullHeight = false }) {
             )}
         </div>
     );
-}
+});
+
+export default TodoWidget;

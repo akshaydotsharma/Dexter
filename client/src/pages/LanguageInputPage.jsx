@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { aiParse } from '../services/api';
+import { aiParse, executeDraft, rejectDraft } from '../services/api';
+import DraftPreviewCard from '../components/DraftPreviewCard';
 
 function LanguageInputPage() {
     const [input, setInput] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isListening, setIsListening] = useState(false);
     const [logs, setLogs] = useState([]);
+    const [pendingDrafts, setPendingDrafts] = useState([]);
     const [bottomOffset, setBottomOffset] = useState(0);
     const [isMobile, setIsMobile] = useState(false);
 
@@ -111,25 +113,16 @@ function LanguageInputPage() {
             const response = await aiParse(userText);
             const result = response.data;
 
-            if (result.success) {
-                // Build parsed details string
-                const parsed = result.parsed;
-                let details = '';
-                if (parsed) {
-                    const parts = [];
-                    if (parsed.title) parts.push(`Title: ${parsed.title}`);
-                    if (parsed.description) parts.push(`Description: ${parsed.description}`);
-                    if (parsed.content) parts.push(`Content: ${parsed.content}`);
-                    if (parsed.due_date) parts.push(`Due: ${new Date(parsed.due_date).toLocaleString()}`);
-                    if (parsed.tag) parts.push(`Tag: ${parsed.tag}`);
-                    if (parsed.items) parts.push(`Items: ${parsed.items.join(', ')}`);
-                    if (parts.length > 0) {
-                        details = `\n\nParsed: ${parts.join(' | ')}`;
-                    }
-                }
-                addLog('system', `✅ ${result.message}${details}`);
-            } else {
-                addLog('system', `💬 ${result.message}`);
+            // v2.0: Handle new response format with assistantText and drafts array
+            if (result.drafts && result.drafts.length > 0) {
+                // Add drafts to pending list for user preview/confirmation
+                setPendingDrafts(prev => [...prev, ...result.drafts]);
+            }
+
+            if (result.assistantText) {
+                addLog('system', result.assistantText);
+            } else if (!result.success && !result.drafts?.length) {
+                addLog('system', `💬 I didn't understand that. Try creating a todo, note, or list.`);
             }
 
         } catch (error) {
@@ -148,7 +141,41 @@ function LanguageInputPage() {
         }
     };
 
-    const hasStarted = logs.length > 0;
+    const handleConfirmDraft = async (draftId, updatedData) => {
+        setIsProcessing(true);
+        try {
+            const response = await executeDraft(draftId, updatedData);
+            const result = response.data;
+
+            if (result.success) {
+                setPendingDrafts(prev => prev.filter(d => d.id !== draftId));
+                addLog('system', `✅ ${result.message}`);
+            }
+        } catch (error) {
+            console.error("Error executing draft:", error);
+            const errorMessage = error.response?.data?.error || error.message || "Failed to execute";
+            addLog('system', `❌ Error: ${errorMessage}`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleRejectDraft = async (draftId) => {
+        setIsProcessing(true);
+        try {
+            await rejectDraft(draftId);
+            setPendingDrafts(prev => prev.filter(d => d.id !== draftId));
+            addLog('system', `🗑️ Draft rejected`);
+        } catch (error) {
+            console.error("Error rejecting draft:", error);
+            const errorMessage = error.response?.data?.error || error.message || "Failed to reject";
+            addLog('system', `❌ Error: ${errorMessage}`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const hasStarted = logs.length > 0 || pendingDrafts.length > 0;
 
     return (
         <div className="flex flex-col h-full bg-slate-50 relative overflow-hidden transition-all duration-500">
@@ -194,7 +221,7 @@ function LanguageInputPage() {
                                 className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-4 duration-300`}
                             >
                                 <div className={`
-                                    max-w-[85%] md:max-w-[70%] p-4 rounded-2xl shadow-sm text-base leading-relaxed
+                                    max-w-[85%] md:max-w-[70%] p-4 rounded-2xl shadow-sm text-base leading-relaxed whitespace-pre-wrap
                                     ${msg.role === 'user'
                                         ? 'bg-indigo-600 text-white rounded-br-none'
                                         : 'bg-white text-slate-700 border border-slate-100 rounded-bl-none'}
@@ -203,6 +230,22 @@ function LanguageInputPage() {
                                 </div>
                             </div>
                         ))}
+
+                        {/* Pending Drafts Preview Cards */}
+                        {pendingDrafts.length > 0 && (
+                            <div className="space-y-4 max-w-[85%] md:max-w-[70%]">
+                                {pendingDrafts.map((draft) => (
+                                    <DraftPreviewCard
+                                        key={draft.id}
+                                        draft={draft}
+                                        onConfirm={handleConfirmDraft}
+                                        onReject={handleRejectDraft}
+                                        isProcessing={isProcessing}
+                                    />
+                                ))}
+                            </div>
+                        )}
+
                         {isProcessing && (
                             <div className="flex w-full justify-start animate-in fade-in">
                                 <div className="bg-white p-4 rounded-2xl rounded-bl-none border border-slate-100 shadow-sm flex items-center gap-2">

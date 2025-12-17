@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import Card from './Card';
 import Input from './Input';
 import Button from './Button';
 import { getNotes, createNote, updateNote, deleteNote, getNoteFolders, createNoteFolder, updateNoteFolder, deleteNoteFolder } from '../services/api';
 import { Plus, Trash2, Loader2, Save, Folder, FolderOpen, ChevronRight, ChevronLeft, Edit2 } from 'lucide-react';
 
-export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) {
+const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHeightPx = null }, ref) {
     const [folders, setFolders] = useState([]);
     const [notes, setNotes] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -44,6 +44,16 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
             fetchNotes(selectedFolderId);
         }
     }, [selectedFolderId]);
+
+    // Expose refresh method to parent via ref
+    useImperativeHandle(ref, () => ({
+        refresh: () => {
+            fetchFolders();
+            if (selectedFolderId) {
+                fetchNotes(selectedFolderId);
+            }
+        }
+    }));
 
     const fetchFolders = async () => {
         try {
@@ -685,4 +695,6 @@ export default function NotesWidget({ fullHeight = false, maxHeightPx = null }) 
             </div>
         </Card>
     );
-}
+});
+
+export default NotesWidget;

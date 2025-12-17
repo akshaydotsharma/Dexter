@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
-import { aiParse } from '../services/api';
+import { aiParse, executeDraft, rejectDraft } from '../services/api';
 import { X } from 'lucide-react';
+import DraftPreviewCard from './DraftPreviewCard';
 
-export default function ChatPopover({ isOpen, onClose }) {
+export default function ChatPopover({ isOpen, onClose, onDraftConfirmed }) {
     const [input, setInput] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isListening, setIsListening] = useState(false);
     const [logs, setLogs] = useState([]);
+    const [pendingDrafts, setPendingDrafts] = useState([]);
 
     const recognitionRef = useRef(null);
     const scrollRef = useRef(null);
@@ -69,30 +71,63 @@ export default function ChatPopover({ isOpen, onClose }) {
             const response = await aiParse(userText);
             const result = response.data;
 
-            if (result.success) {
-                // Build parsed details string
-                const parsed = result.parsed;
-                let details = '';
-                if (parsed) {
-                    const parts = [];
-                    if (parsed.title) parts.push(`Title: ${parsed.title}`);
-                    if (parsed.description) parts.push(`Description: ${parsed.description}`);
-                    if (parsed.content) parts.push(`Content: ${parsed.content}`);
-                    if (parsed.due_date) parts.push(`Due: ${new Date(parsed.due_date).toLocaleString()}`);
-                    if (parsed.tag) parts.push(`Tag: ${parsed.tag}`);
-                    if (parsed.items) parts.push(`Items: ${parsed.items.join(', ')}`);
-                    if (parts.length > 0) {
-                        details = `\n\nParsed: ${parts.join(' | ')}`;
-                    }
-                }
-                addLog('system', `✅ ${result.message}${details}`);
-            } else {
-                addLog('system', `💬 ${result.message}`);
+            // v2.0: Handle new response format with assistantText and drafts array
+            if (result.drafts && result.drafts.length > 0) {
+                // Add drafts to pending list for user preview/confirmation
+                setPendingDrafts(prev => [...prev, ...result.drafts]);
+            }
+
+            // Show assistant text (could be a summary, clarification, or follow-up question)
+            if (result.assistantText) {
+                addLog('system', result.assistantText);
+            } else if (!result.success && !result.drafts?.length) {
+                addLog('system', `💬 I didn't understand that. Try creating a todo, note, or list.`);
             }
 
         } catch (error) {
             console.error("Error processing input:", error);
             const errorMessage = error.response?.data?.error || error.message || "Failed to process request";
+            addLog('system', `❌ Error: ${errorMessage}`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleConfirmDraft = async (draftId, updatedData) => {
+        setIsProcessing(true);
+        try {
+            // Use /api/ai/execute endpoint per v2.0 architecture
+            const response = await executeDraft(draftId, updatedData);
+            const result = response.data;
+
+            if (result.success) {
+                // Remove from pending drafts
+                setPendingDrafts(prev => prev.filter(d => d.id !== draftId));
+                addLog('system', `✅ ${result.message}`);
+
+                // Notify parent component to refresh data
+                if (onDraftConfirmed) {
+                    onDraftConfirmed(result.result);
+                }
+            }
+        } catch (error) {
+            console.error("Error executing draft:", error);
+            const errorMessage = error.response?.data?.error || error.message || "Failed to execute";
+            addLog('system', `❌ Error: ${errorMessage}`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleRejectDraft = async (draftId) => {
+        setIsProcessing(true);
+        try {
+            await rejectDraft(draftId);
+            setPendingDrafts(prev => prev.filter(d => d.id !== draftId));
+            addLog('system', `🗑️ Draft rejected`);
+        } catch (error) {
+            console.error("Error rejecting draft:", error);
+            const errorMessage = error.response?.data?.error || error.message || "Failed to reject";
             addLog('system', `❌ Error: ${errorMessage}`);
         } finally {
             setIsProcessing(false);
@@ -137,7 +172,7 @@ export default function ChatPopover({ isOpen, onClose }) {
                     ref={scrollRef}
                     className="flex-1 overflow-y-auto p-4 space-y-4"
                 >
-                    {logs.length === 0 ? (
+                    {logs.length === 0 && pendingDrafts.length === 0 ? (
                         <div className="flex items-center justify-center h-full text-center text-slate-400 text-xs px-6">
                             <p>Start a conversation! Try "todo Buy milk" or "note Meeting notes"</p>
                         </div>
@@ -149,7 +184,7 @@ export default function ChatPopover({ isOpen, onClose }) {
                                     className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                                 >
                                     <div className={`
-                                        max-w-[85%] p-3 rounded-xl text-sm leading-relaxed
+                                        max-w-[85%] p-3 rounded-xl text-sm leading-relaxed whitespace-pre-wrap
                                         ${msg.role === 'user'
                                             ? 'bg-indigo-600 text-white rounded-br-none'
                                             : 'bg-slate-100 text-slate-700 rounded-bl-none'}
@@ -158,6 +193,22 @@ export default function ChatPopover({ isOpen, onClose }) {
                                     </div>
                                 </div>
                             ))}
+
+                            {/* Pending Drafts Preview Cards */}
+                            {pendingDrafts.length > 0 && (
+                                <div className="space-y-3">
+                                    {pendingDrafts.map((draft) => (
+                                        <DraftPreviewCard
+                                            key={draft.id}
+                                            draft={draft}
+                                            onConfirm={handleConfirmDraft}
+                                            onReject={handleRejectDraft}
+                                            isProcessing={isProcessing}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+
                             {isProcessing && (
                                 <div className="flex w-full justify-start">
                                     <div className="bg-slate-100 p-3 rounded-xl rounded-bl-none flex items-center gap-2">

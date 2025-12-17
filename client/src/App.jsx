@@ -22,6 +22,15 @@ function App() {
   const [rightColumnHeight, setRightColumnHeight] = useState(null);
   const rightColumnRef = useRef(null);
 
+  // v2.0: Refs to widgets for refreshing data without full remount
+  const todoWidgetRef = useRef(null);
+  const notesWidgetRef = useRef(null);
+  const listsWidgetRef = useRef(null);
+  // Dashboard view has separate widget instances
+  const dashTodoWidgetRef = useRef(null);
+  const dashNotesWidgetRef = useRef(null);
+  const dashListsWidgetRef = useRef(null);
+
   useEffect(() => {
     getConfig()
       .then(res => {
@@ -78,7 +87,7 @@ function App() {
               <p className="text-slate-500">Manage your tasks and to-dos.</p>
             </header>
             <div className="h-[calc(100vh-6rem)] md:h-auto md:flex-1 md:min-h-0">
-              <TodoWidget fullHeight />
+              <TodoWidget fullHeight ref={todoWidgetRef} />
             </div>
           </div>
         );
@@ -90,7 +99,7 @@ function App() {
               <p className="text-slate-500">Organize your thoughts and ideas.</p>
             </header>
             <div className="h-[calc(100vh-6rem)] md:h-auto md:flex-1 md:min-h-0">
-              <NotesWidget fullHeight />
+              <NotesWidget fullHeight ref={notesWidgetRef} />
             </div>
           </div>
         );
@@ -102,7 +111,7 @@ function App() {
               <p className="text-slate-500">Create and manage your lists.</p>
             </header>
             <div className="h-[calc(100vh-6rem)] md:h-auto md:flex-1 md:min-h-0">
-              <ListsWidget fullHeight />
+              <ListsWidget fullHeight ref={listsWidgetRef} />
             </div>
           </div>
         );
@@ -135,16 +144,16 @@ function App() {
               {/* Notes Widget - Spans 2 columns, height synced to right column */}
               {visibleWidgets.includes('notes') && (
                 <div className="lg:col-span-2">
-                  <NotesWidget maxHeightPx={rightColumnHeight} />
+                  <NotesWidget maxHeightPx={rightColumnHeight} ref={dashNotesWidgetRef} />
                 </div>
               )}
               {/* Right column - Todos and Lists stacked */}
               <div ref={rightColumnRef} className="flex flex-col gap-6">
                 {visibleWidgets.includes('todos') && (
-                  <TodoWidget />
+                  <TodoWidget ref={dashTodoWidgetRef} />
                 )}
                 {visibleWidgets.includes('lists') && (
-                  <ListsWidget />
+                  <ListsWidget ref={dashListsWidgetRef} />
                 )}
               </div>
             </div>
@@ -233,6 +242,19 @@ function App() {
         <ChatPopover
           isOpen={isChatPopoverOpen}
           onClose={() => setIsChatPopoverOpen(false)}
+          onDraftConfirmed={() => {
+            // Refresh all visible widgets without remounting (preserves UI state like expanded lists)
+            todoWidgetRef.current?.refresh();
+            notesWidgetRef.current?.refresh();
+            listsWidgetRef.current?.refresh();
+            dashTodoWidgetRef.current?.refresh();
+            dashNotesWidgetRef.current?.refresh();
+            dashListsWidgetRef.current?.refresh();
+            // Also refresh stats
+            getStats()
+              .then(res => setStats(res.data))
+              .catch(err => console.error('Error refreshing stats:', err));
+          }}
         />
       </main>
     </div>

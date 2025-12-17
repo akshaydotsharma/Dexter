@@ -1,17 +1,115 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const db = require('./db');
 const fs = require('fs');
-const path = require('path');
-const OpenAI = require('openai');
-const { SYSTEM_PROMPT } = require('./prompts/systemPrompt');
+
+// v2.0 AI modules
+const { chatToDrafts } = require('./ai/chatToDrafts');
+const draftStore = require('./ai/draftStore');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json());
+// =============================================================================
+// SECURITY MIDDLEWARE
+// =============================================================================
+
+// Security headers with Helmet
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "https:"],
+            connectSrc: ["'self'"],
+        },
+    },
+    crossOriginEmbedderPolicy: false, // Disable for development compatibility
+}));
+
+// CORS configuration - restrict to known origins
+const allowedOrigins = [
+    'http://localhost:5173',      // Vite dev server
+    'http://localhost:3000',      // Production server
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+];
+
+// Add production URL if configured
+if (process.env.FRONTEND_URL) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests in dev)
+        if (!origin && process.env.NODE_ENV !== 'production') {
+            return callback(null, true);
+        }
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    optionsSuccessStatus: 200
+}));
+
+// Rate limiting - general API limiter
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 200, // limit each IP to 200 requests per windowMs
+    message: { error: 'Too many requests from this IP, please try again later' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Stricter rate limiter for AI endpoints (prevent cost explosion)
+const aiLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 15, // 15 requests per minute
+    message: { error: 'AI request limit exceeded. Please wait before trying again.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Apply rate limiting to all API routes
+app.use('/api', apiLimiter);
+
+// Apply stricter rate limiting to AI endpoints
+app.use('/api/ai', aiLimiter);
+
+// Request body size limit (prevent large payload attacks)
+app.use(express.json({ limit: '1mb' }));
+
+// =============================================================================
+// ERROR HANDLING HELPERS
+// =============================================================================
+
+/**
+ * Safe error response - hides internal details in production
+ * @param {Response} res - Express response object
+ * @param {Error} err - Error object
+ * @param {number} statusCode - HTTP status code (default 500)
+ */
+const sendErrorResponse = (res, err, statusCode = 500) => {
+    // Log the full error for debugging
+    console.error(`[ERROR ${statusCode}]:`, err.message, process.env.NODE_ENV !== 'production' ? err.stack : '');
+
+    // In production, hide internal error details
+    const message = process.env.NODE_ENV === 'production'
+        ? 'An internal server error occurred'
+        : err.message;
+
+    res.status(statusCode).json({ error: message });
+};
 
 // Serve static files from React build in production
 if (process.env.NODE_ENV === 'production') {
@@ -79,7 +177,7 @@ app.get('/api/todos', async (req, res) => {
         const { rows } = await db.query('SELECT * FROM todos WHERE deleted_at IS NULL ORDER BY created_at DESC');
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -95,7 +193,7 @@ app.get('/api/todos/:id/history', async (req, res) => {
         );
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -115,7 +213,7 @@ app.get('/api/todo-history', async (req, res) => {
         );
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -133,7 +231,7 @@ app.post('/api/todos', async (req, res) => {
 
         res.status(201).json(todo);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -210,7 +308,7 @@ app.put('/api/todos/:id', async (req, res) => {
         res.json(rows[0]);
     } catch (err) {
         console.error('Error updating todo:', err);
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -231,7 +329,7 @@ app.delete('/api/todos/:id', async (req, res) => {
 
         res.status(204).send();
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -251,7 +349,7 @@ app.post('/api/todos/:id/restore', async (req, res) => {
         await logTodoHistory(parseInt(id), 'restored');
         res.json(rows[0]);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -261,7 +359,7 @@ app.get('/api/note-folders', async (req, res) => {
         const { rows } = await db.query('SELECT * FROM note_folders ORDER BY created_at DESC');
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -276,7 +374,7 @@ app.post('/api/note-folders', async (req, res) => {
 
         res.status(201).json(folder);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -298,7 +396,7 @@ app.put('/api/note-folders/:id', async (req, res) => {
 
         res.json(rows[0]);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -317,7 +415,7 @@ app.delete('/api/note-folders/:id', async (req, res) => {
 
         res.status(204).send();
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -337,7 +435,7 @@ app.get('/api/notes', async (req, res) => {
         const { rows } = await db.query(query, params);
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -353,7 +451,7 @@ app.get('/api/notes/:id/history', async (req, res) => {
         );
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -377,7 +475,7 @@ app.get('/api/note-history', async (req, res) => {
         );
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -398,7 +496,7 @@ app.post('/api/notes', async (req, res) => {
         res.status(201).json(note);
     } catch (err) {
         console.error('[NOTES] Error creating note:', err.message);
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -450,7 +548,7 @@ app.put('/api/notes/:id', async (req, res) => {
         res.json(rows[0]);
     } catch (err) {
         console.error('[NOTES] Error updating note:', err);
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -469,7 +567,7 @@ app.delete('/api/notes/:id', async (req, res) => {
 
         res.status(204).send();
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -479,7 +577,7 @@ app.get('/api/lists', async (req, res) => {
         const { rows } = await db.query('SELECT * FROM lists ORDER BY created_at DESC');
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -495,7 +593,7 @@ app.get('/api/lists/:id/history', async (req, res) => {
         );
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -515,7 +613,7 @@ app.get('/api/list-history', async (req, res) => {
         );
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -530,7 +628,7 @@ app.post('/api/lists', async (req, res) => {
 
         res.status(201).json(list);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -619,7 +717,7 @@ app.put('/api/lists/:id', async (req, res) => {
         res.json(rows[0]);
     } catch (err) {
         console.error('Error updating list:', err);
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -638,7 +736,7 @@ app.delete('/api/lists/:id', async (req, res) => {
 
         res.status(204).send();
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -698,7 +796,7 @@ app.get('/api/stats', async (req, res) => {
             }
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -713,7 +811,7 @@ app.get('/api/config', async (req, res) => {
             res.json(rows[0]);
         }
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
@@ -723,14 +821,14 @@ app.put('/api/config', async (req, res) => {
         const { rows } = await db.query('UPDATE dashboard_config SET layout_preference = $1 WHERE id = 1 RETURNING *', [JSON.stringify(layout_preference)]);
         res.json(rows[0]);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        sendErrorResponse(res, err);
     }
 });
 
-// AI PARSE ENDPOINT
+// AI CHAT ENDPOINT - v2.0: Uses Responses API with function calling, returns drafts + assistant text
 app.post('/api/ai/parse', async (req, res) => {
     try {
-        const { input } = req.body;
+        const { input, sessionId, timezone } = req.body;
 
         if (!input || typeof input !== 'string') {
             return res.status(400).json({ error: 'Input is required' });
@@ -740,104 +838,684 @@ app.post('/api/ai/parse', async (req, res) => {
             return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
         }
 
-        // Initialize OpenAI
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-        // Add current date to help with relative date parsing
-        const today = new Date().toISOString().split('T')[0];
-        const userMessage = `Today's date is ${today}. User input: "${input}"`;
-
-        // Call OpenAI API
-        const result = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
-                { role: 'user', content: userMessage }
-            ],
-            temperature: 0.3
+        // Process chat using chatToDrafts with Responses API
+        const result = await chatToDrafts(input, {
+            userId: null, // No user auth for now
+            nowIso: new Date().toISOString(),
+            tz: timezone || 'UTC',
+            sessionId: sessionId || null
         });
 
-        const responseText = result.choices[0].message.content.trim();
+        return res.json({
+            success: result.drafts.length > 0 || (!result.followUpQuestion && result.errors.length === 0),
+            assistantText: result.assistantText,
+            drafts: result.drafts,
+            followUpQuestion: result.followUpQuestion,
+            errors: result.errors
+        });
 
-        // Parse JSON response from Gemini
-        let parsed;
-        try {
-            // Remove any markdown code blocks if present
-            const cleanJson = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            parsed = JSON.parse(cleanJson);
-        } catch (parseErr) {
-            console.error('Failed to parse Gemini response:', responseText);
-            return res.status(500).json({
-                error: 'Failed to parse AI response',
-                raw: responseText
-            });
+    } catch (err) {
+        console.error('AI Chat Error:', err);
+        sendErrorResponse(res, err);
+    }
+});
+
+// POST /api/ai/execute - Execute a confirmed draft
+app.post('/api/ai/execute', async (req, res) => {
+    try {
+        const { draft_id, updatedData } = req.body;
+
+        if (!draft_id) {
+            return res.status(400).json({ error: 'draft_id is required' });
         }
 
-        // Execute the action based on parsed result
-        let dbResult;
-        switch (parsed.action) {
-            case 'CREATE_TODO':
-                const todoData = parsed.data;
+        // Get the pending draft
+        const draft = await draftStore.getPendingDraft(draft_id);
+        if (!draft) {
+            return res.status(404).json({ error: 'Draft not found or already resolved' });
+        }
+
+        const draftData = updatedData || draft.draft_data;
+
+        // Execute the actual CRUD operation based on action type
+        let result;
+        let resultEntityId;
+
+        switch (draft.action_type) {
+            // ========== CREATE OPERATIONS ==========
+            case 'CREATE_TODO': {
                 const { rows: todoRows } = await db.query(
                     'INSERT INTO todos (title, description, due_date, tag) VALUES ($1, $2, $3, $4) RETURNING *',
-                    [todoData.title, todoData.description || null, todoData.due_date || null, todoData.tag || null]
+                    [draftData.title, draftData.description || null, draftData.due_date || null, draftData.tag || null]
                 );
-                dbResult = todoRows[0];
-                // Log creation to history
-                await logTodoHistory(dbResult.id, 'created', null, null, JSON.stringify({ title: todoData.title, description: todoData.description, due_date: todoData.due_date, tag: todoData.tag }));
-                return res.json({
-                    success: true,
-                    action: 'CREATE_TODO',
-                    message: `Created todo: "${todoData.title}"`,
-                    data: dbResult,
-                    parsed: parsed.data
-                });
+                result = todoRows[0];
+                resultEntityId = result.id;
+                await logTodoHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                break;
+            }
 
-            case 'CREATE_NOTE':
-                const noteData = parsed.data;
+            case 'CREATE_NOTE': {
                 const { rows: noteRows } = await db.query(
-                    'INSERT INTO notes (title, content) VALUES ($1, $2) RETURNING *',
-                    [noteData.title, noteData.content]
+                    'INSERT INTO notes (title, content, folder_id) VALUES ($1, $2, $3) RETURNING *',
+                    [draftData.title, draftData.content, draftData.folder_id || null]
                 );
-                dbResult = noteRows[0];
-                // Log creation to history
-                await logNoteHistory(dbResult.id, 'created', null, null, JSON.stringify({ title: noteData.title, content: noteData.content }));
-                return res.json({
-                    success: true,
-                    action: 'CREATE_NOTE',
-                    message: `Created note: "${noteData.title}"`,
-                    data: dbResult,
-                    parsed: parsed.data
-                });
+                result = noteRows[0];
+                resultEntityId = result.id;
+                await logNoteHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                break;
+            }
 
-            case 'CREATE_LIST':
-                const listData = parsed.data;
+            case 'CREATE_LIST': {
+                const items = Array.isArray(draftData.items)
+                    ? draftData.items.map(item => typeof item === 'string' ? { text: item, checked: false } : item)
+                    : [];
                 const { rows: listRows } = await db.query(
                     'INSERT INTO lists (title, items) VALUES ($1, $2) RETURNING *',
-                    [listData.title, JSON.stringify(listData.items)]
+                    [draftData.title, JSON.stringify(items)]
                 );
-                dbResult = listRows[0];
-                // Log creation to history
-                await logListHistory(dbResult.id, 'created', null, null, JSON.stringify({ title: listData.title, items: listData.items }));
-                return res.json({
-                    success: true,
-                    action: 'CREATE_LIST',
-                    message: `Created list: "${listData.title}" with ${listData.items.length} items`,
-                    data: dbResult,
-                    parsed: parsed.data
-                });
+                result = listRows[0];
+                resultEntityId = result.id;
+                await logListHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                break;
+            }
 
-            case 'UNKNOWN':
+            // ========== UPDATE OPERATIONS ==========
+            case 'COMPLETE_TODO': {
+                const { rows: completeTodoRows } = await db.query(
+                    'UPDATE todos SET completed = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+                    [draftData.completed, draftData.id]
+                );
+
+                if (completeTodoRows.length === 0) {
+                    return res.status(404).json({ error: 'Task not found' });
+                }
+
+                result = completeTodoRows[0];
+                resultEntityId = result.id;
+                await logTodoHistory(result.id, draftData.completed ? 'completed' : 'uncompleted', 'completed', !draftData.completed, draftData.completed);
+                break;
+            }
+
+            case 'UPDATE_TODO': {
+                // Build dynamic update query based on provided fields
+                const updates = [];
+                const values = [];
+                let paramIdx = 1;
+
+                if (draftData.title !== undefined) {
+                    updates.push(`title = $${paramIdx++}`);
+                    values.push(draftData.title);
+                }
+                if (draftData.description !== undefined) {
+                    updates.push(`description = $${paramIdx++}`);
+                    values.push(draftData.description);
+                }
+                if (draftData.due_date !== undefined) {
+                    updates.push(`due_date = $${paramIdx++}`);
+                    values.push(draftData.due_date);
+                }
+                if (draftData.tag !== undefined) {
+                    updates.push(`tag = $${paramIdx++}`);
+                    values.push(draftData.tag);
+                }
+
+                if (updates.length === 0) {
+                    return res.status(400).json({ error: 'No fields to update' });
+                }
+
+                values.push(draftData.id);
+                const { rows: updateTodoRows } = await db.query(
+                    `UPDATE todos SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIdx} AND deleted_at IS NULL RETURNING *`,
+                    values
+                );
+
+                if (updateTodoRows.length === 0) {
+                    return res.status(404).json({ error: 'Task not found' });
+                }
+
+                result = updateTodoRows[0];
+                resultEntityId = result.id;
+                await logTodoHistory(result.id, 'updated', null, null, JSON.stringify(draftData));
+                break;
+            }
+
+            case 'UPDATE_NOTE': {
+                const noteUpdates = [];
+                const noteValues = [];
+                let noteParamIdx = 1;
+
+                if (draftData.title !== undefined) {
+                    noteUpdates.push(`title = $${noteParamIdx++}`);
+                    noteValues.push(draftData.title);
+                }
+                if (draftData.content !== undefined) {
+                    noteUpdates.push(`content = $${noteParamIdx++}`);
+                    noteValues.push(draftData.content);
+                }
+                if (draftData.folder_id !== undefined) {
+                    noteUpdates.push(`folder_id = $${noteParamIdx++}`);
+                    noteValues.push(draftData.folder_id);
+                }
+
+                if (noteUpdates.length === 0) {
+                    return res.status(400).json({ error: 'No fields to update' });
+                }
+
+                noteValues.push(draftData.id);
+                const { rows: updateNoteRows } = await db.query(
+                    `UPDATE notes SET ${noteUpdates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${noteParamIdx} RETURNING *`,
+                    noteValues
+                );
+
+                if (updateNoteRows.length === 0) {
+                    return res.status(404).json({ error: 'Note not found' });
+                }
+
+                result = updateNoteRows[0];
+                resultEntityId = result.id;
+                await logNoteHistory(result.id, 'updated', null, null, JSON.stringify(draftData));
+                break;
+            }
+
+            case 'UPDATE_LIST': {
+                const listUpdates = [];
+                const listValues = [];
+                let listParamIdx = 1;
+
+                if (draftData.title !== undefined) {
+                    listUpdates.push(`title = $${listParamIdx++}`);
+                    listValues.push(draftData.title);
+                }
+                if (draftData.items !== undefined) {
+                    listUpdates.push(`items = $${listParamIdx++}`);
+                    listValues.push(JSON.stringify(draftData.items));
+                }
+
+                if (listUpdates.length === 0) {
+                    return res.status(400).json({ error: 'No fields to update' });
+                }
+
+                listValues.push(draftData.id);
+                const { rows: updateListRows } = await db.query(
+                    `UPDATE lists SET ${listUpdates.join(', ')} WHERE id = $${listParamIdx} RETURNING *`,
+                    listValues
+                );
+
+                if (updateListRows.length === 0) {
+                    return res.status(404).json({ error: 'List not found' });
+                }
+
+                result = updateListRows[0];
+                resultEntityId = result.id;
+                await logListHistory(result.id, 'updated', null, null, JSON.stringify(draftData));
+                break;
+            }
+
+            case 'ADD_TO_LIST': {
+                // Get existing list
+                const { rows: existingList } = await db.query(
+                    'SELECT * FROM lists WHERE id = $1',
+                    [draftData.id]
+                );
+
+                if (existingList.length === 0) {
+                    return res.status(404).json({ error: 'List not found' });
+                }
+
+                const currentItems = typeof existingList[0].items === 'string'
+                    ? JSON.parse(existingList[0].items)
+                    : existingList[0].items || [];
+
+                const newItems = [...currentItems, ...draftData.new_items];
+
+                const { rows: addToListRows } = await db.query(
+                    'UPDATE lists SET items = $1 WHERE id = $2 RETURNING *',
+                    [JSON.stringify(newItems), draftData.id]
+                );
+
+                result = addToListRows[0];
+                resultEntityId = result.id;
+                await logListHistory(result.id, 'updated', null, null, JSON.stringify({ added_items: draftData.new_items }));
+                break;
+            }
+
+            case 'UPDATE_LIST_ITEM': {
+                // Get existing list
+                const { rows: listForItemEdit } = await db.query(
+                    'SELECT * FROM lists WHERE id = $1',
+                    [draftData.list_id]
+                );
+
+                if (listForItemEdit.length === 0) {
+                    return res.status(404).json({ error: 'List not found' });
+                }
+
+                const itemsToEdit = typeof listForItemEdit[0].items === 'string'
+                    ? JSON.parse(listForItemEdit[0].items)
+                    : listForItemEdit[0].items || [];
+
+                if (draftData.item_index >= itemsToEdit.length) {
+                    return res.status(400).json({ error: 'Item index out of range' });
+                }
+
+                // Update the specific item
+                const oldItem = { ...itemsToEdit[draftData.item_index] };
+                if (draftData.text !== undefined && draftData.text.trim()) {
+                    itemsToEdit[draftData.item_index].text = draftData.text;
+                }
+                if (draftData.checked !== undefined) {
+                    itemsToEdit[draftData.item_index].completed = draftData.checked;
+                    if (draftData.checked) {
+                        itemsToEdit[draftData.item_index].completedAt = new Date().toISOString();
+                    } else {
+                        itemsToEdit[draftData.item_index].completedAt = null;
+                    }
+                }
+
+                const { rows: editItemRows } = await db.query(
+                    'UPDATE lists SET items = $1 WHERE id = $2 RETURNING *',
+                    [JSON.stringify(itemsToEdit), draftData.list_id]
+                );
+
+                result = editItemRows[0];
+                resultEntityId = result.id;
+                await logListHistory(result.id, 'updated', 'item', JSON.stringify(oldItem), JSON.stringify(itemsToEdit[draftData.item_index]));
+                break;
+            }
+
+            case 'REMOVE_LIST_ITEM': {
+                // Get existing list
+                const { rows: listForItemRemove } = await db.query(
+                    'SELECT * FROM lists WHERE id = $1',
+                    [draftData.list_id]
+                );
+
+                if (listForItemRemove.length === 0) {
+                    return res.status(404).json({ error: 'List not found' });
+                }
+
+                const itemsToRemoveFrom = typeof listForItemRemove[0].items === 'string'
+                    ? JSON.parse(listForItemRemove[0].items)
+                    : listForItemRemove[0].items || [];
+
+                if (draftData.item_index >= itemsToRemoveFrom.length) {
+                    return res.status(400).json({ error: 'Item index out of range' });
+                }
+
+                // Remove the specific item
+                const removedItem = itemsToRemoveFrom.splice(draftData.item_index, 1)[0];
+
+                const { rows: removeItemRows } = await db.query(
+                    'UPDATE lists SET items = $1 WHERE id = $2 RETURNING *',
+                    [JSON.stringify(itemsToRemoveFrom), draftData.list_id]
+                );
+
+                result = removeItemRows[0];
+                resultEntityId = result.id;
+                await logListHistory(result.id, 'item_removed', 'item', JSON.stringify(removedItem), null);
+                break;
+            }
+
+            case 'UPDATE_FOLDER': {
+                const { rows: updateFolderRows } = await db.query(
+                    'UPDATE note_folders SET name = $1 WHERE id = $2 RETURNING *',
+                    [draftData.name, draftData.id]
+                );
+
+                if (updateFolderRows.length === 0) {
+                    return res.status(404).json({ error: 'Folder not found' });
+                }
+
+                result = updateFolderRows[0];
+                resultEntityId = result.id;
+                break;
+            }
+
+            // ========== DELETE OPERATIONS ==========
+            case 'DELETE_TODO': {
+                const { rows: deleteTodoRows } = await db.query(
+                    'UPDATE todos SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING *',
+                    [draftData.id]
+                );
+
+                if (deleteTodoRows.length === 0) {
+                    return res.status(404).json({ error: 'Task not found or already deleted' });
+                }
+
+                result = deleteTodoRows[0];
+                resultEntityId = result.id;
+                await logTodoHistory(result.id, 'deleted', null, null, null);
+                break;
+            }
+
+            case 'DELETE_NOTE': {
+                const { rows: deleteNoteRows } = await db.query(
+                    'DELETE FROM notes WHERE id = $1 RETURNING *',
+                    [draftData.id]
+                );
+
+                if (deleteNoteRows.length === 0) {
+                    return res.status(404).json({ error: 'Note not found' });
+                }
+
+                result = deleteNoteRows[0];
+                resultEntityId = result.id;
+                await logNoteHistory(result.id, 'deleted', null, null, null);
+                break;
+            }
+
+            case 'DELETE_LIST': {
+                const { rows: deleteListRows } = await db.query(
+                    'DELETE FROM lists WHERE id = $1 RETURNING *',
+                    [draftData.id]
+                );
+
+                if (deleteListRows.length === 0) {
+                    return res.status(404).json({ error: 'List not found' });
+                }
+
+                result = deleteListRows[0];
+                resultEntityId = result.id;
+                await logListHistory(result.id, 'deleted', null, null, null);
+                break;
+            }
+
+            case 'DELETE_FOLDER': {
+                // Move notes in folder to no folder first
+                await db.query(
+                    'UPDATE notes SET folder_id = NULL WHERE folder_id = $1',
+                    [draftData.id]
+                );
+
+                const { rows: deleteFolderRows } = await db.query(
+                    'DELETE FROM note_folders WHERE id = $1 RETURNING *',
+                    [draftData.id]
+                );
+
+                if (deleteFolderRows.length === 0) {
+                    return res.status(404).json({ error: 'Folder not found' });
+                }
+
+                result = deleteFolderRows[0];
+                resultEntityId = result.id;
+                break;
+            }
+
             default:
-                return res.json({
-                    success: false,
-                    action: 'UNKNOWN',
-                    message: parsed.message || "I didn't understand that. Try creating a todo, note, or list."
-                });
+                return res.status(400).json({ error: `Unsupported action type: ${draft.action_type}` });
         }
+
+        // Update draft status to confirmed
+        await draftStore.confirmDraft(draft_id, resultEntityId);
+
+        res.json({
+            success: true,
+            message: `${draft.action_type.replace(/_/g, ' ')} executed successfully`,
+            draft_id: parseInt(draft_id),
+            result
+        });
+
     } catch (err) {
-        console.error('AI Parse Error:', err);
-        res.status(500).json({ error: err.message });
+        console.error('AI Execute Error:', err);
+        sendErrorResponse(res, err);
+    }
+});
+
+// DRAFT ACTIONS ENDPOINTS - v2.0
+
+// Get all drafts by status
+app.get('/api/drafts', async (req, res) => {
+    try {
+        const { status = 'pending' } = req.query;
+        const drafts = await draftStore.getDraftsByStatus(status);
+        res.json(drafts.map(draftStore.formatDraft));
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+// Get a specific draft
+app.get('/api/drafts/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const draft = await draftStore.getDraftById(id);
+        if (!draft) {
+            return res.status(404).json({ error: 'Draft not found' });
+        }
+        res.json(draftStore.formatDraft(draft));
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+// Confirm a draft - executes the actual CRUD operation
+app.post('/api/drafts/:id/confirm', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { updatedData } = req.body; // Optional: allow user to modify data before confirming
+
+        // Get the draft
+        const { rows: draftRows } = await db.query(
+            'SELECT * FROM draft_actions WHERE id = $1 AND status = $2',
+            [id, 'pending']
+        );
+
+        if (draftRows.length === 0) {
+            return res.status(404).json({ error: 'Draft not found or already resolved' });
+        }
+
+        const draft = draftRows[0];
+        const draftData = updatedData || draft.draft_data;
+
+        // Execute the actual CRUD operation based on action type
+        let result;
+        let resultEntityId;
+
+        switch (draft.action_type) {
+            case 'CREATE_TODO':
+                const { rows: todoRows } = await db.query(
+                    'INSERT INTO todos (title, description, due_date, tag) VALUES ($1, $2, $3, $4) RETURNING *',
+                    [draftData.title, draftData.description || null, draftData.due_date || null, draftData.tag || null]
+                );
+                result = todoRows[0];
+                resultEntityId = result.id;
+                await logTodoHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                break;
+
+            case 'CREATE_NOTE':
+                const { rows: noteRows } = await db.query(
+                    'INSERT INTO notes (title, content, folder_id) VALUES ($1, $2, $3) RETURNING *',
+                    [draftData.title, draftData.content, draftData.folder_id || null]
+                );
+                result = noteRows[0];
+                resultEntityId = result.id;
+                await logNoteHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                break;
+
+            case 'CREATE_LIST':
+                const items = Array.isArray(draftData.items)
+                    ? draftData.items.map(item => typeof item === 'string' ? { text: item, checked: false } : item)
+                    : [];
+                const { rows: listRows } = await db.query(
+                    'INSERT INTO lists (title, items) VALUES ($1, $2) RETURNING *',
+                    [draftData.title, JSON.stringify(items)]
+                );
+                result = listRows[0];
+                resultEntityId = result.id;
+                await logListHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                break;
+
+            default:
+                return res.status(400).json({ error: `Unsupported action type: ${draft.action_type}` });
+        }
+
+        // Update draft status to confirmed
+        await db.query(
+            'UPDATE draft_actions SET status = $1, resolved_at = CURRENT_TIMESTAMP, result_entity_id = $2 WHERE id = $3',
+            ['confirmed', resultEntityId, id]
+        );
+
+        res.json({
+            success: true,
+            message: `${draft.action_type.replace('_', ' ')} confirmed and executed`,
+            draft_id: parseInt(id),
+            result: result
+        });
+
+    } catch (err) {
+        console.error('Draft confirm error:', err);
+        sendErrorResponse(res, err);
+    }
+});
+
+// Reject a draft
+app.post('/api/drafts/:id/reject', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const draft = await draftStore.rejectDraft(id);
+
+        if (!draft) {
+            return res.status(404).json({ error: 'Draft not found or already resolved' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Draft rejected',
+            draft_id: parseInt(id)
+        });
+
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+// Update a pending draft (modify before confirming)
+app.put('/api/drafts/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { draft_data } = req.body;
+
+        const draft = await draftStore.updateDraftData(id, draft_data);
+
+        if (!draft) {
+            return res.status(404).json({ error: 'Draft not found or already resolved' });
+        }
+
+        res.json(draftStore.formatDraft(draft));
+
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+// Bulk confirm/reject drafts
+app.post('/api/drafts/bulk', async (req, res) => {
+    try {
+        const { action, draft_ids } = req.body;
+
+        if (!['confirm', 'reject'].includes(action)) {
+            return res.status(400).json({ error: 'Action must be "confirm" or "reject"' });
+        }
+
+        if (!Array.isArray(draft_ids) || draft_ids.length === 0) {
+            return res.status(400).json({ error: 'draft_ids must be a non-empty array' });
+        }
+
+        const results = [];
+        const errors = [];
+
+        for (const draftId of draft_ids) {
+            try {
+                if (action === 'confirm') {
+                    // Get the draft
+                    const { rows: draftRows } = await db.query(
+                        'SELECT * FROM draft_actions WHERE id = $1 AND status = $2',
+                        [draftId, 'pending']
+                    );
+
+                    if (draftRows.length === 0) {
+                        errors.push({ id: draftId, error: 'Draft not found or already resolved' });
+                        continue;
+                    }
+
+                    const draft = draftRows[0];
+                    const draftData = draft.draft_data;
+                    let result;
+                    let resultEntityId;
+
+                    switch (draft.action_type) {
+                        case 'CREATE_TODO':
+                            const { rows: todoRows } = await db.query(
+                                'INSERT INTO todos (title, description, due_date, tag) VALUES ($1, $2, $3, $4) RETURNING *',
+                                [draftData.title, draftData.description || null, draftData.due_date || null, draftData.tag || null]
+                            );
+                            result = todoRows[0];
+                            resultEntityId = result.id;
+                            await logTodoHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                            break;
+
+                        case 'CREATE_NOTE':
+                            const { rows: noteRows } = await db.query(
+                                'INSERT INTO notes (title, content, folder_id) VALUES ($1, $2, $3) RETURNING *',
+                                [draftData.title, draftData.content, draftData.folder_id || null]
+                            );
+                            result = noteRows[0];
+                            resultEntityId = result.id;
+                            await logNoteHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                            break;
+
+                        case 'CREATE_LIST':
+                            const items = Array.isArray(draftData.items)
+                                ? draftData.items.map(item => typeof item === 'string' ? { text: item, checked: false } : item)
+                                : [];
+                            const { rows: listRows } = await db.query(
+                                'INSERT INTO lists (title, items) VALUES ($1, $2) RETURNING *',
+                                [draftData.title, JSON.stringify(items)]
+                            );
+                            result = listRows[0];
+                            resultEntityId = result.id;
+                            await logListHistory(result.id, 'created', null, null, JSON.stringify(draftData));
+                            break;
+
+                        default:
+                            errors.push({ id: draftId, error: `Unsupported action type: ${draft.action_type}` });
+                            continue;
+                    }
+
+                    await db.query(
+                        'UPDATE draft_actions SET status = $1, resolved_at = CURRENT_TIMESTAMP, result_entity_id = $2 WHERE id = $3',
+                        ['confirmed', resultEntityId, draftId]
+                    );
+
+                    results.push({ id: draftId, action: 'confirmed', result });
+
+                } else {
+                    // Reject
+                    const { rows } = await db.query(
+                        `UPDATE draft_actions SET status = 'rejected', resolved_at = CURRENT_TIMESTAMP
+                         WHERE id = $1 AND status = 'pending' RETURNING id`,
+                        [draftId]
+                    );
+
+                    if (rows.length === 0) {
+                        errors.push({ id: draftId, error: 'Draft not found or already resolved' });
+                    } else {
+                        results.push({ id: draftId, action: 'rejected' });
+                    }
+                }
+            } catch (err) {
+                errors.push({ id: draftId, error: err.message });
+            }
+        }
+
+        res.json({
+            success: errors.length === 0,
+            results,
+            errors: errors.length > 0 ? errors : undefined
+        });
+
+    } catch (err) {
+        sendErrorResponse(res, err);
     }
 });
 

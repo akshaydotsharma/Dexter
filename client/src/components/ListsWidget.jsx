@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import Card from './Card';
 import Input from './Input';
 import Button from './Button';
 import { getLists, createList, updateList, deleteList } from '../services/api';
 import { Plus, Trash2, Loader2, Check, ChevronRight, ChevronDown, Edit2 } from 'lucide-react';
 
-export default function ListsWidget({ fullHeight = false }) {
+const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref) {
     const [lists, setLists] = useState([]);
     const [loading, setLoading] = useState(true);
     const [expandedListIds, setExpandedListIds] = useState(new Set());
@@ -21,6 +21,11 @@ export default function ListsWidget({ fullHeight = false }) {
     useEffect(() => {
         fetchLists();
     }, []);
+
+    // Expose refresh method to parent via ref
+    useImperativeHandle(ref, () => ({
+        refresh: () => fetchLists()
+    }));
 
     const fetchLists = async () => {
         try {
@@ -104,7 +109,12 @@ export default function ListsWidget({ fullHeight = false }) {
         if (!list) return;
 
         const updatedItems = [...list.items];
-        updatedItems[index].completed = !updatedItems[index].completed;
+        const isNowCompleted = !updatedItems[index].completed;
+        updatedItems[index] = {
+            ...updatedItems[index],
+            completed: isNowCompleted,
+            completedAt: isNowCompleted ? new Date().toISOString() : null
+        };
 
         const updatedList = { ...list, items: updatedItems };
         setLists(lists.map(l => l.id === listId ? updatedList : l));
@@ -295,12 +305,28 @@ export default function ListsWidget({ fullHeight = false }) {
                                                         </Button>
                                                     </form>
 
-                                                    {/* Items List */}
+                                                    {/* Items List - sorted with uncompleted first, completed at bottom */}
                                                     <div className="space-y-1">
                                                         {list.items?.length === 0 ? (
                                                             <div className="text-center text-gray-400 py-2 text-sm">Empty list.</div>
                                                         ) : (
-                                                            list.items.map((item, idx) => {
+                                                            [...list.items]
+                                                                .map((item, originalIdx) => ({ ...item, originalIdx }))
+                                                                .sort((a, b) => {
+                                                                    // Uncompleted items first
+                                                                    if (a.completed !== b.completed) {
+                                                                        return a.completed ? 1 : -1;
+                                                                    }
+                                                                    // Among completed items, sort by completedAt descending (most recent first)
+                                                                    if (a.completed && b.completed) {
+                                                                        const aTime = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+                                                                        const bTime = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+                                                                        return bTime - aTime;
+                                                                    }
+                                                                    return 0;
+                                                                })
+                                                                .map((item) => {
+                                                                const idx = item.originalIdx;
                                                                 const itemKey = `${list.id}-${idx}`;
                                                                 return (
                                                                     <div key={idx} className="group flex items-center justify-between p-2 hover:bg-slate-50 rounded-lg transition-all">
@@ -371,4 +397,6 @@ export default function ListsWidget({ fullHeight = false }) {
             </div>
         </Card>
     );
-}
+});
+
+export default ListsWidget;

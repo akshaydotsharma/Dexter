@@ -1,7 +1,7 @@
 {
   "name": "personal-dashboard-server",
   "version": "1.0.0",
-  "description": "Personal Dashboard API Server",
+  "description": "",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -11,12 +11,14 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "bytez.js": "^3.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
     "openai": "^6.10.0",
     "pg": "^8.16.3"
   },

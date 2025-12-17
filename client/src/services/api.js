@@ -45,4 +45,15 @@ export const getStats = () => api.get('/stats');
 // AI Parse endpoint
 export const aiParse = (input) => api.post('/ai/parse', { input });
 
+// Draft Actions endpoints - v2.0
+export const getDrafts = (status = 'pending') => api.get('/drafts', { params: { status } });
+export const getDraft = (id) => api.get(`/drafts/${id}`);
+export const confirmDraft = (id, updatedData) => api.post(`/drafts/${id}/confirm`, updatedData ? { updatedData } : {});
+export const rejectDraft = (id) => api.post(`/drafts/${id}/reject`);
+export const updateDraft = (id, draft_data) => api.put(`/drafts/${id}`, { draft_data });
+export const bulkDraftAction = (action, draft_ids) => api.post('/drafts/bulk', { action, draft_ids });
+
+// AI Execute endpoint - v2.0 (alternative to confirm, cleaner API)
+export const executeDraft = (draft_id, updatedData) => api.post('/ai/execute', { draft_id, updatedData });
+
 export default api;

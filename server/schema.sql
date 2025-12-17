@@ -105,3 +105,41 @@ CREATE TABLE IF NOT EXISTS dashboard_config (
 INSERT INTO dashboard_config (id, layout_preference)
 SELECT 1, '{"widgets": ["todos", "notes", "lists"]}'
 WHERE NOT EXISTS (SELECT 1 FROM dashboard_config WHERE id = 1);
+
+-- Draft actions table for v2.0 LLM draft generator pattern
+-- Stores pending actions from AI before user confirmation
+CREATE TABLE IF NOT EXISTS draft_actions (
+    id SERIAL PRIMARY KEY,
+    action_type TEXT NOT NULL, -- 'CREATE_TODO', 'CREATE_NOTE', 'CREATE_LIST', 'UPDATE_TODO', etc.
+    entity_type TEXT NOT NULL, -- 'todo', 'note', 'list'
+    entity_id INTEGER, -- null for creates, populated for updates/deletes
+    draft_data JSONB NOT NULL, -- the proposed changes/new entity data
+    original_input TEXT, -- the user's natural language input
+    status TEXT DEFAULT 'pending', -- 'pending', 'confirmed', 'rejected', 'expired'
+    model TEXT, -- model used for generation (e.g., 'gpt-4o-mini')
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP, -- when user confirmed/rejected
+    result_entity_id INTEGER -- the id of the created/updated entity after confirmation
+);
+
+-- Add model column if it doesn't exist (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'draft_actions' AND column_name = 'model') THEN
+        ALTER TABLE draft_actions ADD COLUMN model TEXT;
+    END IF;
+END $$;
+
+-- AI messages table for conversation tracking (LLM layer audit)
+-- Tracks all messages in AI conversations for debugging and multi-turn support
+CREATE TABLE IF NOT EXISTS ai_messages (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT, -- optional: group messages into conversations
+    role TEXT NOT NULL, -- 'user', 'assistant', 'system'
+    content TEXT NOT NULL, -- the message content
+    tool_calls JSONB, -- function/tool calls made by assistant (if any)
+    model TEXT, -- model used (e.g., 'gpt-4o-mini')
+    tokens_used INTEGER, -- total tokens for this message (input + output)
+    response_id TEXT, -- OpenAI response ID for debugging
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
