@@ -1,9 +1,10 @@
 /**
  * Chat to Drafts Module
- * Uses OpenAI Responses API with function calling to convert user messages into drafts
+ * Uses Vercel AI SDK with function calling to convert user messages into drafts
  */
 
-const { getClient, CONFIG } = require('./openaiClient');
+const { generateText } = require('ai');
+const { getChatModel, CONFIG } = require('./openaiClient');
 const { tools } = require('./tools');
 const { handlers } = require('./toolHandlers');
 const draftStore = require('./draftStore');
@@ -155,7 +156,7 @@ async function fetchContext() {
 
 /**
  * Process a chat message and return drafts
- * Uses OpenAI Responses API with function calling
+ * Uses Vercel AI SDK with function calling
  *
  * @param {string} userText - The user's message
  * @param {Object} options - Options
@@ -173,11 +174,9 @@ async function chatToDrafts(userText, options = {}) {
         sessionId = null
     } = options;
 
-    const openai = getClient();
-
     // Fetch existing items for context
     const context = await fetchContext();
-    const instructions = getInstructions(tz, nowIso, context);
+    const systemPrompt = getInstructions(tz, nowIso, context);
 
     // Log user message
     await draftStore.logMessage({
@@ -189,18 +188,20 @@ async function chatToDrafts(userText, options = {}) {
         responseId: null
     });
 
-    // Call OpenAI Responses API with tools
-    // Note: gpt-5-nano doesn't support temperature parameter
-    const response = await openai.responses.create({
-        model: CONFIG.model,
-        instructions,
-        input: [{ role: 'user', content: userText }],
-        tools
+    // Call Vercel AI SDK with tools (using Chat API for proper tool support)
+    const { text, toolCalls, toolResults, usage, response } = await generateText({
+        model: getChatModel(),
+        system: systemPrompt,
+        prompt: userText,
+        tools,
+        maxSteps: 5, // Allow multiple tool calls
+        temperature: CONFIG.temperature,
+        maxTokens: CONFIG.maxTokens
     });
 
-    // Debug: Log response summary (not full response to avoid logging sensitive data)
+    // Debug: Log response summary
     if (process.env.NODE_ENV !== 'production') {
-        console.log('[chatToDrafts] Response received, output items:', response.output?.length || 0);
+        console.log('[chatToDrafts] Response received, tool calls:', toolCalls?.length || 0);
     }
 
     // Result object
@@ -219,45 +220,43 @@ async function chatToDrafts(userText, options = {}) {
         model: CONFIG.model
     };
 
-    // Process response output items
-    if (response.output && Array.isArray(response.output)) {
-        for (const item of response.output) {
-            if (item.type === 'function_call') {
-                // Parse and execute the tool call
-                const functionName = item.name;
-                const args = JSON.parse(item.arguments);
+    // Process tool calls
+    // Note: In AI SDK v5, tool call arguments are in 'input' property, not 'args'
+    if (toolCalls && toolCalls.length > 0) {
+        for (const toolCall of toolCalls) {
+            const functionName = toolCall.toolName;
+            const args = toolCall.input || toolCall.args; // v5 uses 'input', fallback to 'args'
 
-                // Check if we have a handler for this tool
-                if (handlers[functionName]) {
-                    try {
-                        const handlerResult = await handlers[functionName](args, ctx);
+            // Check if we have a handler for this tool
+            if (handlers[functionName]) {
+                try {
+                    const handlerResult = await handlers[functionName](args, ctx);
 
-                        // Get the created draft from DB to return full details
-                        const draft = await draftStore.getDraftById(handlerResult.draft_id);
-                        if (draft) {
-                            result.drafts.push(draftStore.formatDraft(draft));
-                        }
-
-                        result.toolCalls.push({
-                            id: item.call_id,
-                            function: functionName,
-                            arguments: args
-                        });
-                    } catch (err) {
-                        console.error(`Error executing ${functionName}:`, err);
-                        result.errors.push({
-                            tool: functionName,
-                            message: err.message || 'Unknown error occurred'
-                        });
+                    // Get the created draft from DB to return full details
+                    const draft = await draftStore.getDraftById(handlerResult.draft_id);
+                    if (draft) {
+                        result.drafts.push(draftStore.formatDraft(draft));
                     }
+
+                    result.toolCalls.push({
+                        id: toolCall.toolCallId,
+                        function: functionName,
+                        arguments: args
+                    });
+                } catch (err) {
+                    console.error(`Error executing ${functionName}:`, err);
+                    result.errors.push({
+                        tool: functionName,
+                        message: err.message || 'Unknown error occurred'
+                    });
                 }
             }
         }
     }
 
     // Get assistant text from response
-    if (response.output_text) {
-        result.assistantText = response.output_text;
+    if (text) {
+        result.assistantText = text;
     }
 
     // Generate summary if we have drafts but no assistant text
@@ -279,8 +278,8 @@ async function chatToDrafts(userText, options = {}) {
     }
 
     // Calculate tokens used
-    const tokensUsed = response.usage
-        ? (response.usage.input_tokens || 0) + (response.usage.output_tokens || 0)
+    const tokensUsed = usage
+        ? (usage.promptTokens || 0) + (usage.completionTokens || 0)
         : null;
 
     // Log assistant response
@@ -291,7 +290,7 @@ async function chatToDrafts(userText, options = {}) {
         toolCalls: result.toolCalls.length > 0 ? result.toolCalls : null,
         model: CONFIG.model,
         tokensUsed,
-        responseId: response.id || null
+        responseId: response?.id || null
     });
 
     return result;

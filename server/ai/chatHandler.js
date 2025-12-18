@@ -1,9 +1,11 @@
 /**
  * Chat Handler Module
  * Orchestrates LLM calls and processes responses with function calling
+ * Uses Vercel AI SDK
  */
 
-const { getClient, CONFIG } = require('./openaiClient');
+const { generateText } = require('ai');
+const { getChatModel, CONFIG } = require('./openaiClient');
 const { tools, toolToActionType, toolToEntityType } = require('./tools');
 const draftStore = require('./draftStore');
 
@@ -38,16 +40,17 @@ Today's date context will be provided with each message.`;
  */
 async function processChat(userInput, options = {}) {
     const { conversationHistory = [], sessionId = null } = options;
-    const openai = getClient();
 
     // Add current date context
     const today = new Date().toISOString().split('T')[0];
     const userMessage = `Today's date is ${today}. User input: "${userInput}"`;
 
-    // Build messages array
+    // Build messages array for Vercel AI SDK
     const messages = [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...conversationHistory,
+        ...conversationHistory.map(msg => ({
+            role: msg.role,
+            content: msg.content
+        })),
         { role: 'user', content: userMessage }
     ];
 
@@ -61,22 +64,20 @@ async function processChat(userInput, options = {}) {
         responseId: null
     });
 
-    // Call OpenAI with function calling
-    const response = await openai.chat.completions.create({
-        model: CONFIG.model,
+    // Call Vercel AI SDK with function calling (using Chat API for proper tool support)
+    const { text, toolCalls, usage, response } = await generateText({
+        model: getChatModel(),
+        system: SYSTEM_PROMPT,
         messages,
         tools,
-        tool_choice: 'auto',
+        maxSteps: 5,
         temperature: CONFIG.temperature,
-        max_tokens: CONFIG.maxTokens
+        maxTokens: CONFIG.maxTokens
     });
 
-    const choice = response.choices[0];
-    const message = choice.message;
-
     // Calculate tokens used
-    const tokensUsed = response.usage
-        ? response.usage.prompt_tokens + response.usage.completion_tokens
+    const tokensUsed = usage
+        ? (usage.promptTokens || 0) + (usage.completionTokens || 0)
         : null;
 
     // Process the response
@@ -89,10 +90,11 @@ async function processChat(userInput, options = {}) {
     };
 
     // Handle tool calls (function calling)
-    if (message.tool_calls && message.tool_calls.length > 0) {
-        for (const toolCall of message.tool_calls) {
-            const functionName = toolCall.function.name;
-            const functionArgs = JSON.parse(toolCall.function.arguments);
+    // Note: In AI SDK v5, tool call arguments are in 'input' property, not 'args'
+    if (toolCalls && toolCalls.length > 0) {
+        for (const toolCall of toolCalls) {
+            const functionName = toolCall.toolName;
+            const functionArgs = toolCall.input || toolCall.args; // v5 uses 'input'
 
             const actionType = toolToActionType[functionName];
             const entityType = toolToEntityType[functionName];
@@ -110,7 +112,7 @@ async function processChat(userInput, options = {}) {
 
                 result.drafts.push(draftStore.formatDraft(draft));
                 result.toolCalls.push({
-                    id: toolCall.id,
+                    id: toolCall.toolCallId,
                     function: functionName,
                     arguments: functionArgs
                 });
@@ -124,18 +126,18 @@ async function processChat(userInput, options = {}) {
     }
 
     // Handle text response (could be a follow-up question or clarification)
-    if (message.content) {
+    if (text) {
         if (result.drafts.length === 0) {
             // No tools called - this is likely a clarifying question or conversation
-            result.assistantText = message.content;
+            result.assistantText = text;
 
             // Check if it's a question
-            if (message.content.includes('?')) {
-                result.followUpQuestion = message.content;
+            if (text.includes('?')) {
+                result.followUpQuestion = text;
             }
         } else {
             // There are drafts and also text - append to summary
-            result.assistantText = message.content;
+            result.assistantText = text;
         }
     }
 
@@ -147,7 +149,7 @@ async function processChat(userInput, options = {}) {
         toolCalls: result.toolCalls.length > 0 ? result.toolCalls : null,
         model: CONFIG.model,
         tokensUsed,
-        responseId: response.id || null
+        responseId: response?.id || null
     });
 
     return result;
