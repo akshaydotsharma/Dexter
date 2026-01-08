@@ -56,9 +56,11 @@ app.use(cors({
         if (allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
-        // In production, also allow the Railway app's own domain
-        if (process.env.NODE_ENV === 'production' && origin.includes('.up.railway.app')) {
-            return callback(null, true);
+        // In production, also allow the platform domains
+        if (process.env.NODE_ENV === 'production') {
+            if (origin.includes('.up.railway.app') || origin.includes('.onrender.com')) {
+                return callback(null, true);
+            }
         }
         callback(new Error('Not allowed by CORS'));
     },
