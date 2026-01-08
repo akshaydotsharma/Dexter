@@ -996,5 +996,5 @@ Example: `2025-12-17T10:30:00Z`
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `PORT` | No | Server port (default: 3000) |
 | `NODE_ENV` | No | Environment: `development` or `production` |
-| `OPENAI_API_KEY` | No | Required for AI parsing feature |
+| `ANTHROPIC_API_KEY` | No | Required for AI parsing feature (Claude) |
 | `VITE_API_URL` | No | Client-side API URL override |
