@@ -840,8 +840,8 @@ app.post('/api/ai/parse', async (req, res) => {
             return res.status(400).json({ error: 'Input is required' });
         }
 
-        if (!process.env.ANTHROPIC_API_KEY) {
-            return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
+        if (!process.env.OPENAI_API_KEY) {
+            return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
         }
 
         // Process chat using chatToDrafts with Responses API

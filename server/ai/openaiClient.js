@@ -1,42 +1,43 @@
 /**
- * AI Client Module (Vercel AI SDK)
- * Centralized AI client configuration using Vercel AI SDK with Anthropic Claude
+ * OpenAI Client Module (Vercel AI SDK)
+ * Centralized AI client configuration using Vercel AI SDK
  */
 
-const { createAnthropic } = require('@ai-sdk/anthropic');
+const { createOpenAI } = require('@ai-sdk/openai');
 
-let anthropicInstance = null;
+let openaiInstance = null;
 
 /**
- * Get or create the Anthropic provider instance
- * @returns {ReturnType<typeof createAnthropic>} Anthropic provider instance
+ * Get or create the OpenAI provider instance
+ * @returns {ReturnType<typeof createOpenAI>} OpenAI provider instance
  */
 function getProvider() {
-    if (!anthropicInstance) {
-        const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!openaiInstance) {
+        const apiKey = process.env.OPENAI_API_KEY;
         if (!apiKey) {
-            throw new Error('ANTHROPIC_API_KEY is not configured. Please set it in your environment variables.');
+            throw new Error('OPENAI_API_KEY is not configured. Please set it in your environment variables.');
         }
-        anthropicInstance = createAnthropic({ apiKey });
+        openaiInstance = createOpenAI({ apiKey });
     }
-    return anthropicInstance;
+    return openaiInstance;
 }
 
 /**
- * Get a chat model instance
+ * Get a chat model instance (uses Chat Completions API, required for tool calling)
  * @param {string} modelId - Model identifier (default from CONFIG)
  * @returns {LanguageModelV1} Chat model instance
  */
 function getChatModel(modelId) {
     const provider = getProvider();
-    return provider(modelId || CONFIG.model);
+    // Use .chat() to get Chat Completions API which properly supports tool calling
+    return provider.chat(modelId || CONFIG.model);
 }
 
 /**
  * Configuration for AI generation
  */
 const CONFIG = {
-    model: 'claude-sonnet-4-20250514',
+    model: 'gpt-4o-mini',
     temperature: 0.3,
     maxTokens: 1024
 };

@@ -13,7 +13,7 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false  # Set manually in dashboard (Supabase connection string)
-      - key: ANTHROPIC_API_KEY
+      - key: OPENAI_API_KEY
         sync: false  # Set manually in dashboard
 
   # Frontend (Static Site)
