@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { MessageSquare } from 'lucide-react';
 import { usePreferences } from '../contexts/preferences-context';
+import { ChatProvider } from '../contexts/ChatContext';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import ChatPopover from './ChatPopover';
@@ -101,6 +102,7 @@ export default function AppShell() {
   const hideFab = isChatRoute; // mobile-only Today hide is handled via Tailwind below.
 
   return (
+    <ChatProvider>
     <ThemeProvider theme={muiTheme}>
       <div className="min-h-screen bg-paper text-ink flex">
         <Sidebar
@@ -151,5 +153,6 @@ export default function AppShell() {
         />
       </div>
     </ThemeProvider>
+    </ChatProvider>
   );
 }
