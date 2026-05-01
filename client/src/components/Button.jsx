@@ -1,20 +1,51 @@
-export default function Button({ children, onClick, variant = 'primary', className = '', ...props }) {
-    const baseStyles = "px-4 py-2 rounded-xl font-medium transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2";
+import { forwardRef } from 'react';
 
-    const variants = {
-        primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-500/30",
-        secondary: "bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 shadow-sm",
-        danger: "bg-rose-500 text-white hover:bg-rose-600 shadow-lg shadow-rose-500/30",
-        ghost: "text-gray-600 hover:bg-gray-100/50 hover:text-gray-900",
-    };
+/**
+ * v2 Button primitive.
+ *
+ * Variants:
+ *   primary   — bg-ink (the brand mark), used for confirm/submit
+ *   secondary — bordered surface, neutral default action
+ *   ghost     — transparent, used inside dense rows
+ *   accent    — uses the active route accent (per-section ink)
+ *   danger    — destructive
+ *
+ * Sizes: sm (h-8) | md (h-10, default) | lg (h-12)
+ */
+const Button = forwardRef(function Button(
+  { children, variant = 'primary', size = 'md', className = '', type = 'button', disabled, ...props },
+  ref
+) {
+  const base =
+    'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors duration-150 ease-out ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--color-accent-ring] ' +
+    'disabled:bg-paper-2 disabled:text-muted-soft disabled:cursor-not-allowed';
 
-    return (
-        <button
-            onClick={onClick}
-            className={`${baseStyles} ${variants[variant]} ${className}`}
-            {...props}
-        >
-            {children}
-        </button>
-    );
-}
+  const sizes = {
+    sm: 'h-8 px-3 text-sm',
+    md: 'h-10 px-4 text-sm',
+    lg: 'h-12 px-5 text-base',
+  };
+
+  const variants = {
+    primary: 'bg-ink text-paper hover:bg-ink-soft',
+    secondary: 'bg-surface border border-border text-ink hover:bg-paper-2',
+    ghost: 'text-ink hover:bg-paper-2',
+    accent: 'bg-[--color-accent] text-[--color-accent-fg] hover:opacity-90',
+    danger: 'bg-danger text-white hover:opacity-90',
+  };
+
+  return (
+    <button
+      ref={ref}
+      type={type}
+      disabled={disabled}
+      className={`${base} ${sizes[size]} ${variants[variant]} ${className}`}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+});
+
+export default Button;
