@@ -3,8 +3,7 @@ import SwiftUI
 struct NotesView: View {
     @State private var viewModel = NotesViewModel()
     @State private var showingNewFolder = false
-    @State private var showingNewNote = false
-    @State private var editingNote: Note?
+    @State private var selectedNoteId: Int?
     @State private var selectedFolder: NoteFolder?
     @State private var pendingFolderLaunchId: Int? = {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_FOLDER_ID"], let id = Int(raw) { return id }
@@ -19,24 +18,31 @@ struct NotesView: View {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                if let folder = selectedFolder {
+                if let id = selectedNoteId, let note = viewModel.notes.first(where: { $0.id == id }) {
+                    NoteDetailContent(
+                        viewModel: viewModel,
+                        note: note,
+                        onClose: {
+                            withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = nil }
+                        }
+                    )
+                } else if let folder = selectedFolder {
                     folderDetailHeader(folder: folder)
+                    folderNotesList(folder)
                 } else {
                     TopBar(
                         title: "Notes",
                         onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
                         onToggleTheme: { schemePref = schemePref.next }
                     )
-                }
-
-                if let folder = selectedFolder {
-                    folderNotesList(folder)
-                } else {
                     rootList
                 }
             }
 
-            ChatFAB { router.popToChat() }
+            // Hide FAB while editing a note so it doesn't fight the keyboard.
+            if selectedNoteId == nil {
+                ChatFAB { router.popToChat() }
+            }
         }
         .activeSection(.notes)
         .task {
@@ -49,12 +55,6 @@ struct NotesView: View {
         }
         .sheet(isPresented: $showingNewFolder) {
             NewFolderSheet(viewModel: viewModel)
-        }
-        .sheet(isPresented: $showingNewNote) {
-            NoteEditorSheet(viewModel: viewModel, note: nil, defaultFolderId: selectedFolder?.id)
-        }
-        .sheet(item: $editingNote) { note in
-            NoteEditorSheet(viewModel: viewModel, note: note, defaultFolderId: note.folderId)
         }
         .alert("Couldn't load notes",
                isPresented: Binding(
@@ -89,7 +89,9 @@ struct NotesView: View {
                 .font(.edTitle)
                 .foregroundStyle(Tokens.ink)
             Spacer()
-            Button { showingNewNote = true } label: {
+            Button {
+                Task { await createBlankNote(folderId: folder.id) }
+            } label: {
                 Image(systemName: "plus")
                     .frame(width: 44, height: 44)
                     .foregroundStyle(Tokens.ink)
@@ -117,7 +119,7 @@ struct NotesView: View {
                     }
                     .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
                     Button {
-                        showingNewNote = true
+                        Task { await createBlankNote(folderId: selectedFolder?.id) }
                     } label: {
                         Label("New note", systemImage: "plus")
                     }
@@ -145,7 +147,7 @@ struct NotesView: View {
                     section("Unfiled") {
                         VStack(spacing: Space.xs) {
                             ForEach(unfiled) { note in
-                                NoteRow(note: note) { editingNote = note }
+                                NoteRow(note: note) { open(note: note) }
                             }
                         }
                     }
@@ -178,7 +180,7 @@ struct NotesView: View {
                         .padding(.vertical, Space.xxxl)
                 } else {
                     ForEach(inFolder) { note in
-                        NoteRow(note: note) { editingNote = note }
+                        NoteRow(note: note) { open(note: note) }
                     }
                 }
             }
@@ -194,6 +196,17 @@ struct NotesView: View {
             Text(title).eyebrow()
             body()
         }
+    }
+
+    // MARK: - Note actions
+
+    private func open(note: Note) {
+        withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = note.id }
+    }
+
+    private func createBlankNote(folderId: Int?) async {
+        guard let new = await viewModel.createNote(title: nil, content: nil, folderId: folderId) else { return }
+        withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = new.id }
     }
 }
 
@@ -304,87 +317,135 @@ private struct NewFolderSheet: View {
     }
 }
 
-private struct NoteEditorSheet: View {
-    let viewModel: NotesViewModel
-    let note: Note?
-    let defaultFolderId: Int?
+/// Full-screen note detail per DESIGN_SPEC §10.4. Edits are auto-saved
+/// when the user taps Done or otherwise leaves the view; there is no
+/// modal Cancel/Save pair.
+private struct NoteDetailContent: View {
+    @Bindable var viewModel: NotesViewModel
+    let note: Note
+    let onClose: () -> Void
 
-    @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
     @State private var content: String = ""
     @State private var folderId: Int?
-
-    private var isEditing: Bool { note != nil }
+    @State private var hasLoaded = false
+    @FocusState private var contentFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .top) {
-                Tokens.paper.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Space.lg) {
-                        TextField("Untitled", text: $title)
-                            .font(.edTitle)
-                            .foregroundStyle(Tokens.ink)
-                            .textFieldStyle(.plain)
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
 
-                        if !viewModel.folders.isEmpty {
-                            Picker("Folder", selection: Binding(
-                                get: { folderId ?? -1 },
-                                set: { folderId = $0 == -1 ? nil : $0 }
-                            )) {
-                                Text("None").tag(-1)
-                                ForEach(viewModel.folders) { folder in
-                                    Text(folder.name).tag(folder.id)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .tint(Tokens.muted)
-                        }
-
-                        Rectangle().fill(Tokens.divider).frame(height: 0.5)
-
-                        TextEditor(text: $content)
-                            .font(.edBody)
-                            .foregroundStyle(Tokens.ink)
-                            .scrollContentBackground(.hidden)
-                            .background(Tokens.paper)
-                            .frame(minHeight: 240)
-                    }
-                    .padding(Space.lg)
-                }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
-                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty
-                                  && content.trimmingCharacters(in: .whitespaces).isEmpty)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    TextField("Untitled", text: $title, axis: .vertical)
+                        .font(.edDisplay)
                         .foregroundStyle(Tokens.ink)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...3)
+
+                    if !viewModel.folders.isEmpty {
+                        Menu {
+                            Button("None") { folderId = nil }
+                            ForEach(viewModel.folders) { folder in
+                                Button(folder.name) { folderId = folder.id }
+                            }
+                        } label: {
+                            HStack(spacing: Space.xs) {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 13, weight: .regular))
+                                Text(currentFolderName)
+                                    .font(.edFootnote)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(Tokens.muted)
+                            .padding(.horizontal, Space.md)
+                            .padding(.vertical, Space.xs)
+                            .background(Tokens.paper2, in: Capsule())
+                        }
+                    }
+
+                    Rectangle().fill(Tokens.divider).frame(height: 0.5)
+
+                    TextEditor(text: $content)
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                        .scrollContentBackground(.hidden)
+                        .background(Tokens.paper)
+                        .frame(minHeight: 320)
+                        .focused($contentFocused)
                 }
+                .padding(.horizontal, Space.lg)
+                .padding(.top, Space.lg)
+                .padding(.bottom, Space.xxxl)
             }
-            .onAppear {
-                if let note {
-                    title = note.title ?? ""
-                    content = note.content ?? ""
-                    folderId = note.folderId
-                } else {
-                    folderId = defaultFolderId
-                }
+        }
+        .background(Tokens.paper)
+        .onAppear {
+            if !hasLoaded {
+                title = note.title ?? ""
+                content = note.content ?? ""
+                folderId = note.folderId
+                hasLoaded = true
             }
+        }
+        .onDisappear {
+            Task { await persistIfChanged() }
         }
     }
 
-    private func save() async {
+    private var header: some View {
+        HStack(spacing: Space.md) {
+            Button {
+                Task {
+                    await persistIfChanged()
+                    onClose()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                    Text("Notes")
+                }
+                .font(.edBody)
+                .foregroundStyle(Tokens.muted)
+                .frame(height: 44)
+                .contentShape(Rectangle())
+            }
+            Spacer()
+            Text(note.updatedAt, style: .relative)
+                .font(.edCaption)
+                .foregroundStyle(Tokens.mutedSoft)
+            Button {
+                Task {
+                    await viewModel.deleteNote(note)
+                    onClose()
+                }
+            } label: {
+                Image(systemName: "trash")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(Tokens.muted)
+            }
+            .accessibilityLabel("Delete note")
+        }
+        .padding(.horizontal, Space.md)
+        .frame(height: 56)
+        .background(Tokens.paper)
+    }
+
+    private var currentFolderName: String {
+        guard let id = folderId,
+              let folder = viewModel.folders.first(where: { $0.id == id }) else {
+            return "Unfiled"
+        }
+        return folder.name
+    }
+
+    private func persistIfChanged() async {
         let finalTitle = title.trimmingCharacters(in: .whitespaces).isEmpty ? nil : title
         let finalContent = content.isEmpty ? nil : content
-        if let existing = note {
-            await viewModel.updateNote(existing, title: finalTitle, content: finalContent, folderId: folderId)
-        } else {
-            _ = await viewModel.createNote(title: finalTitle, content: finalContent, folderId: folderId)
+        if finalTitle != note.title || finalContent != note.content || folderId != note.folderId {
+            await viewModel.updateNote(note, title: finalTitle, content: finalContent, folderId: folderId)
         }
-        dismiss()
     }
 }
