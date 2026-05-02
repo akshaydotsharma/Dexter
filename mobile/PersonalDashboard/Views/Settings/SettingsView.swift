@@ -4,6 +4,8 @@ struct SettingsView: View {
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
 
+    @State private var showingCacheCleared = false
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Tokens.paper.ignoresSafeArea()
@@ -19,6 +21,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         appearanceSection
                         connectionSection
+                        cacheSection
                         aboutSection
                         footer
                     }
@@ -31,6 +34,35 @@ struct SettingsView: View {
             ChatFAB { router.popToChat() }
         }
         .activeSection(.settings)
+        .alert("Cache cleared",
+               isPresented: $showingCacheCleared) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Cached tasks, notes, lists, and dashboard stats removed. Pull to refresh on each surface to repopulate.")
+        }
+    }
+
+    private var cacheSection: some View {
+        SettingsSection(title: "Offline cache") {
+            Button {
+                CacheStore.clearAll()
+                showingCacheCleared = true
+            } label: {
+                HStack {
+                    Text("Clear cached data")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.danger)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(Tokens.muted)
+                }
+                .padding(.horizontal, Space.lg)
+                .padding(.vertical, Space.md)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // MARK: - Sections

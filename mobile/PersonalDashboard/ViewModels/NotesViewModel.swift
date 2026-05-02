@@ -13,6 +13,12 @@ final class NotesViewModel {
 
     init(service: NoteService = NoteService()) {
         self.service = service
+        if let cachedFolders = CacheStore.load([NoteFolder].self, from: .noteFolders) {
+            self.folders = cachedFolders
+        }
+        if let cachedNotes = CacheStore.load([Note].self, from: .notes) {
+            self.notes = cachedNotes
+        }
     }
 
     func load() async {
@@ -21,8 +27,12 @@ final class NotesViewModel {
         do {
             async let folders = service.listFolders()
             async let notes = service.list()
-            self.folders = try await folders
-            self.notes = try await notes
+            let f = try await folders
+            let n = try await notes
+            self.folders = f
+            self.notes = n
+            CacheStore.save(f, to: .noteFolders)
+            CacheStore.save(n, to: .notes)
         } catch {
             errorMessage = error.localizedDescription
         }

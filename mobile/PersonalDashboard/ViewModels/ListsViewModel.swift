@@ -12,13 +12,18 @@ final class ListsViewModel {
 
     init(service: ChecklistService = ChecklistService()) {
         self.service = service
+        if let cached = CacheStore.load([Checklist].self, from: .lists) {
+            self.lists = cached
+        }
     }
 
     func load() async {
         isLoading = true
         errorMessage = nil
         do {
-            lists = try await service.list()
+            let fresh = try await service.list()
+            lists = fresh
+            CacheStore.save(fresh, to: .lists)
         } catch {
             errorMessage = error.localizedDescription
         }

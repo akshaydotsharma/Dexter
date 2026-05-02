@@ -12,13 +12,18 @@ final class TodosViewModel {
 
     init(service: TodoService = TodoService()) {
         self.service = service
+        if let cached = CacheStore.load([Todo].self, from: .todos) {
+            self.todos = cached
+        }
     }
 
     func load() async {
         isLoading = true
         errorMessage = nil
         do {
-            todos = try await service.list()
+            let fresh = try await service.list()
+            todos = fresh
+            CacheStore.save(fresh, to: .todos)
         } catch {
             errorMessage = error.localizedDescription
         }
