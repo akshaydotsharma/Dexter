@@ -65,6 +65,14 @@ final class ListsViewModel {
         await update(snapshot)
     }
 
+    func reorderItems(in list: Checklist, from source: IndexSet, to destination: Int) async {
+        guard let listIndex = lists.firstIndex(where: { $0.id == list.id }) else { return }
+        var snapshot = lists[listIndex]
+        snapshot.items.move(fromOffsets: source, toOffset: destination)
+        lists[listIndex] = snapshot
+        await update(snapshot)
+    }
+
     func removeItem(from list: Checklist, at index: Int) async {
         guard let listIndex = lists.firstIndex(where: { $0.id == list.id }),
               index < lists[listIndex].items.count else { return }

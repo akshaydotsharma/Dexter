@@ -196,38 +196,58 @@ private struct ListDetailContent: View {
     var body: some View {
         if let list = viewModel.lists.first(where: { $0.id == listId }) {
             VStack(spacing: 0) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: Space.xs) {
-                        HStack(spacing: Space.sm) {
-                            Text("\(list.items.filter(\.checked).count) of \(list.items.count) items")
-                                .font(.edCaption)
-                                .foregroundStyle(Tokens.muted)
-                            Spacer()
+                // Header strip — count + "Edit" affordance is implicit via long-press.
+                HStack(spacing: Space.sm) {
+                    Text("\(list.items.filter(\.checked).count) of \(list.items.count) items")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                    Spacer()
+                    if !list.items.isEmpty {
+                        Text("Hold to reorder")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.mutedSoft)
+                    }
+                }
+                .padding(.horizontal, Space.lg)
+                .padding(.top, Space.lg)
+                .padding(.bottom, Space.sm)
+
+                Rectangle().fill(Tokens.divider).frame(height: 0.5)
+                    .padding(.horizontal, Space.lg)
+
+                // Items list — using SwiftUI List so `.onMove` works.
+                // Chrome stripped to keep the editorial calm look.
+                if list.items.isEmpty {
+                    Text("No items yet. Add one below.")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.muted)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .padding(.vertical, Space.xxxl)
+                } else {
+                    List {
+                        ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
+                            ItemRow(item: item) {
+                                Task { await viewModel.toggleItem(in: list, at: index) }
+                            } onDelete: {
+                                Task { await viewModel.removeItem(from: list, at: index) }
+                            }
+                            .listRowBackground(Tokens.paper)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                         }
-                        .padding(.horizontal, Space.md)
-                        .padding(.bottom, Space.sm)
-
-                        Rectangle().fill(Tokens.divider).frame(height: 0.5).padding(.horizontal, Space.md)
-
-                        if list.items.isEmpty {
-                            Text("No items yet. Add one below.")
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.muted)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, Space.xxxl)
-                        } else {
-                            ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
-                                ItemRow(item: item) {
-                                    Task { await viewModel.toggleItem(in: list, at: index) }
-                                } onDelete: {
-                                    Task { await viewModel.removeItem(from: list, at: index) }
-                                }
+                        .onMove { source, destination in
+                            Task { await viewModel.reorderItems(in: list, from: source, to: destination) }
+                        }
+                        .onDelete { offsets in
+                            for index in offsets {
+                                Task { await viewModel.removeItem(from: list, at: index) }
                             }
                         }
                     }
-                    .padding(.horizontal, Space.lg)
-                    .padding(.top, Space.lg)
-                    .padding(.bottom, 80)
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Tokens.paper)
+                    .environment(\.editMode, .constant(.active))
                 }
 
                 addItemBar(list: list)
