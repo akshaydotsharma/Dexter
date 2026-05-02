@@ -57,7 +57,7 @@ struct ContentView: View {
         case .settings:
             SettingsView(router: router, schemePref: schemePref)
         case .today:
-            PlaceholderView(section: section, router: router, schemePref: schemePref)
+            TodayView(router: router, schemePref: schemePref)
         }
     }
 }
