@@ -5,10 +5,13 @@ CREATE TABLE IF NOT EXISTS todos (
     completed BOOLEAN DEFAULT FALSE,
     due_date TIMESTAMP,
     tag TEXT,
+    position INTEGER, -- ordering for drag-to-reorder; NULL allowed so legacy inserts still work
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP DEFAULT NULL
 );
+
+CREATE INDEX IF NOT EXISTS todos_position_idx ON todos (position);
 
 -- Add updated_at and deleted_at columns if they don't exist (for existing databases)
 DO $$
@@ -55,17 +58,23 @@ END $$;
 CREATE TABLE IF NOT EXISTS note_folders (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
+    position INTEGER, -- ordering for drag-to-reorder; NULL allowed so legacy inserts still work
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS note_folders_position_idx ON note_folders (position);
 
 CREATE TABLE IF NOT EXISTS notes (
     id SERIAL PRIMARY KEY,
     folder_id INTEGER REFERENCES note_folders(id) ON DELETE CASCADE,
     title TEXT,
     content TEXT,
+    position INTEGER, -- ordering within a folder (or unfiled scope when folder_id IS NULL)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS notes_folder_position_idx ON notes (folder_id, position);
 
 -- Add folder_id and updated_at columns if they don't exist (for existing databases)
 DO $$
@@ -82,8 +91,11 @@ CREATE TABLE IF NOT EXISTS lists (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
     items JSONB DEFAULT '[]',
+    position INTEGER, -- ordering for drag-to-reorder; NULL allowed so legacy inserts still work
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS lists_position_idx ON lists (position);
 
 -- List history/audit log table
 CREATE TABLE IF NOT EXISTS list_history (

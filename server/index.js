@@ -13,6 +13,17 @@ const fs = require('fs');
 const { chatToDrafts } = require('./ai/chatToDrafts');
 const draftStore = require('./ai/draftStore');
 
+// v2 refactor helpers
+const { z } = require('zod');
+const { computeNewPosition } = require('./reorderHelpers');
+const {
+    DEFAULT_PREFERENCES,
+    DEFAULT_WIDGETS,
+    preferencesPatchSchema,
+    deepMerge,
+    hydrateLayoutPreference,
+} = require('./preferences');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -226,8 +237,13 @@ app.get('/api/todo-history', async (req, res) => {
 app.post('/api/todos', async (req, res) => {
     try {
         const { title, description, due_date, tag } = req.body;
+        // New rows go to the bottom of the global active-todos scope.
+        // COALESCE(MAX(...), 0) handles the empty-table case.
         const { rows } = await db.query(
-            'INSERT INTO todos (title, description, due_date, tag) VALUES ($1, $2, $3, $4) RETURNING *',
+            `INSERT INTO todos (title, description, due_date, tag, position)
+             VALUES ($1, $2, $3, $4,
+                     (SELECT COALESCE(MAX(position), 0) + 1000 FROM todos WHERE deleted_at IS NULL))
+             RETURNING *`,
             [title, description || null, due_date || null, tag || null]
         );
         const todo = rows[0];
@@ -372,7 +388,12 @@ app.get('/api/note-folders', async (req, res) => {
 app.post('/api/note-folders', async (req, res) => {
     try {
         const { name } = req.body;
-        const { rows } = await db.query('INSERT INTO note_folders (name) VALUES ($1) RETURNING *', [name]);
+        const { rows } = await db.query(
+            `INSERT INTO note_folders (name, position)
+             VALUES ($1, (SELECT COALESCE(MAX(position), 0) + 1000 FROM note_folders))
+             RETURNING *`,
+            [name]
+        );
         const folder = rows[0];
 
         // Log folder creation
@@ -488,10 +509,18 @@ app.get('/api/note-history', async (req, res) => {
 app.post('/api/notes', async (req, res) => {
     try {
         const { title, content, folder_id } = req.body;
-        console.log(`[NOTES] Creating note: title="${title}", folder_id=${folder_id}`);
+        const folderId = folder_id || null;
+        console.log(`[NOTES] Creating note: title="${title}", folder_id=${folderId}`);
+        // Per-folder MAX so notes append to the bottom of their folder (or
+        // unfiled bucket when folder_id IS NULL).
         const { rows } = await db.query(
-            'INSERT INTO notes (title, content, folder_id, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING *',
-            [title, content, folder_id || null]
+            `INSERT INTO notes (title, content, folder_id, position, updated_at)
+             VALUES ($1, $2, $3,
+                     (SELECT COALESCE(MAX(position), 0) + 1000 FROM notes
+                      WHERE folder_id IS NOT DISTINCT FROM $3),
+                     CURRENT_TIMESTAMP)
+             RETURNING *`,
+            [title, content, folderId]
         );
         const note = rows[0];
         console.log(`[NOTES] Note created with id=${note.id}`);
@@ -626,7 +655,12 @@ app.get('/api/list-history', async (req, res) => {
 app.post('/api/lists', async (req, res) => {
     try {
         const { title, items } = req.body;
-        const { rows } = await db.query('INSERT INTO lists (title, items) VALUES ($1, $2) RETURNING *', [title, JSON.stringify(items)]);
+        const { rows } = await db.query(
+            `INSERT INTO lists (title, items, position)
+             VALUES ($1, $2, (SELECT COALESCE(MAX(position), 0) + 1000 FROM lists))
+             RETURNING *`,
+            [title, JSON.stringify(items)]
+        );
         const list = rows[0];
 
         // Log creation
@@ -806,16 +840,22 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
-// DASHBOARD CONFIG
+// =============================================================================
+// DASHBOARD CONFIG / PREFERENCES (v2)
+// =============================================================================
+// The dashboard_config row stores both the legacy `widgets` array and the new
+// nested `preferences` object (theme, default_view, density, etc.). The
+// merge/hydrate logic lives in ./preferences.js so tests can exercise it
+// without spinning up Express.
+
 app.get('/api/config', async (req, res) => {
     try {
-        const { rows } = await db.query('SELECT * FROM dashboard_config WHERE id = 1');
-        if (rows.length === 0) {
-            // Should not happen due to schema init, but just in case
-            res.json({ layout_preference: { widgets: ["todos", "notes", "lists"] } });
-        } else {
-            res.json(rows[0]);
-        }
+        const { rows } = await db.query('SELECT id, layout_preference FROM dashboard_config WHERE id = 1');
+        const stored = rows[0]?.layout_preference || null;
+        res.json({
+            id: rows[0]?.id || 1,
+            layout_preference: hydrateLayoutPreference(stored),
+        });
     } catch (err) {
         sendErrorResponse(res, err);
     }
@@ -824,8 +864,272 @@ app.get('/api/config', async (req, res) => {
 app.put('/api/config', async (req, res) => {
     try {
         const { layout_preference } = req.body;
-        const { rows } = await db.query('UPDATE dashboard_config SET layout_preference = $1 WHERE id = 1 RETURNING *', [JSON.stringify(layout_preference)]);
-        res.json(rows[0]);
+        // Pass the raw object straight through — full overwrite is the legacy
+        // contract. Callers that want partial updates use the PATCH endpoint
+        // below.
+        const { rows } = await db.query(
+            'UPDATE dashboard_config SET layout_preference = $1 WHERE id = 1 RETURNING id, layout_preference',
+            [JSON.stringify(layout_preference)]
+        );
+        res.json({
+            id: rows[0]?.id || 1,
+            layout_preference: hydrateLayoutPreference(rows[0]?.layout_preference || null),
+        });
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+// Friendly aliases used by the v2 frontend. Behaviour is identical to /api/config.
+app.get('/api/dashboard/config', async (req, res) => {
+    try {
+        const { rows } = await db.query('SELECT id, layout_preference FROM dashboard_config WHERE id = 1');
+        res.json({
+            id: rows[0]?.id || 1,
+            layout_preference: hydrateLayoutPreference(rows[0]?.layout_preference || null),
+        });
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+/**
+ * PATCH /api/dashboard/config/preferences
+ * Accepts a partial preferences object and deep-merges it into the stored
+ * preferences sub-object. Does NOT touch `widgets`. Returns the full
+ * hydrated layout_preference shape.
+ */
+app.patch('/api/dashboard/config/preferences', async (req, res) => {
+    try {
+        const parsed = preferencesPatchSchema.safeParse(req.body || {});
+        if (!parsed.success) {
+            return res.status(400).json({
+                error: 'Invalid preferences payload',
+                details: parsed.error.flatten(),
+            });
+        }
+        const patch = parsed.data;
+
+        // Read-modify-write inside a transaction so concurrent PATCHes don't
+        // clobber each other. Single-user app today, but cheap to do right.
+        const result = await db.withTransaction(async (client) => {
+            const { rows } = await client.query(
+                'SELECT layout_preference FROM dashboard_config WHERE id = 1 FOR UPDATE'
+            );
+            const stored = rows[0]?.layout_preference || {};
+            const next = {
+                widgets: Array.isArray(stored.widgets) ? stored.widgets : DEFAULT_WIDGETS.slice(),
+                preferences: deepMerge(deepMerge(DEFAULT_PREFERENCES, stored.preferences || {}), patch),
+            };
+            const upd = await client.query(
+                `INSERT INTO dashboard_config (id, layout_preference) VALUES (1, $1)
+                 ON CONFLICT (id) DO UPDATE SET layout_preference = EXCLUDED.layout_preference
+                 RETURNING id, layout_preference`,
+                [JSON.stringify(next)]
+            );
+            return upd.rows[0];
+        });
+
+        res.json({
+            id: result.id,
+            layout_preference: hydrateLayoutPreference(result.layout_preference),
+        });
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+// =============================================================================
+// REORDER ENDPOINTS (v2 drag-to-reorder)
+// =============================================================================
+// All four endpoints share the same body schema and the same midpoint /
+// renumber strategy via computeNewPosition. The transaction makes
+// SELECT ... FOR UPDATE + UPDATE atomic so concurrent reorders on the same
+// scope don't fight.
+
+const reorderBodySchema = z.object({
+    before_id: z.number().int().nullable().optional(),
+    after_id: z.number().int().nullable().optional(),
+}).strict();
+
+const noteReorderBodySchema = reorderBodySchema.extend({
+    folder_id: z.number().int().nullable().optional(), // optional cross-folder move
+});
+
+/**
+ * Shared reorder runner. Returns the updated row.
+ *
+ * @param {object} args
+ * @param {string} args.table         table name (allowlisted in reorderHelpers)
+ * @param {object} args.scopeFilter   columns that bound the ordering scope
+ * @param {number} args.movingId
+ * @param {number|null} args.beforeId
+ * @param {number|null} args.afterId
+ * @param {(client, newPos) => Promise<object>} args.applyUpdate updates the
+ *        row's position (and any other columns the route mutates, e.g. folder
+ *        moves on notes) and returns the updated row.
+ */
+async function runReorder({ table, scopeFilter, movingId, beforeId, afterId, applyUpdate }) {
+    return db.withTransaction(async (client) => {
+        const newPos = await computeNewPosition(client, table, scopeFilter, movingId, beforeId ?? null, afterId ?? null);
+        return applyUpdate(client, newPos);
+    });
+}
+
+app.patch('/api/todos/:id/reorder', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+        const parsed = reorderBodySchema.safeParse(req.body || {});
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Invalid body', details: parsed.error.flatten() });
+        }
+        const { before_id = null, after_id = null } = parsed.data;
+
+        const updated = await runReorder({
+            table: 'todos',
+            scopeFilter: { deleted_at: null }, // active todos only; matches list-render filter
+            movingId: id,
+            beforeId: before_id,
+            afterId: after_id,
+            applyUpdate: async (client, newPos) => {
+                const { rows } = await client.query(
+                    `UPDATE todos SET position = $1, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $2 RETURNING *`,
+                    [newPos, id]
+                );
+                return rows[0];
+            }
+        });
+
+        if (!updated) return res.status(404).json({ error: 'Todo not found' });
+
+        await logTodoHistory(id, 'reorder', 'position', null, String(updated.position));
+        res.json(updated);
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+app.patch('/api/notes/:id/reorder', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+        const parsed = noteReorderBodySchema.safeParse(req.body || {});
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Invalid body', details: parsed.error.flatten() });
+        }
+        const { before_id = null, after_id = null, folder_id } = parsed.data;
+
+        // Determine the destination folder. If folder_id is omitted from the
+        // body, the note stays in its current folder. We need this BEFORE
+        // computing the new position so the scope is correct.
+        const { rows: noteRows } = await db.query('SELECT folder_id FROM notes WHERE id = $1', [id]);
+        if (noteRows.length === 0) return res.status(404).json({ error: 'Note not found' });
+        const currentFolderId = noteRows[0].folder_id;
+        const targetFolderId = folder_id === undefined ? currentFolderId : folder_id;
+
+        const updated = await runReorder({
+            table: 'notes',
+            scopeFilter: { folder_id: targetFolderId }, // null is allowed and treated as IS NULL
+            movingId: id,
+            beforeId: before_id,
+            afterId: after_id,
+            applyUpdate: async (client, newPos) => {
+                const { rows } = await client.query(
+                    `UPDATE notes SET position = $1, folder_id = $2, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $3 RETURNING *`,
+                    [newPos, targetFolderId, id]
+                );
+                return rows[0];
+            }
+        });
+
+        if (!updated) return res.status(404).json({ error: 'Note not found' });
+
+        // Audit log: emit a folder move row when the folder actually changed,
+        // plus the reorder row so the position change is also recorded.
+        if (folder_id !== undefined && folder_id !== currentFolderId) {
+            await logNoteHistory(id, 'moved', 'folder_id',
+                currentFolderId === null ? null : String(currentFolderId),
+                targetFolderId === null ? null : String(targetFolderId)
+            );
+        }
+        await logNoteHistory(id, 'reorder', 'position', null, String(updated.position));
+
+        res.json(updated);
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+app.patch('/api/lists/:id/reorder', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+        const parsed = reorderBodySchema.safeParse(req.body || {});
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Invalid body', details: parsed.error.flatten() });
+        }
+        const { before_id = null, after_id = null } = parsed.data;
+
+        const updated = await runReorder({
+            table: 'lists',
+            scopeFilter: {}, // global ordering
+            movingId: id,
+            beforeId: before_id,
+            afterId: after_id,
+            applyUpdate: async (client, newPos) => {
+                const { rows } = await client.query(
+                    `UPDATE lists SET position = $1 WHERE id = $2 RETURNING *`,
+                    [newPos, id]
+                );
+                return rows[0];
+            }
+        });
+
+        if (!updated) return res.status(404).json({ error: 'List not found' });
+
+        await logListHistory(id, 'reorder', 'position', null, String(updated.position));
+        res.json(updated);
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+app.patch('/api/note_folders/:id/reorder', async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+        const parsed = reorderBodySchema.safeParse(req.body || {});
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Invalid body', details: parsed.error.flatten() });
+        }
+        const { before_id = null, after_id = null } = parsed.data;
+
+        const updated = await runReorder({
+            table: 'note_folders',
+            scopeFilter: {},
+            movingId: id,
+            beforeId: before_id,
+            afterId: after_id,
+            applyUpdate: async (client, newPos) => {
+                const { rows } = await client.query(
+                    `UPDATE note_folders SET position = $1 WHERE id = $2 RETURNING *`,
+                    [newPos, id]
+                );
+                return rows[0];
+            }
+        });
+
+        if (!updated) return res.status(404).json({ error: 'Folder not found' });
+
+        await logNoteHistory(id, 'reorder', 'position', null, String(updated.position), 'folder');
+        res.json(updated);
     } catch (err) {
         sendErrorResponse(res, err);
     }
@@ -1602,7 +1906,14 @@ if (process.env.NODE_ENV === 'production') {
     });
 }
 
-app.listen(PORT, async () => {
-    console.log(`Server is running on port ${PORT}`);
-    await initDb();
-});
+// Only start the listener when run as the main entrypoint. Tests that need
+// the app for in-process HTTP exercise the `app` export and use a random
+// port via http.createServer(app).listen(0).
+if (require.main === module) {
+    app.listen(PORT, async () => {
+        console.log(`Server is running on port ${PORT}`);
+        await initDb();
+    });
+}
+
+module.exports = { app, initDb };
