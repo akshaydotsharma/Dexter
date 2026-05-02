@@ -43,6 +43,18 @@ struct Draft: Codable, Identifiable, Hashable, Sendable {
     let draftData: DraftPayload
     let preview: String?
     let status: String?
+
+    // The server's draft serializer emits the payload under `data`, but the
+    // Swift property is named `draftData` for clarity. Explicit CodingKeys
+    // map the two; the rest stay on the snake_case → camelCase strategy
+    // configured on `APIClient.decoder`.
+    enum CodingKeys: String, CodingKey {
+        case id
+        case actionType
+        case draftData = "data"
+        case preview
+        case status
+    }
 }
 
 struct ChatRequest: Encodable {

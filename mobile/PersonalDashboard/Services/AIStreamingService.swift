@@ -53,29 +53,44 @@ struct AIStreamingService: Sendable {
                         throw APIError.http(status: http.statusCode, message: "stream endpoint returned \(http.statusCode)")
                     }
 
+                    // SSE record buffer. We flush on a blank line (canonical
+                    // SSE delimiter), at end of stream, or when a new `event:`
+                    // arrives while we already have a complete record buffered
+                    // — the latter is necessary because `URLSession.AsyncBytes
+                    // .lines` collapses consecutive newlines and never emits
+                    // the blank line that should separate records.
                     var currentEvent: String = "message"
                     var currentData: String = ""
+
+                    func flush() {
+                        guard !currentData.isEmpty else {
+                            currentEvent = "message"
+                            return
+                        }
+                        if let event = decodeSSE(event: currentEvent, dataLine: currentData) {
+                            continuation.yield(event)
+                        }
+                        currentEvent = "message"
+                        currentData = ""
+                    }
 
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
 
-                        // Blank line marks end of an SSE record — dispatch and reset.
                         if line.isEmpty {
-                            if !currentData.isEmpty {
-                                if let event = decodeSSE(event: currentEvent, dataLine: currentData) {
-                                    continuation.yield(event)
-                                }
-                            }
-                            currentEvent = "message"
-                            currentData = ""
+                            flush()
                             continue
                         }
-
                         if line.hasPrefix(":") {
-                            // SSE comment — ignore (used as keepalive).
                             continue
                         }
                         if line.hasPrefix("event:") {
+                            // A new event header while we already have data
+                            // means the prior record's blank-line delimiter
+                            // was elided — dispatch what we have first.
+                            if !currentData.isEmpty {
+                                flush()
+                            }
                             currentEvent = line.dropFirst("event:".count)
                                 .trimmingCharacters(in: .whitespaces)
                         } else if line.hasPrefix("data:") {
@@ -90,10 +105,7 @@ struct AIStreamingService: Sendable {
                     }
 
                     // Flush any unterminated final record.
-                    if !currentData.isEmpty,
-                       let event = decodeSSE(event: currentEvent, dataLine: currentData) {
-                        continuation.yield(event)
-                    }
+                    flush()
 
                     continuation.finish()
                 } catch {
