@@ -208,7 +208,7 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
         >
             <div className="flex flex-col flex-1 min-h-0">
                 {loading ? (
-                    <div className="flex justify-center items-center py-10 text-indigo-500">
+                    <div className="flex justify-center items-center py-10 text-[--color-accent]">
                         <Loader2 className="animate-spin" />
                     </div>
                 ) : (
@@ -225,21 +225,21 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                         </form>
                         <div className="overflow-y-auto custom-scrollbar space-y-2 pr-1 flex-1 min-h-0">
                             {lists.length === 0 ? (
-                                <div className="text-center text-gray-400 mt-10">No lists created.</div>
+                                <div className="text-center text-muted-soft mt-10">No lists created.</div>
                             ) : (
                                 lists.map((list) => {
                                     const isExpanded = expandedListIds.has(list.id);
                                     return (
-                                        <div key={list.id} className="rounded-xl border border-transparent hover:border-indigo-100 transition-all">
+                                        <div key={list.id} className="rounded-xl border border-transparent hover:border-[--color-accent-soft] transition-all">
                                             {/* List Header */}
                                             <div
                                                 onClick={() => editingListId !== list.id && toggleExpand(list.id)}
-                                                className={`group flex items-center justify-between p-4 bg-slate-50 hover:bg-white cursor-pointer transition-all ${isExpanded ? 'rounded-t-xl' : 'rounded-xl'}`}
+                                                className={`group flex items-center justify-between p-4 bg-paper-2 hover:bg-surface cursor-pointer transition-all ${isExpanded ? 'rounded-t-xl' : 'rounded-xl'}`}
                                             >
                                                 <div className="flex items-center gap-2 flex-1 min-w-0">
                                                     <button
                                                         onClick={(e) => { e.stopPropagation(); toggleExpand(list.id); }}
-                                                        className="text-slate-400 hover:text-indigo-500 transition-colors cursor-pointer"
+                                                        className="text-muted-soft hover:text-[--color-accent] transition-colors cursor-pointer"
                                                     >
                                                         {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                                                     </button>
@@ -255,13 +255,13 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                                                 if (e.key === 'Escape') setEditingListId(null);
                                                             }}
                                                             onClick={(e) => e.stopPropagation()}
-                                                            className="font-semibold text-gray-800 bg-white border border-indigo-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 flex-1 mr-2"
+                                                            className="font-semibold text-ink bg-surface border border-[--color-accent] rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] flex-1 mr-2"
                                                             autoFocus
                                                         />
                                                     ) : (
                                                         <span
                                                             onClick={(e) => { e.stopPropagation(); startEditListTitle(e, list); }}
-                                                            className="font-semibold text-gray-800 cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1 truncate"
+                                                            className="font-semibold text-ink cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1 truncate"
                                                             title="Click to edit"
                                                         >
                                                             {list.title}
@@ -269,19 +269,19 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                                     )}
                                                 </div>
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-xs text-gray-500 bg-gray-200 px-2 py-1 rounded-full">
+                                                    <span className="text-xs text-muted bg-paper-2 px-2 py-1 rounded-full">
                                                         {list.items ? list.items.length : 0} items
                                                     </span>
                                                     <button
                                                         onClick={(e) => startEditListTitle(e, list)}
-                                                        className="text-slate-400 hover:text-indigo-500 transition-colors p-1 cursor-pointer"
+                                                        className="text-muted-soft hover:text-[--color-accent] transition-colors p-1 cursor-pointer"
                                                         title="Edit"
                                                     >
                                                         <Edit2 size={16} />
                                                     </button>
                                                     <button
                                                         onClick={(e) => handleDeleteList(e, list.id)}
-                                                        className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
+                                                        className="text-muted-soft hover:text-danger transition-colors p-1 cursor-pointer"
                                                         title="Delete"
                                                     >
                                                         <Trash2 size={16} />
@@ -291,7 +291,7 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
 
                                             {/* Expanded Items */}
                                             {isExpanded && (
-                                                <div className="bg-white rounded-b-xl border-t border-slate-100 p-3 pl-8">
+                                                <div className="bg-surface rounded-b-xl border-t border-divider p-3 pl-8">
                                                     {/* Add Item Form */}
                                                     <form onSubmit={(e) => handleAddItem(e, list.id)} className="flex gap-2 mb-3">
                                                         <Input
@@ -308,7 +308,7 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                                     {/* Items List - sorted with uncompleted first, completed at bottom */}
                                                     <div className="space-y-1">
                                                         {list.items?.length === 0 ? (
-                                                            <div className="text-center text-gray-400 py-2 text-sm">Empty list.</div>
+                                                            <div className="text-center text-muted-soft py-2 text-sm">Empty list.</div>
                                                         ) : (
                                                             [...list.items]
                                                                 .map((item, originalIdx) => ({ ...item, originalIdx }))
@@ -329,13 +329,13 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                                                 const idx = item.originalIdx;
                                                                 const itemKey = `${list.id}-${idx}`;
                                                                 return (
-                                                                    <div key={idx} className="group flex items-center justify-between p-2 hover:bg-slate-50 rounded-lg transition-all">
+                                                                    <div key={idx} className="group flex items-center justify-between p-2 hover:bg-paper-2 rounded-lg transition-all">
                                                                         <div className="flex items-center gap-3 min-w-0 flex-1">
                                                                             <button
                                                                                 onClick={() => toggleItem(list.id, idx)}
                                                                                 className={`flex-shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all duration-200 cursor-pointer ${item.completed
-                                                                                    ? 'bg-emerald-500 border-emerald-500 text-white'
-                                                                                    : 'border-slate-300 hover:border-indigo-400'
+                                                                                    ? 'bg-success border-success text-white'
+                                                                                    : 'border-border-strong hover:border-[--color-accent]'
                                                                                     }`}
                                                                             >
                                                                                 {item.completed && <Check size={12} strokeWidth={3} />}
@@ -351,13 +351,13 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                                                                         if (e.key === 'Enter') saveEditItem(list.id, idx);
                                                                                         if (e.key === 'Escape') setEditingItemKey(null);
                                                                                     }}
-                                                                                    className="flex-1 min-w-0 text-gray-700 bg-white border border-indigo-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                                                                                    className="flex-1 min-w-0 text-ink-soft bg-surface border border-[--color-accent] rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] text-sm"
                                                                                     autoFocus
                                                                                 />
                                                                             ) : (
                                                                                 <span
                                                                                     onClick={() => startEditItem(list.id, idx, item.text)}
-                                                                                    className={`truncate cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1 text-sm ${item.completed ? 'text-gray-400 line-through' : 'text-gray-700'}`}
+                                                                                    className={`truncate cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1 text-sm ${item.completed ? 'text-muted-soft line-through' : 'text-ink-soft'}`}
                                                                                     title="Click to edit"
                                                                                 >
                                                                                     {item.text}
@@ -367,14 +367,14 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                                                         <div className="flex gap-1">
                                                                             <button
                                                                                 onClick={() => startEditItem(list.id, idx, item.text)}
-                                                                                className="text-slate-400 hover:text-indigo-500 transition-colors p-1 cursor-pointer"
+                                                                                className="text-muted-soft hover:text-[--color-accent] transition-colors p-1 cursor-pointer"
                                                                                 title="Edit"
                                                                             >
                                                                                 <Edit2 size={14} />
                                                                             </button>
                                                                             <button
                                                                                 onClick={() => deleteItem(list.id, idx)}
-                                                                                className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
+                                                                                className="text-muted-soft hover:text-danger transition-colors p-1 cursor-pointer"
                                                                                 title="Delete"
                                                                             >
                                                                                 <Trash2 size={14} />

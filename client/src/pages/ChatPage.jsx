@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Sparkles, Mic, Square, ArrowUp } from 'lucide-react';
 import ChatSuccessRow from '../components/ChatSuccessRow';
-import Chip from '../components/Chip';
 import DraftPreviewCard from '../components/DraftPreviewCard';
 import { useChatContext } from '../contexts/chat-context';
 import useSpeechRecognition from '../hooks/useSpeechRecognition';
@@ -125,21 +124,22 @@ export default function ChatPage() {
                                     What can I help you organize?
                                 </h1>
                                 <p className="text-base text-muted">
-                                    Ask for a task, a note, or a list — I'll draft it for you to confirm.
+                                    Ask for a task, a note, or a list. I'll draft it for you to confirm.
                                 </p>
                             </div>
                             <div className="flex flex-wrap justify-center gap-2 pt-1">
                                 {EXAMPLE_PROMPTS.map((prompt) => (
-                                    <Chip
+                                    <button
                                         key={prompt}
-                                        variant="action"
+                                        type="button"
                                         onClick={() => {
                                             setInput(prompt);
                                             inputRef.current?.focus();
                                         }}
+                                        className="px-4 py-1.5 rounded-full border border-border bg-surface text-ink text-sm font-medium hover:bg-paper-2 hover:border-border-strong transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--color-accent-ring]"
                                     >
                                         {prompt}
-                                    </Chip>
+                                    </button>
                                 ))}
                             </div>
                         </div>

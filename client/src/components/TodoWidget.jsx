@@ -240,11 +240,11 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
             top = padding;
         }
 
-        // If button is in lower half of screen, position popover so its bottom aligns near the button
+        // Popover has max-h-[90vh]; clamp top so even at max height it fits.
         const viewportHeight = window.innerHeight;
-        if (rect.top > viewportHeight / 2) {
-            // Position so the popover bottom is near the button
-            top = Math.max(padding, rect.bottom - 450);
+        const maxPopoverHeight = viewportHeight * 0.9;
+        if (top + maxPopoverHeight > viewportHeight - padding) {
+            top = Math.max(padding, viewportHeight - maxPopoverHeight - padding);
         }
 
         setPopoverPosition({
@@ -627,12 +627,12 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
     const getTagColor = (tag) => {
         if (!tag) return '';
         const colors = {
-            work: 'bg-blue-100 text-blue-700 border-blue-200',
+            work: 'bg-paper-2 text-ink-soft border-border',
             personal: 'bg-purple-100 text-purple-700 border-purple-200',
-            urgent: 'bg-red-100 text-red-700 border-red-200',
+            urgent: 'bg-danger-soft text-danger border-danger',
             important: 'bg-orange-100 text-orange-700 border-orange-200',
         };
-        return colors[tag.toLowerCase()] || 'bg-gray-100 text-gray-700 border-gray-200';
+        return colors[tag.toLowerCase()] || 'bg-paper-2 text-ink-soft border-border';
     };
 
     const handleTagSelect = (tag) => {
@@ -658,13 +658,13 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
         return (
             <div
                 key={todo.id}
-                className="group flex items-start gap-3 p-3 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-100 transition-all duration-200"
+                className="group flex items-start gap-3 p-3 rounded-lg hover:bg-paper-2 border border-transparent hover:border-divider transition-all duration-200"
             >
                 <button
                     onClick={() => handleToggle(todo.id, todo.completed)}
                     className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-200 mt-0.5 ${todo.completed
-                        ? 'bg-emerald-500 border-emerald-500 text-white'
-                        : 'border-slate-300 hover:border-indigo-400'
+                        ? 'bg-success border-success text-white'
+                        : 'border-border-strong hover:border-[--color-accent]'
                         }`}
                 >
                     {todo.completed && <Check size={14} strokeWidth={3} />}
@@ -691,7 +691,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 setInlineEditValue('');
                                             }
                                         }}
-                                        className="flex-1 min-w-0 font-medium text-gray-800 bg-white border border-indigo-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        className="flex-1 min-w-0 font-medium text-ink bg-surface border border-[--color-accent] rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring]"
                                         autoFocus
                                     />
                                 ) : (
@@ -711,7 +711,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                             });
                                         }}
                                         onMouseLeave={() => setTooltipData({ ...tooltipData, visible: false })}
-                                        className={`font-medium cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1 truncate max-w-[300px] ${todo.completed ? 'text-gray-400 line-through' : 'text-gray-800'}`}
+                                        className={`font-medium cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1 truncate max-w-[300px] ${todo.completed ? 'text-muted-soft line-through' : 'text-ink'}`}
                                     >
                                         {todo.title}
                                     </h3>
@@ -730,12 +730,12 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                             {todo.tag}
                                         </span>
                                         {inlineTagEditId === todo.id && (
-                                            <div className="absolute top-full left-0 mt-1 z-[100] bg-white border border-slate-200 rounded-lg shadow-lg min-w-40">
+                                            <div className="absolute top-full left-0 mt-1 z-[100] bg-surface border border-border rounded-lg shadow-lg min-w-40">
                                                 <div className="p-1">
                                                     <button
                                                         type="button"
                                                         onClick={() => handleInlineTagChange(todo.id, '')}
-                                                        className="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-slate-100 transition-colors text-gray-500"
+                                                        className="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-paper-2 transition-colors text-muted"
                                                     >
                                                         None
                                                     </button>
@@ -744,7 +744,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                             key={tag}
                                                             type="button"
                                                             onClick={() => handleInlineTagChange(todo.id, tag)}
-                                                            className="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-slate-100 transition-colors flex items-center gap-2"
+                                                            className="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-paper-2 transition-colors flex items-center gap-2"
                                                         >
                                                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${getTagColor(tag)}`}>
                                                                 <TagIcon size={10} />
@@ -773,7 +773,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 setInlineEditValue('');
                                             }
                                         }}
-                                        className="w-full text-sm text-gray-500 bg-white border border-indigo-300 rounded px-2 py-1 mt-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                                        className="w-full text-sm text-muted bg-surface border border-[--color-accent] rounded px-2 py-1 mt-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] resize-none"
                                         rows={2}
                                         autoFocus
                                         placeholder="Add a description..."
@@ -785,7 +785,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                             setInlineTitleEditId(null);
                                             setInlineEditValue(todo.description || '');
                                         }}
-                                        className={`text-sm mt-1 font-light cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1 ${todo.completed ? 'text-gray-300' : 'text-gray-500'}`}
+                                        className={`text-sm mt-1 font-light cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1 ${todo.completed ? 'text-muted-soft' : 'text-muted'}`}
                                         title="Click to edit description"
                                     >
                                         {todo.description}
@@ -802,12 +802,12 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                     inline={true}
                                     dateColorClass={
                                         dateInfo?.isOverdue && !todo.completed
-                                            ? 'text-red-600 font-medium'
+                                            ? 'text-danger font-medium'
                                             : dateInfo?.isToday
-                                                ? 'text-amber-600 font-medium'
+                                                ? 'text-warning font-medium'
                                                 : dateInfo
-                                                    ? 'text-slate-600'
-                                                    : 'text-slate-400'
+                                                    ? 'text-ink-soft'
+                                                    : 'text-muted-soft'
                                     }
                                 />
                             </div>
@@ -821,14 +821,14 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                     const buttonEl = e.currentTarget;
                                     handleEdit(todo, buttonEl);
                                 }}
-                                className="text-slate-400 hover:text-indigo-500 transition-colors p-1 cursor-pointer"
+                                className="text-muted-soft hover:text-[--color-accent] transition-colors p-1 cursor-pointer"
                                 title="Edit"
                             >
                                 <Edit2 size={16} />
                             </button>
                             <button
                                 onClick={() => handleDelete(todo.id)}
-                                className="text-slate-400 hover:text-rose-500 transition-colors p-1 cursor-pointer"
+                                className="text-muted-soft hover:text-danger transition-colors p-1 cursor-pointer"
                                 title="Delete"
                             >
                                 <Trash2 size={16} />
@@ -844,7 +844,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
         const dropdownContent = showTagDropdown && createPortal(
             <div
                 ref={tagDropdownRef}
-                className="fixed z-[9999] bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-auto"
+                className="fixed z-[9999] bg-surface border border-border rounded-lg shadow-lg max-h-60 overflow-auto"
                 style={{
                     top: tagDropdownPosition.top + 4,
                     left: tagDropdownPosition.left,
@@ -856,7 +856,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                     <button
                         type="button"
                         onClick={() => handleTagSelect('')}
-                        className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-gray-500"
+                        className="w-full text-left px-3 py-2 text-sm rounded hover:bg-paper-2 transition-colors text-muted"
                     >
                         None
                     </button>
@@ -867,7 +867,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                             key={tag}
                             type="button"
                             onClick={() => handleTagSelect(tag)}
-                            className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors flex items-center gap-2"
+                            className="w-full text-left px-3 py-2 text-sm rounded hover:bg-paper-2 transition-colors flex items-center gap-2"
                         >
                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${getTagColor(tag)}`}>
                                 <TagIcon size={10} />
@@ -877,14 +877,14 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                     ))}
 
                     {/* Divider */}
-                    <div className="border-t border-slate-200 my-1"></div>
+                    <div className="border-t border-border my-1"></div>
 
                     {/* Add custom tag */}
                     {!isAddingCustomTag ? (
                         <button
                             type="button"
                             onClick={() => setIsAddingCustomTag(true)}
-                            className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-indigo-600 font-medium whitespace-nowrap"
+                            className="w-full text-left px-3 py-2 text-sm rounded hover:bg-paper-2 transition-colors text-[--color-accent] font-medium whitespace-nowrap"
                         >
                             + Add custom tag
                         </button>
@@ -905,14 +905,14 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                     }
                                 }}
                                 placeholder="Enter tag name"
-                                className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                className="w-full px-2 py-1 text-sm border border-border-strong rounded focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring]"
                                 autoFocus
                             />
                             <div className="flex gap-1">
                                 <button
                                     type="button"
                                     onClick={handleAddCustomTag}
-                                    className="flex-1 px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
+                                    className="flex-1 px-2 py-1 text-xs bg-[--color-accent] text-white rounded hover:bg-[--color-accent] transition-colors"
                                 >
                                     Add
                                 </button>
@@ -922,7 +922,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                         setIsAddingCustomTag(false);
                                         setCustomTagInput('');
                                     }}
-                                    className="flex-1 px-2 py-1 text-xs bg-slate-200 text-slate-700 rounded hover:bg-slate-300 transition-colors"
+                                    className="flex-1 px-2 py-1 text-xs bg-border text-ink-soft rounded hover:bg-border-strong transition-colors"
                                 >
                                     Cancel
                                 </button>
@@ -940,12 +940,12 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                     ref={tagButtonRef}
                     type="button"
                     onClick={handleTagButtonClick}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm text-left flex items-center justify-between bg-white hover:bg-slate-50 transition-colors"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] focus:border-transparent text-sm text-left flex items-center justify-between bg-surface hover:bg-paper-2 transition-colors"
                 >
-                    <span className={`whitespace-nowrap truncate ${formData.tag ? 'text-gray-900' : 'text-gray-400'}`}>
+                    <span className={`whitespace-nowrap truncate ${formData.tag ? 'text-ink' : 'text-muted-soft'}`}>
                         {formData.tag || 'Select tag'}
                     </span>
-                    <ChevronDown size={16} className="text-gray-400 flex-shrink-0 ml-2" />
+                    <ChevronDown size={16} className="text-muted-soft flex-shrink-0 ml-2" />
                 </button>
                 {dropdownContent}
             </div>
@@ -990,17 +990,17 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                         });
                         setShowEditTagDropdown(!showEditTagDropdown);
                     }}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm text-left flex items-center justify-between bg-white hover:bg-slate-50 transition-colors"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] focus:border-transparent text-sm text-left flex items-center justify-between bg-surface hover:bg-paper-2 transition-colors"
                 >
-                    <span className={`whitespace-nowrap truncate ${editFormData.tag ? 'text-gray-900' : 'text-gray-400'}`}>
+                    <span className={`whitespace-nowrap truncate ${editFormData.tag ? 'text-ink' : 'text-muted-soft'}`}>
                         {editFormData.tag || 'Select tag'}
                     </span>
-                    <ChevronDown size={16} className="text-gray-400 flex-shrink-0 ml-2" />
+                    <ChevronDown size={16} className="text-muted-soft flex-shrink-0 ml-2" />
                 </button>
 
                 {showEditTagDropdown && (
                     <div
-                        className="fixed z-[200] bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-auto"
+                        className="fixed z-[200] bg-surface border border-border rounded-lg shadow-lg max-h-60 overflow-auto"
                         style={{
                             top: `${editTagDropdownPosition.top}px`,
                             left: `${editTagDropdownPosition.left}px`,
@@ -1012,7 +1012,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                             <button
                                 type="button"
                                 onClick={() => handleEditTagSelect('')}
-                                className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-gray-500"
+                                className="w-full text-left px-3 py-2 text-sm rounded hover:bg-paper-2 transition-colors text-muted"
                             >
                                 None
                             </button>
@@ -1023,7 +1023,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                     key={tag}
                                     type="button"
                                     onClick={() => handleEditTagSelect(tag)}
-                                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors flex items-center gap-2"
+                                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-paper-2 transition-colors flex items-center gap-2"
                                 >
                                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${getTagColor(tag)}`}>
                                         <TagIcon size={10} />
@@ -1033,14 +1033,14 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                             ))}
 
                             {/* Divider */}
-                            <div className="border-t border-slate-200 my-1"></div>
+                            <div className="border-t border-border my-1"></div>
 
                             {/* Add custom tag */}
                             {!isAddingCustomTag ? (
                                 <button
                                     type="button"
                                     onClick={() => setIsAddingCustomTag(true)}
-                                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-slate-100 transition-colors text-indigo-600 font-medium whitespace-nowrap"
+                                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-paper-2 transition-colors text-[--color-accent] font-medium whitespace-nowrap"
                                 >
                                     + Add custom tag
                                 </button>
@@ -1061,14 +1061,14 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                             }
                                         }}
                                         placeholder="Enter tag name"
-                                        className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        className="w-full px-2 py-1 text-sm border border-border-strong rounded focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring]"
                                         autoFocus
                                     />
                                     <div className="flex gap-1">
                                         <button
                                             type="button"
                                             onClick={handleAddEditCustomTag}
-                                            className="flex-1 px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
+                                            className="flex-1 px-2 py-1 text-xs bg-[--color-accent] text-white rounded hover:bg-[--color-accent] transition-colors"
                                         >
                                             Add
                                         </button>
@@ -1078,7 +1078,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 setIsAddingCustomTag(false);
                                                 setCustomTagInput('');
                                             }}
-                                            className="flex-1 px-2 py-1 text-xs bg-slate-200 text-slate-700 rounded hover:bg-slate-300 transition-colors"
+                                            className="flex-1 px-2 py-1 text-xs bg-border text-ink-soft rounded hover:bg-border-strong transition-colors"
                                         >
                                             Cancel
                                         </button>
@@ -1115,10 +1115,10 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                         }}
                         onFocus={() => setIsAddFormExpanded(true)}
                         placeholder="Add a new task..."
-                        className={`w-full ${titleError ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`}
+                        className={`w-full ${titleError ? 'border-danger focus:border-danger focus:ring-[--color-danger-soft]/20' : ''}`}
                     />
                     {titleError && (
-                        <p className="text-red-500 text-xs mt-1">{titleError}</p>
+                        <p className="text-danger text-xs mt-1">{titleError}</p>
                     )}
                 </div>
                 <Button type="submit" variant="primary" className="!px-3">
@@ -1127,18 +1127,18 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
             </div>
 
             {isAddFormExpanded && (
-                <div className="bg-slate-50/80 border border-slate-100 rounded-lg p-4 space-y-3">
+                <div className="bg-paper-2/80 border border-divider rounded-lg p-4 space-y-3">
                     <textarea
                         value={formData.description}
                         onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                         placeholder="Description (optional)"
-                        className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none bg-white"
+                        className="w-full px-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] focus:border-transparent resize-none bg-surface"
                         rows="3"
                     />
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-xs text-gray-600 mb-1">Due Date</label>
+                            <label className="block text-xs text-ink-soft mb-1">Due Date</label>
                             <DateTimePicker
                                 value={formData.due_date}
                                 onChange={(newDate) => setFormData({ ...formData, due_date: newDate })}
@@ -1147,7 +1147,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                         </div>
 
                         <div>
-                            <label className="block text-xs text-gray-600 mb-1">Tag</label>
+                            <label className="block text-xs text-ink-soft mb-1">Tag</label>
                             {renderTagDropdown()}
                         </div>
                     </div>
@@ -1159,7 +1159,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                 setIsAddFormExpanded(false);
                                 resetForm();
                             }}
-                            className="flex-1 text-sm py-2 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors text-slate-600"
+                            className="flex-1 text-sm py-2 border border-border-strong rounded-lg hover:bg-paper-2 transition-colors text-ink-soft"
                         >
                             Cancel
                         </button>
@@ -1181,25 +1181,25 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                 {/* Popover */}
                 <div
                     ref={popoverRef}
-                    className="fixed z-50 w-96 bg-white rounded-xl shadow-2xl border border-slate-200 p-4 max-h-[90vh] overflow-y-auto"
+                    className="fixed z-50 w-96 bg-surface rounded-xl shadow-2xl border border-border p-4 max-h-[90vh] overflow-y-auto"
                     style={{
                         top: `${popoverPosition.top}px`,
                         left: `${popoverPosition.left}px`,
                     }}
                 >
                     <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-semibold text-gray-800">Edit Task</h3>
+                        <h3 className="font-semibold text-ink">Edit Task</h3>
                         <button
                             onClick={resetEditForm}
-                            className="text-slate-400 hover:text-slate-600 transition-colors"
+                            className="text-muted-soft hover:text-ink-soft transition-colors"
                         >
                             <X size={18} />
                         </button>
                     </div>
 
                     {editingTodo?.created_at && (
-                        <div className="mb-3 pb-3 border-b border-slate-200">
-                            <div className="text-xs text-gray-500">
+                        <div className="mb-3 pb-3 border-b border-border">
+                            <div className="text-xs text-muted">
                                 Created: {new Date(editingTodo.created_at).toLocaleString('en-US', {
                                     month: 'short',
                                     day: 'numeric',
@@ -1214,7 +1214,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
 
                     <form onSubmit={handleUpdate} className="space-y-3">
                         <div>
-                            <label className="block text-xs text-gray-600 mb-1">Title *</label>
+                            <label className="block text-xs text-ink-soft mb-1">Title *</label>
                             <Input
                                 value={editFormData.title}
                                 onChange={(e) => setEditFormData({ ...editFormData, title: e.target.value })}
@@ -1225,18 +1225,18 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                         </div>
 
                         <div>
-                            <label className="block text-xs text-gray-600 mb-1">Description</label>
+                            <label className="block text-xs text-ink-soft mb-1">Description</label>
                             <textarea
                                 value={editFormData.description}
                                 onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
                                 placeholder="Add details..."
-                                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none text-sm"
+                                className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] focus:border-transparent resize-none text-sm"
                                 rows="3"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-xs text-gray-600 mb-1">Due Date</label>
+                            <label className="block text-xs text-ink-soft mb-1">Due Date</label>
                             <DateTimePicker
                                 value={editFormData.due_date}
                                 onChange={(newDate) => setEditFormData({ ...editFormData, due_date: newDate })}
@@ -1245,7 +1245,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                         </div>
 
                         <div>
-                            <label className="block text-xs text-gray-600 mb-1">Tag</label>
+                            <label className="block text-xs text-ink-soft mb-1">Tag</label>
                             {renderEditTagDropdown()}
                         </div>
 
@@ -1284,8 +1284,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                 onClick={() => setShowFilterDropdown(!showFilterDropdown)}
                                 className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
                                     filterTag
-                                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                                        ? 'bg-[--color-accent-soft] border-[--color-accent] text-[--color-accent]'
+                                        : 'bg-surface border-border text-ink-soft hover:bg-paper-2'
                                 }`}
                             >
                                 <Filter size={12} />
@@ -1294,14 +1294,14 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                             </button>
 
                             {showFilterDropdown && (
-                                <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg min-w-32">
+                                <div className="absolute top-full left-0 mt-1 z-50 bg-surface border border-border rounded-lg shadow-lg min-w-32">
                                     <div className="p-1">
                                         <button
                                             onClick={() => {
                                                 setFilterTag('');
                                                 setShowFilterDropdown(false);
                                             }}
-                                            className={`w-full text-left px-3 py-1.5 text-xs rounded hover:bg-slate-100 transition-colors ${!filterTag ? 'bg-slate-100 font-medium' : ''}`}
+                                            className={`w-full text-left px-3 py-1.5 text-xs rounded hover:bg-paper-2 transition-colors ${!filterTag ? 'bg-paper-2 font-medium' : ''}`}
                                         >
                                             All tags
                                         </button>
@@ -1312,7 +1312,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                     setFilterTag(tag);
                                                     setShowFilterDropdown(false);
                                                 }}
-                                                className={`w-full text-left px-3 py-1.5 text-xs rounded hover:bg-slate-100 transition-colors flex items-center gap-2 ${filterTag === tag ? 'bg-slate-100 font-medium' : ''}`}
+                                                className={`w-full text-left px-3 py-1.5 text-xs rounded hover:bg-paper-2 transition-colors flex items-center gap-2 ${filterTag === tag ? 'bg-paper-2 font-medium' : ''}`}
                                             >
                                                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${getTagColor(tag)}`}>
                                                     <TagIcon size={10} />
@@ -1330,11 +1330,11 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
                     {loading ? (
-                        <div className="flex justify-center items-center h-20 text-indigo-500">
+                        <div className="flex justify-center items-center h-20 text-[--color-accent]">
                             <Loader2 className="animate-spin" />
                         </div>
                     ) : todos.length === 0 ? (
-                        <div className="text-center text-gray-400 mt-10">No tasks yet.</div>
+                        <div className="text-center text-muted-soft mt-10">No tasks yet.</div>
                     ) : (() => {
                         // Filter active todos (non-completed) based on tag filter
                         const activeTodos = todos.filter(todo => {
@@ -1362,7 +1362,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                         return (
                             <div className="space-y-4">
                                 {!hasActiveTodos && completedTodos.length === 0 && (
-                                    <div className="text-center text-gray-400 mt-10">
+                                    <div className="text-center text-muted-soft mt-10">
                                         {filterTag ? `No tasks with tag "${filterTag}"` : 'No active tasks'}
                                     </div>
                                 )}
@@ -1371,10 +1371,10 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                 {hasOverdue && (
                                     <div>
                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                            <h3 className="text-sm font-semibold text-red-600">
+                                            <h3 className="text-sm font-semibold text-danger">
                                                 Overdue
                                             </h3>
-                                            <span className="text-xs text-red-500 bg-red-50 px-2 py-0.5 rounded-full">
+                                            <span className="text-xs text-danger bg-danger-soft px-2 py-0.5 rounded-full">
                                                 {categorized.overdue.length}
                                             </span>
                                         </div>
@@ -1388,10 +1388,10 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                 {hasToday && (
                                     <div>
                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                            <h3 className="text-sm font-semibold text-amber-600">
+                                            <h3 className="text-sm font-semibold text-warning">
                                                 Today
                                             </h3>
-                                            <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                                            <span className="text-xs text-warning bg-warning-soft px-2 py-0.5 rounded-full">
                                                 {categorized.today.length}
                                             </span>
                                         </div>
@@ -1405,10 +1405,10 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                 {hasThisWeek && (
                                     <div>
                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                            <h3 className="text-sm font-semibold text-blue-600">
+                                            <h3 className="text-sm font-semibold text-ink-soft">
                                                 This Week
                                             </h3>
-                                            <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                                            <span className="text-xs text-ink-soft bg-paper-2 px-2 py-0.5 rounded-full">
                                                 {categorized['this-week'].length}
                                             </span>
                                         </div>
@@ -1422,10 +1422,10 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                 {hasRemaining && (
                                     <div>
                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                            <h3 className="text-sm font-semibold text-slate-600">
+                                            <h3 className="text-sm font-semibold text-ink-soft">
                                                 Remaining
                                             </h3>
-                                            <span className="text-xs text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                                            <span className="text-xs text-ink-soft bg-paper-2 px-2 py-0.5 rounded-full">
                                                 {categorized.remaining.length}
                                             </span>
                                         </div>
@@ -1439,10 +1439,10 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                 {hasNoDate && (
                                     <div>
                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                            <h3 className="text-sm font-semibold text-gray-500">
+                                            <h3 className="text-sm font-semibold text-muted">
                                                 No Due Date
                                             </h3>
-                                            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                                            <span className="text-xs text-muted bg-paper-2 px-2 py-0.5 rounded-full">
                                                 {categorized['no-date'].length}
                                             </span>
                                         </div>
@@ -1454,16 +1454,16 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
 
                                 {/* Completed Section */}
                                 {completedTodos.length > 0 && (
-                                    <div className="border-t border-slate-200 pt-4 mt-4">
+                                    <div className="border-t border-border pt-4 mt-4">
                                         <button
                                             onClick={() => setShowCompleted(!showCompleted)}
-                                            className="flex items-center gap-2 mb-2 px-2 w-full text-left hover:bg-slate-50 rounded-lg py-1 transition-colors"
+                                            className="flex items-center gap-2 mb-2 px-2 w-full text-left hover:bg-paper-2 rounded-lg py-1 transition-colors"
                                         >
-                                            <ChevronRight size={16} className={`text-emerald-600 transition-transform ${showCompleted ? 'rotate-90' : ''}`} />
-                                            <h3 className="text-sm font-semibold text-emerald-600">
+                                            <ChevronRight size={16} className={`text-success transition-transform ${showCompleted ? 'rotate-90' : ''}`} />
+                                            <h3 className="text-sm font-semibold text-success">
                                                 Completed
                                             </h3>
-                                            <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+                                            <span className="text-xs text-success bg-success-soft px-2 py-0.5 rounded-full">
                                                 {completedTodos.length}
                                             </span>
                                         </button>
@@ -1474,8 +1474,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized.today.length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Today</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Today</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized.today.length}
                                                             </span>
                                                         </div>
@@ -1489,8 +1489,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized.tomorrow.length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Tomorrow</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Tomorrow</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized.tomorrow.length}
                                                             </span>
                                                         </div>
@@ -1504,8 +1504,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['this-week'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">This Week</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">This Week</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['this-week'].length}
                                                             </span>
                                                         </div>
@@ -1519,8 +1519,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['this-month'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">This Month</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">This Month</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['this-month'].length}
                                                             </span>
                                                         </div>
@@ -1534,8 +1534,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['this-year-future'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">This Year</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">This Year</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['this-year-future'].length}
                                                             </span>
                                                         </div>
@@ -1549,8 +1549,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['next-year'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Next Year</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Next Year</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['next-year'].length}
                                                             </span>
                                                         </div>
@@ -1564,8 +1564,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized.future.length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Future</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Future</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized.future.length}
                                                             </span>
                                                         </div>
@@ -1579,8 +1579,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized.yesterday.length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Yesterday</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Yesterday</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized.yesterday.length}
                                                             </span>
                                                         </div>
@@ -1594,8 +1594,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['last-7-days'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Last 7 Days</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Last 7 Days</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['last-7-days'].length}
                                                             </span>
                                                         </div>
@@ -1609,8 +1609,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['last-30-days'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Last 30 Days</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Last 30 Days</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['last-30-days'].length}
                                                             </span>
                                                         </div>
@@ -1624,8 +1624,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['this-year-past'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Earlier This Year</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Earlier This Year</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['this-year-past'].length}
                                                             </span>
                                                         </div>
@@ -1639,8 +1639,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['last-year'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Last Year</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Last Year</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['last-year'].length}
                                                             </span>
                                                         </div>
@@ -1654,8 +1654,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized.past.length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">Past</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">Past</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized.past.length}
                                                             </span>
                                                         </div>
@@ -1669,8 +1669,8 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                                                 {completedCategorized['no-date'].length > 0 && (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-2 px-2">
-                                                            <h4 className="text-xs font-medium text-slate-500">No Due Date</h4>
-                                                            <span className="text-xs text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full">
+                                                            <h4 className="text-xs font-medium text-muted">No Due Date</h4>
+                                                            <span className="text-xs text-muted-soft bg-paper-2 px-1.5 py-0.5 rounded-full">
                                                                 {completedCategorized['no-date'].length}
                                                             </span>
                                                         </div>
@@ -1692,7 +1692,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
             {/* Tooltip Portal */}
             {tooltipData.visible && createPortal(
                 <div
-                    className="fixed z-[9999] bg-gray-900 text-white text-xs rounded py-1 px-2 shadow-lg pointer-events-none whitespace-normal"
+                    className="fixed z-[9999] bg-ink text-white text-xs rounded py-1 px-2 shadow-lg pointer-events-none whitespace-normal"
                     style={{
                         left: tooltipData.x,
                         top: tooltipData.y,

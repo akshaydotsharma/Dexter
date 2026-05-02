@@ -43,7 +43,7 @@ export default function DashboardPage() {
 
   return (
     <div className="px-6 md:px-10 py-8 max-w-7xl mx-auto w-full">
-      <PageTitle eyebrow="Dashboard" subtitle="Everything in view.">
+      <PageTitle subtitle="Everything in view.">
         Dashboard
       </PageTitle>
 

@@ -41,7 +41,7 @@ export default function TopBar({ onOpenMobileSidebar, onOpenCommandPalette }) {
           <Menu size={20} strokeWidth={1.75} aria-hidden="true" />
         </button>
 
-        <span className="font-display text-lg text-ink truncate">{label}</span>
+        <span className="md:hidden font-display text-lg text-ink truncate">{label}</span>
       </div>
 
       <div className="flex items-center gap-2">

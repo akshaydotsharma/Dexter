@@ -1,44 +1,45 @@
 import { TrendingUp, TrendingDown } from 'lucide-react';
 
-export default function StatsCard({ title, value, trend, icon: Icon, className = '' }) {
-    const isPositiveTrend = trend && trend > 0;
-    const isNegativeTrend = trend && trend < 0;
+export default function StatsCard({ title, value, trend, className = '' }) {
+    const isPositive = typeof trend === 'number' && trend > 0;
+    const isNegative = typeof trend === 'number' && trend < 0;
+    const hasTrend = typeof trend === 'number' && trend !== 0;
 
     return (
-        <div className={`group relative bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-indigo-100 hover:shadow-xl hover:border-indigo-200 transition-all duration-300 hover:-translate-y-1 ${className}`}>
-            {/* Gradient overlay on hover */}
-            <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+        <div
+            className={
+                'group bg-surface border border-border rounded-xl p-5 transition-colors duration-150 ease-out hover:border-border-strong ' +
+                className
+            }
+        >
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+                {title}
+            </p>
+            <p
+                className="mt-2 font-display text-3xl text-ink leading-none tabular-nums"
+                style={{ letterSpacing: '-0.01em' }}
+            >
+                {value}
+            </p>
 
-            <div className="relative z-10">
-                <div className="flex items-start justify-between mb-4">
-                    <div className="flex-1">
-                        <p className="text-sm font-medium text-slate-500 mb-1">{title}</p>
-                        <h3 className="text-3xl font-bold text-slate-800">{value}</h3>
-                    </div>
-                    {Icon && (
-                        <div className="p-3 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl shadow-md group-hover:shadow-lg transition-shadow duration-300">
-                            <Icon className="w-6 h-6 text-white" />
-                        </div>
+            {hasTrend && (
+                <div className="mt-3 flex items-center gap-1.5">
+                    {isPositive ? (
+                        <TrendingUp size={14} strokeWidth={1.75} className="text-success" aria-hidden="true" />
+                    ) : (
+                        <TrendingDown size={14} strokeWidth={1.75} className="text-danger" aria-hidden="true" />
                     )}
+                    <span
+                        className={
+                            'text-xs font-medium tabular-nums ' +
+                            (isPositive ? 'text-success' : isNegative ? 'text-danger' : 'text-muted')
+                        }
+                    >
+                        {isPositive ? '+' : ''}{trend}%
+                    </span>
+                    <span className="text-xs text-muted-soft">vs last week</span>
                 </div>
-
-                {trend !== undefined && trend !== null && (
-                    <div className="flex items-center gap-1">
-                        {isPositiveTrend ? (
-                            <TrendingUp className="w-4 h-4 text-green-500" />
-                        ) : isNegativeTrend ? (
-                            <TrendingDown className="w-4 h-4 text-red-500" />
-                        ) : null}
-                        <span className={`text-sm font-medium ${isPositiveTrend ? 'text-green-600' :
-                                isNegativeTrend ? 'text-red-600' :
-                                    'text-slate-500'
-                            }`}>
-                            {trend > 0 ? '+' : ''}{trend}%
-                        </span>
-                        <span className="text-xs text-slate-400 ml-1">vs last week</span>
-                    </div>
-                )}
-            </div>
+            )}
         </div>
     );
 }
