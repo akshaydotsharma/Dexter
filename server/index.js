@@ -1641,6 +1641,123 @@ app.post('/api/ai/execute', async (req, res) => {
     }
 });
 
+// AI CAPTURE ENDPOINT - one-shot voice capture for the iOS side-button flow.
+//
+// Takes free text, runs it through chatToDrafts, then applies "smart"
+// auto-confirm:
+//   - exactly 1 CREATE-type draft and no follow-up question -> auto-execute
+//     and return status: "created"
+//   - drafts.length === 0 with a follow-up question -> status: "needs_clarification"
+//   - any other shape (multiple drafts, edit/delete drafts, etc.) ->
+//     status: "needs_review" so the user opens the app and confirms in chat
+//
+// Auto-confirm is intentionally conservative — only safe CREATE actions go
+// through silently. Edits, deletes, and multi-draft batches always fall back
+// to needs_review so a misheard prompt cannot mutate or delete existing data.
+app.post('/api/ai/capture', async (req, res) => {
+    try {
+        const { input, sessionId, timezone } = req.body || {};
+
+        if (!input || typeof input !== 'string' || !input.trim()) {
+            return res.status(400).json({ error: 'Input is required' });
+        }
+
+        if (!process.env.ANTHROPIC_API_KEY) {
+            return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
+        }
+
+        const result = await chatToDrafts(input, {
+            userId: null,
+            nowIso: new Date().toISOString(),
+            tz: timezone || 'UTC',
+            sessionId: sessionId || null
+        });
+
+        const drafts = result.drafts || [];
+        const followUpQuestion = result.followUpQuestion || null;
+        const errors = result.errors || [];
+
+        const isCreateAction = (t) => t === 'CREATE_TODO' || t === 'CREATE_NOTE' || t === 'CREATE_LIST';
+        const summarizeDraft = (d) => ({
+            id: d.id,
+            type: d.entity_type,
+            title: d.data?.title || d.data?.name || ''
+        });
+
+        if (errors.length > 0 && drafts.length === 0) {
+            return res.json({ status: 'error', errors });
+        }
+
+        if (drafts.length === 0 && followUpQuestion) {
+            return res.json({ status: 'needs_clarification', followUpQuestion });
+        }
+
+        if (drafts.length === 1 && isCreateAction(drafts[0].action_type) && !followUpQuestion) {
+            const draft = drafts[0];
+            const draftData = draft.data;
+            let createdRow;
+
+            switch (draft.action_type) {
+                case 'CREATE_TODO': {
+                    const { rows } = await db.query(
+                        'INSERT INTO todos (title, description, due_date, tag) VALUES ($1, $2, $3, $4) RETURNING *',
+                        [draftData.title, draftData.description || null, draftData.due_date || null, draftData.tag || null]
+                    );
+                    createdRow = rows[0];
+                    await logTodoHistory(createdRow.id, 'created', null, null, JSON.stringify(draftData));
+                    break;
+                }
+                case 'CREATE_NOTE': {
+                    const { rows } = await db.query(
+                        'INSERT INTO notes (title, content, folder_id) VALUES ($1, $2, $3) RETURNING *',
+                        [draftData.title, draftData.content, draftData.folder_id || null]
+                    );
+                    createdRow = rows[0];
+                    await logNoteHistory(createdRow.id, 'created', null, null, JSON.stringify(draftData));
+                    break;
+                }
+                case 'CREATE_LIST': {
+                    const items = Array.isArray(draftData.items)
+                        ? draftData.items.map(item => typeof item === 'string' ? { text: item, checked: false } : item)
+                        : [];
+                    const { rows } = await db.query(
+                        'INSERT INTO lists (title, items) VALUES ($1, $2) RETURNING *',
+                        [draftData.title, JSON.stringify(items)]
+                    );
+                    createdRow = rows[0];
+                    await logListHistory(createdRow.id, 'created', null, null, JSON.stringify(draftData));
+                    break;
+                }
+            }
+
+            await draftStore.confirmDraft(draft.id, createdRow.id);
+
+            return res.json({
+                status: 'created',
+                created: [{
+                    type: draft.entity_type,
+                    title: draftData.title,
+                    id: createdRow.id,
+                    dueDate: createdRow.due_date || null
+                }]
+            });
+        }
+
+        // Multi-draft, edit/delete drafts, or any mixed shape: leave them
+        // pending. The user opens the app and the chat surface will replay
+        // these drafts so they can confirm or reject explicitly.
+        return res.json({
+            status: 'needs_review',
+            pendingDrafts: drafts.map(summarizeDraft),
+            assistantText: result.assistantText || null
+        });
+
+    } catch (err) {
+        console.error('AI Capture Error:', err);
+        sendErrorResponse(res, err);
+    }
+});
+
 // DRAFT ACTIONS ENDPOINTS - v2.0
 
 // Get all drafts by status
