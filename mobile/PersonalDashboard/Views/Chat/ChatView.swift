@@ -135,7 +135,10 @@ struct ChatView: View {
                         .id(turn.id)
                     }
 
-                    if viewModel.isSending {
+                    // Show typing indicator only when we don't have an
+                    // assistant turn yet streaming text (the live turn shows
+                    // its own cursor — see TurnView).
+                    if viewModel.isSending && !hasLiveAssistantTurn {
                         TypingIndicator()
                             .padding(.top, Space.xs)
                     }
@@ -159,6 +162,10 @@ struct ChatView: View {
     private func send() {
         Task { await viewModel.send() }
     }
+
+    private var hasLiveAssistantTurn: Bool {
+        viewModel.turns.last?.isStreaming == true
+    }
 }
 
 private struct TurnView: View {
@@ -169,11 +176,11 @@ private struct TurnView: View {
 
     var body: some View {
         VStack(alignment: turn.role == .user ? .trailing : .leading, spacing: Space.md) {
-            if !turn.text.isEmpty {
+            if !turn.text.isEmpty || turn.isStreaming {
                 if turn.role == .user {
                     UserBubble(text: turn.text)
                 } else {
-                    AIProse(text: turn.text)
+                    StreamingProse(text: turn.text, isStreaming: turn.isStreaming)
                 }
             }
 
@@ -188,5 +195,34 @@ private struct TurnView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: turn.role == .user ? .trailing : .leading)
+    }
+}
+
+/// AI prose with an optional blinking cursor while text is streaming in.
+/// While the text is empty and isStreaming=true, shows just the cursor.
+private struct StreamingProse: View {
+    let text: String
+    let isStreaming: Bool
+
+    @State private var cursorVisible = true
+
+    var body: some View {
+        HStack(alignment: .lastTextBaseline, spacing: 2) {
+            if !text.isEmpty {
+                AIProse(text: text)
+            }
+            if isStreaming {
+                Rectangle()
+                    .fill(Tokens.ink)
+                    .frame(width: 2, height: 18)
+                    .opacity(cursorVisible ? 1 : 0)
+                    .padding(.bottom, 2)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                            cursorVisible = false
+                        }
+                    }
+            }
+        }
     }
 }
