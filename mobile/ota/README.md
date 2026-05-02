@@ -58,6 +58,34 @@ The free personal-team provisioning profile expires every 7 days. Re-run
 
 ---
 
+## Daily dev loop (use the installed build with live backend)
+
+After the app is installed on your phone, you do not need to re-archive every
+time you change the backend. Run two terminals:
+
+```bash
+# Terminal 1: Express dev server with hot reload
+npm start
+```
+
+```bash
+# Terminal 2: Tailscale tunnel for the API only
+bash mobile/ota/dev-tunnel.sh
+```
+
+Your phone (with Tailscale on) now hits the dev server at
+`https://<your-mac-hostname>.ts.net/api` over Tailscale. Edit `server/`,
+nodemon restarts, the phone sees the change immediately. Works on any network.
+
+Press Ctrl-C in the tunnel terminal to tear down. Re-running `dev-tunnel.sh`
+is safe; it resets and re-applies the Serve config.
+
+If you run `ship.sh` while `npm start` is already up, `ship.sh` configures the
+`/api` route automatically alongside the OTA route, so the freshly installed
+app can talk to the backend right away.
+
+---
+
 ## Troubleshooting / fallback
 
 **Tailscale is unavailable on this network**: fall back to a Cloudflare quick
