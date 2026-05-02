@@ -1,0 +1,52 @@
+name: PersonalDashboard
+options:
+  bundleIdPrefix: com.akshaysharma
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+targets:
+  PersonalDashboard:
+    type: application
+    platform: iOS
+    sources:
+      - path: PersonalDashboard
+        excludes:
+          - "Resources/Preview Content/**"
+          - "Resources/Fonts/**"
+      - path: PersonalDashboard/Resources/Preview Content
+        type: folder
+      - path: PersonalDashboard/Resources/Fonts
+        buildPhase: resources
+      - path: PersonalDashboard/Resources/Assets.xcassets
+        buildPhase: resources
+    info:
+      path: PersonalDashboard/Info.plist
+      properties:
+        CFBundleDisplayName: Dashboard
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen:
+          UIColorName: AccentColor
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - Calistoga-Regular.ttf
+          - Inter-Regular.ttf
+          - Inter-Medium.ttf
+          - Inter-SemiBold.ttf
+          - JetBrainsMono-Regular.ttf
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_ASSET_PATHS: '"PersonalDashboard/Resources/Preview Content"'
+        ENABLE_PREVIEWS: YES
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: "PJFPUSSNUW"
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
