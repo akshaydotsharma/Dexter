@@ -3,7 +3,7 @@ import Card from './Card';
 import Input from './Input';
 import Button from './Button';
 import { getNotes, createNote, updateNote, deleteNote, getNoteFolders, createNoteFolder, updateNoteFolder, deleteNoteFolder } from '../services/api';
-import { Plus, Trash2, Loader2, Save, Folder, FolderOpen, ChevronRight, ChevronLeft, Edit2 } from 'lucide-react';
+import { Plus, Trash2, Loader2, Save, Folder, FolderOpen, ChevronRight, ChevronLeft, Edit2, Inbox } from 'lucide-react';
 
 const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHeightPx = null }, ref) {
     const [folders, setFolders] = useState([]);
@@ -40,7 +40,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
     }, []);
 
     useEffect(() => {
-        if (selectedFolderId) {
+        if (selectedFolderId !== null) {
             fetchNotes(selectedFolderId);
         }
     }, [selectedFolderId]);
@@ -49,7 +49,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
     useImperativeHandle(ref, () => ({
         refresh: () => {
             fetchFolders();
-            if (selectedFolderId) {
+            if (selectedFolderId !== null) {
                 fetchNotes(selectedFolderId);
             }
         }
@@ -60,9 +60,9 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
             const { data } = await getNoteFolders();
             const foldersArray = Array.isArray(data) ? data : [];
             setFolders(foldersArray);
-            // Auto-select first folder if available
-            if (foldersArray.length > 0 && !selectedFolderId) {
-                setSelectedFolderId(foldersArray[0].id);
+            // Default to "All Notes" so unfiled notes are visible.
+            if (selectedFolderId === null) {
+                setSelectedFolderId('all');
             }
         } catch (error) {
             console.error('Error fetching folders:', error);
@@ -74,7 +74,8 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
     const fetchNotes = async (folderId) => {
         try {
-            const { data } = await getNotes(folderId);
+            // 'all' = no filter, fetch every note (incl. unfiled)
+            const { data } = await getNotes(folderId === 'all' ? undefined : folderId);
             setNotes(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching notes:', error);
@@ -139,8 +140,10 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
     // Note functions
     const handleCreateNote = () => {
-        if (!selectedFolderId) return;
-        setCurrentNote({ title: '', content: '', folder_id: selectedFolderId, isNew: true });
+        if (selectedFolderId === null) return;
+        // 'all' selected = create unfiled note (folder_id null)
+        const folderForNew = selectedFolderId === 'all' ? null : selectedFolderId;
+        setCurrentNote({ title: '', content: '', folder_id: folderForNew, isNew: true });
     };
 
     const handleEditNote = (note) => {
@@ -153,10 +156,12 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
         try {
             if (currentNote.isNew) {
-                const { data } = await createNote(currentNote.title, currentNote.content, selectedFolderId);
+                const folderForCreate = selectedFolderId === 'all' ? null : selectedFolderId;
+                const { data } = await createNote(currentNote.title, currentNote.content, folderForCreate);
                 setNotes([data, ...notes]);
             } else {
-                const { data } = await updateNote(currentNote.id, currentNote.title, currentNote.content, selectedFolderId);
+                const folderForUpdate = selectedFolderId === 'all' ? currentNote.folder_id : selectedFolderId;
+                const { data } = await updateNote(currentNote.id, currentNote.title, currentNote.content, folderForUpdate);
                 // Move updated note to top (most recently updated first)
                 setNotes([data, ...notes.filter(n => n.id !== data.id)]);
             }
@@ -213,7 +218,8 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
         cancelInlineEdit();
 
         try {
-            await updateNote(noteId, updatedTitle, updatedContent, selectedFolderId);
+            const folderForInline = selectedFolderId === 'all' ? notes.find(n => n.id === noteId)?.folder_id ?? null : selectedFolderId;
+            await updateNote(noteId, updatedTitle, updatedContent, folderForInline);
         } catch (error) {
             console.error('Error updating note:', error);
             fetchNotes(selectedFolderId);
@@ -282,7 +288,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
     // Handle folder selection on mobile - switch to notes view
     const handleMobileFolderSelect = (folderId) => {
-        if (editingFolderId !== folderId) {
+        if (folderId === 'all' || editingFolderId !== folderId) {
             setSelectedFolderId(folderId);
             setMobileView('notes');
         }
@@ -309,15 +315,33 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                     placeholder="New folder..."
                     className="!py-1.5 text-sm"
                 />
-                <Button type="submit" variant="primary" className="!px-2 !py-1.5">
+                <Button
+                    type="submit"
+                    variant="primary"
+                    className="!px-2 !py-1.5"
+                    disabled={!newFolderName.trim()}
+                    title={newFolderName.trim() ? 'Add folder' : 'Type a folder name first'}
+                >
                     <Plus size={16} />
                 </Button>
             </form>
 
             <div className="overflow-y-auto custom-scrollbar space-y-1 flex-1 min-h-0 pr-1">
-                {folders.length === 0 ? (
-                    <div className="text-center text-muted-soft text-sm mt-4">No folders yet.</div>
-                ) : (
+                {/* All Notes virtual folder — shows every note including unfiled */}
+                <div
+                    onClick={() => isMobile ? handleMobileFolderSelect('all') : setSelectedFolderId('all')}
+                    className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                        selectedFolderId === 'all'
+                            ? 'bg-[--color-accent-soft] border border-[--color-accent]'
+                            : 'hover:bg-paper-2'
+                    }`}
+                >
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <Inbox size={16} strokeWidth={1.75} className={selectedFolderId === 'all' ? 'text-[--color-accent] flex-shrink-0' : 'text-muted-soft flex-shrink-0'} />
+                        <span className="text-sm font-medium text-ink-soft truncate">All Notes</span>
+                    </div>
+                </div>
+                {folders.length === 0 ? null : (
                     folders.map((folder) => (
                         <div
                             key={folder.id}
@@ -534,14 +558,32 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                         placeholder="New folder..."
                                         className="!py-1.5 text-sm"
                                     />
-                                    <Button type="submit" variant="primary" className="!px-2 !py-1.5">
+                                    <Button
+                                        type="submit"
+                                        variant="primary"
+                                        className="!px-2 !py-1.5"
+                                        disabled={!newFolderName.trim()}
+                                        title={newFolderName.trim() ? 'Add folder' : 'Type a folder name first'}
+                                    >
                                         <Plus size={16} />
                                     </Button>
                                 </form>
                                 <div className="overflow-y-auto custom-scrollbar space-y-1 pr-1 flex-1 min-h-0">
-                                    {folders.length === 0 ? (
-                                        <div className="text-center text-muted-soft text-sm mt-4">No folders yet.</div>
-                                    ) : (
+                                    {/* All Notes virtual folder */}
+                                    <div
+                                        onClick={() => setSelectedFolderId('all')}
+                                        className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                                            selectedFolderId === 'all'
+                                                ? 'bg-[--color-accent-soft] border border-[--color-accent]'
+                                                : 'hover:bg-paper-2'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                                            <Inbox size={16} strokeWidth={1.75} className={selectedFolderId === 'all' ? 'text-[--color-accent] flex-shrink-0' : 'text-muted-soft flex-shrink-0'} />
+                                            <span className="text-sm font-medium text-ink-soft truncate">All Notes</span>
+                                        </div>
+                                    </div>
+                                    {folders.length === 0 ? null : (
                                         folders.map((folder) => (
                                             <div
                                                 key={folder.id}

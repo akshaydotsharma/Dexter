@@ -219,7 +219,13 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                 onChange={(e) => setNewListName(e.target.value)}
                                 placeholder="New List Name..."
                             />
-                            <Button type="submit" variant="primary" className="!px-3">
+                            <Button
+                                type="submit"
+                                variant="primary"
+                                className="!px-3"
+                                disabled={!newListName.trim()}
+                                title={newListName.trim() ? 'Add list' : 'Type a name first'}
+                            >
                                 <Plus size={20} />
                             </Button>
                         </form>
@@ -300,7 +306,13 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                                             placeholder="Add item..."
                                                             className="!py-1.5 text-sm"
                                                         />
-                                                        <Button type="submit" variant="primary" className="!px-2 !py-1.5">
+                                                        <Button
+                                                            type="submit"
+                                                            variant="primary"
+                                                            className="!px-2 !py-1.5"
+                                                            disabled={!(newItemText[list.id] || '').trim()}
+                                                            title={(newItemText[list.id] || '').trim() ? 'Add item' : 'Type an item first'}
+                                                        >
                                                             <Plus size={16} />
                                                         </Button>
                                                     </form>

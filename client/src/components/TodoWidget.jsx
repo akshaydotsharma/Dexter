@@ -1121,7 +1121,13 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
                         <p className="text-danger text-xs mt-1">{titleError}</p>
                     )}
                 </div>
-                <Button type="submit" variant="primary" className="!px-3">
+                <Button
+                    type="submit"
+                    variant="primary"
+                    className="!px-3"
+                    disabled={!formData.title.trim()}
+                    title={formData.title.trim() ? 'Add task' : 'Type a task first'}
+                >
                     <Plus size={20} />
                 </Button>
             </div>
