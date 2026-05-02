@@ -134,6 +134,16 @@ function SidebarBody({ expanded, onNavigate, wordmark }) {
 
       {/* Footer: theme toggle + profile pip placeholder */}
       <div className="px-2 py-3 border-t border-divider">
+        <div
+          className={
+            'px-2 mb-1.5 ' +
+            (expanded ? 'opacity-100' : 'opacity-0 pointer-events-none')
+          }
+        >
+          <span className="text-[10px] font-mono tracking-wider text-muted">
+            v{__APP_VERSION__}
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           <ThemeToggle />
           <div
