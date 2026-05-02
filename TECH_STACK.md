@@ -30,3 +30,26 @@ You can swap the backend language without changing the frontend.
 | **Python** | **AI / Data** | Machine Learning, Scientific Computing. |
 | **Go** | **Scale** | Massive infrastructure (Uber/Google). |
 | **Java** | **Enterprise** | Large corporate teams (Banks). |
+
+---
+
+## Native iOS App (Mobile)
+
+The companion iOS app talks to the same Express backend over REST + SSE.
+
+| Role | Technology | Notes |
+| :--- | :--- | :--- |
+| **Framework** | **SwiftUI** | Declarative UI, `@Observable` view-models. |
+| **Networking** | **URLSession** | `bytes(for:)` for streaming chat (SSE). |
+| **Project gen** | **xcodegen** | `.xcodeproj` is regenerated from `mobile/project.yml`. |
+| **Distribution** | **Free dev signing** | OTA install via Cloudflare quick tunnel (`mobile/ota/ship.sh`). 7-day profile rotation. |
+
+---
+
+## AI Layer
+
+| Role | Technology | Notes |
+| :--- | :--- | :--- |
+| **Provider** | **Anthropic Claude** | Via `@ai-sdk/anthropic` (Vercel AI SDK). Requires `ANTHROPIC_API_KEY`. |
+| **Pipeline** | **Tool calls -> drafts** | `server/ai/chatToDrafts.js` turns user text into a structured `Draft` row before any DB writes. |
+| **Streaming** | **Server-Sent Events** | `/api/ai/parse/stream`. Both web and iOS clients consume the same wire format (`event: drafts/text/done/error`). |
