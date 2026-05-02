@@ -158,6 +158,15 @@ if [ "${TRANSPORT}" = "tailscale" ]; then
     exit 1
   fi
 
+  # Optionally also expose the dev API at /api when npm start is already running.
+  if lsof -nP -iTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "-> also exposing /api -> http://127.0.0.1:3000 (dev server detected on :3000)"
+    tailscale serve --bg --set-path=/api "http://127.0.0.1:3000" >/tmp/ts-serve-api.log 2>&1 \
+      || echo "(warning) /api route failed — install will work but the installed app cannot reach the backend. See /tmp/ts-serve-api.log"
+  else
+    echo "(warning) port 3000 not listening; /api route skipped. Run 'npm start' before ship.sh if you want the installed app to reach the backend."
+  fi
+
   cleanup() {
     echo ""
     echo "-> cleaning up (tailscale serve + http server)"
