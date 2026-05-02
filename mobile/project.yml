@@ -34,6 +34,7 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         ITSAppUsesNonExemptEncryption: false
+        OTA_API_URL: $(OTA_API_URL)
         UIAppFonts:
           - Calistoga-Regular.ttf
           - Inter-Regular.ttf

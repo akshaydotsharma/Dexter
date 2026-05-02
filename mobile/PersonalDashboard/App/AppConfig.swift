@@ -5,17 +5,29 @@ import Foundation
 /// Resolution order:
 ///   1. The `API_URL` environment variable (set in the Xcode scheme's
 ///      Run > Arguments > Environment Variables for local development,
-///      or injected at archive time for OTA builds).
-///   2. The default below: `http://localhost:3000/api`. This works for the
-///      iOS simulator running on the same Mac as the dev server; physical
-///      devices cannot reach Mac localhost and need either the env var
-///      override or a public tunnel URL substituted here.
+///      or injected at archive time for OTA builds via xcodebuild).
+///   2. The `OTA_API_URL` Info.plist key, injected by `mobile/ota/ship.sh`
+///      at archive time via `xcodebuild OTA_API_URL=https://<host>/api`.
+///      This makes OTA-installed builds reach the Mac over Tailscale
+///      automatically, without any manual configuration on the device.
+///   3. The default `http://localhost:3000/api`. This works for the iOS
+///      simulator on the same Mac as the dev server; physical devices on a
+///      different host need option 1 or 2.
 enum AppConfig {
     static let apiBaseURL: URL = {
+        // 1. Runtime env var override (Xcode scheme or xcodebuild injection).
         if let override = ProcessInfo.processInfo.environment["API_URL"],
            let url = URL(string: override) {
             return url
         }
+        // 2. Build-time OTA URL embedded in Info.plist by ship.sh.
+        if let otaURL = Bundle.main.object(forInfoDictionaryKey: "OTA_API_URL") as? String,
+           !otaURL.isEmpty,
+           !otaURL.hasPrefix("$("),   // guard against unexpanded xcconfig variables
+           let url = URL(string: otaURL) {
+            return url
+        }
+        // 3. Local simulator default.
         return URL(string: "http://localhost:3000/api")!
     }()
 }
