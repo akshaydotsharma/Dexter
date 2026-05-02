@@ -4,7 +4,42 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>client</title>
+    <meta name="theme-color" content="#FBF9F4" />
+    <meta name="theme-color" content="#14110D" media="(prefers-color-scheme: dark)" />
+
+    <!-- Google Fonts: Calistoga (display) + Inter (body) + JetBrains Mono (eyebrows / kbd) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap"
+      rel="stylesheet"
+    />
+
+    <title>Dashy</title>
+
+    <!--
+      FOUC prevention: stamp data-theme on <html> synchronously before the
+      React bundle loads. Reads localStorage('theme'); if 'light' or 'dark',
+      apply directly. If 'system' or absent, defer to prefers-color-scheme.
+      Wrapped in try/catch so private-mode browsers (no localStorage) don't
+      throw and block boot.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = null;
+          try { stored = localStorage.getItem('theme'); } catch (_) { /* no-op */ }
+          if (stored === 'light' || stored === 'dark') {
+            document.documentElement.dataset.theme = stored;
+            return;
+          }
+          // 'system' or null → only stamp dark when the OS asks for dark.
+          if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.dataset.theme = 'dark';
+          }
+        } catch (_) { /* never block the page on theme stamping */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

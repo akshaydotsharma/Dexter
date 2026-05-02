@@ -840,8 +840,8 @@ app.post('/api/ai/parse', async (req, res) => {
             return res.status(400).json({ error: 'Input is required' });
         }
 
-        if (!process.env.OPENAI_API_KEY) {
-            return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
+        if (!process.env.ANTHROPIC_API_KEY) {
+            return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
         }
 
         // Process chat using chatToDrafts with Responses API
@@ -863,6 +863,76 @@ app.post('/api/ai/parse', async (req, res) => {
     } catch (err) {
         console.error('AI Chat Error:', err);
         sendErrorResponse(res, err);
+    }
+});
+
+// AI CHAT STREAMING ENDPOINT
+// Returns Server-Sent Events. Same logic as /api/ai/parse but emits the
+// assistantText as incremental "text" deltas after the drafts are resolved,
+// so the chat UI can render tokens progressively. The underlying LLM call
+// is still single-shot today; when the SDK call switches to streamText,
+// only this handler changes — the SSE wire format stays the same.
+//
+// SSE event format:
+//   event: drafts   data: { drafts: [...] }
+//   event: text     data: { chunk: "..." }     (zero or more)
+//   event: done     data: { followUpQuestion?: string, errors: [...] }
+//   event: error    data: { message: "..." }
+app.post('/api/ai/parse/stream', async (req, res) => {
+    const { input, sessionId, timezone } = req.body || {};
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const writeEvent = (event, data) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+        if (!input || typeof input !== 'string') {
+            writeEvent('error', { message: 'Input is required' });
+            return res.end();
+        }
+        if (!process.env.ANTHROPIC_API_KEY) {
+            writeEvent('error', { message: 'ANTHROPIC_API_KEY is not configured' });
+            return res.end();
+        }
+
+        const result = await chatToDrafts(input, {
+            userId: null,
+            nowIso: new Date().toISOString(),
+            tz: timezone || 'UTC',
+            sessionId: sessionId || null
+        });
+
+        // Emit drafts immediately so the UI can render the preview cards.
+        writeEvent('drafts', { drafts: result.drafts || [] });
+
+        // Stream the assistant text word-by-word with a small delay to
+        // produce the typewriter feel. When streamText is wired upstream
+        // these deltas will arrive directly from the LLM at native cadence.
+        const text = result.assistantText || '';
+        if (text) {
+            const tokens = text.match(/\S+\s*/g) || [text];
+            for (const token of tokens) {
+                writeEvent('text', { chunk: token });
+                // 12ms ≈ ~80 wpm — fast but legible
+                await new Promise((resolve) => setTimeout(resolve, 12));
+            }
+        }
+
+        writeEvent('done', {
+            followUpQuestion: result.followUpQuestion || null,
+            errors: result.errors || []
+        });
+        res.end();
+    } catch (err) {
+        console.error('AI Chat Streaming Error:', err);
+        writeEvent('error', { message: err?.message || 'Streaming failed' });
+        res.end();
     }
 });
 

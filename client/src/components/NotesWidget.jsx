@@ -3,7 +3,7 @@ import Card from './Card';
 import Input from './Input';
 import Button from './Button';
 import { getNotes, createNote, updateNote, deleteNote, getNoteFolders, createNoteFolder, updateNoteFolder, deleteNoteFolder } from '../services/api';
-import { Plus, Trash2, Loader2, Save, Folder, FolderOpen, ChevronRight, ChevronLeft, Edit2 } from 'lucide-react';
+import { Plus, Trash2, Loader2, Save, Folder, FolderOpen, ChevronRight, ChevronLeft, Edit2, Inbox } from 'lucide-react';
 
 const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHeightPx = null }, ref) {
     const [folders, setFolders] = useState([]);
@@ -40,7 +40,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
     }, []);
 
     useEffect(() => {
-        if (selectedFolderId) {
+        if (selectedFolderId !== null) {
             fetchNotes(selectedFolderId);
         }
     }, [selectedFolderId]);
@@ -49,7 +49,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
     useImperativeHandle(ref, () => ({
         refresh: () => {
             fetchFolders();
-            if (selectedFolderId) {
+            if (selectedFolderId !== null) {
                 fetchNotes(selectedFolderId);
             }
         }
@@ -60,9 +60,9 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
             const { data } = await getNoteFolders();
             const foldersArray = Array.isArray(data) ? data : [];
             setFolders(foldersArray);
-            // Auto-select first folder if available
-            if (foldersArray.length > 0 && !selectedFolderId) {
-                setSelectedFolderId(foldersArray[0].id);
+            // Default to "All Notes" so unfiled notes are visible.
+            if (selectedFolderId === null) {
+                setSelectedFolderId('all');
             }
         } catch (error) {
             console.error('Error fetching folders:', error);
@@ -74,7 +74,8 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
     const fetchNotes = async (folderId) => {
         try {
-            const { data } = await getNotes(folderId);
+            // 'all' = no filter, fetch every note (incl. unfiled)
+            const { data } = await getNotes(folderId === 'all' ? undefined : folderId);
             setNotes(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching notes:', error);
@@ -139,8 +140,10 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
     // Note functions
     const handleCreateNote = () => {
-        if (!selectedFolderId) return;
-        setCurrentNote({ title: '', content: '', folder_id: selectedFolderId, isNew: true });
+        if (selectedFolderId === null) return;
+        // 'all' selected = create unfiled note (folder_id null)
+        const folderForNew = selectedFolderId === 'all' ? null : selectedFolderId;
+        setCurrentNote({ title: '', content: '', folder_id: folderForNew, isNew: true });
     };
 
     const handleEditNote = (note) => {
@@ -153,10 +156,12 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
         try {
             if (currentNote.isNew) {
-                const { data } = await createNote(currentNote.title, currentNote.content, selectedFolderId);
+                const folderForCreate = selectedFolderId === 'all' ? null : selectedFolderId;
+                const { data } = await createNote(currentNote.title, currentNote.content, folderForCreate);
                 setNotes([data, ...notes]);
             } else {
-                const { data } = await updateNote(currentNote.id, currentNote.title, currentNote.content, selectedFolderId);
+                const folderForUpdate = selectedFolderId === 'all' ? currentNote.folder_id : selectedFolderId;
+                const { data } = await updateNote(currentNote.id, currentNote.title, currentNote.content, folderForUpdate);
                 // Move updated note to top (most recently updated first)
                 setNotes([data, ...notes.filter(n => n.id !== data.id)]);
             }
@@ -213,7 +218,8 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
         cancelInlineEdit();
 
         try {
-            await updateNote(noteId, updatedTitle, updatedContent, selectedFolderId);
+            const folderForInline = selectedFolderId === 'all' ? notes.find(n => n.id === noteId)?.folder_id ?? null : selectedFolderId;
+            await updateNote(noteId, updatedTitle, updatedContent, folderForInline);
         } catch (error) {
             console.error('Error updating note:', error);
             fetchNotes(selectedFolderId);
@@ -251,7 +257,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                         <Button onClick={() => setCurrentNote(null)} variant="secondary" className="!px-3 !py-1 text-sm">
                             <ChevronLeft size={16} /> Back
                         </Button>
-                        <span className="text-sm font-medium text-slate-600">
+                        <span className="text-sm font-medium text-ink-soft">
                             {currentNote.isNew ? 'New Note' : 'Edit Note'}
                         </span>
                         <div className="w-16" /> {/* Spacer for centering */}
@@ -268,7 +274,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                         value={currentNote.content}
                         onChange={(e) => setCurrentNote({ ...currentNote, content: e.target.value })}
                         placeholder="Write your note here..."
-                        className="flex-1 w-full p-4 rounded-xl border border-gray-200 bg-white/50 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all duration-200 outline-none resize-none text-gray-700 font-normal leading-relaxed"
+                        className="flex-1 w-full p-4 rounded-xl border border-border bg-surface/50 focus:bg-surface focus:border-[--color-accent] focus:ring-2 focus:ring-[--color-accent-ring]/20 transition-all duration-200 outline-none resize-none text-ink-soft font-normal leading-relaxed"
                     />
                     <div className="flex justify-end">
                         <Button type="submit" variant="primary">
@@ -282,7 +288,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
 
     // Handle folder selection on mobile - switch to notes view
     const handleMobileFolderSelect = (folderId) => {
-        if (editingFolderId !== folderId) {
+        if (folderId === 'all' || editingFolderId !== folderId) {
             setSelectedFolderId(folderId);
             setMobileView('notes');
         }
@@ -293,10 +299,10 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
         <div className={`flex flex-col ${isMobile ? 'h-full overflow-hidden' : 'flex-1 min-h-0'}`}>
             {isMobile && (
                 <div className="flex items-center justify-between mb-4 flex-shrink-0">
-                    <h3 className="text-sm font-semibold text-slate-700">Folders</h3>
+                    <h3 className="text-sm font-semibold text-ink-soft">Folders</h3>
                     <button
                         onClick={() => setMobileView('notes')}
-                        className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
+                        className="flex items-center gap-1 text-sm text-[--color-accent] hover:text-[--color-accent]"
                     >
                         Notes <ChevronRight size={16} />
                     </button>
@@ -309,30 +315,48 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                     placeholder="New folder..."
                     className="!py-1.5 text-sm"
                 />
-                <Button type="submit" variant="primary" className="!px-2 !py-1.5">
+                <Button
+                    type="submit"
+                    variant="primary"
+                    className="!px-2 !py-1.5"
+                    disabled={!newFolderName.trim()}
+                    title={newFolderName.trim() ? 'Add folder' : 'Type a folder name first'}
+                >
                     <Plus size={16} />
                 </Button>
             </form>
 
             <div className="overflow-y-auto custom-scrollbar space-y-1 flex-1 min-h-0 pr-1">
-                {folders.length === 0 ? (
-                    <div className="text-center text-gray-400 text-sm mt-4">No folders yet.</div>
-                ) : (
+                {/* All Notes virtual folder — shows every note including unfiled */}
+                <div
+                    onClick={() => isMobile ? handleMobileFolderSelect('all') : setSelectedFolderId('all')}
+                    className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                        selectedFolderId === 'all'
+                            ? 'bg-[--color-accent-soft] border border-[--color-accent]'
+                            : 'hover:bg-paper-2'
+                    }`}
+                >
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <Inbox size={16} strokeWidth={1.75} className={selectedFolderId === 'all' ? 'text-[--color-accent] flex-shrink-0' : 'text-muted-soft flex-shrink-0'} />
+                        <span className="text-sm font-medium text-ink-soft truncate">All Notes</span>
+                    </div>
+                </div>
+                {folders.length === 0 ? null : (
                     folders.map((folder) => (
                         <div
                             key={folder.id}
                             onClick={() => isMobile ? handleMobileFolderSelect(folder.id) : (editingFolderId !== folder.id && setSelectedFolderId(folder.id))}
                             className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
                                 selectedFolderId === folder.id
-                                    ? 'bg-indigo-50 border border-indigo-200'
-                                    : 'hover:bg-slate-50'
+                                    ? 'bg-[--color-accent-soft] border border-[--color-accent]'
+                                    : 'hover:bg-paper-2'
                             }`}
                         >
                             <div className="flex items-center gap-2 flex-1 min-w-0">
                                 {selectedFolderId === folder.id ? (
-                                    <FolderOpen size={16} className="text-indigo-500 flex-shrink-0" />
+                                    <FolderOpen size={16} className="text-[--color-accent] flex-shrink-0" />
                                 ) : (
-                                    <Folder size={16} className="text-slate-400 flex-shrink-0" />
+                                    <Folder size={16} className="text-muted-soft flex-shrink-0" />
                                 )}
                                 {editingFolderId === folder.id ? (
                                     <input
@@ -346,13 +370,13 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                             if (e.key === 'Escape') setEditingFolderId(null);
                                         }}
                                         onClick={(e) => e.stopPropagation()}
-                                        className="flex-1 text-sm bg-white border border-indigo-300 rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        className="flex-1 text-sm bg-surface border border-[--color-accent] rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring]"
                                         autoFocus
                                     />
                                 ) : (
                                     <span
                                         onClick={(e) => { e.stopPropagation(); startEditFolder(e, folder); }}
-                                        className="text-sm font-medium text-gray-700 truncate cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                        className="text-sm font-medium text-ink-soft truncate cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1"
                                         title="Click to edit"
                                     >
                                         {folder.name}
@@ -361,7 +385,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                             </div>
                             <button
                                 onClick={(e) => handleDeleteFolder(e, folder.id)}
-                                className="text-slate-400 hover:text-rose-500 transition-all p-1 cursor-pointer opacity-0 group-hover:opacity-100"
+                                className="text-muted-soft hover:text-danger transition-all p-1 cursor-pointer opacity-0 group-hover:opacity-100"
                             >
                                 <Trash2 size={14} />
                             </button>
@@ -380,7 +404,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                 <div className="flex justify-between items-center mb-3 flex-shrink-0">
                     <button
                         onClick={() => setMobileView('folders')}
-                        className="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
+                        className="flex items-center gap-1 text-sm text-[--color-accent] hover:text-[--color-accent]"
                     >
                         <ChevronLeft size={16} /> Folders
                     </button>
@@ -405,13 +429,13 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                     <div className="overflow-y-auto custom-scrollbar space-y-2 flex-1 min-h-0 pr-1">
                         {notes.length === 0 ? (
                             <div className="flex-1 flex items-center justify-center h-full min-h-[120px]">
-                                <span className="text-gray-400 text-sm">No Notes</span>
+                                <span className="text-muted-soft text-sm">No Notes</span>
                             </div>
                         ) : (
                             notes.map((note) => (
                                 <div
                                     key={note.id}
-                                    className="group p-3 bg-slate-50 hover:bg-white rounded-xl border border-transparent hover:border-indigo-100 hover:shadow-md transition-all relative"
+                                    className="group p-3 bg-paper-2 hover:bg-surface rounded-xl border border-transparent hover:border-[--color-accent-soft] hover:shadow-md transition-all relative"
                                 >
                                     {/* Title - inline editable */}
                                     {inlineEditingNoteId === note.id && inlineEditingField === 'title' ? (
@@ -429,14 +453,14 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                                     cancelInlineEdit();
                                                 }
                                             }}
-                                            className="w-full font-semibold text-gray-800 text-sm bg-white border border-indigo-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
+                                            className="w-full font-semibold text-ink text-sm bg-surface border border-[--color-accent] rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] pr-8"
                                             placeholder="Note title..."
                                             autoFocus
                                         />
                                     ) : (
                                         <h3
                                             onClick={(e) => startInlineEdit(e, note, 'title')}
-                                            className="font-semibold text-gray-800 text-sm truncate pr-8 cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                            className="font-semibold text-ink text-sm truncate pr-8 cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1"
                                             title="Click to edit title"
                                         >
                                             {note.title || 'Untitled Note'}
@@ -455,7 +479,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                                     cancelInlineEdit();
                                                 }
                                             }}
-                                            className="w-full text-xs text-gray-500 bg-white border border-indigo-300 rounded px-2 py-1 mt-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                                            className="w-full text-xs text-muted bg-surface border border-[--color-accent] rounded px-2 py-1 mt-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] resize-none"
                                             rows={3}
                                             placeholder="Note content..."
                                             autoFocus
@@ -463,7 +487,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                     ) : (
                                         <p
                                             onClick={(e) => startInlineEdit(e, note, 'content')}
-                                            className="text-xs text-gray-500 line-clamp-2 mt-1 cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                            className="text-xs text-muted line-clamp-2 mt-1 cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1"
                                             title="Click to edit content"
                                         >
                                             {note.content || 'No content'}
@@ -471,20 +495,20 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                     )}
 
                                     <div className="flex items-center justify-between mt-2">
-                                        <span className="text-xs text-gray-400">
+                                        <span className="text-xs text-muted-soft">
                                             {formatDate(note.updated_at)}
                                         </span>
                                         <div className="flex gap-1">
                                             <button
                                                 onClick={() => handleEditNote(note)}
-                                                className="text-slate-400 hover:text-indigo-500 transition-all p-1 cursor-pointer"
+                                                className="text-muted-soft hover:text-[--color-accent] transition-all p-1 cursor-pointer"
                                                 title="Open full editor"
                                             >
                                                 <Edit2 size={14} />
                                             </button>
                                             <button
                                                 onClick={(e) => handleDeleteNote(e, note.id)}
-                                                className="text-slate-400 hover:text-rose-500 transition-all p-1 cursor-pointer"
+                                                className="text-muted-soft hover:text-danger transition-all p-1 cursor-pointer"
                                                 title="Delete"
                                             >
                                                 <Trash2 size={14} />
@@ -497,7 +521,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                     </div>
                 </>
             ) : (
-                <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm gap-2 min-h-[120px]">
+                <div className="flex-1 flex flex-col items-center justify-center text-muted-soft text-sm gap-2 min-h-[120px]">
                     <span>No Notes</span>
                 </div>
             )}
@@ -519,14 +543,14 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
         >
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
                 {loading ? (
-                    <div className="flex justify-center items-center py-10 text-indigo-500">
+                    <div className="flex justify-center items-center py-10 text-[--color-accent]">
                         <Loader2 className="animate-spin" />
                     </div>
                 ) : (
                     <>
                         {/* Desktop View - Two columns side by side */}
                         <div className="hidden md:flex gap-4 flex-1 min-h-0">
-                            <div className="w-1/3 border-r border-slate-100 pr-4 flex flex-col min-h-0">
+                            <div className="w-1/3 border-r border-divider pr-4 flex flex-col min-h-0">
                                 <form onSubmit={handleCreateFolder} className="flex gap-2 mb-3 flex-shrink-0">
                                     <Input
                                         value={newFolderName}
@@ -534,29 +558,47 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                         placeholder="New folder..."
                                         className="!py-1.5 text-sm"
                                     />
-                                    <Button type="submit" variant="primary" className="!px-2 !py-1.5">
+                                    <Button
+                                        type="submit"
+                                        variant="primary"
+                                        className="!px-2 !py-1.5"
+                                        disabled={!newFolderName.trim()}
+                                        title={newFolderName.trim() ? 'Add folder' : 'Type a folder name first'}
+                                    >
                                         <Plus size={16} />
                                     </Button>
                                 </form>
                                 <div className="overflow-y-auto custom-scrollbar space-y-1 pr-1 flex-1 min-h-0">
-                                    {folders.length === 0 ? (
-                                        <div className="text-center text-gray-400 text-sm mt-4">No folders yet.</div>
-                                    ) : (
+                                    {/* All Notes virtual folder */}
+                                    <div
+                                        onClick={() => setSelectedFolderId('all')}
+                                        className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                                            selectedFolderId === 'all'
+                                                ? 'bg-[--color-accent-soft] border border-[--color-accent]'
+                                                : 'hover:bg-paper-2'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                                            <Inbox size={16} strokeWidth={1.75} className={selectedFolderId === 'all' ? 'text-[--color-accent] flex-shrink-0' : 'text-muted-soft flex-shrink-0'} />
+                                            <span className="text-sm font-medium text-ink-soft truncate">All Notes</span>
+                                        </div>
+                                    </div>
+                                    {folders.length === 0 ? null : (
                                         folders.map((folder) => (
                                             <div
                                                 key={folder.id}
                                                 onClick={() => editingFolderId !== folder.id && setSelectedFolderId(folder.id)}
                                                 className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
                                                     selectedFolderId === folder.id
-                                                        ? 'bg-indigo-50 border border-indigo-200'
-                                                        : 'hover:bg-slate-50'
+                                                        ? 'bg-[--color-accent-soft] border border-[--color-accent]'
+                                                        : 'hover:bg-paper-2'
                                                 }`}
                                             >
                                                 <div className="flex items-center gap-2 flex-1 min-w-0">
                                                     {selectedFolderId === folder.id ? (
-                                                        <FolderOpen size={16} className="text-indigo-500 flex-shrink-0" />
+                                                        <FolderOpen size={16} className="text-[--color-accent] flex-shrink-0" />
                                                     ) : (
-                                                        <Folder size={16} className="text-slate-400 flex-shrink-0" />
+                                                        <Folder size={16} className="text-muted-soft flex-shrink-0" />
                                                     )}
                                                     {editingFolderId === folder.id ? (
                                                         <input
@@ -570,13 +612,13 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                                                 if (e.key === 'Escape') setEditingFolderId(null);
                                                             }}
                                                             onClick={(e) => e.stopPropagation()}
-                                                            className="flex-1 text-sm bg-white border border-indigo-300 rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                            className="flex-1 text-sm bg-surface border border-[--color-accent] rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring]"
                                                             autoFocus
                                                         />
                                                     ) : (
                                                         <span
                                                             onClick={(e) => { e.stopPropagation(); startEditFolder(e, folder); }}
-                                                            className="text-sm font-medium text-gray-700 truncate cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                                            className="text-sm font-medium text-ink-soft truncate cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1"
                                                             title="Click to edit"
                                                         >
                                                             {folder.name}
@@ -585,7 +627,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                                 </div>
                                                 <button
                                                     onClick={(e) => handleDeleteFolder(e, folder.id)}
-                                                    className="text-slate-400 hover:text-rose-500 transition-all p-1 cursor-pointer opacity-0 group-hover:opacity-100"
+                                                    className="text-muted-soft hover:text-danger transition-all p-1 cursor-pointer opacity-0 group-hover:opacity-100"
                                                 >
                                                     <Trash2 size={14} />
                                                 </button>
@@ -605,13 +647,13 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                         <div className="overflow-y-auto custom-scrollbar space-y-2 pr-1 flex-1 min-h-0">
                                             {notes.length === 0 ? (
                                                 <div className="flex-1 flex items-center justify-center h-full min-h-[120px]">
-                                                    <span className="text-gray-400 text-sm">No Notes</span>
+                                                    <span className="text-muted-soft text-sm">No Notes</span>
                                                 </div>
                                             ) : (
                                                 notes.map((note) => (
                                                     <div
                                                         key={note.id}
-                                                        className="group p-3 bg-slate-50 hover:bg-white rounded-xl border border-transparent hover:border-indigo-100 hover:shadow-md transition-all relative"
+                                                        className="group p-3 bg-paper-2 hover:bg-surface rounded-xl border border-transparent hover:border-[--color-accent-soft] hover:shadow-md transition-all relative"
                                                     >
                                                         {inlineEditingNoteId === note.id && inlineEditingField === 'title' ? (
                                                             <input
@@ -624,14 +666,14 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                                                     if (e.key === 'Enter') { e.preventDefault(); saveInlineEdit(note.id); }
                                                                     else if (e.key === 'Escape') { cancelInlineEdit(); }
                                                                 }}
-                                                                className="w-full font-semibold text-gray-800 text-sm bg-white border border-indigo-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-8"
+                                                                className="w-full font-semibold text-ink text-sm bg-surface border border-[--color-accent] rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] pr-8"
                                                                 placeholder="Note title..."
                                                                 autoFocus
                                                             />
                                                         ) : (
                                                             <h3
                                                                 onClick={(e) => startInlineEdit(e, note, 'title')}
-                                                                className="font-semibold text-gray-800 text-sm truncate pr-8 cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                                                className="font-semibold text-ink text-sm truncate pr-8 cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1"
                                                                 title="Click to edit title"
                                                             >
                                                                 {note.title || 'Untitled Note'}
@@ -644,7 +686,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                                                 onChange={(e) => setInlineEditValue(e.target.value)}
                                                                 onBlur={() => saveInlineEdit(note.id)}
                                                                 onKeyDown={(e) => { if (e.key === 'Escape') { cancelInlineEdit(); } }}
-                                                                className="w-full text-xs text-gray-500 bg-white border border-indigo-300 rounded px-2 py-1 mt-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                                                                className="w-full text-xs text-muted bg-surface border border-[--color-accent] rounded px-2 py-1 mt-1 focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] resize-none"
                                                                 rows={3}
                                                                 placeholder="Note content..."
                                                                 autoFocus
@@ -652,19 +694,19 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                                         ) : (
                                                             <p
                                                                 onClick={(e) => startInlineEdit(e, note, 'content')}
-                                                                className="text-xs text-gray-500 line-clamp-2 mt-1 cursor-pointer hover:bg-slate-100 rounded px-1 -mx-1"
+                                                                className="text-xs text-muted line-clamp-2 mt-1 cursor-pointer hover:bg-paper-2 rounded px-1 -mx-1"
                                                                 title="Click to edit content"
                                                             >
                                                                 {note.content || 'No content'}
                                                             </p>
                                                         )}
                                                         <div className="flex items-center justify-between mt-2">
-                                                            <span className="text-xs text-gray-400">{formatDate(note.updated_at)}</span>
+                                                            <span className="text-xs text-muted-soft">{formatDate(note.updated_at)}</span>
                                                             <div className="flex gap-1">
-                                                                <button onClick={() => handleEditNote(note)} className="text-slate-400 hover:text-indigo-500 transition-all p-1 cursor-pointer" title="Open full editor">
+                                                                <button onClick={() => handleEditNote(note)} className="text-muted-soft hover:text-[--color-accent] transition-all p-1 cursor-pointer" title="Open full editor">
                                                                     <Edit2 size={14} />
                                                                 </button>
-                                                                <button onClick={(e) => handleDeleteNote(e, note.id)} className="text-slate-400 hover:text-rose-500 transition-all p-1 cursor-pointer" title="Delete">
+                                                                <button onClick={(e) => handleDeleteNote(e, note.id)} className="text-muted-soft hover:text-danger transition-all p-1 cursor-pointer" title="Delete">
                                                                     <Trash2 size={14} />
                                                                 </button>
                                                             </div>
@@ -675,7 +717,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                                         </div>
                                     </>
                                 ) : (
-                                    <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm gap-2 min-h-[120px]">
+                                    <div className="flex-1 flex flex-col items-center justify-center text-muted-soft text-sm gap-2 min-h-[120px]">
                                         <span>No Notes</span>
                                     </div>
                                 )}

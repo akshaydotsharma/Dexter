@@ -2,31 +2,8 @@ import { useState, useRef } from 'react';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { DateTimePicker as MuiDateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
 import dayjs from 'dayjs';
 import { Calendar } from 'lucide-react';
-
-// Custom theme to match the app's design
-const theme = createTheme({
-    palette: {
-        primary: {
-            main: '#6366f1', // indigo-500
-        },
-    },
-    components: {
-        MuiButton: {
-            styleOverrides: {
-                root: {
-                    textTransform: 'none',
-                    fontWeight: 500,
-                    borderRadius: '6px',
-                    padding: '6px 16px',
-                    fontSize: '0.875rem',
-                },
-            },
-        },
-    },
-});
 
 export default function DateTimePicker({
     value,
@@ -64,7 +41,6 @@ export default function DateTimePicker({
     const displayValue = formatDisplayValue(value);
 
     return (
-        <ThemeProvider theme={theme}>
             <LocalizationProvider dateAdapter={AdapterDayjs}>
                 <div className={inline ? 'inline-block' : 'w-full'}>
                     {/* Custom trigger button */}
@@ -73,7 +49,7 @@ export default function DateTimePicker({
                             ref={anchorRef}
                             type="button"
                             onClick={handleOpen}
-                            className={`inline-flex items-center gap-1 hover:bg-slate-100 rounded px-1 py-0.5 transition-colors text-xs cursor-pointer ${dateColorClass || 'text-slate-400'}`}
+                            className={`inline-flex items-center gap-1 hover:bg-paper-2 rounded px-1 py-0.5 transition-colors text-xs cursor-pointer ${dateColorClass || 'text-muted-soft'}`}
                             title="Click to change date"
                         >
                             <Calendar size={12} />
@@ -84,12 +60,12 @@ export default function DateTimePicker({
                             ref={anchorRef}
                             type="button"
                             onClick={handleOpen}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm text-left flex items-center justify-between bg-white hover:bg-slate-50 transition-colors cursor-pointer"
+                            className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-[--color-accent-ring] focus:border-transparent text-sm text-left flex items-center justify-between bg-surface hover:bg-paper-2 transition-colors cursor-pointer"
                         >
-                            <span className={`whitespace-nowrap truncate ${displayValue ? 'text-gray-900' : 'text-gray-400'}`}>
+                            <span className={`whitespace-nowrap truncate ${displayValue ? 'text-ink' : 'text-muted-soft'}`}>
                                 {displayValue || placeholder || 'Select Date'}
                             </span>
-                            <Calendar size={16} className="text-gray-400 flex-shrink-0 ml-2" />
+                            <Calendar size={16} className="text-muted-soft flex-shrink-0 ml-2" />
                         </button>
                     )}
 
@@ -109,50 +85,47 @@ export default function DateTimePicker({
                                     '& .MuiPaper-root': {
                                         borderRadius: '0.75rem',
                                         boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
-                                        border: '1px solid #e2e8f0',
+                                        border: '1px solid var(--color-border)',
+                                        backgroundColor: 'var(--color-surface)',
+                                        color: 'var(--color-ink)',
                                         marginTop: '4px',
                                         overflow: 'hidden',
                                     },
-                                    // Action bar styling
                                     '& .MuiDialogActions-root': {
-                                        backgroundColor: '#f8fafc',
-                                        borderTop: '1px solid #e2e8f0',
+                                        backgroundColor: 'var(--color-paper-2)',
+                                        borderTop: '1px solid var(--color-border)',
                                         padding: '12px 16px',
                                         gap: '8px',
                                     },
-                                    // Clear button - subtle gray text
                                     '& .MuiDialogActions-root .MuiButton-root:first-of-type': {
-                                        color: '#64748b',
+                                        color: 'var(--color-muted)',
                                         '&:hover': {
-                                            backgroundColor: '#f1f5f9',
+                                            backgroundColor: 'var(--color-paper-2)',
                                         },
                                     },
-                                    // Cancel button - outline style
                                     '& .MuiDialogActions-root .MuiButton-root:nth-of-type(2)': {
-                                        border: '1px solid #e2e8f0',
-                                        color: '#64748b',
-                                        backgroundColor: 'white',
+                                        border: '1px solid var(--color-border)',
+                                        color: 'var(--color-ink-soft)',
+                                        backgroundColor: 'var(--color-surface)',
                                         '&:hover': {
-                                            backgroundColor: '#f8fafc',
-                                            borderColor: '#cbd5e1',
+                                            backgroundColor: 'var(--color-paper-2)',
+                                            borderColor: 'var(--color-border-strong)',
                                         },
                                     },
-                                    // OK/Accept button - solid indigo
                                     '& .MuiDialogActions-root .MuiButton-root:last-of-type': {
-                                        backgroundColor: '#6366f1',
-                                        color: 'white',
+                                        backgroundColor: 'var(--color-ink)',
+                                        color: 'var(--color-paper)',
                                         '&:hover': {
-                                            backgroundColor: '#4f46e5',
+                                            backgroundColor: 'var(--color-ink-soft)',
                                         },
                                     },
-                                    // When only 2 buttons (cancel, accept) - adjust styles
                                     '& .MuiDialogActions-root:has(.MuiButton-root:nth-of-type(2):last-of-type) .MuiButton-root:first-of-type': {
-                                        border: '1px solid #e2e8f0',
-                                        color: '#64748b',
-                                        backgroundColor: 'white',
+                                        border: '1px solid var(--color-border)',
+                                        color: 'var(--color-ink-soft)',
+                                        backgroundColor: 'var(--color-surface)',
                                         '&:hover': {
-                                            backgroundColor: '#f8fafc',
-                                            borderColor: '#cbd5e1',
+                                            backgroundColor: 'var(--color-paper-2)',
+                                            borderColor: 'var(--color-border-strong)',
                                         },
                                     },
                                 },
@@ -176,6 +149,5 @@ export default function DateTimePicker({
                     />
                 </div>
             </LocalizationProvider>
-        </ThemeProvider>
     );
 }

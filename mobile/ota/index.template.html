@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Install Dashboard</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+      background: #FBF9F4;
+      color: #1F1B16;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #14110D; color: #F2EBDA; }
+      .card { background: #1F1C16; border-color: #36302A; }
+      .meta { color: #A89E8A; }
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      padding: 32px 24px;
+      background: #fff;
+      border: 1px solid #E8E2D2;
+      border-radius: 24px;
+      text-align: center;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.06);
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
+    .meta { font-size: 13px; opacity: .75; margin-bottom: 24px; }
+    .install {
+      display: block;
+      width: 100%;
+      padding: 16px 20px;
+      font-size: 17px;
+      font-weight: 600;
+      color: #FBF9F4;
+      background: #1F1B16;
+      border-radius: 14px;
+      text-decoration: none;
+      transition: transform .12s ease, opacity .12s ease;
+    }
+    .install:active { transform: scale(0.98); opacity: 0.9; }
+    .hint {
+      margin-top: 20px;
+      font-size: 12px;
+      line-height: 1.5;
+      opacity: .65;
+    }
+    .build {
+      margin-top: 16px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      opacity: .5;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Dashboard</h1>
+    <div class="meta">Personal build · open this page in Safari on your iPhone</div>
+    <a class="install" href="itms-services://?action=download-manifest&amp;url=__MANIFEST_URL__">Install</a>
+    <div class="hint">If nothing happens after tapping, you're not in Safari (Chrome/in-app browsers block <code>itms-services</code>). Open the page directly in Safari and try again.</div>
+    <div class="build">build __BUNDLE_VERSION__ · expires __PROFILE_EXPIRY__</div>
+  </div>
+</body>
+</html>
