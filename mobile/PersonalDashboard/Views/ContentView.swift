@@ -54,7 +54,9 @@ struct ContentView: View {
             ListsView(router: router, schemePref: schemePref)
         case .dashboard:
             DashboardView(router: router, schemePref: schemePref)
-        case .today, .settings:
+        case .settings:
+            SettingsView(router: router, schemePref: schemePref)
+        case .today:
             PlaceholderView(section: section, router: router, schemePref: schemePref)
         }
     }
