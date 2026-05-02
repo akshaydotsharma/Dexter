@@ -39,3 +39,6 @@ mobile/*.xcarchive
 mobile/.swiftpm/
 **/xcuserdata/
 **/*.xcuserstate
+
+# Claude Code: local-only project settings
+.claude/settings.local.json

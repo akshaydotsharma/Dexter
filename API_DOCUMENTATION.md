@@ -957,7 +957,102 @@ Parse natural language input to create todos, notes, or lists.
 - `CREATE_TODO` - Creates a new task
 - `CREATE_NOTE` - Creates a new note
 - `CREATE_LIST` - Creates a new checklist
+- `UPDATE_TODO`, `UPDATE_NOTE`, `UPDATE_LIST`, `ADD_TO_LIST`, `UPDATE_LIST_ITEM`, `REMOVE_LIST_ITEM`, `COMPLETE_TODO`, `DELETE_TODO`, `DELETE_NOTE`, `DELETE_LIST`, `UPDATE_FOLDER`, `DELETE_FOLDER` - Mutations through the draft pipeline
 - `UNKNOWN` - Could not parse intent
+
+#### `POST /api/ai/parse/stream`
+
+Streaming variant of `/api/ai/parse`. Emits Server-Sent Events so the chat UI can render text token-by-token. Both the web client and the iOS app consume this endpoint.
+
+**Request body:** same shape as `/api/ai/parse` (`{ "input": "...", "sessionId"?: "...", "timezone"?: "..." }`).
+
+**Response:** `200 OK` with `Content-Type: text/event-stream`. Frame format:
+
+```
+event: drafts
+data: {"drafts": [{ ...draft objects... }]}
+
+event: text
+data: {"chunk": "I've "}
+
+event: text
+data: {"chunk": "prepared "}
+
+...
+
+event: done
+data: {"followUpQuestion": null, "errors": []}
+```
+
+On failure the stream emits a single `event: error` frame and ends:
+
+```
+event: error
+data: {"message": "ANTHROPIC_API_KEY is not configured"}
+```
+
+The `drafts` event always arrives before the first `text` chunk so the client can render preview cards while text is still streaming. The `text` chunks today are server-paced word fragments at ~80 wpm; the wire format is stable and won't change when the underlying LLM call switches to native token streaming.
+
+#### `POST /api/ai/execute`
+
+Confirm a pending draft and apply its mutation against the real entity tables.
+
+**Request Body:**
+```json
+{
+  "draft_id": 42,
+  "updatedData": { "title": "Call mom (edited)" }
+}
+```
+
+`updatedData` is optional; when present it overrides the draft payload before execution (used for inline edits inside the draft preview card).
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "message": "Created todo: \"Call mom (edited)\"",
+  "draftId": 42
+}
+```
+
+---
+
+### Reorder
+
+Each user-orderable resource exposes a reorder endpoint backed by a shared `computeNewPosition` helper. The helper picks the midpoint between two anchors (`beforeId`, `afterId`); if the gap collapses to <= 1 it renumbers the entire scope with gap-1000 spacing. `SELECT ... FOR UPDATE` inside a transaction makes concurrent reorders serializable.
+
+#### `PATCH /api/todos/:id/reorder`
+#### `PATCH /api/lists/:id/reorder`
+#### `PATCH /api/note-folders/:id/reorder`
+
+**Request Body:**
+```json
+{
+  "beforeId": 12,
+  "afterId":  17
+}
+```
+
+Either anchor may be `null`. `{"beforeId": null, "afterId": 17}` puts the moving row at the top; `{"beforeId": 12, "afterId": null}` puts it at the bottom.
+
+**Response:** `200 OK`
+```json
+{ "success": true, "id": 5, "position": 13500 }
+```
+
+#### `PATCH /api/notes/:id/reorder`
+
+Same shape, plus an optional `folder_id` for cross-folder moves. Writes both a `moved` and a `reorder` row to `note_history` when the folder changes.
+
+**Request Body:**
+```json
+{
+  "beforeId": 12,
+  "afterId":  17,
+  "folder_id": 3
+}
+```
 
 ---
 
@@ -996,5 +1091,8 @@ Example: `2025-12-17T10:30:00Z`
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `PORT` | No | Server port (default: 3000) |
 | `NODE_ENV` | No | Environment: `development` or `production` |
-| `OPENAI_API_KEY` | No | Required for AI parsing feature |
-| `VITE_API_URL` | No | Client-side API URL override |
+| `ANTHROPIC_API_KEY` | Yes (for chat) | Required by `/api/ai/parse`, `/api/ai/parse/stream`, `/api/ai/execute`. The endpoints return a clean error frame when unset. |
+| `OPENAI_API_KEY` | No | Legacy. Only used by diagnostic scripts (`server/check-env.js`, `server/test-bytez.js`); not on the active chat path. |
+| `FRONTEND_URL` | No | When set, allowed in CORS for production deployments where the client and server are on different origins. |
+| `VITE_API_URL` | No | Client-side API URL override (production builds with split client/server origins). |
+| `API_URL` | No | iOS only: overrides `mobile/PersonalDashboard/App/AppConfig.swift`'s default `http://localhost:3000/api`. Use the Xcode scheme env vars for local runs, or inject at archive time for OTA builds against a tunnel. |
