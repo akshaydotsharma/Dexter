@@ -1,6 +1,27 @@
 import SwiftUI
 import Observation
 
+/// Activity timeline deep-link payload. The Activity surface sets this when
+/// the user taps a row, then pushes the destination section. The destination
+/// view consumes the focus on appearance: scrolls the matching item into
+/// view, plays the 600ms accent pulse, then clears the field. Folder
+/// deep-links re-use the `id` slot for the folder identifier; section
+/// disambiguates the meaning.
+struct ActivityFocus: Equatable {
+    /// Where the focus should land. Determines which destination view reads it.
+    let section: AppSection
+    /// Server-side integer id of the row (or folder) to focus.
+    let id: Int
+    /// True for a folder deep-link (section is .notes, but the id is a folder).
+    let isFolder: Bool
+
+    init(section: AppSection, id: Int, isFolder: Bool = false) {
+        self.section = section
+        self.id = id
+        self.isFolder = isFolder
+    }
+}
+
 /// Holds navigation state for the chat-rooted stack and the drawer.
 @Observable
 @MainActor
@@ -14,6 +35,11 @@ final class AppRouter {
         return []
     }()
     var drawerOpen: Bool = (ProcessInfo.processInfo.environment["LAUNCH_DRAWER"] == "1")
+
+    /// Pending Activity timeline deep-link target. The destination view reads
+    /// this on `task` / `onAppear`, applies the scroll + pulse, then sets it
+    /// back to nil so it doesn't fire again on the next appearance.
+    var focus: ActivityFocus?
 
     /// Push a section into the chat-rooted stack and close the drawer.
     func go(to section: AppSection) {

@@ -9,6 +9,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case notes
     case lists
     case dashboard
+    case activity
     case settings
 
     var id: String { rawValue }
@@ -21,6 +22,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .notes:     return "Notes"
         case .lists:     return "Lists"
         case .dashboard: return "Dashboard"
+        case .activity:  return "Activity"
         case .settings:  return "Settings"
         }
     }
@@ -34,6 +36,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .notes:     return "doc.text"
         case .lists:     return "list.bullet"
         case .dashboard: return "rectangle.grid.2x2"
+        case .activity:  return "clock.arrow.circlepath"
         case .settings:  return "gearshape"
         }
     }
@@ -80,6 +83,7 @@ enum Tokens {
     static let accentNotes     = Color.paper(0xB45309, 0xF59E0B)
     static let accentLists     = Color.paper(0x0F766E, 0x2DD4BF)
     static let accentDashboard = Color.paper(0x1F1B16, 0xF2EBDA)
+    static let accentActivity  = Color.paper(0x7C3F58, 0xE5A3BA)
     static let accentSettings  = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)
 
@@ -100,6 +104,7 @@ enum Tokens {
         case .notes:     return accentNotes
         case .lists:     return accentLists
         case .dashboard: return accentDashboard
+        case .activity:  return accentActivity
         case .settings:  return accentSettings
         }
     }

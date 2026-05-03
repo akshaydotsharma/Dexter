@@ -85,6 +85,9 @@ struct SideDrawer: View {
             // Dashboard
             DrawerRow(section: .dashboard, router: router)
 
+            // Activity (read-only chronological feed of all creations)
+            DrawerRow(section: .activity, router: router)
+
             DrawerDivider()
 
             // Settings

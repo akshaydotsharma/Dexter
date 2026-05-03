@@ -54,6 +54,8 @@ struct ContentView: View {
             ListsView(router: router, schemePref: schemePref)
         case .dashboard:
             DashboardView(router: router, schemePref: schemePref)
+        case .activity:
+            ActivityView(router: router, schemePref: schemePref)
         case .settings:
             SettingsView(router: router, schemePref: schemePref)
         case .today:

@@ -46,6 +46,18 @@ struct TasksView: View {
         }
         .activeSection(.tasks)
         .task { await viewModel.load() }
+        .onAppear {
+            // Activity timeline deep-link consumption. The Activity surface
+            // sets `router.focus` to ActivityFocus(section: .tasks, id: serverId)
+            // before pushing the section. Local todos are keyed by clientUUID,
+            // so the integer id can't currently be resolved back to a SwiftData
+            // row; we clear the field here so the focus doesn't fire again on
+            // the next appearance. If a serverId column is added to the local
+            // model later, scroll + pulse can be implemented in this hook.
+            if router.focus?.section == .tasks {
+                router.focus = nil
+            }
+        }
         .sheet(isPresented: $showingEditor) {
             TaskEditorSheet(viewModel: viewModel, todo: nil)
         }
