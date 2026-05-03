@@ -977,6 +977,236 @@ app.patch('/api/dashboard/config/preferences', async (req, res) => {
 });
 
 // =============================================================================
+// ACTIVITY TIMELINE  (issue #16)
+// =============================================================================
+// Read-only feed. UNIONs todos, notes, lists, note_folders keyed on created_at
+// and returns a unified shape with keyset cursor pagination.
+//
+// GET /api/dashboard/activity
+//   ?limit=50       (default 50, clamp [1,100])
+//   ?cursor=<iso>:<type>:<id>   keyset cursor from the last item on the prev page
+//   ?type=note|todo|list|folder  optional single-type filter
+//   ?includeDeleted=1            include soft-deleted rows
+//
+// Response: { items: [...], nextCursor: string|null }
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Valid entity types for the ?type filter. */
+const ACTIVITY_TYPES = new Set(['note', 'todo', 'list', 'folder']);
+
+/**
+ * Build the UNION query for the activity feed.
+ *
+ * Each arm projects to a common shape:
+ *   id, type, title, snippet, parent_name, created_at
+ *
+ * The outer SELECT applies the keyset cursor + ordering + LIMIT.
+ *
+ * @param {object} opts
+ * @param {string|null}  opts.typeFilter      - single type to restrict to
+ * @param {boolean}      opts.includeDeleted  - strip deleted_at IS NULL filter
+ * @param {boolean}      opts.hasCursor       - whether a cursor is provided
+ * @param {number}       opts.limit
+ * @returns {{ sql: string, params: unknown[] }}
+ */
+function buildActivityQuery({ typeFilter, includeDeleted, hasCursor, limit }) {
+    const notDeleted = includeDeleted ? '' : 'AND deleted_at IS NULL';
+
+    // ── per-table SELECT arms ─────────────────────────────────────────────
+    const arms = [];
+
+    // Cast created_at to TIMESTAMPTZ in every arm so:
+    //   1. The pg driver always returns a UTC-normalised Date object (no session-tz surprise).
+    //   2. The cursor predicate can compare $1::timestamptz against it without implicit
+    //      timezone loss.  Postgres converts TIMESTAMP WITHOUT TIME ZONE → TIMESTAMPTZ
+    //      using the session timezone, so the cast is semantically correct on any host.
+    if (!typeFilter || typeFilter === 'todo') {
+        arms.push(`
+            SELECT
+                id,
+                'todo'::text AS type,
+                title,
+                CASE
+                    WHEN description IS NOT NULL AND description <> ''
+                    THEN LEFT(REPLACE(description, E'\\n', ' '), 140)
+                    ELSE NULL
+                END AS snippet,
+                NULL::text AS parent_name,
+                created_at::timestamptz AS created_at
+            FROM todos
+            WHERE TRUE ${notDeleted}
+        `);
+    }
+
+    if (!typeFilter || typeFilter === 'note') {
+        arms.push(`
+            SELECT
+                n.id,
+                'note'::text AS type,
+                COALESCE(n.title, '') AS title,
+                CASE
+                    WHEN n.content IS NOT NULL AND n.content <> ''
+                    THEN LEFT(REPLACE(n.content, E'\\n', ' '), 140)
+                    ELSE NULL
+                END AS snippet,
+                f.name AS parent_name,
+                n.created_at::timestamptz AS created_at
+            FROM notes n
+            LEFT JOIN note_folders f ON f.id = n.folder_id
+            WHERE TRUE ${notDeleted.replace('deleted_at', 'n.deleted_at')}
+        `);
+    }
+
+    if (!typeFilter || typeFilter === 'list') {
+        arms.push(`
+            SELECT
+                id,
+                'list'::text AS type,
+                title,
+                CASE
+                    WHEN jsonb_array_length(items) > 0
+                    THEN items->0->>'text'
+                    ELSE NULL
+                END AS snippet,
+                NULL::text AS parent_name,
+                created_at::timestamptz AS created_at
+            FROM lists
+            WHERE TRUE ${notDeleted}
+        `);
+    }
+
+    if (!typeFilter || typeFilter === 'folder') {
+        arms.push(`
+            SELECT
+                id,
+                'folder'::text AS type,
+                name AS title,
+                NULL::text AS snippet,
+                NULL::text AS parent_name,
+                created_at::timestamptz AS created_at
+            FROM note_folders
+            WHERE TRUE ${notDeleted}
+        `);
+    }
+
+    const union = arms.join('\nUNION ALL\n');
+
+    // ── cursor predicate ──────────────────────────────────────────────────
+    // Order is (created_at DESC, type ASC, id DESC).
+    // "Strictly less than" the cursor triple means:
+    //   created_at < $1  OR  (created_at = $1 AND type > $2)
+    //                    OR  (created_at = $1 AND type = $2 AND id < $3)
+    // We cast $1 to TIMESTAMPTZ explicitly so Postgres does a timezone-aware
+    // comparison against the TIMESTAMPTZ column from the union arms.
+    const cursorPredicate = hasCursor
+        ? `AND (
+            t.created_at < $1::timestamptz
+            OR (t.created_at = $1::timestamptz AND t.type > $2)
+            OR (t.created_at = $1::timestamptz AND t.type = $2 AND t.id < $3)
+           )`
+        : '';
+
+    const limitParam = hasCursor ? '$4' : '$1';
+
+    const sql = `
+        SELECT t.id, t.type, t.title, t.snippet, t.parent_name, t.created_at
+        FROM (${union}) t
+        WHERE TRUE ${cursorPredicate}
+        ORDER BY t.created_at DESC, t.type ASC, t.id DESC
+        LIMIT ${limitParam}
+    `;
+
+    return { sql };
+}
+
+app.get('/api/dashboard/activity', async (req, res) => {
+    try {
+        // ── parse + validate query params ─────────────────────────────────
+        let limit = parseInt(req.query.limit ?? '50', 10);
+        if (isNaN(limit)) limit = 50;
+        limit = Math.max(1, Math.min(100, limit));
+
+        const typeFilter = req.query.type ?? null;
+        if (typeFilter !== null && !ACTIVITY_TYPES.has(typeFilter)) {
+            return res.status(400).json({
+                error: `Invalid type "${typeFilter}". Must be one of: note, todo, list, folder`,
+            });
+        }
+
+        const includeDeleted = req.query.includeDeleted === '1' || req.query.includeDeleted === 'true';
+
+        // ── parse keyset cursor ───────────────────────────────────────────
+        // Format: <iso-ts>:<type>:<id>
+        // Example: 2026-01-15T12:00:00.000Z:note:42
+        let cursorTs = null;
+        let cursorType = null;
+        let cursorId = null;
+        const rawCursor = req.query.cursor ?? null;
+
+        if (rawCursor) {
+            // Split on the last two colons that precede type and id.
+            // ISO timestamps contain colons, so we split from the right.
+            const lastColon = rawCursor.lastIndexOf(':');
+            if (lastColon === -1) {
+                return res.status(400).json({ error: 'Invalid cursor format. Expected <iso-ts>:<type>:<id>' });
+            }
+            const idPart = rawCursor.slice(lastColon + 1);
+            const remainder = rawCursor.slice(0, lastColon);
+            const secondColon = remainder.lastIndexOf(':');
+            if (secondColon === -1) {
+                return res.status(400).json({ error: 'Invalid cursor format. Expected <iso-ts>:<type>:<id>' });
+            }
+            const typePart = remainder.slice(secondColon + 1);
+            const tsPart = remainder.slice(0, secondColon);
+
+            cursorId = parseInt(idPart, 10);
+            if (!ACTIVITY_TYPES.has(typePart) || isNaN(cursorId) || !tsPart) {
+                return res.status(400).json({ error: 'Invalid cursor: could not parse ts/type/id' });
+            }
+            cursorTs = tsPart;
+            cursorType = typePart;
+        }
+
+        const hasCursor = cursorTs !== null;
+
+        // ── build + run query ─────────────────────────────────────────────
+        const { sql } = buildActivityQuery({ typeFilter, includeDeleted, hasCursor, limit });
+
+        const params = hasCursor
+            ? [cursorTs, cursorType, cursorId, limit]
+            : [limit];
+
+        const { rows } = await db.query(sql, params);
+
+        // ── shape response ────────────────────────────────────────────────
+        const items = rows.map((r) => ({
+            id: r.id,
+            type: r.type,
+            title: r.title ?? '',
+            snippet: r.snippet ?? null,
+            parent: r.parent_name ?? null,
+            createdAt: r.created_at instanceof Date
+                ? r.created_at.toISOString()
+                : r.created_at,
+        }));
+
+        // Emit nextCursor only when the page is full (more pages likely exist).
+        let nextCursor = null;
+        if (rows.length === limit) {
+            const last = rows[rows.length - 1];
+            const ts = last.created_at instanceof Date
+                ? last.created_at.toISOString()
+                : last.created_at;
+            nextCursor = `${ts}:${last.type}:${last.id}`;
+        }
+
+        res.json({ items, nextCursor });
+    } catch (err) {
+        sendErrorResponse(res, err);
+    }
+});
+
+// =============================================================================
 // REORDER ENDPOINTS (v2 drag-to-reorder)
 // =============================================================================
 // All four endpoints share the same body schema and the same midpoint /
