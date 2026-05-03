@@ -2,17 +2,21 @@
 
 Standard workflow rules for any change in this repo.
 
+## Active surface: iOS only
+
+Webapp work is paused (decision recorded 2026-05-03 — see `.claude/CLAUDE.md`). Don't auto-route iOS work to the server / web client unless the user explicitly asks.
+
 ## Local-first
 
 - Never auto-deploy. The user runs the deploy step themselves.
-- Backend deploy is via Railway; frontend is served as static files from `client/dist` by the same Express process. iOS is OTA via `ship.sh` / `ship-lan.sh`.
-- Dev server is `npm start` (runs server + client together via concurrently). Default ports: client `:5173`, server `:3000` (auto-falls-through to `:3001` if `:3000` is taken).
+- iOS is OTA via `bash mobile/ota/ship-lan.sh` → `xcrun devicectl device install app --device <UDID> /tmp/ota/app.ipa` over wifi. No more Tailscale dance for iOS — `ship.sh` is legacy.
+- (Paused) Web client + Express server: `npm start` would bring up :5173 and :3000/:3001. Don't start it as part of an iOS task.
 
 ## Tests before declaring done
 
-- Server changes MUST run `cd server && npm test` and pass before commit. Test DB is `personal_dashboard_test` (one-time `createdb personal_dashboard_test`).
-- Frontend changes MUST be smoke-tested in the browser at `http://localhost:5173` before commit. Verify the golden path AND the surfaces around the change for regressions.
-- iOS changes that touch behaviour (not just syntax) MUST be installed on a real device via `bash mobile/ota/ship-lan.sh` or `ship.sh` before declaring done. Static checks (`xcodegen generate`, type-check) are NOT QA on iOS — see project memory `feedback_qa_framing.md`.
+- iOS changes that touch behaviour (not just syntax) MUST be installed on a real device via `bash mobile/ota/ship-lan.sh` + `devicectl device install` before declaring done. Static checks (`xcodegen generate`, `xcodebuild build`) are NOT QA on iOS — see project memory `feedback_qa_framing.md`.
+- (Paused) Server tests: `cd server && npm test` against `personal_dashboard_test`. Only run if the user asked for a server change.
+- (Paused) Web frontend smoke at `http://localhost:5173`. Only run if the user asked for a web change.
 
 ## Commits link to issues
 
