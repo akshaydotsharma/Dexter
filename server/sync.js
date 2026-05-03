@@ -24,14 +24,23 @@
  * application code does not need to set them.
  */
 
-const TABLES = ['todos', 'notes', 'lists', 'note_folders'];
+// Order matters for /api/sync/upsert: note_folders must be processed
+// BEFORE notes so an offline-created folder + offline-created note can
+// be upserted in the same batch and the note's folder_client_uuid
+// resolves to a row that already exists.
+const TABLES = ['note_folders', 'todos', 'notes', 'lists'];
 
 // Schemas describe which columns a client may upsert per table. id and
 // auto-managed columns (version, created_at, updated_at) are NOT in this list.
 // `deleted_at` is allowed so a client can submit a soft-delete intent.
+//
+// Notes use folder_client_uuid (UUID) as the canonical FK going forward.
+// folder_id (server int) is derived inside the upsert handler so legacy
+// readers that join by folder_id keep working without iOS having to know
+// the server's integer ids.
 const TABLE_SCHEMAS = {
     todos: ['title', 'description', 'completed', 'due_date', 'tag', 'position', 'deleted_at'],
-    notes: ['title', 'content', 'folder_id', 'position', 'deleted_at'],
+    notes: ['title', 'content', 'folder_client_uuid', 'position', 'deleted_at'],
     lists: ['title', 'items', 'position', 'deleted_at'],
     note_folders: ['name', 'position', 'deleted_at'],
 };
@@ -95,6 +104,30 @@ async function handleUpsert(req, res, db) {
                         continue;
                     }
 
+                    // For notes, derive folder_id (server int) from
+                    // folder_client_uuid so legacy GET /api/notes (which
+                    // joins by folder_id) keeps working. The note row
+                    // itself stores both columns; folder_client_uuid is
+                    // the canonical link.
+                    if (table === 'notes' && Object.prototype.hasOwnProperty.call(row, 'folder_client_uuid')) {
+                        if (row.folder_client_uuid === null) {
+                            row.folder_id = null;
+                        } else {
+                            const { rows: folderRows } = await client.query(
+                                `SELECT id FROM note_folders WHERE client_uuid = $1`,
+                                [row.folder_client_uuid]
+                            );
+                            if (folderRows.length === 0) {
+                                result.rejected[table].push({
+                                    client_uuid: row.client_uuid,
+                                    reason: 'folder_not_found',
+                                });
+                                continue;
+                            }
+                            row.folder_id = folderRows[0].id;
+                        }
+                    }
+
                     const { rows: existingRows } = await client.query(
                         `SELECT * FROM ${table} WHERE client_uuid = $1`,
                         [row.client_uuid]
@@ -105,7 +138,10 @@ async function handleUpsert(req, res, db) {
                         // including keys present on the incoming row.
                         const cols = ['client_uuid'];
                         const vals = [row.client_uuid];
-                        for (const col of TABLE_SCHEMAS[table]) {
+                        const insertableCols = [...TABLE_SCHEMAS[table]];
+                        // Notes also write folder_id (derived above).
+                        if (table === 'notes') insertableCols.push('folder_id');
+                        for (const col of insertableCols) {
                             if (Object.prototype.hasOwnProperty.call(row, col)) {
                                 cols.push(col);
                                 vals.push(serializeValue(table, col, row[col]));
@@ -143,7 +179,9 @@ async function handleUpsert(req, res, db) {
                         // Client wins: build SET clause from schema-allowed keys.
                         const sets = [];
                         const vals = [];
-                        for (const col of TABLE_SCHEMAS[table]) {
+                        const updatableCols = [...TABLE_SCHEMAS[table]];
+                        if (table === 'notes') updatableCols.push('folder_id');
+                        for (const col of updatableCols) {
                             if (Object.prototype.hasOwnProperty.call(row, col)) {
                                 sets.push(`${col} = $${vals.length + 1}`);
                                 vals.push(serializeValue(table, col, row[col]));

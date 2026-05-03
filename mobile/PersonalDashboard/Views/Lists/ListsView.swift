@@ -3,8 +3,8 @@ import SwiftUI
 struct ListsView: View {
     @State private var viewModel = ListsViewModel()
     @State private var showingNewList = false
-    @State private var selectedListId: Int? = {
-        if let raw = ProcessInfo.processInfo.environment["LAUNCH_LIST_ID"], let id = Int(raw) { return id }
+    @State private var selectedListId: UUID? = {
+        if let raw = ProcessInfo.processInfo.environment["LAUNCH_LIST_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
     }()
 
@@ -190,7 +190,7 @@ private struct ListSummaryRow: View {
 
 private struct ListDetailContent: View {
     @Bindable var viewModel: ListsViewModel
-    let listId: Int
+    let listId: UUID
     @State private var newItemText: String = ""
 
     var body: some View {

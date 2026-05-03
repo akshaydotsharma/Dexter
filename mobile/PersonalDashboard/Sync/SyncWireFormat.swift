@@ -13,13 +13,23 @@ import Foundation
 
 struct SyncChangesResponse: Decodable {
     let todos: [Todo]
+    let notes: [Note]
+    let lists: [Checklist]
+    let noteFolders: [NoteFolder]
     let maxVersion: Int64
 }
 
 /// Body for `POST /api/sync/upsert`. Each table is a separate array so the
 /// server can route per-table without inferring entity type.
 struct SyncUpsertRequest: Encodable {
-    var todos: [TodoUpsertRow]
+    var todos: [TodoUpsertRow] = []
+    var notes: [NoteUpsertRow] = []
+    var lists: [ListUpsertRow] = []
+    var noteFolders: [NoteFolderUpsertRow] = []
+
+    var isEmpty: Bool {
+        todos.isEmpty && notes.isEmpty && lists.isEmpty && noteFolders.isEmpty
+    }
 }
 
 /// One row in a sync upsert batch. Carries clientUuid + updatedAt + the
@@ -38,6 +48,35 @@ struct TodoUpsertRow: Encodable {
     let updatedAt: Date
 }
 
+struct NoteFolderUpsertRow: Encodable {
+    let clientUuid: UUID
+    let name: String?
+    let position: Int?
+    let deletedAt: Date?
+    let updatedAt: Date
+}
+
+struct NoteUpsertRow: Encodable {
+    let clientUuid: UUID
+    /// Maps to server's `folder_client_uuid`. Nil clears the folder
+    /// assignment (note becomes unfiled).
+    let folderClientUuid: UUID?
+    let title: String?
+    let content: String?
+    let position: Int?
+    let deletedAt: Date?
+    let updatedAt: Date
+}
+
+struct ListUpsertRow: Encodable {
+    let clientUuid: UUID
+    let title: String?
+    let items: [ChecklistItem]?
+    let position: Int?
+    let deletedAt: Date?
+    let updatedAt: Date
+}
+
 struct SyncUpsertResponse: Decodable {
     let applied: AppliedRows
     let rejected: RejectedRows
@@ -45,17 +84,23 @@ struct SyncUpsertResponse: Decodable {
 
     struct AppliedRows: Decodable {
         let todos: [Todo]
+        let notes: [Note]
+        let lists: [Checklist]
+        let noteFolders: [NoteFolder]
     }
 
     struct RejectedRows: Decodable {
-        let todos: [RejectedRow]
+        let todos: [RejectedRow<Todo>]
+        let notes: [RejectedRow<Note>]
+        let lists: [RejectedRow<Checklist>]
+        let noteFolders: [RejectedRow<NoteFolder>]
     }
 
-    struct RejectedRow: Decodable {
+    struct RejectedRow<Row: Decodable>: Decodable {
         let clientUuid: UUID
         let reason: String
         /// When the server wins, it returns the current row so the client
         /// can adopt it without a separate GET.
-        let serverRow: Todo?
+        let serverRow: Row?
     }
 }

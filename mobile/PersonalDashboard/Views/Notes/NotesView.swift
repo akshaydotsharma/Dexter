@@ -3,10 +3,10 @@ import SwiftUI
 struct NotesView: View {
     @State private var viewModel = NotesViewModel()
     @State private var showingNewFolder = false
-    @State private var selectedNoteId: Int?
+    @State private var selectedNoteId: UUID?
     @State private var selectedFolder: NoteFolder?
-    @State private var pendingFolderLaunchId: Int? = {
-        if let raw = ProcessInfo.processInfo.environment["LAUNCH_FOLDER_ID"], let id = Int(raw) { return id }
+    @State private var pendingFolderLaunchId: UUID? = {
+        if let raw = ProcessInfo.processInfo.environment["LAUNCH_FOLDER_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
     }()
 
@@ -204,7 +204,7 @@ struct NotesView: View {
         withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = note.id }
     }
 
-    private func createBlankNote(folderId: Int?) async {
+    private func createBlankNote(folderId: UUID?) async {
         guard let new = await viewModel.createNote(title: nil, content: nil, folderId: folderId) else { return }
         withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = new.id }
     }
@@ -327,7 +327,7 @@ private struct NoteDetailContent: View {
 
     @State private var title: String = ""
     @State private var content: String = ""
-    @State private var folderId: Int?
+    @State private var folderId: UUID?
     @State private var hasLoaded = false
     @FocusState private var contentFocused: Bool
 

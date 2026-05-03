@@ -4,15 +4,16 @@ import SwiftData
 /// Sync engine for the iOS local-first data layer (#14).
 ///
 /// Two responsibilities:
-///   1. **Push**: drains LocalTodo rows where `needsSync == true`, posts
-///      them to `/api/sync/upsert`, and applies the server's response back
-///      into the store (so server-assigned id + version are stamped on).
-///   2. **Pull**: asks `/api/sync/changes?since_version=<watermark>` for any
+///   1. **Push**: drains rows where `needsSync == true` across todos,
+///      notes, lists, and note_folders, posts them to `/api/sync/upsert`,
+///      and applies the server's response back into the store (so
+///      server-assigned version is stamped on).
+///   2. **Pull**: asks `/api/sync/changes?since_version=<watermark>` for
 ///      remote changes since last sync and applies them — including
-///      tombstones, which delete the matching LocalTodo locally.
+///      tombstones, which delete the matching local row.
 ///
-/// `sync()` runs push then pull, which is the natural order: push local
-/// edits first so the pull doesn't fetch and overwrite them in flight.
+/// `sync()` runs push then pull, so push results don't get clobbered by
+/// the pull window.
 ///
 /// All entry points are async + actor-isolated to MainActor because the
 /// SwiftData ModelContext is main-actor-only on iOS 17.
@@ -28,9 +29,6 @@ final class SyncEngine {
         self.store = store
     }
 
-    /// Push pending local changes, then pull remote changes. Errors are
-    /// surfaced for the caller to display; the local store is unaffected
-    /// by transport failures so the next sync retries.
     func sync() async throws {
         NSLog("[SyncEngine] sync() begin")
         do {
@@ -46,57 +44,114 @@ final class SyncEngine {
 
     // MARK: - Push
 
-    /// Drain LocalTodo rows where needsSync == true. Build an upsert batch,
-    /// post it, then apply the response: applied rows adopt server state;
-    /// rejected rows (server_newer) adopt the server's row.
     func pushOutbox() async throws {
         let context = store.context
-        let descriptor = FetchDescriptor<LocalTodo>(
-            predicate: #Predicate { $0.needsSync == true }
-        )
-        let pending = try context.fetch(descriptor)
-        guard !pending.isEmpty else { return }
 
-        let rows = pending.map { todo in
-            TodoUpsertRow(
-                clientUuid: todo.clientUUID,
-                title: todo.title,
-                description: todo.todoDescription,
-                completed: todo.completed,
-                dueDate: todo.dueDate,
-                tag: todo.tag,
-                position: todo.position,
-                deletedAt: todo.deletedAt,
-                updatedAt: todo.updatedAt
-            )
-        }
-        let body = SyncUpsertRequest(todos: rows)
+        // Folders go first inside the same batch so notes referencing
+        // a freshly-created folder by UUID can resolve on the server.
+        let pendingFolders = try context.fetch(FetchDescriptor<LocalNoteFolder>(
+            predicate: #Predicate { $0.needsSync == true }
+        ))
+        let pendingTodos = try context.fetch(FetchDescriptor<LocalTodo>(
+            predicate: #Predicate { $0.needsSync == true }
+        ))
+        let pendingNotes = try context.fetch(FetchDescriptor<LocalNote>(
+            predicate: #Predicate { $0.needsSync == true }
+        ))
+        let pendingLists = try context.fetch(FetchDescriptor<LocalList>(
+            predicate: #Predicate { $0.needsSync == true }
+        ))
+
+        var body = SyncUpsertRequest()
+        body.noteFolders = pendingFolders.map(folderToRow)
+        body.todos = pendingTodos.map(todoToRow)
+        body.notes = pendingNotes.map(noteToRow)
+        body.lists = pendingLists.map(listToRow)
+
+        guard !body.isEmpty else { return }
+
         let response: SyncUpsertResponse = try await api.post("sync/upsert", body: body)
 
-        // Index local rows by clientUUID for fast lookup during apply.
-        var byUUID: [UUID: LocalTodo] = [:]
-        for row in pending { byUUID[row.clientUUID] = row }
+        var todosByUUID: [UUID: LocalTodo] = [:]
+        for r in pendingTodos { todosByUUID[r.clientUUID] = r }
+        var foldersByUUID: [UUID: LocalNoteFolder] = [:]
+        for r in pendingFolders { foldersByUUID[r.clientUUID] = r }
+        var notesByUUID: [UUID: LocalNote] = [:]
+        for r in pendingNotes { notesByUUID[r.clientUUID] = r }
+        var listsByUUID: [UUID: LocalList] = [:]
+        for r in pendingLists { listsByUUID[r.clientUUID] = r }
 
-        for serverDTO in response.applied.todos {
-            byUUID[serverDTO.id]?.applyServerState(serverDTO)
+        for dto in response.applied.todos { todosByUUID[dto.id]?.applyServerState(dto) }
+        for dto in response.applied.noteFolders { foldersByUUID[dto.id]?.applyServerState(dto) }
+        for dto in response.applied.notes { notesByUUID[dto.id]?.applyServerState(dto) }
+        for dto in response.applied.lists { listsByUUID[dto.id]?.applyServerState(dto) }
+
+        for r in response.rejected.todos {
+            if let server = r.serverRow { todosByUUID[r.clientUuid]?.applyServerState(server) }
         }
-        for rejection in response.rejected.todos {
-            if let serverRow = rejection.serverRow {
-                byUUID[rejection.clientUuid]?.applyServerState(serverRow)
-            }
-            // For non-server_newer rejections (missing fields, etc.), the
-            // local row keeps needsSync = true so the next push retries.
+        for r in response.rejected.noteFolders {
+            if let server = r.serverRow { foldersByUUID[r.clientUuid]?.applyServerState(server) }
+        }
+        for r in response.rejected.notes {
+            if let server = r.serverRow { notesByUUID[r.clientUuid]?.applyServerState(server) }
+        }
+        for r in response.rejected.lists {
+            if let server = r.serverRow { listsByUUID[r.clientUuid]?.applyServerState(server) }
         }
 
         try context.save()
         SyncWatermark.advance(to: response.maxVersion)
     }
 
+    private func todoToRow(_ row: LocalTodo) -> TodoUpsertRow {
+        TodoUpsertRow(
+            clientUuid: row.clientUUID,
+            title: row.title,
+            description: row.todoDescription,
+            completed: row.completed,
+            dueDate: row.dueDate,
+            tag: row.tag,
+            position: row.position,
+            deletedAt: row.deletedAt,
+            updatedAt: row.updatedAt
+        )
+    }
+
+    private func folderToRow(_ row: LocalNoteFolder) -> NoteFolderUpsertRow {
+        NoteFolderUpsertRow(
+            clientUuid: row.clientUUID,
+            name: row.name,
+            position: row.position,
+            deletedAt: row.deletedAt,
+            updatedAt: row.updatedAt
+        )
+    }
+
+    private func noteToRow(_ row: LocalNote) -> NoteUpsertRow {
+        NoteUpsertRow(
+            clientUuid: row.clientUUID,
+            folderClientUuid: row.folderClientUUID,
+            title: row.title,
+            content: row.content,
+            position: row.position,
+            deletedAt: row.deletedAt,
+            updatedAt: row.updatedAt
+        )
+    }
+
+    private func listToRow(_ row: LocalList) -> ListUpsertRow {
+        ListUpsertRow(
+            clientUuid: row.clientUUID,
+            title: row.title,
+            items: row.items,
+            position: row.position,
+            deletedAt: row.deletedAt,
+            updatedAt: row.updatedAt
+        )
+    }
+
     // MARK: - Pull
 
-    /// Fetch every server change with `version > watermark` and apply.
-    /// Inserts rows we don't have. Updates rows we do. Rows whose
-    /// `deleted_at` is not null are tombstones — the local row is deleted.
     func pullChanges() async throws {
         let watermark = SyncWatermark.current
         let path = "sync/changes"
@@ -104,9 +159,10 @@ final class SyncEngine {
         let response: SyncChangesResponse = try await api.get(path, query: query)
 
         let context = store.context
-        for incoming in response.todos {
-            try applyIncomingTodo(incoming, in: context)
-        }
+        for dto in response.noteFolders { try applyIncomingFolder(dto, in: context) }
+        for dto in response.todos { try applyIncomingTodo(dto, in: context) }
+        for dto in response.notes { try applyIncomingNote(dto, in: context) }
+        for dto in response.lists { try applyIncomingList(dto, in: context) }
         try context.save()
         SyncWatermark.advance(to: response.maxVersion)
     }
@@ -119,26 +175,10 @@ final class SyncEngine {
         let existing = try context.fetch(descriptor).first
 
         if let row = existing {
-            // Tombstone? Delete locally (only if local has no unsynced edits;
-            // otherwise the next push will conflict and the server response
-            // will overwrite us).
-            if dto.deletedAt != nil {
-                context.delete(row)
-                return
-            }
-            // Last-write-wins by updated_at: only adopt server state when
-            // the server's updated_at is newer than ours. If the local row
-            // has unpushed edits with a later updated_at, leave it alone —
-            // the next pushOutbox() will resolve the conflict.
-            if dto.updatedAt > row.updatedAt {
-                row.applyServerState(dto)
-            }
+            if dto.deletedAt != nil { context.delete(row); return }
+            if dto.updatedAt > row.updatedAt { row.applyServerState(dto) }
         } else {
-            if dto.deletedAt != nil {
-                // Tombstone for a row we never had locally. Skip.
-                return
-            }
-            // New row from server.
+            if dto.deletedAt != nil { return }
             let row = LocalTodo(
                 clientUUID: dto.id,
                 title: dto.title,
@@ -146,6 +186,87 @@ final class SyncEngine {
                 completed: dto.completed,
                 dueDate: dto.dueDate,
                 tag: dto.tag,
+                position: dto.position,
+                version: dto.version,
+                createdAt: dto.createdAt,
+                updatedAt: dto.updatedAt,
+                deletedAt: dto.deletedAt,
+                needsSync: false
+            )
+            context.insert(row)
+        }
+    }
+
+    private func applyIncomingFolder(_ dto: NoteFolder, in context: ModelContext) throws {
+        let uuid = dto.id
+        let descriptor = FetchDescriptor<LocalNoteFolder>(
+            predicate: #Predicate { $0.clientUUID == uuid }
+        )
+        let existing = try context.fetch(descriptor).first
+
+        if let row = existing {
+            if dto.deletedAt != nil { context.delete(row); return }
+            if dto.updatedAt > row.updatedAt { row.applyServerState(dto) }
+        } else {
+            if dto.deletedAt != nil { return }
+            let row = LocalNoteFolder(
+                clientUUID: dto.id,
+                name: dto.name,
+                position: dto.position,
+                version: dto.version,
+                createdAt: dto.createdAt,
+                updatedAt: dto.updatedAt,
+                deletedAt: dto.deletedAt,
+                needsSync: false
+            )
+            context.insert(row)
+        }
+    }
+
+    private func applyIncomingNote(_ dto: Note, in context: ModelContext) throws {
+        let uuid = dto.id
+        let descriptor = FetchDescriptor<LocalNote>(
+            predicate: #Predicate { $0.clientUUID == uuid }
+        )
+        let existing = try context.fetch(descriptor).first
+
+        if let row = existing {
+            if dto.deletedAt != nil { context.delete(row); return }
+            if dto.updatedAt > row.updatedAt { row.applyServerState(dto) }
+        } else {
+            if dto.deletedAt != nil { return }
+            let row = LocalNote(
+                clientUUID: dto.id,
+                folderClientUUID: dto.folderId,
+                title: dto.title,
+                content: dto.content,
+                position: dto.position,
+                version: dto.version,
+                createdAt: dto.createdAt,
+                updatedAt: dto.updatedAt,
+                deletedAt: dto.deletedAt,
+                needsSync: false
+            )
+            context.insert(row)
+        }
+    }
+
+    private func applyIncomingList(_ dto: Checklist, in context: ModelContext) throws {
+        let uuid = dto.id
+        let descriptor = FetchDescriptor<LocalList>(
+            predicate: #Predicate { $0.clientUUID == uuid }
+        )
+        let existing = try context.fetch(descriptor).first
+
+        if let row = existing {
+            if dto.deletedAt != nil { context.delete(row); return }
+            if dto.updatedAt > row.updatedAt { row.applyServerState(dto) }
+        } else {
+            if dto.deletedAt != nil { return }
+            let row = LocalList(
+                clientUUID: dto.id,
+                title: dto.title,
+                items: dto.items,
                 position: dto.position,
                 version: dto.version,
                 createdAt: dto.createdAt,

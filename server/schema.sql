@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS notes (
     id SERIAL PRIMARY KEY,
     client_uuid UUID UNIQUE DEFAULT gen_random_uuid(),
     folder_id INTEGER REFERENCES note_folders(id) ON DELETE CASCADE,
+    folder_client_uuid UUID REFERENCES note_folders(client_uuid) ON DELETE CASCADE,
     title TEXT,
     content TEXT,
     position INTEGER, -- ordering within a folder (or unfiled scope when folder_id IS NULL)

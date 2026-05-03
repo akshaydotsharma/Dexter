@@ -20,7 +20,12 @@ final class SwiftDataStore {
 
     private init() {
         do {
-            let schema = Schema([LocalTodo.self])
+            let schema = Schema([
+                LocalTodo.self,
+                LocalNoteFolder.self,
+                LocalNote.self,
+                LocalList.self,
+            ])
             // SwiftData defaults the store URL to Application Support, but
             // on a fresh simulator that directory doesn't exist yet and
             // CoreData logs a noisy stat failure on first run. Pre-creating
@@ -46,7 +51,12 @@ final class SwiftDataStore {
     /// Build an in-memory container for tests or previews.
     static func makeInMemory() -> ModelContainer {
         do {
-            let schema = Schema([LocalTodo.self])
+            let schema = Schema([
+                LocalTodo.self,
+                LocalNoteFolder.self,
+                LocalNote.self,
+                LocalList.self,
+            ])
             let configuration = ModelConfiguration(
                 schema: schema,
                 isStoredInMemoryOnly: true

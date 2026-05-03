@@ -188,3 +188,38 @@ CREATE INDEX IF NOT EXISTS todos_version_idx        ON todos (version);
 CREATE INDEX IF NOT EXISTS notes_version_idx        ON notes (version);
 CREATE INDEX IF NOT EXISTS lists_version_idx        ON lists (version);
 CREATE INDEX IF NOT EXISTS note_folders_version_idx ON note_folders (version);
+
+-- =============================================================================
+-- 2026-05-03: folder_client_uuid for note->folder linking by UUID (#14)
+-- =============================================================================
+-- iOS can create a folder offline AND a note inside that folder offline.
+-- Both rows arrive at the server in a single sync upsert batch. The note
+-- needs to reference the folder by something stable across the network,
+-- and the folder's integer id only exists after the server has persisted
+-- the folder. folder_client_uuid is the canonical link going forward;
+-- folder_id is kept in sync via the sync.js upsert handler so legacy
+-- callers that read folder_id keep working.
+
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS folder_client_uuid UUID;
+
+-- Backfill from existing folder_id by joining note_folders.client_uuid.
+UPDATE notes n
+SET folder_client_uuid = f.client_uuid
+FROM note_folders f
+WHERE n.folder_id = f.id AND n.folder_client_uuid IS NULL;
+
+CREATE INDEX IF NOT EXISTS notes_folder_client_uuid_idx ON notes (folder_client_uuid);
+
+-- FK only after backfill is safe to add. Wrap in DO so re-runs are idempotent.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'notes_folder_client_uuid_fkey'
+    ) THEN
+        ALTER TABLE notes
+        ADD CONSTRAINT notes_folder_client_uuid_fkey
+        FOREIGN KEY (folder_client_uuid)
+        REFERENCES note_folders(client_uuid) ON DELETE CASCADE;
+    END IF;
+END $$;
