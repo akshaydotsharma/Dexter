@@ -1,11 +1,23 @@
+-- gen_random_uuid() ships with core Postgres 13+, but pgcrypto is a safe shim
+-- for older builds. Idempotent; CREATE EXTENSION IF NOT EXISTS is a no-op when
+-- the function is already in core.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Global monotonic sync version sequence. Every UPDATE on a synced table bumps
+-- the row's `version` to nextval(). The iOS sync engine watermarks on the max
+-- version it has seen and asks the server for everything newer in one call.
+CREATE SEQUENCE IF NOT EXISTS sync_version_seq;
+
 CREATE TABLE IF NOT EXISTS todos (
     id SERIAL PRIMARY KEY,
+    client_uuid UUID UNIQUE DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,
     description TEXT,
     completed BOOLEAN DEFAULT FALSE,
     due_date TIMESTAMP,
     tag TEXT,
     position INTEGER, -- ordering for drag-to-reorder; NULL allowed so legacy inserts still work
+    version BIGINT NOT NULL DEFAULT nextval('sync_version_seq'),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP DEFAULT NULL
@@ -57,21 +69,28 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS note_folders (
     id SERIAL PRIMARY KEY,
+    client_uuid UUID UNIQUE DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     position INTEGER, -- ordering for drag-to-reorder; NULL allowed so legacy inserts still work
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    version BIGINT NOT NULL DEFAULT nextval('sync_version_seq'),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS note_folders_position_idx ON note_folders (position);
 
 CREATE TABLE IF NOT EXISTS notes (
     id SERIAL PRIMARY KEY,
+    client_uuid UUID UNIQUE DEFAULT gen_random_uuid(),
     folder_id INTEGER REFERENCES note_folders(id) ON DELETE CASCADE,
     title TEXT,
     content TEXT,
     position INTEGER, -- ordering within a folder (or unfiled scope when folder_id IS NULL)
+    version BIGINT NOT NULL DEFAULT nextval('sync_version_seq'),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS notes_folder_position_idx ON notes (folder_id, position);
@@ -89,10 +108,14 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS lists (
     id SERIAL PRIMARY KEY,
+    client_uuid UUID UNIQUE DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,
     items JSONB DEFAULT '[]',
     position INTEGER, -- ordering for drag-to-reorder; NULL allowed so legacy inserts still work
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    version BIGINT NOT NULL DEFAULT nextval('sync_version_seq'),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS lists_position_idx ON lists (position);
@@ -155,3 +178,39 @@ CREATE TABLE IF NOT EXISTS ai_messages (
     response_id TEXT, -- OpenAI response ID for debugging
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- =============================================================================
+-- Sync metadata triggers
+-- =============================================================================
+-- Each synced table has a BEFORE UPDATE trigger that bumps `version` to the
+-- next value of `sync_version_seq` and refreshes `updated_at`. The iOS sync
+-- engine uses `version` as the sole watermark for delta pulls.
+
+CREATE OR REPLACE FUNCTION bump_sync_metadata() RETURNS trigger AS $$
+BEGIN
+    NEW.version := nextval('sync_version_seq');
+    NEW.updated_at := CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS todos_bump_sync ON todos;
+CREATE TRIGGER todos_bump_sync BEFORE UPDATE ON todos
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+DROP TRIGGER IF EXISTS notes_bump_sync ON notes;
+CREATE TRIGGER notes_bump_sync BEFORE UPDATE ON notes
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+DROP TRIGGER IF EXISTS lists_bump_sync ON lists;
+CREATE TRIGGER lists_bump_sync BEFORE UPDATE ON lists
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+DROP TRIGGER IF EXISTS note_folders_bump_sync ON note_folders;
+CREATE TRIGGER note_folders_bump_sync BEFORE UPDATE ON note_folders
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+CREATE INDEX IF NOT EXISTS todos_version_idx        ON todos (version);
+CREATE INDEX IF NOT EXISTS notes_version_idx        ON notes (version);
+CREATE INDEX IF NOT EXISTS lists_version_idx        ON lists (version);
+CREATE INDEX IF NOT EXISTS note_folders_version_idx ON note_folders (version);

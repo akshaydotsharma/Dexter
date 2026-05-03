@@ -134,10 +134,15 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Initialize Database Schema
+// schema.sql is the canonical fresh install; migration.sql is the cumulative
+// idempotent diff applied on top so existing DBs pick up new columns/triggers
+// without manual intervention. Both files must be safe to re-run on every boot.
 const initDb = async () => {
     try {
         const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
         await db.query(schema);
+        const migration = fs.readFileSync(path.join(__dirname, 'migration.sql'), 'utf8');
+        await db.query(migration);
         console.log('Database initialized successfully');
     } catch (err) {
         console.error('Error initializing database:', err);

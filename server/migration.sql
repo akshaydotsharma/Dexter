@@ -92,3 +92,99 @@ CREATE INDEX IF NOT EXISTS todos_position_idx        ON todos (position);
 CREATE INDEX IF NOT EXISTS lists_position_idx        ON lists (position);
 CREATE INDEX IF NOT EXISTS note_folders_position_idx ON note_folders (position);
 CREATE INDEX IF NOT EXISTS notes_folder_position_idx ON notes (folder_id, position);
+
+-- =============================================================================
+-- 2026-05-03: Sync metadata for iOS local-first data layer (#14)
+-- =============================================================================
+-- Adds a global monotonic sync-version sequence, plus per-row `version`,
+-- `client_uuid`, `updated_at`, and `deleted_at` columns to todos, notes, lists,
+-- and note_folders so the iOS SwiftData store can do delta sync. A BEFORE
+-- UPDATE trigger on each table bumps version + updated_at on every UPDATE so
+-- application code does not have to remember to set them. client_uuid lets the
+-- phone create rows offline with a stable identity that the server adopts on
+-- first sync.
+--
+-- Idempotent: ADD COLUMN IF NOT EXISTS, conditional UNIQUE constraint, ALTER
+-- COLUMN SET NOT NULL only after backfill, DROP TRIGGER IF EXISTS before
+-- recreating. Re-running the script is a no-op once applied.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE SEQUENCE IF NOT EXISTS sync_version_seq;
+
+ALTER TABLE todos        ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT nextval('sync_version_seq');
+ALTER TABLE notes        ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT nextval('sync_version_seq');
+ALTER TABLE lists        ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT nextval('sync_version_seq');
+ALTER TABLE note_folders ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT nextval('sync_version_seq');
+
+ALTER TABLE todos        ADD COLUMN IF NOT EXISTS client_uuid UUID;
+ALTER TABLE notes        ADD COLUMN IF NOT EXISTS client_uuid UUID;
+ALTER TABLE lists        ADD COLUMN IF NOT EXISTS client_uuid UUID;
+ALTER TABLE note_folders ADD COLUMN IF NOT EXISTS client_uuid UUID;
+
+UPDATE todos        SET client_uuid = gen_random_uuid() WHERE client_uuid IS NULL;
+UPDATE notes        SET client_uuid = gen_random_uuid() WHERE client_uuid IS NULL;
+UPDATE lists        SET client_uuid = gen_random_uuid() WHERE client_uuid IS NULL;
+UPDATE note_folders SET client_uuid = gen_random_uuid() WHERE client_uuid IS NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'todos_client_uuid_key') THEN
+        ALTER TABLE todos ADD CONSTRAINT todos_client_uuid_key UNIQUE (client_uuid);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'notes_client_uuid_key') THEN
+        ALTER TABLE notes ADD CONSTRAINT notes_client_uuid_key UNIQUE (client_uuid);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'lists_client_uuid_key') THEN
+        ALTER TABLE lists ADD CONSTRAINT lists_client_uuid_key UNIQUE (client_uuid);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'note_folders_client_uuid_key') THEN
+        ALTER TABLE note_folders ADD CONSTRAINT note_folders_client_uuid_key UNIQUE (client_uuid);
+    END IF;
+END $$;
+
+ALTER TABLE todos        ALTER COLUMN client_uuid SET NOT NULL;
+ALTER TABLE notes        ALTER COLUMN client_uuid SET NOT NULL;
+ALTER TABLE lists        ALTER COLUMN client_uuid SET NOT NULL;
+ALTER TABLE note_folders ALTER COLUMN client_uuid SET NOT NULL;
+
+ALTER TABLE todos        ALTER COLUMN client_uuid SET DEFAULT gen_random_uuid();
+ALTER TABLE notes        ALTER COLUMN client_uuid SET DEFAULT gen_random_uuid();
+ALTER TABLE lists        ALTER COLUMN client_uuid SET DEFAULT gen_random_uuid();
+ALTER TABLE note_folders ALTER COLUMN client_uuid SET DEFAULT gen_random_uuid();
+
+ALTER TABLE notes        ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP DEFAULT NULL;
+ALTER TABLE lists        ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP DEFAULT NULL;
+ALTER TABLE note_folders ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP DEFAULT NULL;
+
+ALTER TABLE lists        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE note_folders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+CREATE OR REPLACE FUNCTION bump_sync_metadata() RETURNS trigger AS $$
+BEGIN
+    NEW.version := nextval('sync_version_seq');
+    NEW.updated_at := CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS todos_bump_sync ON todos;
+CREATE TRIGGER todos_bump_sync BEFORE UPDATE ON todos
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+DROP TRIGGER IF EXISTS notes_bump_sync ON notes;
+CREATE TRIGGER notes_bump_sync BEFORE UPDATE ON notes
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+DROP TRIGGER IF EXISTS lists_bump_sync ON lists;
+CREATE TRIGGER lists_bump_sync BEFORE UPDATE ON lists
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+DROP TRIGGER IF EXISTS note_folders_bump_sync ON note_folders;
+CREATE TRIGGER note_folders_bump_sync BEFORE UPDATE ON note_folders
+    FOR EACH ROW EXECUTE FUNCTION bump_sync_metadata();
+
+CREATE INDEX IF NOT EXISTS todos_version_idx        ON todos (version);
+CREATE INDEX IF NOT EXISTS notes_version_idx        ON notes (version);
+CREATE INDEX IF NOT EXISTS lists_version_idx        ON lists (version);
+CREATE INDEX IF NOT EXISTS note_folders_version_idx ON note_folders (version);
