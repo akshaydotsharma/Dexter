@@ -5,28 +5,21 @@ import Observation
 @MainActor
 final class DashboardViewModel {
     private(set) var stats: DashboardStats?
-    private(set) var isLoading = false
-    var errorMessage: String?
 
     private let service: DashboardService
 
-    init(service: DashboardService = DashboardService()) {
+    init() {
+        let service = DashboardService()
         self.service = service
-        if let cached = CacheStore.load(DashboardStats.self, from: .dashboardStats) {
-            self.stats = cached
-        }
+        self.stats = service.stats()
     }
 
-    func load() async {
-        isLoading = true
-        errorMessage = nil
-        do {
-            let fresh = try await service.stats()
-            stats = fresh
-            CacheStore.save(fresh, to: .dashboardStats)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isLoading = false
+    init(service: DashboardService) {
+        self.service = service
+        self.stats = service.stats()
+    }
+
+    func refresh() {
+        stats = service.stats()
     }
 }

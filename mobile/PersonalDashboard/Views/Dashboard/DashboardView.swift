@@ -1,10 +1,18 @@
 import SwiftUI
+import SwiftData
 
 struct DashboardView: View {
     @State private var viewModel = DashboardViewModel()
 
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
+
+    // Query the live SwiftData state so the view body re-evaluates on every
+    // mutation. We don't read these arrays for display — they're a lightweight
+    // change-trigger that keeps `viewModel.stats` in lockstep with the store.
+    @Query(filter: #Predicate<LocalTodo> { $0.deletedAt == nil }) private var todos: [LocalTodo]
+    @Query(filter: #Predicate<LocalNote> { $0.deletedAt == nil }) private var notes: [LocalNote]
+    @Query(filter: #Predicate<LocalList> { $0.deletedAt == nil }) private var lists: [LocalList]
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -21,17 +29,6 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         if let stats = viewModel.stats {
                             statsSection(stats: stats)
-                        } else if viewModel.isLoading {
-                            HStack { Spacer(); ProgressView().tint(Tokens.muted); Spacer() }
-                                .padding(.vertical, Space.xxxl)
-                        } else if let error = viewModel.errorMessage {
-                            errorView(error)
-                        } else {
-                            Text("No data yet.")
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.muted)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, Space.xxxl)
                         }
 
                         quickActions
@@ -40,13 +37,16 @@ struct DashboardView: View {
                     .padding(.top, Space.lg)
                     .padding(.bottom, 96)
                 }
-                .refreshable { await viewModel.load() }
+                .refreshable { viewModel.refresh() }
             }
 
             ChatFAB { router.popToChat() }
         }
         .activeSection(.dashboard)
-        .task { await viewModel.load() }
+        .onAppear { viewModel.refresh() }
+        .onChange(of: todos.count) { viewModel.refresh() }
+        .onChange(of: notes.count) { viewModel.refresh() }
+        .onChange(of: lists.count) { viewModel.refresh() }
     }
 
     private func statsSection(stats: DashboardStats) -> some View {
@@ -58,25 +58,6 @@ struct DashboardView: View {
                 StatCard(title: "Lists", value: stats.lists.total, trend: stats.lists.trend, icon: "list.bullet", accent: Tokens.accentLists)
             }
         }
-    }
-
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: Space.md) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 24, weight: .regular))
-                .foregroundStyle(Tokens.warning)
-            Text("Couldn't load stats")
-                .font(.edHeading)
-                .foregroundStyle(Tokens.ink)
-            Text(message)
-                .font(.edSubheadline)
-                .foregroundStyle(Tokens.muted)
-                .multilineTextAlignment(.center)
-            Button("Try again") { Task { await viewModel.load() } }
-                .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(Space.xl)
     }
 
     private var quickActions: some View {
