@@ -48,11 +48,14 @@ final class TodosViewModel {
         guard let index = todos.firstIndex(of: todo) else { return }
         let optimistic = Todo(
             id: todo.id,
+            clientUuid: todo.clientUuid,
             title: todo.title,
             description: todo.description,
             completed: !todo.completed,
             dueDate: todo.dueDate,
             tag: todo.tag,
+            position: todo.position,
+            version: todo.version,
             createdAt: todo.createdAt,
             updatedAt: Date(),
             deletedAt: todo.deletedAt

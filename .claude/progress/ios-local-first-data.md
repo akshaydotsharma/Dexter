@@ -52,10 +52,20 @@ Make iOS todos, notes, and lists fully usable when the Mac is off. Local-first s
 - [ ] Device QA evidence in ticket comment
 
 ## Completed Steps
-(none yet)
+- [x] Phase 1: schema additions + sync triggers + tests (5 new tests, 2026-05-03)
+- [x] Phase 2: sync endpoints + soft-delete switch for notes/lists/folders + tests (7 new tests, 2026-05-03)
+- [x] Phase 3: iOS SwiftData scaffold — LocalTodo @Model, SwiftDataStore container, SyncEngine pull+push, SyncWatermark, SyncWireFormat DTOs, app-launch sync wiring (2026-05-03). Build succeeds.
 
 ## Current Step
-Phase 1: schema additions.
+Phase 4: migrate Todos widget to read from SwiftData.
+- Rewrite `TodoService` so create/update/delete operate on `LocalTodo` first, then enqueue (set `needsSync = true`) for the next sync push. Read paths fetch LocalTodo and project to `Todo` DTOs.
+- Rewrite `TodosViewModel` to source `[Todo]` from `SwiftDataStore.shared.context.fetch(LocalTodo)` instead of the API. `load()` becomes "trigger sync, then refetch from local store".
+- Validate on a real device per `dev-workflow.md`: airplane-mode add/edit/delete, reconnect, watch the sync settle.
+- Note: `ChatViewModel` and the AI capture flow also call `TodoService.create` etc — confirm those paths still work after the rewrite (they should, as the API surface stays the same shape).
+
+## Phase 4 callsite map (compiled before starting)
+- `TodoService` is consumed by: `TodosViewModel`, `ChatViewModel` (chat-to-drafts confirmation), the App Intent capture flow.
+- All three should keep working because the public method signatures don't change — only the implementation moves from "POST/PUT/DELETE API call" to "write to SwiftData + queue for sync".
 
 ## Blockers
 None.
