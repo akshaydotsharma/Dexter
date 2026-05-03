@@ -1,27 +1,18 @@
 import Foundation
 
-/// Read-only on-disk JSON cache for API responses.
+/// Read-only on-disk JSON cache for derived API responses.
 ///
-/// Each view model reads from the cache during `init` so the surface paints
-/// stale data on the very first frame, then refreshes from the API in the
-/// background. The cache is never authoritative — it's a snapshot of the most
-/// recent successful fetch. Writes go straight to the API; the cache is updated
-/// after a successful refresh.
+/// Scope shrank with #14: todos, notes, lists, and folders moved to the
+/// SwiftData store (`SwiftDataStore`) which is the authoritative on-device
+/// source. CacheStore now exists only for derived/aggregated payloads
+/// (currently just the dashboard stats), where the iOS app simply mirrors
+/// what the server computes and a cache eviction is recoverable on the
+/// next fetch.
 ///
-/// Files live in `Caches/api-cache/<key>.json`. The system may evict caches
-/// under storage pressure, which is fine — next fetch repopulates.
-///
-/// We use plain JSON files instead of SwiftData @Model classes because the
-/// data is read-only, the volumes are small (a single user's todos/notes/
-/// lists/stats), and JSON keeps the interop with the API codecs zero-friction.
-/// If we ever need live queries, on-device search, or schema migrations, this
-/// can be swapped to SwiftData without touching the call sites.
+/// Files live in `Caches/api-cache/<key>.json`. The system may evict
+/// caches under storage pressure, which is fine — next fetch repopulates.
 enum CacheStore {
     enum Key: String {
-        case todos
-        case notes
-        case noteFolders = "note_folders"
-        case lists
         case dashboardStats = "dashboard_stats"
     }
 

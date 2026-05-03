@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftData
 
 @Observable
 @MainActor
@@ -10,20 +11,30 @@ final class ListsViewModel {
 
     private let service: ChecklistService
 
-    init(service: ChecklistService = ChecklistService()) {
-        self.service = service
-        if let cached = CacheStore.load([Checklist].self, from: .lists) {
-            self.lists = cached
-        }
+    init(service: ChecklistService? = nil) {
+        let resolved = service ?? ChecklistService()
+        self.service = resolved
+
+        let descriptor = FetchDescriptor<LocalList>(
+            predicate: #Predicate { $0.deletedAt == nil },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        let rows = (try? resolved.store.context.fetch(descriptor)) ?? []
+        self.lists = rows.map { $0.toDTO() }
     }
 
-    func load() async {
+    func load(syncFirst: Bool = true) async {
         isLoading = true
         errorMessage = nil
+        if syncFirst {
+            do {
+                try await SyncEngine.shared.sync()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
         do {
-            let fresh = try await service.list()
-            lists = fresh
-            CacheStore.save(fresh, to: .lists)
+            lists = try await service.list()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -43,7 +54,7 @@ final class ListsViewModel {
     func update(_ list: Checklist) async {
         do {
             let request = ChecklistUpdateRequest(title: list.title, items: list.items)
-            let updated = try await service.update(id: list.id, request)
+            let updated = try await service.update(list, request)
             if let index = lists.firstIndex(where: { $0.id == list.id }) {
                 lists[index] = updated
             }
@@ -89,7 +100,7 @@ final class ListsViewModel {
 
     func delete(_ list: Checklist) async {
         do {
-            try await service.delete(id: list.id)
+            try await service.delete(list)
             lists.removeAll { $0.id == list.id }
         } catch {
             errorMessage = error.localizedDescription

@@ -1,5 +1,13 @@
 require('dotenv').config();
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// Postgres BIGINT (OID 20) defaults to a string in JS to avoid precision
+// loss above Number.MAX_SAFE_INTEGER. Our use case for BIGINT is the
+// monotonic `sync_version_seq` which produces row versions — these stay
+// well within Int53 range, so parsing as Number keeps the wire format
+// consistent with the iOS Int64 expectation. If we ever introduce other
+// BIGINT columns at scale, revisit this per-column.
+types.setTypeParser(20, (val) => parseInt(val, 10));
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,

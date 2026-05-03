@@ -1,6 +1,9 @@
 import Foundation
 import Observation
+import SwiftData
 
+/// View model for the Notes surface. Reads from SwiftData via NoteService;
+/// mutations land locally and trigger a background sync push.
 @Observable
 @MainActor
 final class NotesViewModel {
@@ -11,28 +14,39 @@ final class NotesViewModel {
 
     private let service: NoteService
 
-    init(service: NoteService = NoteService()) {
-        self.service = service
-        if let cachedFolders = CacheStore.load([NoteFolder].self, from: .noteFolders) {
-            self.folders = cachedFolders
-        }
-        if let cachedNotes = CacheStore.load([Note].self, from: .notes) {
-            self.notes = cachedNotes
-        }
+    init(service: NoteService? = nil) {
+        let resolved = service ?? NoteService()
+        self.service = resolved
+
+        let folderDescriptor = FetchDescriptor<LocalNoteFolder>(
+            predicate: #Predicate { $0.deletedAt == nil },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        let noteDescriptor = FetchDescriptor<LocalNote>(
+            predicate: #Predicate { $0.deletedAt == nil },
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        let folderRows = (try? resolved.store.context.fetch(folderDescriptor)) ?? []
+        let noteRows = (try? resolved.store.context.fetch(noteDescriptor)) ?? []
+        self.folders = folderRows.map { $0.toDTO() }
+        self.notes = noteRows.map { $0.toDTO() }
     }
 
-    func load() async {
+    func load(syncFirst: Bool = true) async {
         isLoading = true
         errorMessage = nil
+        if syncFirst {
+            do {
+                try await SyncEngine.shared.sync()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
         do {
-            async let folders = service.listFolders()
-            async let notes = service.list()
-            let f = try await folders
-            let n = try await notes
-            self.folders = f
-            self.notes = n
-            CacheStore.save(f, to: .noteFolders)
-            CacheStore.save(n, to: .notes)
+            async let f = service.listFolders()
+            async let n = service.list()
+            self.folders = try await f
+            self.notes = try await n
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -57,7 +71,7 @@ final class NotesViewModel {
 
     func renameFolder(_ folder: NoteFolder, to name: String) async {
         do {
-            let updated = try await service.renameFolder(id: folder.id, name: name)
+            let updated = try await service.renameFolder(folder, to: name)
             if let index = folders.firstIndex(where: { $0.id == folder.id }) {
                 folders[index] = updated
             }
@@ -68,7 +82,7 @@ final class NotesViewModel {
 
     func deleteFolder(_ folder: NoteFolder) async {
         do {
-            try await service.deleteFolder(id: folder.id)
+            try await service.deleteFolder(folder)
             folders.removeAll { $0.id == folder.id }
             notes.removeAll { $0.folderId == folder.id }
         } catch {
@@ -76,7 +90,7 @@ final class NotesViewModel {
         }
     }
 
-    func createNote(title: String?, content: String?, folderId: Int? = nil) async -> Note? {
+    func createNote(title: String?, content: String?, folderId: UUID? = nil) async -> Note? {
         do {
             let request = NoteCreateRequest(title: title, content: content, folderId: folderId)
             let note = try await service.create(request)
@@ -88,10 +102,10 @@ final class NotesViewModel {
         }
     }
 
-    func updateNote(_ note: Note, title: String?, content: String?, folderId: Int?) async {
+    func updateNote(_ note: Note, title: String?, content: String?, folderId: UUID?) async {
         do {
             let request = NoteUpdateRequest(title: title, content: content, folderId: folderId)
-            let updated = try await service.update(id: note.id, request)
+            let updated = try await service.update(note, request)
             if let index = notes.firstIndex(where: { $0.id == note.id }) {
                 notes[index] = updated
             }
@@ -102,7 +116,7 @@ final class NotesViewModel {
 
     func deleteNote(_ note: Note) async {
         do {
-            try await service.delete(id: note.id)
+            try await service.delete(note)
             notes.removeAll { $0.id == note.id }
         } catch {
             errorMessage = error.localizedDescription

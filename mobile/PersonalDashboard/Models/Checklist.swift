@@ -35,19 +35,35 @@ struct ChecklistItem: Codable, Hashable, Sendable {
     }
 }
 
+/// View-facing DTO for a checklist. Identity is the clientUUID.
 struct Checklist: Codable, Identifiable, Hashable, Sendable {
-    let id: Int
+    let id: UUID
     var title: String
     var items: [ChecklistItem]
+    var position: Int?
+    let version: Int64
     let createdAt: Date
+    let updatedAt: Date
+    let deletedAt: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case id = "clientUuid"
+        case title
+        case items
+        case position
+        case version
+        case createdAt
+        case updatedAt
+        case deletedAt
+    }
 }
 
-struct ChecklistCreateRequest: Encodable {
+struct ChecklistCreateRequest {
     let title: String
     let items: [ChecklistItem]
 }
 
-struct ChecklistUpdateRequest: Encodable {
+struct ChecklistUpdateRequest {
     let title: String
     let items: [ChecklistItem]
 }

@@ -5,6 +5,7 @@ enum APIError: LocalizedError {
     case http(status: Int, message: String?)
     case decoding(Error)
     case transport(Error)
+    case notFound
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ enum APIError: LocalizedError {
             return "Could not parse server response. \(err.localizedDescription)"
         case .transport(let err):
             return err.localizedDescription
+        case .notFound:
+            return "Item not found."
         }
     }
 }
