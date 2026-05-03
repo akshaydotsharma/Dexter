@@ -1,17 +1,14 @@
 import Foundation
 import SwiftData
 
-/// Local-first checklist service. Items are part of the row (JSONB on
-/// the server, JSON-encoded Data on the device) so updating an item is
-/// a row-level update.
+/// Local-first checklist service. Items are part of the row (JSON-encoded
+/// Data) so updating an item is a row-level update.
 @MainActor
 struct ChecklistService {
     let store: SwiftDataStore
-    let syncEngine: SyncEngine
 
-    init(store: SwiftDataStore = .shared, syncEngine: SyncEngine = .shared) {
+    init(store: SwiftDataStore = .shared) {
         self.store = store
-        self.syncEngine = syncEngine
     }
 
     func list() async throws -> [Checklist] {
@@ -29,12 +26,10 @@ struct ChecklistService {
             title: request.title,
             items: request.items,
             createdAt: now,
-            updatedAt: now,
-            needsSync: true
+            updatedAt: now
         )
         store.context.insert(row)
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
@@ -43,9 +38,7 @@ struct ChecklistService {
         row.title = request.title
         row.items = request.items
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
@@ -53,9 +46,7 @@ struct ChecklistService {
         let row = try fetchLocal(uuid: list.id)
         row.deletedAt = Date()
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
     }
 
     private func fetchLocal(uuid: UUID) throws -> LocalList {
@@ -66,9 +57,5 @@ struct ChecklistService {
             throw APIError.notFound
         }
         return row
-    }
-
-    private func kickSync() {
-        Task { @MainActor in try? await syncEngine.sync() }
     }
 }

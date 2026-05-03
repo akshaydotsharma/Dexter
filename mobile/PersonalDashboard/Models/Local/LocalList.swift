@@ -46,17 +46,6 @@ final class LocalList {
         set { itemsData = LocalList.encode(newValue) }
     }
 
-    func applyServerState(_ dto: Checklist) {
-        self.title = dto.title
-        self.items = dto.items
-        self.position = dto.position
-        self.version = dto.version
-        self.createdAt = dto.createdAt
-        self.updatedAt = dto.updatedAt
-        self.deletedAt = dto.deletedAt
-        self.needsSync = false
-    }
-
     func toDTO() -> Checklist {
         Checklist(
             id: clientUUID,

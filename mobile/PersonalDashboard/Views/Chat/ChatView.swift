@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
-    @State private var resolvedDrafts: [Int: DraftPreviewCard.Resolution] = [:]
+    @State private var resolvedDrafts: [UUID: DraftPreviewCard.Resolution] = [:]
     @State private var pendingViewMore: Bool = false
 
     @Bindable var router: AppRouter
@@ -126,10 +126,12 @@ struct ChatView: View {
                                 }
                             },
                             onCancel: { draft in
-                                Task {
-                                    await viewModel.reject(draft)
-                                    resolvedDrafts[draft.id] = .cancelled
-                                }
+                                // Reject is purely a UI operation now — record
+                                // the resolution before the model removes the
+                                // draft from its turn so the card animates out
+                                // showing the "Cancelled" state.
+                                resolvedDrafts[draft.id] = .cancelled
+                                viewModel.reject(draft)
                             }
                         )
                         .id(turn.id)
@@ -170,9 +172,9 @@ struct ChatView: View {
 
 private struct TurnView: View {
     let turn: ChatTurn
-    let resolvedDrafts: [Int: DraftPreviewCard.Resolution]
-    let onConfirm: (Draft) -> Void
-    let onCancel: (Draft) -> Void
+    let resolvedDrafts: [UUID: DraftPreviewCard.Resolution]
+    let onConfirm: (ChatDraft) -> Void
+    let onCancel: (ChatDraft) -> Void
 
     var body: some View {
         VStack(alignment: turn.role == .user ? .trailing : .leading, spacing: Space.md) {

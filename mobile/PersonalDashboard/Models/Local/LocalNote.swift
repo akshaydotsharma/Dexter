@@ -40,18 +40,6 @@ final class LocalNote {
         self.needsSync = needsSync
     }
 
-    func applyServerState(_ dto: Note) {
-        self.folderClientUUID = dto.folderId
-        self.title = dto.title
-        self.content = dto.content
-        self.position = dto.position
-        self.version = dto.version
-        self.createdAt = dto.createdAt
-        self.updatedAt = dto.updatedAt
-        self.deletedAt = dto.deletedAt
-        self.needsSync = false
-    }
-
     func toDTO() -> Note {
         Note(
             id: clientUUID,

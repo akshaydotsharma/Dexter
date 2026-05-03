@@ -3,7 +3,7 @@ import Observation
 import SwiftData
 
 /// View model for the Notes surface. Reads from SwiftData via NoteService;
-/// mutations land locally and trigger a background sync push.
+/// mutations land locally in the SwiftData store.
 @Observable
 @MainActor
 final class NotesViewModel {
@@ -32,16 +32,8 @@ final class NotesViewModel {
         self.notes = noteRows.map { $0.toDTO() }
     }
 
-    func load(syncFirst: Bool = true) async {
+    func load() async {
         isLoading = true
-        errorMessage = nil
-        if syncFirst {
-            do {
-                try await SyncEngine.shared.sync()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
         do {
             async let f = service.listFolders()
             async let n = service.list()

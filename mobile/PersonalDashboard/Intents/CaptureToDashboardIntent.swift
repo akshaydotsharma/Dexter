@@ -8,17 +8,16 @@ import Foundation
 /// Screen / Siri) can trigger:
 ///   Dictate Text -> CaptureToDashboard(input: $dictation) -> Show Notification
 ///
-/// The server's smart auto-confirm rule decides what happens to the input:
-///   - one CREATE_TODO/NOTE/LIST draft -> created and persisted, dialog
-///     reports what was added.
-///   - multiple drafts or any edit/delete draft -> left pending, dialog
-///     asks the user to open Dashboard to confirm.
+/// The on-device pipeline applies tool calls directly to SwiftData and
+/// reports outcomes:
+///   - executed actions -> dialog summarises what was applied.
 ///   - LLM follow-up question -> dialog surfaces the question, nothing
 ///     persisted.
+///   - failure -> dialog surfaces a brief error.
 struct CaptureToDashboardIntent: AppIntent {
     static var title: LocalizedStringResource = "Capture to Dashboard"
     static var description = IntentDescription(
-        "Add a task, note, or list to your dashboard from text or voice. Nothing risky is auto-saved — edits and multi-item captures are queued for review in the app."
+        "Add a task, note, or list to your dashboard from text or voice. Runs on-device against your local data, no server hop."
     )
 
     /// Stay backgrounded so the side button feels instant and the user
@@ -52,42 +51,98 @@ struct CaptureToDashboardIntent: AppIntent {
         do {
             response = try await service.capture(input: trimmed)
         } catch {
-            let detail = (error as? APIError)?.localizedDescription ?? error.localizedDescription
-            return .result(dialog: "Couldn't capture — \(detail)")
+            return .result(dialog: IntentDialog(stringLiteral: "Couldn't capture — \(error.localizedDescription)"))
         }
 
         switch response.status {
-        case .created:
-            let summary = Self.createdDialog(for: response.created ?? [])
+        case .executed:
+            let summary = Self.executedDialog(for: response.executed ?? [])
             return .result(dialog: IntentDialog(stringLiteral: summary))
         case .needsClarification:
             let q = response.followUpQuestion ?? "I need a bit more detail."
             return .result(dialog: IntentDialog(stringLiteral: q))
-        case .needsReview:
-            let count = response.pendingDrafts?.count ?? 0
-            let plural = count == 1 ? "item" : "items"
-            return .result(dialog: IntentDialog(stringLiteral:
-                "Drafted \(count) \(plural) — open Dashboard to review and confirm."
-            ))
         case .error:
             let first = response.errors?.first?.message ?? "something went wrong"
             return .result(dialog: IntentDialog(stringLiteral: "Couldn't capture — \(first)"))
         }
     }
 
-    private static func createdDialog(for items: [CapturedItem]) -> String {
-        guard let item = items.first else { return "Captured." }
-        let typeLabel: String
-        switch item.type {
-        case "todo": typeLabel = "task"
-        case "note": typeLabel = "note"
-        case "list": typeLabel = "list"
-        default: typeLabel = item.type
+    // MARK: - Dialog formatting
+
+    /// Build the dialog string from the list of applied actions. Single
+    /// action gets a focused sentence; multiple actions get a tally.
+    private static func executedDialog(for items: [ExecutedDraft]) -> String {
+        guard !items.isEmpty else { return "Done." }
+        if items.count == 1 {
+            return sentence(for: items[0])
         }
-        if let due = item.dueDate {
-            return "Added \(typeLabel) \"\(item.title)\" — due \(Self.dueFormatter.string(from: due))."
+        // Multi-action: short summary by type.
+        let creates = items.filter { $0.action == "created" }.count
+        let updates = items.filter {
+            $0.action == "updated" || $0.action == "completed" || $0.action == "reopened" ||
+            $0.action == "items_added" || $0.action == "item_updated" || $0.action == "item_removed"
+        }.count
+        let deletes = items.filter { $0.action == "deleted" }.count
+        var parts: [String] = []
+        if creates > 0 { parts.append("\(creates) added") }
+        if updates > 0 { parts.append("\(updates) updated") }
+        if deletes > 0 { parts.append("\(deletes) deleted") }
+        return parts.isEmpty ? "Done." : "Done — " + parts.joined(separator: ", ") + "."
+    }
+
+    private static func sentence(for item: ExecutedDraft) -> String {
+        let typeLabel = label(for: item.type)
+        let title = item.title ?? ""
+        let titleClause = title.isEmpty ? "" : " \"\(title)\""
+
+        switch (item.type, item.action) {
+        case ("todo", "created"):
+            if let due = item.dueDate {
+                return "Added task\(titleClause) — due \(dueFormatter.string(from: due))."
+            }
+            return "Added task\(titleClause)."
+        case ("note", "created"):
+            return "Added note\(titleClause)."
+        case ("list", "created"):
+            return "Added list\(titleClause)."
+        case ("folder", "created"):
+            return "Added folder\(titleClause)."
+
+        case ("todo", "completed"):
+            return "Marked task\(titleClause) complete."
+        case ("todo", "reopened"):
+            return "Reopened task\(titleClause)."
+        case (_, "updated"):
+            return "Updated \(typeLabel)\(titleClause)."
+        case ("list", "items_added"):
+            let target = title.isEmpty ? "the list" : "\"\(title)\""
+            if let names = item.addedNames, !names.isEmpty {
+                return "Added \(names) to \(target)."
+            }
+            return "Added items to \(target)."
+        case ("list", "item_updated"):
+            let target = title.isEmpty ? "the list" : "\"\(title)\""
+            return "Updated an item in \(target)."
+        case ("list", "item_removed"):
+            let target = title.isEmpty ? "the list" : "\"\(title)\""
+            return "Removed an item from \(target)."
+
+        case (_, "deleted"):
+            return "Deleted \(typeLabel)\(titleClause)."
+
+        default:
+            return "Done."
         }
-        return "Added \(typeLabel) \"\(item.title)\"."
+    }
+
+    private static func label(for type: String) -> String {
+        switch type {
+        case "todo": return "task"
+        case "note": return "note"
+        case "list": return "list"
+        case "folder": return "folder"
+        default: return type
+        }
     }
 
     private static let dueFormatter: DateFormatter = {

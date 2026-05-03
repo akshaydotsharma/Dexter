@@ -1,28 +1,20 @@
 import Foundation
 import SwiftData
 
-/// Local-first todo service. All mutations land in SwiftData first, get
-/// flagged with `needsSync = true`, and are pushed to the server in the
-/// background by `SyncEngine`. Reads always come from the local store, so
-/// the UI stays responsive even when the Mac is off.
-///
+/// Local-first todo service. All mutations land in SwiftData.
 /// Identity is the row's `clientUUID` (exposed as `Todo.id`), which is
-/// stable across the network — the iOS layer never depends on the
-/// server's integer primary key.
+/// stable — the iOS layer never depends on the server's integer primary key.
 @MainActor
 struct TodoService {
     let store: SwiftDataStore
-    let syncEngine: SyncEngine
 
-    init(store: SwiftDataStore = .shared, syncEngine: SyncEngine = .shared) {
+    init(store: SwiftDataStore = .shared) {
         self.store = store
-        self.syncEngine = syncEngine
     }
 
     // MARK: - Reads
 
-    /// Return the live, undeleted todos sorted by the server's preferred
-    /// position (or createdAt as a fallback).
+    /// Return the live, undeleted todos sorted by createdAt descending.
     func list() async throws -> [Todo] {
         let context = store.context
         let descriptor = FetchDescriptor<LocalTodo>(
@@ -35,9 +27,6 @@ struct TodoService {
 
     // MARK: - Writes
 
-    /// Create a new todo locally with a fresh UUID. The row is queued for
-    /// sync; it appears in `list()` immediately and shows up on the Mac on
-    /// the next successful push.
     func create(_ request: TodoCreateRequest) async throws -> Todo {
         let now = Date()
         let row = LocalTodo(
@@ -47,18 +36,13 @@ struct TodoService {
             dueDate: request.dueDate,
             tag: request.tag,
             createdAt: now,
-            updatedAt: now,
-            needsSync: true
+            updatedAt: now
         )
         store.context.insert(row)
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
-    /// Update a todo identified by its UUID (= `Todo.id`). Only fields
-    /// present on `request` are changed; nil values leave the existing
-    /// value alone.
     func update(_ todo: Todo, _ request: TodoUpdateRequest) async throws -> Todo {
         let row = try fetchLocal(uuid: todo.id)
         if let title = request.title { row.title = title }
@@ -67,27 +51,20 @@ struct TodoService {
         if let dueDate = request.dueDate { row.dueDate = dueDate }
         if let tag = request.tag { row.tag = tag }
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
-    /// Flip the `completed` flag. Identity is the UUID on `todo`.
     func toggleCompleted(_ todo: Todo) async throws -> Todo {
         let row = try fetchLocal(uuid: todo.id)
         row.completed.toggle()
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
-    /// Soft-delete the todo. The row stays in SwiftData with `deletedAt`
-    /// stamped so the next sync can push the tombstone. `permanent: true`
-    /// removes the row from the local store too — used when the server has
-    /// confirmed the delete and we no longer need the tombstone locally.
+    /// Soft-delete the todo. `permanent: true` removes the row from the local
+    /// store entirely.
     func delete(_ todo: Todo, permanent: Bool = false) async throws {
         let row = try fetchLocal(uuid: todo.id)
         if permanent {
@@ -95,20 +72,15 @@ struct TodoService {
         } else {
             row.deletedAt = Date()
             row.updatedAt = Date()
-            row.needsSync = true
         }
         try store.context.save()
-        kickSync()
     }
 
-    /// Restore a soft-deleted todo. Clears `deletedAt` and queues for sync.
     func restore(_ todo: Todo) async throws -> Todo {
         let row = try fetchLocal(uuid: todo.id)
         row.deletedAt = nil
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
@@ -122,13 +94,5 @@ struct TodoService {
             throw APIError.notFound
         }
         return row
-    }
-
-    /// Best-effort background sync. Failures are silent — the row stays
-    /// `needsSync = true` and the next attempt retries.
-    private func kickSync() {
-        Task { @MainActor in
-            try? await syncEngine.sync()
-        }
     }
 }

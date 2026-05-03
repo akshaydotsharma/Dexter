@@ -1,17 +1,13 @@
 import Foundation
 import SwiftData
 
-/// Local-first note service. Mirrors `TodoService` pattern: every
-/// mutation lands in SwiftData first, gets flagged needsSync, and the
-/// SyncEngine pushes to the server in the background.
+/// Local-first note service. Every mutation lands in SwiftData.
 @MainActor
 struct NoteService {
     let store: SwiftDataStore
-    let syncEngine: SyncEngine
 
-    init(store: SwiftDataStore = .shared, syncEngine: SyncEngine = .shared) {
+    init(store: SwiftDataStore = .shared) {
         self.store = store
-        self.syncEngine = syncEngine
     }
 
     // MARK: - Folders
@@ -26,10 +22,9 @@ struct NoteService {
     }
 
     func createFolder(name: String) async throws -> NoteFolder {
-        let row = LocalNoteFolder(name: name, needsSync: true)
+        let row = LocalNoteFolder(name: name)
         store.context.insert(row)
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
@@ -37,9 +32,7 @@ struct NoteService {
         let row = try fetchLocalFolder(uuid: folder.id)
         row.name = name
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
@@ -47,10 +40,7 @@ struct NoteService {
         let row = try fetchLocalFolder(uuid: folder.id)
         row.deletedAt = Date()
         row.updatedAt = Date()
-        row.needsSync = true
-        // Soft-cascade to child notes so the iOS view immediately stops
-        // showing them. The server's folder delete also cascades, so
-        // post-sync state matches.
+        // Soft-cascade to child notes so the iOS view immediately stops showing them.
         let folderUUID = folder.id
         let childDescriptor = FetchDescriptor<LocalNote>(
             predicate: #Predicate { $0.folderClientUUID == folderUUID && $0.deletedAt == nil }
@@ -59,10 +49,8 @@ struct NoteService {
         for child in children {
             child.deletedAt = Date()
             child.updatedAt = Date()
-            child.needsSync = true
         }
         try store.context.save()
-        kickSync()
     }
 
     // MARK: - Notes
@@ -91,12 +79,10 @@ struct NoteService {
             title: request.title,
             content: request.content,
             createdAt: now,
-            updatedAt: now,
-            needsSync: true
+            updatedAt: now
         )
         store.context.insert(row)
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
@@ -106,9 +92,7 @@ struct NoteService {
         if let content = request.content { row.content = content }
         if let folderId = request.folderId { row.folderClientUUID = folderId }
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
         return row.toDTO()
     }
 
@@ -116,9 +100,7 @@ struct NoteService {
         let row = try fetchLocalNote(uuid: note.id)
         row.deletedAt = Date()
         row.updatedAt = Date()
-        row.needsSync = true
         try store.context.save()
-        kickSync()
     }
 
     // MARK: - Internals
@@ -141,9 +123,5 @@ struct NoteService {
             throw APIError.notFound
         }
         return row
-    }
-
-    private func kickSync() {
-        Task { @MainActor in try? await syncEngine.sync() }
     }
 }

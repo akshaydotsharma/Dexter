@@ -30,4 +30,24 @@ enum AppConfig {
         // 3. Local simulator default.
         return URL(string: "http://localhost:3000/api")!
     }()
+
+    /// Anthropic Messages API key. Source order:
+    ///   1. `ANTHROPIC_API_KEY` env var (Xcode scheme for local sim runs).
+    ///   2. `ANTHROPIC_API_KEY` Info.plist key, baked at archive time by
+    ///      `mobile/ota/ship-lan.sh` so OTA-installed builds carry their own
+    ///      key without any per-device setup.
+    /// Returns nil if neither is set, in which case AI features surface a
+    /// clear "Anthropic API key not configured" error to the user.
+    static let anthropicAPIKey: String? = {
+        if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"],
+           !env.isEmpty {
+            return env
+        }
+        if let plist = Bundle.main.object(forInfoDictionaryKey: "ANTHROPIC_API_KEY") as? String,
+           !plist.isEmpty,
+           !plist.hasPrefix("$(") {
+            return plist
+        }
+        return nil
+    }()
 }
