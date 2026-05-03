@@ -16,6 +16,7 @@ const draftStore = require('./ai/draftStore');
 // v2 refactor helpers
 const { z } = require('zod');
 const { computeNewPosition } = require('./reorderHelpers');
+const { mountSyncRoutes } = require('./sync');
 const {
     DEFAULT_PREFERENCES,
     DEFAULT_WIDGETS,
@@ -148,6 +149,10 @@ const initDb = async () => {
         console.error('Error initializing database:', err);
     }
 };
+
+// Mount sync routes (iOS local-first data layer, #14). These live in their
+// own module to keep the wire format isolated from the legacy CRUD endpoints.
+mountSyncRoutes(app, db);
 
 // API Routes
 
@@ -383,7 +388,9 @@ app.post('/api/todos/:id/restore', async (req, res) => {
 // NOTE FOLDERS
 app.get('/api/note-folders', async (req, res) => {
     try {
-        const { rows } = await db.query('SELECT * FROM note_folders ORDER BY created_at DESC');
+        const { rows } = await db.query(
+            'SELECT * FROM note_folders WHERE deleted_at IS NULL ORDER BY created_at DESC'
+        );
         res.json(rows);
     } catch (err) {
         sendErrorResponse(res, err);
@@ -395,7 +402,7 @@ app.post('/api/note-folders', async (req, res) => {
         const { name } = req.body;
         const { rows } = await db.query(
             `INSERT INTO note_folders (name, position)
-             VALUES ($1, (SELECT COALESCE(MAX(position), 0) + 1000 FROM note_folders))
+             VALUES ($1, (SELECT COALESCE(MAX(position), 0) + 1000 FROM note_folders WHERE deleted_at IS NULL))
              RETURNING *`,
             [name]
         );
@@ -440,7 +447,22 @@ app.delete('/api/note-folders/:id', async (req, res) => {
         const { rows: folderRows } = await db.query('SELECT name FROM note_folders WHERE id = $1', [id]);
         const folderName = folderRows.length > 0 ? folderRows[0].name : null;
 
-        await db.query('DELETE FROM note_folders WHERE id = $1', [id]);
+        // Soft-delete the folder AND any notes inside it. Cascading the
+        // soft-delete to children means the iOS sync engine receives a
+        // tombstone per note, so local state correctly removes the whole
+        // subtree without orphaned references.
+        await db.withTransaction(async (client) => {
+            await client.query(
+                `UPDATE notes SET deleted_at = CURRENT_TIMESTAMP
+                 WHERE folder_id = $1 AND deleted_at IS NULL`,
+                [id]
+            );
+            await client.query(
+                `UPDATE note_folders SET deleted_at = CURRENT_TIMESTAMP
+                 WHERE id = $1 AND deleted_at IS NULL`,
+                [id]
+            );
+        });
 
         // Log folder deletion
         await logNoteHistory(parseInt(id), 'deleted', null, folderName, null, 'folder');
@@ -455,11 +477,11 @@ app.delete('/api/note-folders/:id', async (req, res) => {
 app.get('/api/notes', async (req, res) => {
     try {
         const { folder_id } = req.query;
-        let query = 'SELECT * FROM notes';
+        let query = 'SELECT * FROM notes WHERE deleted_at IS NULL';
         let params = [];
 
         if (folder_id) {
-            query += ' WHERE folder_id = $1';
+            query += ' AND folder_id = $1';
             params.push(folder_id);
         }
         query += ' ORDER BY updated_at DESC';
@@ -522,7 +544,7 @@ app.post('/api/notes', async (req, res) => {
             `INSERT INTO notes (title, content, folder_id, position, updated_at)
              VALUES ($1, $2, $3,
                      (SELECT COALESCE(MAX(position), 0) + 1000 FROM notes
-                      WHERE folder_id IS NOT DISTINCT FROM $3),
+                      WHERE folder_id IS NOT DISTINCT FROM $3 AND deleted_at IS NULL),
                      CURRENT_TIMESTAMP)
              RETURNING *`,
             [title, content, folderId]
@@ -600,7 +622,11 @@ app.delete('/api/notes/:id', async (req, res) => {
         const { rows: noteRows } = await db.query('SELECT title FROM notes WHERE id = $1', [id]);
         const noteTitle = noteRows.length > 0 ? noteRows[0].title : null;
 
-        await db.query('DELETE FROM notes WHERE id = $1', [id]);
+        await db.query(
+            `UPDATE notes SET deleted_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND deleted_at IS NULL`,
+            [id]
+        );
 
         // Log deletion
         await logNoteHistory(parseInt(id), 'deleted', null, noteTitle, null);
@@ -614,7 +640,9 @@ app.delete('/api/notes/:id', async (req, res) => {
 // LISTS
 app.get('/api/lists', async (req, res) => {
     try {
-        const { rows } = await db.query('SELECT * FROM lists ORDER BY created_at DESC');
+        const { rows } = await db.query(
+            'SELECT * FROM lists WHERE deleted_at IS NULL ORDER BY created_at DESC'
+        );
         res.json(rows);
     } catch (err) {
         sendErrorResponse(res, err);
@@ -662,7 +690,7 @@ app.post('/api/lists', async (req, res) => {
         const { title, items } = req.body;
         const { rows } = await db.query(
             `INSERT INTO lists (title, items, position)
-             VALUES ($1, $2, (SELECT COALESCE(MAX(position), 0) + 1000 FROM lists))
+             VALUES ($1, $2, (SELECT COALESCE(MAX(position), 0) + 1000 FROM lists WHERE deleted_at IS NULL))
              RETURNING *`,
             [title, JSON.stringify(items)]
         );
@@ -774,7 +802,11 @@ app.delete('/api/lists/:id', async (req, res) => {
         const { rows: listRows } = await db.query('SELECT title FROM lists WHERE id = $1', [id]);
         const listTitle = listRows.length > 0 ? listRows[0].title : null;
 
-        await db.query('DELETE FROM lists WHERE id = $1', [id]);
+        await db.query(
+            `UPDATE lists SET deleted_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND deleted_at IS NULL`,
+            [id]
+        );
 
         // Log deletion
         await logListHistory(parseInt(id), 'deleted', null, listTitle, null);
