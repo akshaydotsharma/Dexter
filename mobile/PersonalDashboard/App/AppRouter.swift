@@ -26,6 +26,11 @@ struct ActivityFocus: Equatable {
 @Observable
 @MainActor
 final class AppRouter {
+    /// Process-wide router so the URL handler (.onOpenURL) and the
+    /// notification-tap delegate can route into the same instance the views
+    /// observe.
+    static let shared = AppRouter()
+
     var path: [AppSection] = {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_SECTION"]?.lowercased(),
            let s = AppSection(rawValue: raw),
@@ -63,4 +68,32 @@ final class AppRouter {
 
     /// The currently active section (top of the stack, or chat when empty).
     var currentSection: AppSection { path.last ?? .chat }
+
+    // MARK: - Deeplinks
+
+    /// Handle a `personaldashboard://` URL by navigating to the right surface
+    /// and (if a UUID is present) setting `focus` so the destination view can
+    /// scroll the row into view.
+    ///
+    /// Recognised forms:
+    ///   personaldashboard://chat
+    ///   personaldashboard://tasks[/<uuid>]
+    ///   personaldashboard://notes[/<uuid>]    -- uuid may be a folder
+    ///   personaldashboard://lists[/<uuid>]
+    ///   personaldashboard://activity
+    ///   personaldashboard://dashboard
+    func handle(url: URL) {
+        guard url.scheme == "personaldashboard" else { return }
+        guard let host = url.host?.lowercased(), let section = AppSection(rawValue: host) else { return }
+
+        let trimmedPath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let uuid = trimmedPath.isEmpty ? nil : UUID(uuidString: trimmedPath)
+
+        if let uuid {
+            let isFolder = (section == .notes) && (URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "folder" })?.value == "1")
+            focus = ActivityFocus(section: section, id: uuid, isFolder: isFolder)
+        }
+        go(to: section)
+    }
 }

@@ -56,7 +56,18 @@ struct CaptureToDashboardIntent: AppIntent {
 
         switch response.status {
         case .executed:
-            let summary = Self.executedDialog(for: response.executed ?? [])
+            let executed = response.executed ?? []
+            let summary = Self.executedDialog(for: executed)
+            // Issue #13: post a tappable confirmation notification with a
+            // deeplink target so the user can jump from the banner into the
+            // owning surface. The App Intent's own ProvidesDialog is read-only
+            // and stays as the immediate confirmation.
+            let deeplink = CaptureNotification.deeplink(for: executed)
+            await CaptureNotification.schedule(
+                title: "Captured to Dashboard",
+                body: summary,
+                deeplink: deeplink
+            )
             return .result(dialog: IntentDialog(stringLiteral: summary))
         case .needsClarification:
             let q = response.followUpQuestion ?? "I need a bit more detail."

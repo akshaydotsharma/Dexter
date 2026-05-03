@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var router = AppRouter()
+    // Use the shared instance so .onOpenURL and the notification delegate can
+    // route into the same router the views observe (issue #13).
+    @State private var router = AppRouter.shared
     @AppStorage("colorSchemePref") private var schemePrefRaw: String = ColorSchemePref.system.rawValue
 
     private var schemePref: Binding<ColorSchemePref> {

@@ -54,6 +54,13 @@ targets:
           - Inter-Medium.ttf
           - Inter-SemiBold.ttf
           - JetBrainsMono-Regular.ttf
+        # Custom URL scheme for capture-confirmation notification taps and any
+        # future deeplinks. Format: personaldashboard://<section>[/<uuid>]
+        # e.g. personaldashboard://tasks/A1B2C3D4-... opens the Tasks surface.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.akshaysharma.personaldashboard
+            CFBundleURLSchemes:
+              - personaldashboard
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard
