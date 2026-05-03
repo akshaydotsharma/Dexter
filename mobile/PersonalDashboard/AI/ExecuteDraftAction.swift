@@ -32,10 +32,9 @@ struct DraftActionOutcome {
     let addedNames: String?
 }
 
-/// Applies the 15 tool-call action types to SwiftData. Mirrors the server's
-/// `executeDraftAction.js` flow but operates on `LocalTodo / LocalNote /
-/// LocalList / LocalNoteFolder`. Without sync there's no `needsSync` /
-/// `version` / soft-delete bookkeeping — deletes are true deletes.
+/// Applies the 15 tool-call action types to SwiftData. Operates on
+/// `LocalTodo / LocalNote / LocalList / LocalNoteFolder`. Deletes are
+/// true deletes (no tombstones).
 @MainActor
 struct ExecuteDraftAction {
     let store: SwiftDataStore

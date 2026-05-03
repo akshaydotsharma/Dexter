@@ -4,8 +4,6 @@ import SwiftData
 
 /// View model for the Tasks surface. Reads from the local SwiftData store
 /// (via `TodoService`) so the UI works whether or not the Mac is reachable.
-/// Mutations go to the local store immediately and trigger a background
-/// sync; the next refresh pulls back the canonical server state.
 @Observable
 @MainActor
 final class TodosViewModel {
@@ -28,20 +26,9 @@ final class TodosViewModel {
         self.todos = rows.map { $0.toDTO() }
     }
 
-    /// Refresh from the local store. Optionally triggers a sync first so
-    /// the local store catches up with the server before we re-render.
-    func load(syncFirst: Bool = true) async {
+    /// Refresh from the local store.
+    func load() async {
         isLoading = true
-        errorMessage = nil
-        if syncFirst {
-            do {
-                try await SyncEngine.shared.sync()
-            } catch {
-                // Sync failure is non-fatal — the local store still has the
-                // last-known state. Surface the error but keep going.
-                errorMessage = error.localizedDescription
-            }
-        }
         do {
             todos = try await service.list()
         } catch {
@@ -51,7 +38,7 @@ final class TodosViewModel {
     }
 
     func refresh() async {
-        await load(syncFirst: true)
+        await load()
     }
 
     func create(title: String, description: String? = nil, dueDate: Date? = nil, tag: String? = nil) async {

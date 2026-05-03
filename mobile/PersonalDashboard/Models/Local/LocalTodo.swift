@@ -1,15 +1,11 @@
 import Foundation
 import SwiftData
 
-/// Local-first SwiftData model for a todo. The phone treats this as the
-/// source of truth: every create/update/delete writes here first, then the
-/// `SyncEngine` pushes pending changes to the server and pulls remote
-/// changes back. `clientUUID` is the stable identity across the network;
-/// the server's integer primary key is irrelevant on the iOS side.
+/// Local-first SwiftData model for a todo. `clientUUID` is the stable
+/// identity; the server's integer primary key is irrelevant on the iOS side.
 @Model
 final class LocalTodo {
-    /// Stable identity. Generated locally on creation; the server adopts it
-    /// on first sync. Unique within the SwiftData store.
+    /// Stable identity. Generated locally on creation. Unique within the SwiftData store.
     @Attribute(.unique) var clientUUID: UUID
 
     var title: String
@@ -19,15 +15,12 @@ final class LocalTodo {
     var tag: String?
     var position: Int?
 
-    /// Server-assigned monotonic version. 0 if never synced.
     var version: Int64
 
     var createdAt: Date
     var updatedAt: Date
     var deletedAt: Date?
 
-    /// True when this row has unpushed local changes. The sync engine drains
-    /// the set of `needsSync == true` rows on every push cycle.
     var needsSync: Bool
 
     init(
@@ -56,23 +49,6 @@ final class LocalTodo {
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
         self.needsSync = needsSync
-    }
-
-    /// Adopt server state into the local row. Used by SyncEngine when
-    /// applying delta from `/api/sync/changes`. Clears `needsSync` because
-    /// the row now matches the server.
-    func applyServerState(_ dto: Todo) {
-        self.title = dto.title
-        self.todoDescription = dto.description
-        self.completed = dto.completed
-        self.dueDate = dto.dueDate
-        self.tag = dto.tag
-        self.position = dto.position
-        self.version = dto.version
-        self.createdAt = dto.createdAt
-        self.updatedAt = dto.updatedAt
-        self.deletedAt = dto.deletedAt
-        self.needsSync = false
     }
 
     /// Project to the view-facing DTO. ViewModels and views consume `Todo`

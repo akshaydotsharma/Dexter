@@ -23,16 +23,8 @@ final class ListsViewModel {
         self.lists = rows.map { $0.toDTO() }
     }
 
-    func load(syncFirst: Bool = true) async {
+    func load() async {
         isLoading = true
-        errorMessage = nil
-        if syncFirst {
-            do {
-                try await SyncEngine.shared.sync()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
         do {
             lists = try await service.list()
         } catch {

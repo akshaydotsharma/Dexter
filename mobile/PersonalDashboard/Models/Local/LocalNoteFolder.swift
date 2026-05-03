@@ -32,16 +32,6 @@ final class LocalNoteFolder {
         self.needsSync = needsSync
     }
 
-    func applyServerState(_ dto: NoteFolder) {
-        self.name = dto.name
-        self.position = dto.position
-        self.version = dto.version
-        self.createdAt = dto.createdAt
-        self.updatedAt = dto.updatedAt
-        self.deletedAt = dto.deletedAt
-        self.needsSync = false
-    }
-
     func toDTO() -> NoteFolder {
         NoteFolder(
             id: clientUUID,
