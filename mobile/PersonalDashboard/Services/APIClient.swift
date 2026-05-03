@@ -82,6 +82,9 @@ struct APIClient: Sendable {
             do {
                 return try Self.decoder.decode(T.self, from: data)
             } catch {
+                let bodyPreview = String(data: data.prefix(800), encoding: .utf8) ?? "<non-utf8 bytes>"
+                NSLog("[APIClient] Decoding failed for %@ — error=%@ body=%@",
+                      String(describing: T.self), String(describing: error), bodyPreview)
                 throw APIError.decoding(error)
             }
         } catch let error as APIError {

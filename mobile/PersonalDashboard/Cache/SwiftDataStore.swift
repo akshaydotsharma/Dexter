@@ -21,9 +21,21 @@ final class SwiftDataStore {
     private init() {
         do {
             let schema = Schema([LocalTodo.self])
+            // SwiftData defaults the store URL to Application Support, but
+            // on a fresh simulator that directory doesn't exist yet and
+            // CoreData logs a noisy stat failure on first run. Pre-creating
+            // the directory and pointing the configuration at an explicit
+            // URL avoids both problems.
+            let supportDir = try FileManager.default.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            let storeURL = supportDir.appendingPathComponent("PersonalDashboard.sqlite")
             let configuration = ModelConfiguration(
                 schema: schema,
-                isStoredInMemoryOnly: false
+                url: storeURL
             )
             self.container = try ModelContainer(for: schema, configurations: [configuration])
         } catch {

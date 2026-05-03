@@ -32,8 +32,16 @@ final class SyncEngine {
     /// surfaced for the caller to display; the local store is unaffected
     /// by transport failures so the next sync retries.
     func sync() async throws {
-        try await pushOutbox()
-        try await pullChanges()
+        NSLog("[SyncEngine] sync() begin")
+        do {
+            try await pushOutbox()
+            NSLog("[SyncEngine] pushOutbox done")
+            try await pullChanges()
+            NSLog("[SyncEngine] pullChanges done")
+        } catch {
+            NSLog("[SyncEngine] sync failed: %@", String(describing: error))
+            throw error
+        }
     }
 
     // MARK: - Push
