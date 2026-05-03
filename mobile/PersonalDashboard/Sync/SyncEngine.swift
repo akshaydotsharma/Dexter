@@ -70,7 +70,7 @@ final class SyncEngine {
         for row in pending { byUUID[row.clientUUID] = row }
 
         for serverDTO in response.applied.todos {
-            byUUID[serverDTO.clientUuid]?.applyServerState(serverDTO)
+            byUUID[serverDTO.id]?.applyServerState(serverDTO)
         }
         for rejection in response.rejected.todos {
             if let serverRow = rejection.serverRow {
@@ -104,7 +104,7 @@ final class SyncEngine {
     }
 
     private func applyIncomingTodo(_ dto: Todo, in context: ModelContext) throws {
-        let uuid = dto.clientUuid
+        let uuid = dto.id
         let descriptor = FetchDescriptor<LocalTodo>(
             predicate: #Predicate { $0.clientUUID == uuid }
         )
@@ -132,8 +132,7 @@ final class SyncEngine {
             }
             // New row from server.
             let row = LocalTodo(
-                clientUUID: dto.clientUuid,
-                serverID: dto.id,
+                clientUUID: dto.id,
                 title: dto.title,
                 todoDescription: dto.description,
                 completed: dto.completed,

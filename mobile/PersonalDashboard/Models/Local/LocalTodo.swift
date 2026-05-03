@@ -4,17 +4,13 @@ import SwiftData
 /// Local-first SwiftData model for a todo. The phone treats this as the
 /// source of truth: every create/update/delete writes here first, then the
 /// `SyncEngine` pushes pending changes to the server and pulls remote
-/// changes back. `clientUUID` is the stable identity across the network —
-/// the server keeps an integer `id` but the iOS layer only ever keys on UUID.
+/// changes back. `clientUUID` is the stable identity across the network;
+/// the server's integer primary key is irrelevant on the iOS side.
 @Model
 final class LocalTodo {
     /// Stable identity. Generated locally on creation; the server adopts it
     /// on first sync. Unique within the SwiftData store.
     @Attribute(.unique) var clientUUID: UUID
-
-    /// Server-assigned integer id, populated after the first successful sync.
-    /// nil for rows that exist locally but have not yet been pushed.
-    var serverID: Int?
 
     var title: String
     var todoDescription: String?
@@ -36,7 +32,6 @@ final class LocalTodo {
 
     init(
         clientUUID: UUID = UUID(),
-        serverID: Int? = nil,
         title: String,
         todoDescription: String? = nil,
         completed: Bool = false,
@@ -50,7 +45,6 @@ final class LocalTodo {
         needsSync: Bool = true
     ) {
         self.clientUUID = clientUUID
-        self.serverID = serverID
         self.title = title
         self.todoDescription = todoDescription
         self.completed = completed
@@ -68,7 +62,6 @@ final class LocalTodo {
     /// applying delta from `/api/sync/changes`. Clears `needsSync` because
     /// the row now matches the server.
     func applyServerState(_ dto: Todo) {
-        self.serverID = dto.id
         self.title = dto.title
         self.todoDescription = dto.description
         self.completed = dto.completed
@@ -82,12 +75,12 @@ final class LocalTodo {
         self.needsSync = false
     }
 
-    /// Project to the API-wire DTO for legacy view-model consumption while
-    /// the migration is in flight. ViewModels that read `[Todo]` keep working.
+    /// Project to the view-facing DTO. ViewModels and views consume `Todo`
+    /// (struct, value semantics) rather than the `LocalTodo` model directly,
+    /// so SwiftUI updates are predictable and equality is per-snapshot.
     func toDTO() -> Todo {
         Todo(
-            id: serverID ?? 0,
-            clientUuid: clientUUID,
+            id: clientUUID,
             title: title,
             description: todoDescription,
             completed: completed,
