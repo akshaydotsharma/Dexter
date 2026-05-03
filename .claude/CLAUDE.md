@@ -54,6 +54,16 @@ event: error    data: {"message": "..."}
 
 A real `streamText`-based implementation (`{type:"delta"/"draft"/"done"}` frames) was prototyped on the dropped `refactor/v2-backend` `chatStream.js`. To revive it, restore that file AND update `mobile/PersonalDashboard/Services/AIStreamingService.swift` + `client/src/hooks/useChat.js` together — the wire format is breaking.
 
+## GitHub issue conventions
+
+Every issue title MUST start with one of these three prefixes:
+
+- `[Enhancement]` — improvement to an existing feature (e.g. *[Enhancement] Improve UI of Todos widget*)
+- `[Bug]` — something broken or misbehaving (e.g. *[Bug] Chat does not process long messages*)
+- `[Feature]` — net-new capability (e.g. *[Feature] Build a new speech-to-text feature*)
+
+Tag with the matching label (`enhancement`, `bug`, or create/use a `feature` label). When the user describes work without specifying type, infer it: brand-new capability -> Feature; broken behaviour -> Bug; everything else -> Enhancement.
+
 ## Project-specific rules
 
 - Every secret-bearing file (`server/.env`, `client/.env`) is gitignored. Templates live in `*.env.example`. Never commit a real key.
