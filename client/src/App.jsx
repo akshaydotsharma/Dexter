@@ -7,6 +7,7 @@ import TasksPage from './pages/TasksPage';
 import NotesPage from './pages/NotesPage';
 import ListsPage from './pages/ListsPage';
 import DashboardPage from './pages/DashboardPage';
+import ActivityPage from './pages/ActivityPage';
 
 /**
  * v2 App — wraps the route tree in PreferencesProvider, then mounts every
@@ -65,6 +66,8 @@ export default function App() {
           <Route path="/lists/:id" element={<ListsPage />} />
 
           <Route path="/dashboard" element={<DashboardPage />} />
+
+          <Route path="/activity" element={<ActivityPage />} />
 
           <Route path="/settings" element={<Navigate to="/settings/appearance" replace />} />
           <Route path="/settings/appearance" element={<SettingsPlaceholder sectionLabel="Appearance" />} />

@@ -9,7 +9,7 @@ import TopBar from './TopBar';
 import ChatPopover from './ChatPopover';
 import { getStats } from '../services/api';
 
-const ROUTE_SEGMENTS = ['today', 'chat', 'tasks', 'notes', 'lists', 'dashboard', 'settings'];
+const ROUTE_SEGMENTS = ['today', 'chat', 'tasks', 'notes', 'lists', 'dashboard', 'activity', 'settings'];
 
 function deriveRoute(pathname) {
   const seg = pathname.split('/').filter(Boolean)[0];

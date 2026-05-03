@@ -5,11 +5,17 @@ import Button from './Button';
 import { getNotes, createNote, updateNote, deleteNote, getNoteFolders, createNoteFolder, updateNoteFolder, deleteNoteFolder } from '../services/api';
 import { Plus, Trash2, Loader2, Save, Folder, FolderOpen, ChevronRight, ChevronLeft, Edit2, Inbox } from 'lucide-react';
 
-const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHeightPx = null }, ref) {
+const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHeightPx = null, initialFolderId = null }, ref) {
     const [folders, setFolders] = useState([]);
     const [notes, setNotes] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [selectedFolderId, setSelectedFolderId] = useState(null);
+    // Honour initialFolderId from props (used by Activity timeline deep-link).
+    // Coerced to a number when numeric, since folder ids are integers.
+    const [selectedFolderId, setSelectedFolderId] = useState(() => {
+        if (initialFolderId == null) return null;
+        const asNumber = Number(initialFolderId);
+        return Number.isFinite(asNumber) ? asNumber : initialFolderId;
+    });
     const [currentNote, setCurrentNote] = useState(null); // null = list view, object = edit view
     const [newFolderName, setNewFolderName] = useState('');
     const [editingFolderId, setEditingFolderId] = useState(null);
@@ -52,7 +58,11 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
             if (selectedFolderId !== null) {
                 fetchNotes(selectedFolderId);
             }
-        }
+        },
+        selectFolder: (id) => {
+            const next = id == null ? 'all' : (Number.isFinite(Number(id)) ? Number(id) : id);
+            setSelectedFolderId(next);
+        },
     }));
 
     const fetchFolders = async () => {
@@ -61,6 +71,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
             const foldersArray = Array.isArray(data) ? data : [];
             setFolders(foldersArray);
             // Default to "All Notes" so unfiled notes are visible.
+            // If a deep-link supplied a starting folder, honour it instead.
             if (selectedFolderId === null) {
                 setSelectedFolderId('all');
             }
@@ -435,6 +446,7 @@ const NotesWidget = forwardRef(function NotesWidget({ fullHeight = false, maxHei
                             notes.map((note) => (
                                 <div
                                     key={note.id}
+                                    data-activity-id={note.id}
                                     className="group p-3 bg-paper-2 hover:bg-surface rounded-xl border border-transparent hover:border-[--color-accent-soft] hover:shadow-md transition-all relative"
                                 >
                                     {/* Title - inline editable */}

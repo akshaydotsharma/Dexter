@@ -42,6 +42,16 @@ export const updateConfig = (layout_preference) => api.put('/config', { layout_p
 
 export const getStats = () => api.get('/stats');
 
+// Activity timeline (issue #16): read-only feed of every create event.
+// Server contract: /api/dashboard/activity?cursor=<iso>:<type>:<id>&type=<note|todo|list|folder>&limit=<n>
+export const getActivity = ({ cursor, type, limit } = {}) => {
+  const params = {};
+  if (cursor) params.cursor = cursor;
+  if (type) params.type = type;
+  if (limit) params.limit = limit;
+  return api.get('/dashboard/activity', { params });
+};
+
 // AI Parse endpoint
 export const aiParse = (input) => api.post('/ai/parse', { input });
 

@@ -32,6 +32,7 @@
   --color-accent-tasks:    #4338CA;
   --color-accent-notes:    #B45309;
   --color-accent-lists:    #0F766E;
+  --color-accent-activity: #7C3F58;
   --color-accent-settings: #475569;
 
   /* Active route accent (defaults to chat = ink; overridden by [data-route="..."]) */
@@ -69,6 +70,7 @@
   --color-accent-tasks:    #818CF8;
   --color-accent-notes:    #F59E0B;
   --color-accent-lists:    #2DD4BF;
+  --color-accent-activity: #E5A3BA;
   --color-accent-settings: #94A3B8;
 
   --color-accent-fg:   #14110D;
@@ -104,6 +106,7 @@
     --color-accent-tasks:    #818CF8;
     --color-accent-notes:    #F59E0B;
     --color-accent-lists:    #2DD4BF;
+    --color-accent-activity: #E5A3BA;
     --color-accent-settings: #94A3B8;
 
     --color-accent-fg:   #14110D;
@@ -126,6 +129,7 @@
 [data-route="tasks"]    { --color-accent: var(--color-accent-tasks); }
 [data-route="notes"]    { --color-accent: var(--color-accent-notes); }
 [data-route="lists"]    { --color-accent: var(--color-accent-lists); }
+[data-route="activity"] { --color-accent: var(--color-accent-activity); }
 [data-route="settings"] { --color-accent: var(--color-accent-settings); }
 
 @layer base {
@@ -142,6 +146,23 @@
     min-height: 100vh;
     min-height: -webkit-fill-available;
   }
+}
+
+/* Activity deep-link pulse. A 1px outline at the current accent ring colour
+   that fades over 600ms. The destination widget toggles `data-activity-focus`
+   on the focused row, scrolls it into view, then removes the attribute when
+   the animation ends. Honours prefers-reduced-motion via the global rule
+   below (animation-duration is collapsed to 0.01ms, so the pulse is skipped). */
+@keyframes activity-focus-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--color-accent-ring); }
+  100% { box-shadow: 0 0 0 6px transparent; }
+}
+
+[data-activity-focus="true"] {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: inherit;
+  animation: activity-focus-pulse 600ms ease-out;
 }
 
 /* Reduced motion — honour OS preference globally */

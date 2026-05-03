@@ -4,6 +4,7 @@ import {
   CalendarDays,
   CheckSquare,
   FileText,
+  History,
   LayoutDashboard,
   List as ListIcon,
   MessageSquare,
@@ -30,6 +31,7 @@ const ITEMS = [
   { type: 'item', to: '/lists', label: 'Lists', icon: ListIcon },
   { type: 'divider' },
   { type: 'item', to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { type: 'item', to: '/activity', label: 'Activity', icon: History },
   { type: 'divider' },
   { type: 'item', to: '/settings', label: 'Settings', icon: Settings },
 ];
