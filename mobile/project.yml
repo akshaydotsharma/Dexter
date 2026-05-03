@@ -35,6 +35,7 @@ targets:
           - UIInterfaceOrientationPortrait
         ITSAppUsesNonExemptEncryption: false
         OTA_API_URL: $(OTA_API_URL)
+        ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
         # Allow plain-HTTP calls to the Mac dev server on the local network.
         # Personal-use dev build only — App Store distribution is not a goal.
         NSAppTransportSecurity:

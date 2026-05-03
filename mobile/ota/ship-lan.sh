@@ -37,9 +37,12 @@ command -v cloudflared  >/dev/null || { echo "cloudflared not found (brew instal
 
 cd "${MOBILE_DIR}"
 
-# ---- Resolve LAN IP and dev server port ----
-LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
-[ -n "${LAN_IP}" ] || { echo "Could not resolve Mac's LAN IP (en0/en1). Are you on wifi?"; exit 1; }
+# ---- Resolve LAN IP and dev server port (legacy — see note) ----
+# Once the iOS app moved on-device for AI + storage (PR #22-onwards),
+# OTA_API_URL is no longer load-bearing for the iPhone; AppConfig only
+# falls through to it if a future feature adds a server-bound call. We
+# still bake a sensible value so the Info.plist is well-formed.
+LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "127.0.0.1")"
 
 DEV_PORT=""
 for p in 3001 3000 3030; do
@@ -47,12 +50,24 @@ for p in 3001 3000 3030; do
         DEV_PORT="${p}"; break
     fi
 done
-[ -n "${DEV_PORT}" ] || { echo "Could not find personal-dashboard dev server on :3001/:3000/:3030. Run 'npm start' first."; exit 1; }
+DEV_PORT="${DEV_PORT:-3001}"
 
 API_URL="http://${LAN_IP}:${DEV_PORT}/api"
 echo "-> Mac LAN: ${LAN_IP}"
-echo "-> dev server port: ${DEV_PORT}"
-echo "-> API URL baked into IPA: ${API_URL}"
+echo "-> dev server port (best-effort): ${DEV_PORT}"
+echo "-> OTA_API_URL baked into IPA: ${API_URL} (legacy, unused by on-device AI path)"
+
+# ---- Resolve Anthropic API key ----
+# Source order: env override > server/.env. The key is baked into the IPA
+# so the on-device AI pipeline can reach api.anthropic.com without any
+# per-device setup. AppConfig.swift reads it from Info.plist at runtime.
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    if [ -f "${MOBILE_DIR}/../server/.env" ]; then
+        ANTHROPIC_API_KEY="$(grep -E '^ANTHROPIC_API_KEY=' "${MOBILE_DIR}/../server/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+    fi
+fi
+[ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "ANTHROPIC_API_KEY not set (env or server/.env). Aborting — AI features won't work without it."; exit 1; }
+echo "-> ANTHROPIC_API_KEY resolved (length=${#ANTHROPIC_API_KEY})"
 
 # ---- Regenerate project ----
 echo "-> regenerating Xcode project"
@@ -79,6 +94,7 @@ xcodebuild \
     CURRENT_PROJECT_VERSION="${BUNDLE_VERSION}" \
     MARKETING_VERSION="${SHORT_VERSION}" \
     OTA_API_URL="${API_URL}" \
+    ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
     archive \
     2>&1 | grep -E "(error:|warning: .*\.swift:|\*\* )" || true
 
