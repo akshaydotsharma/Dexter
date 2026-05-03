@@ -72,7 +72,218 @@ struct AnthropicClient: Sendable {
         }
     }
 
-    // TODO: streaming variant for Phase 2 (chat tokens + tool-use deltas).
+    /// Streaming variant of `send`. Yields incremental events the chat
+    /// surface can render token-by-token, plus reconstructed tool-use blocks
+    /// once their JSON input has been fully accumulated.
+    ///
+    /// Anthropic's SSE wire emits, per content block:
+    ///   1. `content_block_start` with the block's `index` + initial shape
+    ///   2. zero or more `content_block_delta` carrying either `text_delta`
+    ///      (for prose) or `input_json_delta` (partial JSON for tool_use)
+    ///   3. `content_block_stop` once the block is complete
+    /// Tool inputs arrive as a stream of partial JSON strings keyed by index;
+    /// we accumulate them and parse at `content_block_stop`.
+    @MainActor
+    func stream(
+        systemPrompt: String,
+        messages: [AnthropicMessage],
+        tools: [AnthropicTool]
+    ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
+                        throw AnthropicError.notConfigured
+                    }
+
+                    let body = AnthropicStreamingRequest(
+                        model: Self.model,
+                        max_tokens: Self.maxTokens,
+                        temperature: Self.temperature,
+                        system: systemPrompt,
+                        messages: messages,
+                        tools: tools,
+                        stream: true
+                    )
+
+                    var request = URLRequest(url: Self.endpoint)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.setValue(key, forHTTPHeaderField: "x-api-key")
+                    request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
+                    request.timeoutInterval = 120
+                    request.httpBody = try Self.encoder.encode(body)
+
+                    let (bytes, response) = try await session.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw AnthropicError.http(0, "non-HTTP response")
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        // Drain a small body preview to surface the API error.
+                        var preview = ""
+                        for try await line in bytes.lines {
+                            preview += line + "\n"
+                            if preview.count > 800 { break }
+                        }
+                        throw AnthropicError.http(http.statusCode, preview)
+                    }
+
+                    // SSE parser ported from Services/AIStreamingService.swift.
+                    // The flush-on-new-`event:` branch is load-bearing because
+                    // URLSession.AsyncBytes.lines collapses consecutive
+                    // newlines and never emits the blank record delimiter.
+                    var currentEvent: String = "message"
+                    var currentData: String = ""
+                    var blocks: [Int: AccumulatingBlock] = [:]
+
+                    func flush() {
+                        guard !currentData.isEmpty else {
+                            currentEvent = "message"
+                            return
+                        }
+                        Self.handle(
+                            eventName: currentEvent,
+                            dataLine: currentData,
+                            blocks: &blocks,
+                            continuation: continuation
+                        )
+                        currentEvent = "message"
+                        currentData = ""
+                    }
+
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { break }
+                        if line.isEmpty {
+                            flush()
+                            continue
+                        }
+                        if line.hasPrefix(":") {
+                            continue
+                        }
+                        if line.hasPrefix("event:") {
+                            if !currentData.isEmpty {
+                                flush()
+                            }
+                            currentEvent = line.dropFirst("event:".count)
+                                .trimmingCharacters(in: .whitespaces)
+                        } else if line.hasPrefix("data:") {
+                            let chunk = line.dropFirst("data:".count)
+                                .trimmingCharacters(in: .whitespaces)
+                            if currentData.isEmpty {
+                                currentData = chunk
+                            } else {
+                                currentData += "\n" + chunk
+                            }
+                        }
+                    }
+
+                    flush()
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Dispatch one decoded SSE record into the continuation. Kept static so
+    /// the parsing has no `self` dependency and stays testable in isolation.
+    private static func handle(
+        eventName: String,
+        dataLine: String,
+        blocks: inout [Int: AccumulatingBlock],
+        continuation: AsyncThrowingStream<AnthropicStreamEvent, Error>.Continuation
+    ) {
+        guard let data = dataLine.data(using: .utf8) else { return }
+
+        switch eventName {
+        case "content_block_start":
+            // Body: { type, index, content_block: { type, name?, ... } }
+            struct Payload: Decodable {
+                struct Block: Decodable {
+                    let type: String
+                    let name: String?
+                }
+                let index: Int
+                let content_block: Block
+            }
+            guard let p = try? Self.decoder.decode(Payload.self, from: data) else { return }
+            blocks[p.index] = AccumulatingBlock(
+                type: p.content_block.type,
+                name: p.content_block.name,
+                partialJSON: ""
+            )
+
+        case "content_block_delta":
+            // Body: { type, index, delta: { type, text?, partial_json? } }
+            struct Payload: Decodable {
+                struct Delta: Decodable {
+                    let type: String
+                    let text: String?
+                    let partial_json: String?
+                }
+                let index: Int
+                let delta: Delta
+            }
+            guard let p = try? Self.decoder.decode(Payload.self, from: data) else { return }
+            switch p.delta.type {
+            case "text_delta":
+                if let text = p.delta.text, !text.isEmpty {
+                    continuation.yield(.textDelta(text))
+                }
+            case "input_json_delta":
+                guard var block = blocks[p.index], let partial = p.delta.partial_json else { return }
+                block.partialJSON += partial
+                blocks[p.index] = block
+            default:
+                // Ignore unknown delta types (e.g. thinking_delta) — Phase 2
+                // chat surface only consumes text + tool input.
+                break
+            }
+
+        case "content_block_stop":
+            struct Payload: Decodable { let index: Int }
+            guard let p = try? Self.decoder.decode(Payload.self, from: data),
+                  let block = blocks.removeValue(forKey: p.index) else { return }
+            guard block.type == "tool_use", let name = block.name else { return }
+            // Empty input is valid (zero-arg tool); fall back to {} when blank.
+            let raw = block.partialJSON.isEmpty ? "{}" : block.partialJSON
+            guard let inputData = raw.data(using: .utf8),
+                  let value = try? JSONDecoder().decode(AnthropicJSONValue.self, from: inputData) else {
+                NSLog("AnthropicClient.stream: dropped malformed tool input for %@", name)
+                return
+            }
+            continuation.yield(.toolUse(name: name, input: value))
+
+        case "message_delta":
+            // Body: { type, delta: { stop_reason?, ... }, usage? }
+            // We don't yield here — `message_stop` is the canonical terminator
+            // and carries enough signal for our consumers.
+            break
+
+        case "message_stop":
+            // No useful body fields for the chat surface; carry the stop_reason
+            // through if we have one cached, otherwise nil.
+            continuation.yield(.done(stopReason: nil))
+
+        case "error":
+            struct Payload: Decodable {
+                struct Err: Decodable { let message: String? }
+                let error: Err?
+            }
+            if let p = try? Self.decoder.decode(Payload.self, from: data) {
+                continuation.yield(.error(p.error?.message ?? "Anthropic stream error"))
+            } else {
+                continuation.yield(.error(dataLine))
+            }
+
+        default:
+            // message_start / ping / unknown: nothing to yield.
+            break
+        }
+    }
 
     static let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -118,6 +329,38 @@ struct AnthropicRequest: Encodable {
     let system: String
     let messages: [AnthropicMessage]
     let tools: [AnthropicTool]
+}
+
+/// Streaming variant of the request body. Identical to `AnthropicRequest`
+/// plus the `stream: true` flag — kept as a separate struct so we don't
+/// emit `stream: false` on non-streaming calls.
+struct AnthropicStreamingRequest: Encodable {
+    let model: String
+    let max_tokens: Int
+    let temperature: Double
+    let system: String
+    let messages: [AnthropicMessage]
+    let tools: [AnthropicTool]
+    let stream: Bool
+}
+
+/// One decoded event from the streaming endpoint. The chat surface only
+/// needs four cases — text, completed tool block, terminator, error — so
+/// internal SSE plumbing stays inside `AnthropicClient`.
+enum AnthropicStreamEvent: Sendable {
+    case textDelta(String)
+    case toolUse(name: String, input: AnthropicJSONValue)
+    case done(stopReason: String?)
+    case error(String)
+}
+
+/// Per-block accumulator. We retain `type` + `name` from `content_block_start`
+/// so that on `content_block_stop` we know whether to emit a `.toolUse` (for
+/// `type == "tool_use"`) and have the tool's name without re-walking events.
+private struct AccumulatingBlock {
+    let type: String
+    let name: String?
+    var partialJSON: String
 }
 
 /// One conversation turn. `role` is "user" or "assistant"; content is an
@@ -213,7 +456,7 @@ struct AnthropicResponse: Decodable {
 /// Recursive JSON value. Load-bearing because tool inputs are arbitrary
 /// JSON shapes and we need to round-trip them through `Codable` without
 /// per-tool struct definitions.
-indirect enum AnthropicJSONValue: Codable, Sendable {
+indirect enum AnthropicJSONValue: Codable, Sendable, Hashable {
     case string(String)
     case int(Int)
     case double(Double)

@@ -24,7 +24,7 @@ extension DraftActionType {
 }
 
 struct DraftPreviewCard: View {
-    let draft: Draft
+    let draft: ChatDraft
     var resolved: Resolution? = nil
     var onConfirm: () -> Void
     var onEdit: (() -> Void)? = nil
@@ -37,18 +37,18 @@ struct DraftPreviewCard: View {
             Text(draft.actionType.eyebrowLabel)
                 .eyebrow()
 
-            if let title = draft.draftData.title ?? draft.draftData.name, !title.isEmpty {
+            if let title = draft.title, !title.isEmpty {
                 Text(title)
                     .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
-            } else if let preview = draft.preview, !preview.isEmpty {
-                Text(preview)
+            } else if !draft.preview.isEmpty {
+                Text(draft.preview)
                     .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
             }
 
-            if let content = draft.draftData.content, !content.isEmpty {
-                Text(content)
+            if let body = draft.bodyPreview, !body.isEmpty {
+                Text(body)
                     .font(.edSubheadline)
                     .foregroundStyle(Tokens.inkSoft)
                     .lineLimit(4)
@@ -58,14 +58,14 @@ struct DraftPreviewCard: View {
             chipRow
 
             // List items preview
-            if let items = draft.draftData.items, !items.isEmpty {
+            if let items = draft.itemTexts, !items.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(items.prefix(5).enumerated()), id: \.offset) { _, item in
+                    ForEach(Array(items.prefix(5).enumerated()), id: \.offset) { _, text in
                         HStack(spacing: 6) {
                             Image(systemName: "circle")
                                 .font(.system(size: 10, weight: .regular))
                                 .foregroundStyle(Tokens.muted)
-                            Text(item.text)
+                            Text(text)
                                 .font(.edCaption)
                                 .foregroundStyle(Tokens.inkSoft)
                         }
@@ -159,13 +159,13 @@ struct DraftPreviewCard: View {
 
     private func makeChips() -> [DraftChip] {
         var chips: [DraftChip] = []
-        if let due = draft.draftData.dueDate {
+        if let due = draft.dueDate {
             let isWarning = due.timeIntervalSinceNow < 24 * 3600 && due.timeIntervalSinceNow > 0
             let formatter = DateFormatter()
             formatter.dateFormat = "MMM d, h:mm a"
             chips.append(DraftChip(text: formatter.string(from: due), icon: "calendar", warning: isWarning))
         }
-        if let tag = draft.draftData.tag, !tag.isEmpty {
+        if let tag = draft.tag {
             chips.append(DraftChip(text: tag, icon: "tag", warning: false))
         }
         return chips
