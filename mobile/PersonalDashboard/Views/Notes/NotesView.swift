@@ -53,6 +53,15 @@ struct NotesView: View {
                 pendingFolderLaunchId = nil
             }
         }
+        .onAppear {
+            // Activity timeline deep-link consumption. Same caveat as the
+            // other surfaces: local notes/folders are keyed by clientUUID,
+            // so the activity endpoint's integer id can't currently resolve
+            // to a SwiftData row. Clear the focus so it doesn't loop.
+            if router.focus?.section == .notes {
+                router.focus = nil
+            }
+        }
         .sheet(isPresented: $showingNewFolder) {
             NewFolderSheet(viewModel: viewModel)
         }

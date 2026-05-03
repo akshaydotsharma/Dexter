@@ -658,6 +658,7 @@ const TodoWidget = forwardRef(function TodoWidget({ fullHeight = false }, ref) {
         return (
             <div
                 key={todo.id}
+                data-activity-id={todo.id}
                 className="group flex items-start gap-3 p-3 rounded-lg hover:bg-paper-2 border border-transparent hover:border-divider transition-all duration-200"
             >
                 <button

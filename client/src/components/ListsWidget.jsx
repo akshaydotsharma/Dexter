@@ -236,7 +236,7 @@ const ListsWidget = forwardRef(function ListsWidget({ fullHeight = false }, ref)
                                 lists.map((list) => {
                                     const isExpanded = expandedListIds.has(list.id);
                                     return (
-                                        <div key={list.id} className="rounded-xl border border-transparent hover:border-[--color-accent-soft] transition-all">
+                                        <div key={list.id} data-activity-id={list.id} className="rounded-xl border border-transparent hover:border-[--color-accent-soft] transition-all">
                                             {/* List Header */}
                                             <div
                                                 onClick={() => editingListId !== list.id && toggleExpand(list.id)}
