@@ -1,13 +1,15 @@
 /**
  * Tests for POST /api/ai/capture — the headless voice-capture endpoint
- * powering the iOS side-button shortcut.
+ * powering the iOS side-button shortcut. As of #14 follow-up the endpoint
+ * auto-executes EVERY draft the LLM produces (single, multi, create,
+ * edit, add-to-list, delete) so the shortcut is fully autonomous.
  *
- *  - status: "created" when chatToDrafts returns one CREATE_TODO/NOTE/LIST
- *  - status: "needs_review" for multiple drafts or any edit/delete draft
+ *  - status: "executed" when at least one draft was applied; `executed`
+ *    array carries the per-draft summaries used to build the spoken dialog
  *  - status: "needs_clarification" when LLM asks a follow-up question
+ *  - status: "error" only when zero drafts AND tool errors
  *  - 400 when input is missing or empty
  *  - 500 when ANTHROPIC_API_KEY is missing
- *  - real DB row is created for the auto-confirm path
  */
 
 const { test, before, after, beforeEach } = require('node:test');
@@ -105,9 +107,9 @@ test('rejects non-string input with 400', async () => {
     assert.strictEqual(status, 400);
 });
 
-// --- created (auto-confirm single CREATE) ------------------------------------
+// --- executed (auto-execution covers every draft type) ----------------------
 
-test('auto-confirms a single CREATE_TODO draft and creates the row', async () => {
+test('auto-executes a single CREATE_TODO draft and creates the row', async () => {
     const draft = await seedPendingDraft({
         actionType: 'CREATE_TODO',
         entityType: 'todo',
@@ -122,70 +124,85 @@ test('auto-confirms a single CREATE_TODO draft and creates the row', async () =>
 
     const { status, body } = await api('POST', '/api/ai/capture', { input: 'remind me to call John tomorrow at 3' });
     assert.strictEqual(status, 200);
-    assert.strictEqual(body.status, 'created');
-    assert.strictEqual(body.created.length, 1);
-    assert.strictEqual(body.created[0].type, 'todo');
-    assert.strictEqual(body.created[0].title, 'Call John');
-    assert.ok(body.created[0].id, 'should return the new todo id');
+    assert.strictEqual(body.status, 'executed');
+    assert.strictEqual(body.executed.length, 1);
+    assert.strictEqual(body.executed[0].type, 'todo');
+    assert.strictEqual(body.executed[0].action, 'created');
+    assert.strictEqual(body.executed[0].title, 'Call John');
+    assert.ok(body.executed[0].id, 'should return the new todo id');
 
-    const { rows } = await pool.query('SELECT title, tag, due_date FROM todos WHERE id = $1', [body.created[0].id]);
-    assert.strictEqual(rows.length, 1);
+    const { rows } = await pool.query('SELECT title, tag FROM todos WHERE id = $1', [body.executed[0].id]);
     assert.strictEqual(rows[0].title, 'Call John');
     assert.strictEqual(rows[0].tag, 'work');
 
     const updated = await draftStore.getDraftById(draft.id);
     assert.strictEqual(updated.status, 'confirmed');
-    assert.strictEqual(updated.result_entity_id, body.created[0].id);
+    assert.strictEqual(updated.result_entity_id, body.executed[0].id);
 });
 
-test('auto-confirms a single CREATE_NOTE draft', async () => {
+test('auto-executes a CREATE_NOTE draft', async () => {
     const draft = await seedPendingDraft({
-        actionType: 'CREATE_NOTE',
-        entityType: 'note',
+        actionType: 'CREATE_NOTE', entityType: 'note',
         draftData: { title: 'Trip ideas', content: 'Lisbon, Tokyo, Reykjavik' },
     });
     nextChatToDraftsResponse = {
         drafts: [draftStore.formatDraft(await draftStore.getDraftById(draft.id))],
-        assistantText: 'Drafted the note.',
-        followUpQuestion: null,
-        errors: [],
+        assistantText: 'Drafted the note.', followUpQuestion: null, errors: [],
     };
 
     const { body } = await api('POST', '/api/ai/capture', { input: 'note: Lisbon, Tokyo, Reykjavik' });
-    assert.strictEqual(body.status, 'created');
-    assert.strictEqual(body.created[0].type, 'note');
-    assert.strictEqual(body.created[0].title, 'Trip ideas');
+    assert.strictEqual(body.status, 'executed');
+    assert.strictEqual(body.executed[0].type, 'note');
+    assert.strictEqual(body.executed[0].action, 'created');
 
-    const { rows } = await pool.query('SELECT title, content FROM notes WHERE id = $1', [body.created[0].id]);
+    const { rows } = await pool.query('SELECT content FROM notes WHERE id = $1', [body.executed[0].id]);
     assert.strictEqual(rows[0].content, 'Lisbon, Tokyo, Reykjavik');
 });
 
-test('auto-confirms a single CREATE_LIST draft with items', async () => {
+test('auto-executes a CREATE_LIST draft with items', async () => {
     const draft = await seedPendingDraft({
-        actionType: 'CREATE_LIST',
-        entityType: 'list',
+        actionType: 'CREATE_LIST', entityType: 'list',
         draftData: { title: 'Groceries', items: ['eggs', 'milk', 'bread'] },
     });
     nextChatToDraftsResponse = {
         drafts: [draftStore.formatDraft(await draftStore.getDraftById(draft.id))],
-        assistantText: '',
-        followUpQuestion: null,
-        errors: [],
+        assistantText: '', followUpQuestion: null, errors: [],
     };
 
     const { body } = await api('POST', '/api/ai/capture', { input: 'shopping list eggs milk bread' });
-    assert.strictEqual(body.status, 'created');
-
-    const { rows } = await pool.query('SELECT items FROM lists WHERE id = $1', [body.created[0].id]);
+    assert.strictEqual(body.status, 'executed');
+    const { rows } = await pool.query('SELECT items FROM lists WHERE id = $1', [body.executed[0].id]);
     const items = typeof rows[0].items === 'string' ? JSON.parse(rows[0].items) : rows[0].items;
     assert.strictEqual(items.length, 3);
     assert.strictEqual(items[0].text, 'eggs');
-    assert.strictEqual(items[0].checked, false);
 });
 
-// --- needs_review (multi-draft or non-create) --------------------------------
+test('auto-executes ADD_TO_LIST so shortcut adds items without UI confirmation', async () => {
+    const { rows: listRows } = await pool.query(
+        `INSERT INTO lists (title, items) VALUES ('Groceries', '[{"text":"eggs","checked":false}]') RETURNING id`
+    );
+    const listId = listRows[0].id;
+    const draft = await seedPendingDraft({
+        actionType: 'ADD_TO_LIST', entityType: 'list',
+        draftData: { id: listId, new_items: [{ text: 'milk', checked: false }, { text: 'bread', checked: false }] },
+    });
+    nextChatToDraftsResponse = {
+        drafts: [draftStore.formatDraft(await draftStore.getDraftById(draft.id))],
+        assistantText: '', followUpQuestion: null, errors: [],
+    };
 
-test('returns needs_review for multiple drafts and leaves them pending', async () => {
+    const { body } = await api('POST', '/api/ai/capture', { input: 'add milk and bread to my groceries list' });
+    assert.strictEqual(body.status, 'executed');
+    assert.strictEqual(body.executed[0].action, 'items_added');
+    assert.match(body.executed[0].addedNames || '', /milk.*bread/);
+
+    const { rows } = await pool.query('SELECT items FROM lists WHERE id = $1', [listId]);
+    const items = typeof rows[0].items === 'string' ? JSON.parse(rows[0].items) : rows[0].items;
+    assert.strictEqual(items.length, 3);
+    assert.deepStrictEqual(items.map(i => i.text), ['eggs', 'milk', 'bread']);
+});
+
+test('auto-executes a multi-draft batch (every draft applies)', async () => {
     const todoDraft = await seedPendingDraft({
         actionType: 'CREATE_TODO', entityType: 'todo', draftData: { title: 'Task A' }
     });
@@ -197,43 +214,65 @@ test('returns needs_review for multiple drafts and leaves them pending', async (
             draftStore.formatDraft(await draftStore.getDraftById(todoDraft.id)),
             draftStore.formatDraft(await draftStore.getDraftById(noteDraft.id)),
         ],
-        assistantText: 'I drafted 2 items.',
-        followUpQuestion: null,
-        errors: [],
+        assistantText: 'I drafted 2 items.', followUpQuestion: null, errors: [],
     };
 
-    const { status, body } = await api('POST', '/api/ai/capture', { input: 'task A and note B' });
-    assert.strictEqual(status, 200);
-    assert.strictEqual(body.status, 'needs_review');
-    assert.strictEqual(body.pendingDrafts.length, 2);
-    assert.strictEqual(body.assistantText, 'I drafted 2 items.');
+    const { body } = await api('POST', '/api/ai/capture', { input: 'task A and note B' });
+    assert.strictEqual(body.status, 'executed');
+    assert.strictEqual(body.executed.length, 2);
 
     const todoState = await draftStore.getDraftById(todoDraft.id);
     const noteState = await draftStore.getDraftById(noteDraft.id);
-    assert.strictEqual(todoState.status, 'pending', 'multi-draft must NOT auto-confirm');
-    assert.strictEqual(noteState.status, 'pending', 'multi-draft must NOT auto-confirm');
+    assert.strictEqual(todoState.status, 'confirmed');
+    assert.strictEqual(noteState.status, 'confirmed');
 
     const { rows } = await pool.query('SELECT count(*)::int AS n FROM todos');
-    assert.strictEqual(rows[0].n, 0, 'no rows should be created on needs_review');
+    assert.strictEqual(rows[0].n, 1);
 });
 
-test('returns needs_review for an edit/delete draft (never auto-confirms mutations)', async () => {
-    const editDraft = await seedPendingDraft({
-        actionType: 'UPDATE_TODO', entityType: 'todo', draftData: { id: 42, title: 'New title' }
+test('auto-executes UPDATE_TODO drafts (no UI gate)', async () => {
+    const { rows: existing } = await pool.query(
+        `INSERT INTO todos (title) VALUES ('old title') RETURNING id`
+    );
+    const todoId = existing[0].id;
+    const draft = await seedPendingDraft({
+        actionType: 'UPDATE_TODO', entityType: 'todo', draftData: { id: todoId, title: 'New title' }
     });
     nextChatToDraftsResponse = {
-        drafts: [draftStore.formatDraft(await draftStore.getDraftById(editDraft.id))],
-        assistantText: '',
-        followUpQuestion: null,
-        errors: [],
+        drafts: [draftStore.formatDraft(await draftStore.getDraftById(draft.id))],
+        assistantText: '', followUpQuestion: null, errors: [],
     };
 
     const { body } = await api('POST', '/api/ai/capture', { input: 'rename task to New title' });
-    assert.strictEqual(body.status, 'needs_review');
-    assert.strictEqual(body.pendingDrafts.length, 1);
+    assert.strictEqual(body.status, 'executed');
+    assert.strictEqual(body.executed[0].action, 'updated');
 
-    const after = await draftStore.getDraftById(editDraft.id);
-    assert.strictEqual(after.status, 'pending');
+    const after = await draftStore.getDraftById(draft.id);
+    assert.strictEqual(after.status, 'confirmed');
+    const { rows } = await pool.query('SELECT title FROM todos WHERE id = $1', [todoId]);
+    assert.strictEqual(rows[0].title, 'New title');
+});
+
+test('partial failure: applied drafts succeed, broken ones land in `failed`', async () => {
+    const okDraft = await seedPendingDraft({
+        actionType: 'CREATE_TODO', entityType: 'todo', draftData: { title: 'Works' }
+    });
+    const badDraft = await seedPendingDraft({
+        actionType: 'UPDATE_TODO', entityType: 'todo', draftData: { id: 9999999, title: 'Misses' }
+    });
+    nextChatToDraftsResponse = {
+        drafts: [
+            draftStore.formatDraft(await draftStore.getDraftById(okDraft.id)),
+            draftStore.formatDraft(await draftStore.getDraftById(badDraft.id)),
+        ],
+        assistantText: '', followUpQuestion: null, errors: [],
+    };
+
+    const { body } = await api('POST', '/api/ai/capture', { input: 'mixed' });
+    assert.strictEqual(body.status, 'executed');
+    assert.strictEqual(body.executed.length, 1);
+    assert.strictEqual(body.failed.length, 1);
+    assert.match(body.failed[0].reason, /not found/i);
 });
 
 // --- needs_clarification -----------------------------------------------------

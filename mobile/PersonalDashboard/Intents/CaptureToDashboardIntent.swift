@@ -1,24 +1,21 @@
 import AppIntents
 import Foundation
 
-/// Adds a task / note / list to the personal dashboard from a free-text or
-/// dictated phrase, without opening the app.
+/// Adds a task / note / list (or edits one) on the personal dashboard from
+/// a free-text or dictated phrase, without opening the app.
 ///
-/// Wired into Shortcuts so the iPhone Action Button (or back-tap / Lock
-/// Screen / Siri) can trigger:
+/// Wired into Shortcuts so the iPhone Action Button (or back-tap, Lock
+/// Screen, Siri) can trigger:
 ///   Dictate Text -> CaptureToDashboard(input: $dictation) -> Show Notification
 ///
-/// The server's smart auto-confirm rule decides what happens to the input:
-///   - one CREATE_TODO/NOTE/LIST draft -> created and persisted, dialog
-///     reports what was added.
-///   - multiple drafts or any edit/delete draft -> left pending, dialog
-///     asks the user to open Dashboard to confirm.
-///   - LLM follow-up question -> dialog surfaces the question, nothing
-///     persisted.
+/// Server behaviour: every draft the LLM produces from the dictated input
+/// is auto-executed. Single create, multi-create, add-to-list, edit, even
+/// delete — all run autonomously. The dialog reports what changed, item by
+/// item, so the user gets confirmation without opening the app.
 struct CaptureToDashboardIntent: AppIntent {
     static var title: LocalizedStringResource = "Capture to Dashboard"
     static var description = IntentDescription(
-        "Add a task, note, or list to your dashboard from text or voice. Nothing risky is auto-saved — edits and multi-item captures are queued for review in the app."
+        "Add or update a task, note, or list on your dashboard from text or voice. Runs autonomously — the dictated phrase is parsed and applied without opening the app."
     )
 
     /// Stay backgrounded so the side button feels instant and the user
@@ -32,7 +29,7 @@ struct CaptureToDashboardIntent: AppIntent {
     /// prompts the user with the keyboard.
     @Parameter(
         title: "Capture",
-        description: "What you want to add — for example 'remind me to call John tomorrow at 3' or 'note: book ideas — Lisbon, Tokyo'.",
+        description: "What you want to add or change — for example 'remind me to call John tomorrow at 3', 'add milk and eggs to my groceries list', 'mark the dentist task as done'.",
         requestValueDialog: "What do you want to capture?"
     )
     var input: String
@@ -57,37 +54,79 @@ struct CaptureToDashboardIntent: AppIntent {
         }
 
         switch response.status {
-        case .created:
-            let summary = Self.createdDialog(for: response.created ?? [])
+        case .executed:
+            let summary = Self.executedDialog(executed: response.executed ?? [], failed: response.failed ?? [])
             return .result(dialog: IntentDialog(stringLiteral: summary))
         case .needsClarification:
             let q = response.followUpQuestion ?? "I need a bit more detail."
             return .result(dialog: IntentDialog(stringLiteral: q))
-        case .needsReview:
-            let count = response.pendingDrafts?.count ?? 0
-            let plural = count == 1 ? "item" : "items"
-            return .result(dialog: IntentDialog(stringLiteral:
-                "Drafted \(count) \(plural) — open Dashboard to review and confirm."
-            ))
         case .error:
             let first = response.errors?.first?.message ?? "something went wrong"
             return .result(dialog: IntentDialog(stringLiteral: "Couldn't capture — \(first)"))
         }
     }
 
-    private static func createdDialog(for items: [CapturedItem]) -> String {
-        guard let item = items.first else { return "Captured." }
-        let typeLabel: String
-        switch item.type {
-        case "todo": typeLabel = "task"
-        case "note": typeLabel = "note"
-        case "list": typeLabel = "list"
-        default: typeLabel = item.type
+    // MARK: - Dialog builder
+
+    private static func executedDialog(executed: [ExecutedDraft], failed: [FailedDraft]) -> String {
+        let lines = executed.map(sentence(for:))
+        var text: String
+        switch lines.count {
+        case 0: text = "Nothing to apply."
+        case 1: text = lines[0]
+        default: text = lines.joined(separator: " ")
         }
-        if let due = item.dueDate {
-            return "Added \(typeLabel) \"\(item.title)\" — due \(Self.dueFormatter.string(from: due))."
+        if !failed.isEmpty {
+            let plural = failed.count == 1 ? "item" : "items"
+            text += " (\(failed.count) \(plural) couldn't be applied.)"
         }
-        return "Added \(typeLabel) \"\(item.title)\"."
+        return text
+    }
+
+    private static func sentence(for item: ExecutedDraft) -> String {
+        let title = item.title ?? ""
+        switch (item.type, item.action) {
+        case ("todo", "created"):
+            if let due = item.dueDate {
+                return "Added task \"\(title)\" — due \(dueFormatter.string(from: due))."
+            }
+            return "Added task \"\(title)\"."
+        case ("todo", "completed"):
+            return "Marked \"\(title)\" complete."
+        case ("todo", "reopened"):
+            return "Reopened \"\(title)\"."
+        case ("todo", "updated"):
+            return "Updated task \"\(title)\"."
+        case ("todo", "deleted"):
+            return "Deleted task \"\(title)\"."
+        case ("note", "created"):
+            return "Added note \"\(title)\"."
+        case ("note", "updated"):
+            return "Updated note \"\(title)\"."
+        case ("note", "deleted"):
+            return "Deleted note \"\(title)\"."
+        case ("list", "created"):
+            return "Created list \"\(title)\"."
+        case ("list", "items_added"):
+            if let added = item.addedNames, !added.isEmpty {
+                return "Added \(added) to \"\(title)\"."
+            }
+            return "Added items to \"\(title)\"."
+        case ("list", "item_updated"):
+            return "Updated an item in \"\(title)\"."
+        case ("list", "item_removed"):
+            return "Removed an item from \"\(title)\"."
+        case ("list", "updated"):
+            return "Updated list \"\(title)\"."
+        case ("list", "deleted"):
+            return "Deleted list \"\(title)\"."
+        case ("folder", "updated"):
+            return "Renamed folder \"\(title)\"."
+        case ("folder", "deleted"):
+            return "Deleted folder \"\(title)\"."
+        default:
+            return "Done."
+        }
     }
 
     private static let dueFormatter: DateFormatter = {

@@ -6,17 +6,30 @@ struct CaptureRequest: Encodable {
     let timezone: String?
 }
 
-struct CapturedItem: Decodable, Sendable {
+/// Server's per-draft summary after auto-execution. The same shape covers
+/// creates, updates, deletes, and add-to-list intents — `action` tells the
+/// dialog builder which sentence to emit.
+struct ExecutedDraft: Decodable, Sendable {
     let type: String
-    let title: String
+    let action: String
     let id: Int
+    let title: String?
     let dueDate: Date?
+    let addedNames: String?
 }
 
-struct PendingDraftSummary: Decodable, Sendable {
+struct FailedDraft: Decodable, Sendable {
     let id: Int
-    let type: String
-    let title: String
+    let actionType: String
+    let title: String?
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case actionType
+        case title
+        case reason
+    }
 }
 
 struct CaptureErrorEntry: Decodable, Sendable {
@@ -26,15 +39,14 @@ struct CaptureErrorEntry: Decodable, Sendable {
 
 struct CaptureResponse: Decodable, Sendable {
     let status: Status
-    let created: [CapturedItem]?
-    let pendingDrafts: [PendingDraftSummary]?
+    let executed: [ExecutedDraft]?
+    let failed: [FailedDraft]?
     let assistantText: String?
     let followUpQuestion: String?
     let errors: [CaptureErrorEntry]?
 
     enum Status: String, Decodable, Sendable {
-        case created
-        case needsReview = "needs_review"
+        case executed
         case needsClarification = "needs_clarification"
         case error
     }
