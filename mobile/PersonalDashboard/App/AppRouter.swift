@@ -10,12 +10,12 @@ import Observation
 struct ActivityFocus: Equatable {
     /// Where the focus should land. Determines which destination view reads it.
     let section: AppSection
-    /// Server-side integer id of the row (or folder) to focus.
-    let id: Int
+    /// Local `clientUUID` of the row (or folder) to focus.
+    let id: UUID
     /// True for a folder deep-link (section is .notes, but the id is a folder).
     let isFolder: Bool
 
-    init(section: AppSection, id: Int, isFolder: Bool = false) {
+    init(section: AppSection, id: UUID, isFolder: Bool = false) {
         self.section = section
         self.id = id
         self.isFolder = isFolder

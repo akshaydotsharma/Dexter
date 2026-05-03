@@ -36,7 +36,7 @@ struct ActivityView: View {
                 FilterChipBar(
                     selected: viewModel.filter,
                     onSelect: { next in
-                        Task { await viewModel.setFilter(next) }
+                        viewModel.setFilter(next)
                     }
                 )
                 .padding(.horizontal, Space.lg)
@@ -78,34 +78,20 @@ struct ActivityView: View {
                                 Color.clear
                                     .frame(height: 1)
                                     .onAppear {
-                                        Task { await viewModel.loadNextPage() }
+                                        viewModel.loadNextPage()
                                     }
-                            }
-
-                            if let err = viewModel.errorMessage, !viewModel.isLoading {
-                                Button {
-                                    Task { await viewModel.loadNextPage() }
-                                } label: {
-                                    Text("Couldn't load more. Tap to retry.")
-                                        .font(.edSubheadline)
-                                        .foregroundStyle(Tokens.danger)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, Space.lg)
-                                        .accessibilityLabel("Retry loading more. \(err)")
-                                }
-                                .buttonStyle(.plain)
                             }
                         }
                     }
                     .padding(.bottom, 96) // FAB clearance
                 }
-                .refreshable { await viewModel.refresh() }
+                .refreshable { viewModel.refresh() }
             }
 
             ChatFAB { router.popToChat() }
         }
         .activeSection(.activity)
-        .task { await viewModel.loadFirstPage() }
+        .onAppear { viewModel.loadFirstPage() }
     }
 
     // MARK: - Tap → deep-link

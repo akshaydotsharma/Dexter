@@ -1,12 +1,9 @@
 import Foundation
 import Observation
 
-/// State holder for the Activity surface. Pure remote, no local cache. The
-/// service is injected so tests can stub it.
-///
-/// Pagination model: the server returns up to `limit` items plus a
-/// `nextCursor`. When `nextCursor` is null, we stop paginating. Filter
-/// changes reset the cursor and clear the items.
+/// State holder for the Activity surface. Reads from local SwiftData via
+/// `ActivityService`; no remote / no error path. Pagination is keyset-based
+/// over (createdAt, type, id) so a fresh insert can't shuffle pages.
 @Observable
 @MainActor
 final class ActivityViewModel {
@@ -37,7 +34,6 @@ final class ActivityViewModel {
             }
         }
 
-        /// `nil` for `.all`; the wire value otherwise.
         var typeParam: ActivityItem.ItemType? {
             switch self {
             case .all:    return nil
@@ -53,77 +49,51 @@ final class ActivityViewModel {
     private(set) var nextCursor: String?
     private(set) var isLoading = false
     private(set) var isLoadingMore = false
-    var errorMessage: String?
     var filter: Filter = .all
-
-    /// Bumped on every fresh load so a stale-filter response can be discarded
-    /// when the user flips filters mid-fetch.
-    private var requestGeneration = 0
 
     private let service: ActivityService
 
-    init(service: ActivityService = ActivityService()) {
+    init() {
+        self.service = ActivityService()
+    }
+
+    init(service: ActivityService) {
         self.service = service
     }
 
-    /// First page or refresh after filter change. Clears items, shows the
-    /// first-load skeleton in the view, and resets the cursor.
-    func loadFirstPage() async {
-        let myGen = bumpGeneration()
+    /// First page or refresh after filter change. Clears items and resets the
+    /// cursor.
+    func loadFirstPage() {
         isLoading = true
-        errorMessage = nil
         items = []
         nextCursor = nil
 
-        do {
-            let page = try await service.page(cursor: nil, type: filter.typeParam)
-            guard myGen == requestGeneration else { return }
-            items = page.items
-            nextCursor = page.nextCursor
-        } catch {
-            guard myGen == requestGeneration else { return }
-            errorMessage = error.localizedDescription
-        }
-        if myGen == requestGeneration {
-            isLoading = false
-        }
+        let page = service.page(cursor: nil, type: filter.typeParam)
+        items = page.items
+        nextCursor = page.nextCursor
+        isLoading = false
     }
 
     /// Append the next page if a cursor exists. No-op while another fetch is
     /// in flight or there are no more pages.
-    func loadNextPage() async {
+    func loadNextPage() {
         guard let cursor = nextCursor, !isLoadingMore, !isLoading else { return }
-        let myGen = requestGeneration
         isLoadingMore = true
-        errorMessage = nil
-        do {
-            let page = try await service.page(cursor: cursor, type: filter.typeParam)
-            guard myGen == requestGeneration else { return }
-            items.append(contentsOf: page.items)
-            nextCursor = page.nextCursor
-        } catch {
-            guard myGen == requestGeneration else { return }
-            errorMessage = error.localizedDescription
-        }
-        if myGen == requestGeneration {
-            isLoadingMore = false
-        }
+        let page = service.page(cursor: cursor, type: filter.typeParam)
+        items.append(contentsOf: page.items)
+        nextCursor = page.nextCursor
+        isLoadingMore = false
     }
 
     /// Pull-to-refresh hook. Same effect as `loadFirstPage`.
-    func refresh() async {
-        await loadFirstPage()
+    func refresh() {
+        loadFirstPage()
     }
 
     /// Switch the active filter and re-fetch. No-op if the filter is unchanged.
-    func setFilter(_ next: Filter) async {
+    func setFilter(_ next: Filter) {
         guard next != filter else { return }
         filter = next
-        await loadFirstPage()
-    }
-
-    private func bumpGeneration() -> Int {
-        requestGeneration += 1
-        return requestGeneration
+        loadFirstPage()
     }
 }
