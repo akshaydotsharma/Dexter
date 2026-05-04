@@ -11,6 +11,12 @@ struct ContentView: View {
         )
     }
 
+    /// Width of the leading hot-zone that captures edge-swipes to open the
+    /// drawer (issue #35). Matches the iOS-standard ~20pt edge for back /
+    /// drawer gestures.
+    private let edgeSwipeWidth: CGFloat = 20
+    private let edgeCoordinateSpace = "rootEdgeSwipe"
+
     var body: some View {
         ZStack(alignment: .leading) {
             // Chat is the root. Surfaces stack on top of chat by toggling
@@ -32,6 +38,43 @@ struct ContentView: View {
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
         .activeSection(router.currentSection)
         .animation(.easeOut(duration: 0.2), value: router.path)
+        .coordinateSpace(name: edgeCoordinateSpace)
+        // Edge-swipe-to-open lives on the root so it works on every primary
+        // surface. `simultaneousGesture` keeps taps reaching the underlying
+        // views; only drags whose start lands in the leading 20pt strip
+        // hijack the gesture to drag the drawer.
+        .simultaneousGesture(edgeOpenGesture)
+    }
+
+    private var edgeOpenGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named(edgeCoordinateSpace))
+            .onChanged { value in
+                guard !router.drawerOpen else { return }
+                guard value.startLocation.x <= edgeSwipeWidth else { return }
+                guard value.translation.width > 0 else { return }
+                let drawerWidth = min(280, UIScreen.main.bounds.width * 0.8)
+                router.drawerDragOffset = min(drawerWidth, value.translation.width)
+            }
+            .onEnded { value in
+                guard !router.drawerOpen else {
+                    router.drawerDragOffset = 0
+                    return
+                }
+                guard value.startLocation.x <= edgeSwipeWidth else {
+                    router.drawerDragOffset = 0
+                    return
+                }
+                let drawerWidth = min(280, UIScreen.main.bounds.width * 0.8)
+                let translation = value.translation.width
+                let velocity = value.predictedEndTranslation.width - translation
+                let shouldOpen = translation > drawerWidth * 0.4 || velocity > 500
+                withAnimation(.easeOut(duration: 0.2)) {
+                    router.drawerDragOffset = 0
+                    if shouldOpen {
+                        router.drawerOpen = true
+                    }
+                }
+            }
     }
 
     @ViewBuilder
