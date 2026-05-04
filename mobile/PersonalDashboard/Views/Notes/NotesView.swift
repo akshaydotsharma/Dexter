@@ -117,8 +117,11 @@ struct NotesView: View {
     // MARK: - Root list (folders + unfiled)
 
     private var rootList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: Space.xl) {
+        // `List` (not `ScrollView { LazyVStack }`) so each folder/note row can
+        // opt into native `.swipeActions`. Paper aesthetic preserved with
+        // clear row backgrounds and hidden separators.
+        List {
+            Section {
                 HStack {
                     Spacer()
                     Button {
@@ -134,77 +137,133 @@ struct NotesView: View {
                     }
                     .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
                 }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: Space.sm, trailing: Space.lg))
+            }
 
-                if !viewModel.folders.isEmpty {
-                    section("Folders") {
-                        VStack(spacing: Space.xs) {
-                            ForEach(viewModel.folders) { folder in
-                                FolderRow(
-                                    folder: folder,
-                                    count: viewModel.notes(in: folder).count,
-                                    onTap: {
-                                        withAnimation(.easeOut(duration: 0.2)) { selectedFolder = folder }
-                                    }
-                                )
+            if !viewModel.folders.isEmpty {
+                Section {
+                    ForEach(viewModel.folders) { folder in
+                        FolderRow(
+                            folder: folder,
+                            count: viewModel.notes(in: folder).count,
+                            onTap: {
+                                withAnimation(.easeOut(duration: 0.2)) { selectedFolder = folder }
+                            }
+                        )
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                Haptics.destructive()
+                                Task { await viewModel.deleteFolder(folder) }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }
-                }
-
-                let unfiled = viewModel.notes(in: nil)
-                if !unfiled.isEmpty {
-                    section("Unfiled") {
-                        VStack(spacing: Space.xs) {
-                            ForEach(unfiled) { note in
-                                NoteRow(note: note) { open(note: note) }
-                            }
-                        }
-                    }
-                }
-
-                if viewModel.folders.isEmpty && viewModel.notes.isEmpty && !viewModel.isLoading {
-                    Text("No notes yet. Tap “New note” to start.")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.muted)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, Space.xxxl)
+                } header: {
+                    sectionEyebrow("Folders")
                 }
             }
-            .padding(.horizontal, Space.lg)
-            .padding(.top, Space.lg)
-            .padding(.bottom, 96)
+
+            let unfiled = viewModel.notes(in: nil)
+            if !unfiled.isEmpty {
+                Section {
+                    ForEach(unfiled) { note in
+                        NoteRow(note: note) { open(note: note) }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    Haptics.destructive()
+                                    Task { await viewModel.deleteNote(note) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                    }
+                } header: {
+                    sectionEyebrow("Unfiled")
+                }
+            }
+
+            if viewModel.folders.isEmpty && viewModel.notes.isEmpty && !viewModel.isLoading {
+                Text("No notes yet. Tap “New note” to start.")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Space.xxxl)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+            }
+
+            Color.clear
+                .frame(height: 96)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
         .refreshable { await viewModel.load() }
     }
 
     private func folderNotesList(_ folder: NoteFolder) -> some View {
         let inFolder = viewModel.notes(in: folder)
-        return ScrollView {
-            LazyVStack(spacing: Space.xs) {
-                if inFolder.isEmpty {
-                    Text("No notes in \(folder.name) yet.")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.muted)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, Space.xxxl)
-                } else {
-                    ForEach(inFolder) { note in
-                        NoteRow(note: note) { open(note: note) }
-                    }
+        return List {
+            if inFolder.isEmpty {
+                Text("No notes in \(folder.name) yet.")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Space.xxxl)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: 0, trailing: Space.lg))
+            } else {
+                ForEach(inFolder) { note in
+                    NoteRow(note: note) { open(note: note) }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                Haptics.destructive()
+                                Task { await viewModel.deleteNote(note) }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                 }
             }
-            .padding(.horizontal, Space.lg)
-            .padding(.top, Space.lg)
-            .padding(.bottom, 96)
+
+            Color.clear
+                .frame(height: 96)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
         .refreshable { await viewModel.load() }
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder _ body: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            Text(title).eyebrow()
-            body()
-        }
+    private func sectionEyebrow(_ title: String) -> some View {
+        Text(title)
+            .eyebrow()
+            .textCase(nil)
+            .padding(.horizontal, Space.lg)
+            .padding(.top, Space.lg)
+            .padding(.bottom, Space.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.paper)
     }
 
     // MARK: - Note actions

@@ -23,22 +23,37 @@ struct TasksView: View {
                     onToggleTheme: { schemePref = schemePref.next }
                 )
 
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: Space.lg) {
+                // Using `List` (not `ScrollView { LazyVStack }`) so each row
+                // can opt into native `.swipeActions`. The list is dressed
+                // down to keep the editorial paper styling: clear row
+                // backgrounds, hidden separators, and `.scrollContentBackground`
+                // hidden so `Tokens.paper` shows through.
+                List {
+                    Section {
                         addRow
-
-                        if viewModel.isLoading && viewModel.todos.isEmpty {
-                            placeholder("Loading…")
-                        } else if viewModel.todos.isEmpty {
-                            placeholder("No tasks yet. Add one above.")
-                        } else {
-                            taskGroups
-                        }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: 0, trailing: Space.lg))
                     }
-                    .padding(.horizontal, Space.lg)
-                    .padding(.top, Space.lg)
-                    .padding(.bottom, 96) // FAB clearance
+
+                    if viewModel.isLoading && viewModel.todos.isEmpty {
+                        placeholderRow("Loading…")
+                    } else if viewModel.todos.isEmpty {
+                        placeholderRow("No tasks yet. Add one above.")
+                    } else {
+                        taskGroups
+                    }
+
+                    // FAB clearance — keeps the last row scrollable above the chat FAB.
+                    Color.clear
+                        .frame(height: 96)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Tokens.paper)
                 .refreshable { await viewModel.load() }
             }
 
@@ -123,80 +138,108 @@ struct TasksView: View {
 
     // MARK: - Grouped tasks
 
+    @ViewBuilder
     private var taskGroups: some View {
+        let buckets = computeBuckets()
+        if !buckets.overdue.isEmpty {
+            taskSection(title: "Overdue", count: buckets.overdue.count, accent: Tokens.danger, soft: Tokens.dangerSoft, todos: buckets.overdue)
+        }
+        if !buckets.today.isEmpty {
+            taskSection(title: "Today", count: buckets.today.count, accent: Tokens.warning, soft: Tokens.warningSoft, todos: buckets.today)
+        }
+        if !buckets.thisWeek.isEmpty {
+            taskSection(title: "This Week", count: buckets.thisWeek.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.thisWeek)
+        }
+        if !buckets.later.isEmpty {
+            taskSection(title: "Later", count: buckets.later.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.later)
+        }
+        if !buckets.noDate.isEmpty {
+            taskSection(title: "No Date", count: buckets.noDate.count, accent: Tokens.muted, soft: Tokens.paper2, todos: buckets.noDate)
+        }
+        if !buckets.completed.isEmpty {
+            completedSection(buckets.completed)
+        }
+    }
+
+    private struct TaskBuckets {
+        var overdue: [Todo] = []
+        var today: [Todo] = []
+        var thisWeek: [Todo] = []
+        var later: [Todo] = []
+        var noDate: [Todo] = []
+        var completed: [Todo] = []
+    }
+
+    private func computeBuckets() -> TaskBuckets {
         let now = Date()
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
         let weekEnd = cal.date(byAdding: .day, value: 7, to: today)!
 
+        var b = TaskBuckets()
+        b.completed = viewModel.todos.filter { $0.completed }
         let open = viewModel.todos.filter { !$0.completed }
-        let completed = viewModel.todos.filter { $0.completed }
-
-        var overdue: [Todo] = []
-        var todayList: [Todo] = []
-        var thisWeek: [Todo] = []
-        var later: [Todo] = []
-        var noDate: [Todo] = []
-
         for todo in open {
-            guard let due = todo.dueDate else { noDate.append(todo); continue }
-            if due < today { overdue.append(todo) }
-            else if due < tomorrow { todayList.append(todo) }
-            else if due < weekEnd { thisWeek.append(todo) }
-            else { later.append(todo) }
+            guard let due = todo.dueDate else { b.noDate.append(todo); continue }
+            if due < today { b.overdue.append(todo) }
+            else if due < tomorrow { b.today.append(todo) }
+            else if due < weekEnd { b.thisWeek.append(todo) }
+            else { b.later.append(todo) }
         }
+        return b
+    }
 
-        return VStack(alignment: .leading, spacing: Space.xl) {
-            if !overdue.isEmpty {
-                taskSection(title: "Overdue", count: overdue.count, accent: Tokens.danger, soft: Tokens.dangerSoft, todos: overdue)
+    @ViewBuilder
+    private func taskSection(title: String, count: Int, accent: Color, soft: Color, todos: [Todo]) -> some View {
+        Section {
+            ForEach(todos) { todo in
+                TaskRow(todo: todo) {
+                    Task { await viewModel.toggleCompleted(todo) }
+                } onTap: {
+                    editingTodo = todo
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        Haptics.destructive()
+                        Task { await viewModel.delete(todo) }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
-            if !todayList.isEmpty {
-                taskSection(title: "Today", count: todayList.count, accent: Tokens.warning, soft: Tokens.warningSoft, todos: todayList)
-            }
-            if !thisWeek.isEmpty {
-                taskSection(title: "This Week", count: thisWeek.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: thisWeek)
-            }
-            if !later.isEmpty {
-                taskSection(title: "Later", count: later.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: later)
-            }
-            if !noDate.isEmpty {
-                taskSection(title: "No Date", count: noDate.count, accent: Tokens.muted, soft: Tokens.paper2, todos: noDate)
-            }
-            if !completed.isEmpty {
-                completedSection(completed)
-            }
+        } header: {
+            sectionHeader(title: title, count: count, accent: accent, soft: soft)
         }
     }
 
-    private func taskSection(title: String, count: Int, accent: Color, soft: Color, todos: [Todo]) -> some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(spacing: Space.sm) {
-                Text(title)
-                    .font(.edHeading)
-                    .foregroundStyle(accent)
-                Text("\(count)")
-                    .font(.edCaption)
-                    .foregroundStyle(accent)
-                    .padding(.horizontal, Space.sm)
-                    .padding(.vertical, 2)
-                    .background(soft, in: Capsule())
-                Spacer()
-            }
-            VStack(spacing: Space.xs) {
+    @ViewBuilder
+    private func completedSection(_ todos: [Todo]) -> some View {
+        Section {
+            if completedExpanded {
                 ForEach(todos) { todo in
                     TaskRow(todo: todo) {
                         Task { await viewModel.toggleCompleted(todo) }
                     } onTap: {
                         editingTodo = todo
                     }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            Haptics.destructive()
+                            Task { await viewModel.delete(todo) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 }
             }
-        }
-    }
-
-    private func completedSection(_ todos: [Todo]) -> some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        } header: {
             Button {
                 withAnimation(.easeOut(duration: 0.2)) { completedExpanded.toggle() }
             } label: {
@@ -218,27 +261,45 @@ struct TasksView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-
-            if completedExpanded {
-                VStack(spacing: Space.xs) {
-                    ForEach(todos) { todo in
-                        TaskRow(todo: todo) {
-                            Task { await viewModel.toggleCompleted(todo) }
-                        } onTap: {
-                            editingTodo = todo
-                        }
-                    }
-                }
-            }
+            .textCase(nil)
+            .padding(.horizontal, Space.lg)
+            .padding(.top, Space.lg)
+            .padding(.bottom, Space.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.paper)
         }
     }
 
-    private func placeholder(_ text: String) -> some View {
+    private func sectionHeader(title: String, count: Int, accent: Color, soft: Color) -> some View {
+        HStack(spacing: Space.sm) {
+            Text(title)
+                .font(.edHeading)
+                .foregroundStyle(accent)
+            Text("\(count)")
+                .font(.edCaption)
+                .foregroundStyle(accent)
+                .padding(.horizontal, Space.sm)
+                .padding(.vertical, 2)
+                .background(soft, in: Capsule())
+            Spacer()
+        }
+        .textCase(nil)
+        .padding(.horizontal, Space.lg)
+        .padding(.top, Space.lg)
+        .padding(.bottom, Space.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.paper)
+    }
+
+    private func placeholderRow(_ text: String) -> some View {
         Text(text)
             .font(.edBody)
             .foregroundStyle(Tokens.muted)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, Space.xxxl)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
     }
 }
 
