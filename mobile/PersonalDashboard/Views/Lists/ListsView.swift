@@ -65,8 +65,11 @@ struct ListsView: View {
     }
 
     private var rootList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: Space.md) {
+        // `List` (not `ScrollView { LazyVStack }`) so each list row can opt
+        // into native `.swipeActions`. Paper aesthetic preserved via clear
+        // row backgrounds, hidden separators, and `.scrollContentBackground`.
+        List {
+            Section {
                 HStack {
                     Spacer()
                     Button {
@@ -76,27 +79,50 @@ struct ListsView: View {
                     }
                     .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
                 }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: Space.sm, trailing: Space.lg))
+            }
 
-                if viewModel.lists.isEmpty && !viewModel.isLoading {
-                    Text("No lists yet. Tap “New list” to start.")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.muted)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, Space.xxxl)
-                } else {
-                    ForEach(viewModel.lists) { list in
-                        ListSummaryRow(list: list) {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                selectedListId = list.id
-                            }
+            if viewModel.lists.isEmpty && !viewModel.isLoading {
+                Text("No lists yet. Tap “New list” to start.")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Space.xxxl)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+            } else {
+                ForEach(viewModel.lists) { list in
+                    ListSummaryRow(list: list) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            selectedListId = list.id
+                        }
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            Haptics.destructive()
+                            Task { await viewModel.delete(list) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
                         }
                     }
                 }
             }
-            .padding(.horizontal, Space.lg)
-            .padding(.top, Space.lg)
-            .padding(.bottom, 96)
+
+            Color.clear
+                .frame(height: 96)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
         .refreshable { await viewModel.load() }
     }
 }
@@ -238,17 +264,27 @@ private struct ListDetailContent: View {
                             ItemRow(item: item) {
                                 Task { await viewModel.toggleItem(in: list, at: index) }
                             } onDelete: {
+                                Haptics.destructive()
                                 Task { await viewModel.removeItem(from: list, at: index) }
                             }
                             .listRowBackground(Tokens.paper)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    Haptics.destructive()
+                                    Task { await viewModel.removeItem(from: list, at: index) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                         .onMove { source, destination in
                             Task { await viewModel.reorderItems(in: list, from: source, to: destination) }
                         }
                         .onDelete { offsets in
                             for index in offsets {
+                                Haptics.destructive()
                                 Task { await viewModel.removeItem(from: list, at: index) }
                             }
                         }
