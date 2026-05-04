@@ -53,7 +53,11 @@ struct ContentView: View {
         case .lists:
             ListsView(router: router, schemePref: schemePref)
         case .dashboard:
-            DashboardView(router: router, schemePref: schemePref)
+            // Dashboard surface is hidden (issue #30). The drawer entry has
+            // been removed and the LAUNCH_SECTION deep-link redirects to
+            // .activity, so this case is unreachable. Restore by replacing
+            // EmptyView() with `DashboardView(router: router, schemePref: schemePref)`.
+            EmptyView()
         case .activity:
             ActivityView(router: router, schemePref: schemePref)
         case .settings:
