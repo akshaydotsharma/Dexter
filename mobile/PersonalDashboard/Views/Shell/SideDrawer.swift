@@ -124,31 +124,38 @@ struct SideDrawer: View {
             Spacer()
 
             // Footer
-            HStack(spacing: Space.md) {
-                Button {
-                    schemePref = schemePref.next
-                } label: {
-                    Image(systemName: schemeIcon)
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(Tokens.muted)
-                        .frame(width: 36, height: 36)
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text("v\(Self.shortVersion) (\(Self.buildNumber))")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                    .accessibilityLabel("App version \(Self.shortVersion), build \(Self.buildNumber)")
+
+                HStack(spacing: Space.md) {
+                    Button {
+                        schemePref = schemePref.next
+                    } label: {
+                        Image(systemName: schemeIcon)
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundStyle(Tokens.muted)
+                            .frame(width: 36, height: 36)
+                            .background(Tokens.paper2, in: Circle())
+                            .overlay(Circle().stroke(Tokens.border, lineWidth: 0.5))
+                    }
+                    .accessibilityLabel("Theme: \(schemePref.rawValue)")
+
+                    Text("AS")
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.ink)
+                        .frame(width: 32, height: 32)
                         .background(Tokens.paper2, in: Circle())
                         .overlay(Circle().stroke(Tokens.border, lineWidth: 0.5))
+
+                    Text("Akshay")
+                        .font(.edBodyMedium)
+                        .foregroundStyle(Tokens.ink)
+
+                    Spacer()
                 }
-                .accessibilityLabel("Theme: \(schemePref.rawValue)")
-
-                Text("AS")
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.ink)
-                    .frame(width: 32, height: 32)
-                    .background(Tokens.paper2, in: Circle())
-                    .overlay(Circle().stroke(Tokens.border, lineWidth: 0.5))
-
-                Text("Akshay")
-                    .font(.edBodyMedium)
-                    .foregroundStyle(Tokens.ink)
-
-                Spacer()
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.lg)
@@ -166,6 +173,16 @@ struct SideDrawer: View {
         case .light:  return "sun.max"
         case .dark:   return "moon"
         }
+    }
+
+    // MARK: - Bundle helpers (mirrors SettingsView)
+
+    private static var shortVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    private static var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
     }
 }
 
