@@ -82,10 +82,9 @@ struct SideDrawer: View {
 
             DrawerDivider()
 
-            // Dashboard
-            DrawerRow(section: .dashboard, router: router)
-
-            // Activity (read-only chronological feed of all creations)
+            // Activity (read-only chronological feed of all creations).
+            // Dashboard surface is hidden (issue #30) — files retained for a
+            // future repurpose into a forward-looking plan/focus view.
             DrawerRow(section: .activity, router: router)
 
             DrawerDivider()

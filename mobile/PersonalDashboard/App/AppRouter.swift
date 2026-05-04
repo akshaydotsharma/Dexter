@@ -30,6 +30,9 @@ final class AppRouter {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_SECTION"]?.lowercased(),
            let s = AppSection(rawValue: raw),
            s != .chat {
+            // Dashboard is hidden (issue #30). Redirect any deep-link that
+            // targets it to Activity, the closest replacement surface.
+            if s == .dashboard { return [.activity] }
             return [s]
         }
         return []
