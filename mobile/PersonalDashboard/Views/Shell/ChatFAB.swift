@@ -9,25 +9,27 @@ struct ChatFAB: View {
     @State private var keyboardVisible = false
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(Tokens.paper)
-                .frame(width: 52, height: 52)
-                .background(Tokens.ink, in: Circle())
-                .shadowMd()
+        ZStack {
+            if !keyboardVisible {
+                Button(action: action) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(Tokens.paper)
+                        .frame(width: 52, height: 52)
+                        .background(Tokens.ink, in: Circle())
+                        .shadowMd()
+                }
+                .accessibilityLabel("Open chat")
+                .padding(.trailing, Space.lg)
+                .padding(.bottom, Space.lg)
+                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+            }
         }
-        .accessibilityLabel("Open chat")
-        .padding(.trailing, Space.lg)
-        .padding(.bottom, Space.lg)
-        .opacity(keyboardVisible ? 0 : 1)
-        .allowsHitTesting(!keyboardVisible)
-        .animation(.easeOut(duration: 0.18), value: keyboardVisible)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            keyboardVisible = true
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardVisible = false
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = false }
         }
     }
 }
