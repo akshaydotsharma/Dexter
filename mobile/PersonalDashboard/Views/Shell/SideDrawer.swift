@@ -1,54 +1,83 @@
 import SwiftUI
 
 /// Left side drawer mirroring `Sidebar.jsx`. Width = `min(280, screenWidth * 0.8)`.
+///
+/// Edge-swipe and finger-tracking gestures (issue #35):
+/// - Opening: a leading 20pt edge gesture lives on `ContentView` and writes
+///   to `router.drawerDragOffset` so the panel follows the finger.
+/// - Closing: a finger-tracking pan on the panel (and a tap on the scrim).
 struct SideDrawer: View {
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
 
+    /// Velocity threshold for "fling" snaps (pt/s). Above this, the drawer
+    /// snaps to the direction of motion regardless of distance.
+    private let velocitySnapThreshold: CGFloat = 500
+    /// Distance threshold as a fraction of drawer width (40%).
+    private let distanceSnapFraction: CGFloat = 0.4
+
     var body: some View {
         GeometryReader { geo in
             let drawerWidth = min(280, geo.size.width * 0.8)
+            let baseOffset: CGFloat = router.drawerOpen ? 0 : -drawerWidth
+            let panelX = max(-drawerWidth, min(0, baseOffset + router.drawerDragOffset))
+            // 0 = fully closed, 1 = fully open. Drives scrim opacity + hit-testing.
+            let progress = (panelX + drawerWidth) / drawerWidth
 
             ZStack(alignment: .leading) {
-                // Scrim
-                if router.drawerOpen {
-                    Tokens.ink.opacity(0.40)
-                        .ignoresSafeArea()
-                        .transition(.opacity)
-                        .onTapGesture {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                router.drawerOpen = false
-                            }
+                // Scrim — always present so it can fade in/out with the drag.
+                Tokens.ink.opacity(0.40 * Double(progress))
+                    .ignoresSafeArea()
+                    .allowsHitTesting(progress > 0.01)
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            router.drawerOpen = false
+                            router.drawerDragOffset = 0
                         }
-                }
+                    }
 
-                if router.drawerOpen {
-                    drawerPanel
-                        .frame(width: drawerWidth)
-                        .background(
-                            Tokens.surface
-                                .overlay(alignment: .trailing) {
-                                    Rectangle()
-                                        .fill(Tokens.border)
-                                        .frame(width: 0.5)
-                                }
-                                .ignoresSafeArea(edges: .vertical)
-                        )
-                        .transition(.move(edge: .leading))
-                        .gesture(
-                            DragGesture(minimumDistance: 20)
-                                .onEnded { value in
-                                    if value.translation.width < -40 {
-                                        withAnimation(.easeOut(duration: 0.2)) {
-                                            router.drawerOpen = false
-                                        }
-                                    }
-                                }
-                        )
-                }
+                drawerPanel
+                    .frame(width: drawerWidth)
+                    .background(
+                        Tokens.surface
+                            .overlay(alignment: .trailing) {
+                                Rectangle()
+                                    .fill(Tokens.border)
+                                    .frame(width: 0.5)
+                            }
+                            .ignoresSafeArea(edges: .vertical)
+                    )
+                    .offset(x: panelX)
+                    .gesture(closeDragGesture(drawerWidth: drawerWidth))
             }
             .animation(.easeOut(duration: 0.2), value: router.drawerOpen)
+            .animation(.interactiveSpring(response: 0.25, dampingFraction: 0.9), value: router.drawerDragOffset)
         }
+    }
+
+    /// Finger-tracking swipe-left-to-close gesture on the panel itself.
+    /// Active only when the drawer is open. Negative translations move the
+    /// panel toward the closed position; positive translations are ignored
+    /// (no over-pull past fully-open).
+    private func closeDragGesture(drawerWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 5)
+            .onChanged { value in
+                guard router.drawerOpen else { return }
+                router.drawerDragOffset = max(-drawerWidth, min(0, value.translation.width))
+            }
+            .onEnded { value in
+                guard router.drawerOpen else { return }
+                let translation = value.translation.width
+                let velocity = value.predictedEndTranslation.width - translation
+                let shouldClose = translation < -drawerWidth * distanceSnapFraction
+                    || velocity < -velocitySnapThreshold
+                withAnimation(.easeOut(duration: 0.2)) {
+                    router.drawerDragOffset = 0
+                    if shouldClose {
+                        router.drawerOpen = false
+                    }
+                }
+            }
     }
 
     private var drawerPanel: some View {

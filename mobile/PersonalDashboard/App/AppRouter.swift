@@ -39,6 +39,13 @@ final class AppRouter {
     }()
     var drawerOpen: Bool = (ProcessInfo.processInfo.environment["LAUNCH_DRAWER"] == "1")
 
+    /// Live drag delta for the drawer, in points. Positive while the user is
+    /// pulling the drawer open from the left edge; negative while pulling it
+    /// closed. Reset to 0 once the gesture ends and the drawer snaps to its
+    /// final state. SideDrawer reads this to render the panel mid-drag so it
+    /// follows the finger.
+    var drawerDragOffset: CGFloat = 0
+
     /// Pending Activity timeline deep-link target. The destination view reads
     /// this on `task` / `onAppear`, applies the scroll + pulse, then sets it
     /// back to nil so it doesn't fire again on the next appearance.
