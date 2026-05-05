@@ -18,37 +18,60 @@ extension View {
         }
     }
 
-    /// Fades a subtle gray tint behind the row as the user swipes left,
-    /// so the row's background reads as distinct from the destructive
-    /// `.swipeActions` button on the trailing edge. Visual-only — runs
-    /// as a `simultaneousGesture` so the stock swipe-to-delete still
-    /// commits normally; row height and the delete button itself are
-    /// unchanged.
-    func swipeProgressTint(_ color: Color = Tokens.borderStrong) -> some View {
-        modifier(SwipeProgressTintModifier(tint: color))
+    /// Fades a rounded gray tint behind the row in proportion to how
+    /// far the stock `.swipeActions` recogniser has shifted the row to
+    /// the left. Detection is purely geometric — a GeometryReader
+    /// measures the row's global x position and we compare against the
+    /// at-rest position. No custom DragGesture is attached, so the
+    /// stock swipe (and its full-swipe-to-commit) keep working
+    /// unchanged. Row height and the trailing trash button are
+    /// untouched.
+    func swipeProgressTint(_ color: Color = Tokens.borderStrong, cornerRadius: CGFloat = Radius.md) -> some View {
+        modifier(SwipeProgressTintModifier(tint: color, cornerRadius: cornerRadius))
+    }
+}
+
+private struct SwipeRowOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
 private struct SwipeProgressTintModifier: ViewModifier {
     let tint: Color
+    let cornerRadius: CGFloat
+    @State private var baseX: CGFloat? = nil
     @State private var progress: Double = 0
+
+    /// Distance over which the tint fades from 0 -> 1 opacity. Roughly
+    /// matches the width of the stock `.swipeActions` trash button so
+    /// the tint is fully present once the action is fully revealed.
+    private let revealDistance: CGFloat = 80
 
     func body(content: Content) -> some View {
         content
-            .background(tint.opacity(progress))
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 8)
-                    .onChanged { value in
-                        let dx = -value.translation.width
-                        guard dx > 0,
-                              abs(value.translation.width) > abs(value.translation.height) else { return }
-                        progress = min(1, Double(dx / 80))
-                    }
-                    .onEnded { _ in
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            progress = 0
-                        }
-                    }
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(tint)
+                    .opacity(progress)
             )
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .preference(
+                            key: SwipeRowOffsetKey.self,
+                            value: geo.frame(in: .global).origin.x
+                        )
+                }
+            )
+            .onPreferenceChange(SwipeRowOffsetKey.self) { x in
+                if let base = baseX {
+                    let dx = base - x
+                    progress = min(1, max(0, Double(dx / revealDistance)))
+                } else {
+                    baseX = x
+                }
+            }
     }
 }
