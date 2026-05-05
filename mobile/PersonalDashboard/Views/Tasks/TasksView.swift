@@ -200,13 +200,8 @@ struct TasksView: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        Haptics.destructive()
-                        Task { await viewModel.delete(todo) }
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
+                .swipeToDeleteTrash {
+                    Task { await viewModel.delete(todo) }
                 }
             }
         } header: {
@@ -227,13 +222,8 @@ struct TasksView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            Haptics.destructive()
-                            Task { await viewModel.delete(todo) }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                    .swipeToDeleteTrash {
+                        Task { await viewModel.delete(todo) }
                     }
                 }
             }
@@ -325,6 +315,9 @@ private struct TaskRow: View {
                 .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
+            // Map the circle's center (with a 4pt body-font offset for x-height) to the
+            // firstTextBaseline so the bullet visually centers on the title's first line.
+            .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
             .accessibilityLabel(todo.completed ? "Mark incomplete" : "Mark complete")
 
             VStack(alignment: .leading, spacing: 4) {
