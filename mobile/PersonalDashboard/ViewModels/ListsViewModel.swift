@@ -55,6 +55,29 @@ final class ListsViewModel {
         }
     }
 
+    func rename(_ list: Checklist, to title: String) async {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let listIndex = lists.firstIndex(where: { $0.id == list.id }),
+              lists[listIndex].title != trimmed else { return }
+        var snapshot = lists[listIndex]
+        snapshot.title = trimmed
+        lists[listIndex] = snapshot
+        await update(snapshot)
+    }
+
+    func renameItem(in list: Checklist, at index: Int, to text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let listIndex = lists.firstIndex(where: { $0.id == list.id }),
+              index < lists[listIndex].items.count,
+              lists[listIndex].items[index].text != trimmed else { return }
+        var snapshot = lists[listIndex]
+        snapshot.items[index].text = trimmed
+        lists[listIndex] = snapshot
+        await update(snapshot)
+    }
+
     func toggleItem(in list: Checklist, at index: Int) async {
         guard let listIndex = lists.firstIndex(where: { $0.id == list.id }),
               index < lists[listIndex].items.count else { return }

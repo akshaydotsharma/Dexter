@@ -27,7 +27,23 @@ struct NotesView: View {
                         }
                     )
                 } else if let folder = selectedFolder {
-                    folderDetailHeader(folder: folder)
+                    FolderDetailHeader(
+                        folder: folder,
+                        onBack: {
+                            withAnimation(.easeOut(duration: 0.2)) { selectedFolder = nil }
+                        },
+                        onRename: { newName in
+                            Task {
+                                await viewModel.renameFolder(folder, to: newName)
+                                if let updated = viewModel.folders.first(where: { $0.id == folder.id }) {
+                                    selectedFolder = updated
+                                }
+                            }
+                        },
+                        onAddNote: {
+                            Task { await createBlankNote(folderId: folder.id) }
+                        }
+                    )
                     folderNotesList(folder)
                 } else {
                     TopBar(
@@ -75,43 +91,6 @@ struct NotesView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
-    }
-
-    // MARK: - Folder header
-
-    private func folderDetailHeader(folder: NoteFolder) -> some View {
-        HStack(spacing: Space.md) {
-            Button {
-                withAnimation(.easeOut(duration: 0.2)) { selectedFolder = nil }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                    Text("Notes")
-                }
-                .font(.edBody)
-                .foregroundStyle(Tokens.muted)
-                .frame(height: 44)
-                .contentShape(Rectangle())
-            }
-            Spacer()
-            Text(folder.name)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-            Spacer()
-            Button {
-                Task { await createBlankNote(folderId: folder.id) }
-            } label: {
-                Image(systemName: "plus")
-                    .frame(width: 44, height: 44)
-                    .foregroundStyle(Tokens.ink)
-            }
-            .accessibilityLabel("New note")
-        }
-        .padding(.horizontal, Space.md)
-        .frame(height: 56)
-        .background(Tokens.paper.overlay(alignment: .bottom) {
-            Rectangle().fill(Tokens.divider).frame(height: 0.5)
-        })
     }
 
     // MARK: - Root list (folders + unfiled)
@@ -260,6 +239,79 @@ struct NotesView: View {
     private func createBlankNote(folderId: UUID?) async {
         guard let new = await viewModel.createNote(title: nil, content: nil, folderId: folderId) else { return }
         withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = new.id }
+    }
+}
+
+private struct FolderDetailHeader: View {
+    let folder: NoteFolder
+    let onBack: () -> Void
+    let onRename: (String) -> Void
+    let onAddNote: () -> Void
+
+    @State private var isEditing = false
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            Button(action: onBack) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                    Text("Notes")
+                }
+                .font(.edBody)
+                .foregroundStyle(Tokens.muted)
+                .frame(height: 44)
+                .contentShape(Rectangle())
+            }
+            Spacer()
+            if isEditing {
+                TextField("", text: $draft)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.center)
+                    .submitLabel(.done)
+                    .focused($focused)
+                    .onSubmit { commit() }
+                    .onChange(of: focused) { _, nowFocused in
+                        if !nowFocused { commit() }
+                    }
+                    .accessibilityLabel("Folder name")
+            } else {
+                Text(folder.name)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        draft = folder.name
+                        isEditing = true
+                        focused = true
+                    }
+                    .accessibilityLabel("Folder name, tap to rename")
+            }
+            Spacer()
+            Button(action: onAddNote) {
+                Image(systemName: "plus")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(Tokens.ink)
+            }
+            .accessibilityLabel("New note")
+        }
+        .padding(.horizontal, Space.md)
+        .frame(height: 56)
+        .background(Tokens.paper.overlay(alignment: .bottom) {
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+        })
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty && trimmed != folder.name {
+            onRename(trimmed)
+        }
+        isEditing = false
+        focused = false
     }
 }
 
