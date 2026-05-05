@@ -54,10 +54,10 @@ struct NotesView: View {
             }
         }
         .onAppear {
-            // Activity timeline deep-link consumption. Same caveat as the
-            // other surfaces: local notes/folders are keyed by clientUUID,
-            // so the activity endpoint's integer id can't currently resolve
-            // to a SwiftData row. Clear the focus so it doesn't loop.
+            // Activity timeline deep-link consumption. Same shape as the
+            // other surfaces: focus carries the clientUUID (folder UUID when
+            // `isFolder` is true). Scroll + pulse on the matching row is a
+            // follow-up; clear here so the focus doesn't loop.
             if router.focus?.section == .notes {
                 router.focus = nil
             }

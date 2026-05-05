@@ -41,10 +41,9 @@ struct ListsView: View {
         .activeSection(.lists)
         .task { await viewModel.load() }
         .onAppear {
-            // Activity timeline deep-link consumption. Same caveat as TasksView:
-            // local lists use clientUUID as identity, so the activity endpoint's
-            // integer id can't resolve into the local store today. Clear the
-            // field to avoid re-firing on subsequent appearances.
+            // Activity timeline deep-link consumption. Same shape as TasksView:
+            // focus carries the clientUUID. Scroll + pulse on the matching row
+            // is a follow-up; clear here so the focus doesn't loop.
             if router.focus?.section == .lists {
                 router.focus = nil
             }

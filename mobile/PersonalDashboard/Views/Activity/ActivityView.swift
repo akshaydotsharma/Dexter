@@ -1,15 +1,69 @@
 import SwiftUI
+import SwiftData
 
 /// Activity timeline surface (issue #16). Read-only chronological feed of
-/// every note, todo, list, and folder the user has created. Same shape as the
-/// web version: filter chips, day-grouped rows with sticky headers, infinite
-/// scroll via the last-row sentinel, deep-link to the owning section with a
-/// brief accent pulse on the focused row.
+/// every note, todo, list, and folder the user has captured. Day-grouped rows
+/// with sticky headers, deep-link to the owning section.
+///
+/// The feed reads directly from SwiftData via `@Query`, so any create / edit
+/// / soft-delete on any surface (Tasks, Notes, Lists, AI capture, chat
+/// confirm) updates the feed automatically without a pull-to-refresh.
 struct ActivityView: View {
-    @State private var viewModel = ActivityViewModel()
+    enum Filter: Equatable, CaseIterable, Identifiable {
+        case all, note, todo, list, folder
+
+        var id: String {
+            switch self {
+            case .all:    return "all"
+            case .note:   return "note"
+            case .todo:   return "todo"
+            case .list:   return "list"
+            case .folder: return "folder"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .all:    return "All"
+            case .note:   return "Notes"
+            case .todo:   return "Todos"
+            case .list:   return "Lists"
+            case .folder: return "Folders"
+            }
+        }
+
+        var typeMatch: ActivityItem.ItemType? {
+            switch self {
+            case .all:    return nil
+            case .note:   return .note
+            case .todo:   return .todo
+            case .list:   return .list
+            case .folder: return .folder
+            }
+        }
+    }
 
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
+
+    @Query(filter: #Predicate<LocalTodo> { $0.deletedAt == nil })
+    private var todos: [LocalTodo]
+
+    @Query(filter: #Predicate<LocalNote> { $0.deletedAt == nil })
+    private var notes: [LocalNote]
+
+    @Query(filter: #Predicate<LocalList> { $0.deletedAt == nil })
+    private var lists: [LocalList]
+
+    @Query(filter: #Predicate<LocalNoteFolder> { $0.deletedAt == nil })
+    private var folders: [LocalNoteFolder]
+
+    @State private var filter: Filter = .all
+    @State private var visibleCount: Int = pageSize
+
+    /// First page size and the increment per "load more" tap. Generous because
+    /// SwiftData fetches are cheap and LazyVStack only renders what's on screen.
+    private static let pageSize = 100
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -24,7 +78,6 @@ struct ActivityView: View {
                     onToggleTheme: { schemePref = schemePref.next }
                 )
 
-                // Caption sits under TopBar, mirroring the web subtitle.
                 Text("Everything you have captured, newest first.")
                     .font(.edSubheadline)
                     .foregroundStyle(Tokens.muted)
@@ -34,9 +87,11 @@ struct ActivityView: View {
                     .padding(.bottom, Space.sm)
 
                 FilterChipBar(
-                    selected: viewModel.filter,
+                    selected: filter,
                     onSelect: { next in
-                        Task { await viewModel.setFilter(next) }
+                        guard next != filter else { return }
+                        filter = next
+                        visibleCount = Self.pageSize
                     }
                 )
                 .padding(.horizontal, Space.lg)
@@ -44,16 +99,17 @@ struct ActivityView: View {
 
                 Divider().background(Tokens.divider)
 
+                let pageItems = currentPageItems
+                let total = totalAfterFilter
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        if viewModel.isLoading {
-                            FirstLoadSkeleton()
-                        } else if viewModel.items.isEmpty {
-                            EmptyStateView(filter: viewModel.filter)
+                        if pageItems.isEmpty {
+                            EmptyStateView(filter: filter)
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, Space.xxxl)
                         } else {
-                            ForEach(groups, id: \.key) { group in
+                            ForEach(groups(for: pageItems), id: \.key) { group in
                                 Section(header: dayHeader(for: group)) {
                                     ForEach(Array(group.items.enumerated()), id: \.element.rowKey) { idx, item in
                                         ActivityRow(item: item) {
@@ -69,43 +125,114 @@ struct ActivityView: View {
                                 }
                             }
 
-                            // Subsequent-page skeleton + load-more sentinel
-                            if viewModel.isLoadingMore {
-                                NextPageSkeleton()
-                            }
-
-                            if viewModel.nextCursor != nil {
+                            if pageItems.count < total {
                                 Color.clear
                                     .frame(height: 1)
                                     .onAppear {
-                                        Task { await viewModel.loadNextPage() }
+                                        visibleCount += Self.pageSize
                                     }
-                            }
-
-                            if let err = viewModel.errorMessage, !viewModel.isLoading {
-                                Button {
-                                    Task { await viewModel.loadNextPage() }
-                                } label: {
-                                    Text("Couldn't load more. Tap to retry.")
-                                        .font(.edSubheadline)
-                                        .foregroundStyle(Tokens.danger)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, Space.lg)
-                                        .accessibilityLabel("Retry loading more. \(err)")
-                                }
-                                .buttonStyle(.plain)
                             }
                         }
                     }
                     .padding(.bottom, 96) // FAB clearance
                 }
-                .refreshable { await viewModel.refresh() }
+                .refreshable {
+                    // @Query is already live; pull-to-refresh just resets the
+                    // page window so the feed snaps back to the top.
+                    visibleCount = Self.pageSize
+                }
             }
 
             ChatFAB { router.popToChat() }
         }
         .activeSection(.activity)
-        .task { await viewModel.loadFirstPage() }
+    }
+
+    // MARK: - Combine + filter + paginate
+
+    private var combinedItems: [ActivityItem] {
+        var out: [ActivityItem] = []
+        out.reserveCapacity(todos.count + notes.count + lists.count + folders.count)
+
+        for todo in todos {
+            out.append(ActivityItem(
+                id: todo.clientUUID,
+                type: .todo,
+                title: todo.title,
+                snippet: todo.todoDescription,
+                parent: nil,
+                sortDate: max(todo.createdAt, todo.updatedAt),
+                createdAt: todo.createdAt
+            ))
+        }
+
+        let folderNameByUUID: [UUID: String] = Dictionary(
+            uniqueKeysWithValues: folders.map { ($0.clientUUID, $0.name) }
+        )
+
+        for note in notes {
+            let parentName: String? = {
+                guard let fid = note.folderClientUUID else { return nil }
+                return folderNameByUUID[fid]
+            }()
+            out.append(ActivityItem(
+                id: note.clientUUID,
+                type: .note,
+                title: note.title ?? "",
+                snippet: note.content,
+                parent: parentName,
+                sortDate: max(note.createdAt, note.updatedAt),
+                createdAt: note.createdAt
+            ))
+        }
+
+        for list in lists {
+            // Snippet: first 2-3 item texts, comma-separated. The list's
+            // `updatedAt` already bumps when items change (ChecklistService.update),
+            // so list-item additions naturally bubble the parent to the top.
+            let snippet: String? = {
+                let texts = list.items.prefix(3).map(\.text).filter { !$0.isEmpty }
+                return texts.isEmpty ? nil : texts.joined(separator: ", ")
+            }()
+            out.append(ActivityItem(
+                id: list.clientUUID,
+                type: .list,
+                title: list.title,
+                snippet: snippet,
+                parent: nil,
+                sortDate: max(list.createdAt, list.updatedAt),
+                createdAt: list.createdAt
+            ))
+        }
+
+        for folder in folders {
+            out.append(ActivityItem(
+                id: folder.clientUUID,
+                type: .folder,
+                title: folder.name,
+                snippet: nil,
+                parent: nil,
+                sortDate: max(folder.createdAt, folder.updatedAt),
+                createdAt: folder.createdAt
+            ))
+        }
+
+        let filtered: [ActivityItem]
+        if let match = filter.typeMatch {
+            filtered = out.filter { $0.type == match }
+        } else {
+            filtered = out
+        }
+
+        return filtered.sorted { $0.sortDate > $1.sortDate }
+    }
+
+    private var totalAfterFilter: Int { combinedItems.count }
+
+    private var currentPageItems: [ActivityItem] {
+        let all = combinedItems
+        guard visibleCount < all.count else { return all }
+        return Array(all.prefix(visibleCount))
     }
 
     // MARK: - Tap → deep-link
@@ -117,7 +244,7 @@ struct ActivityView: View {
         case .note:   target = .notes; isFolder = false
         case .todo:   target = .tasks; isFolder = false
         case .list:   target = .lists; isFolder = false
-        case .folder: target = .notes; isFolder = true // folder deep-link lands in Notes
+        case .folder: target = .notes; isFolder = true
         }
         router.focus = ActivityFocus(section: target, id: item.id, isFolder: isFolder)
         router.go(to: target)
@@ -125,13 +252,13 @@ struct ActivityView: View {
 
     // MARK: - Grouping
 
-    /// Bucket items by local-day. Server delivers them newest-first already,
-    /// so we just walk in order and group.
-    private var groups: [DayGroup] {
+    private func groups(for items: [ActivityItem]) -> [DayGroup] {
         var result: [DayGroup] = []
         var current: DayGroup?
         let calendar = Calendar.current
-        for item in viewModel.items {
+        for item in items {
+            // Day-bucket by the visible-row date (createdAt) so the header
+            // matches the "1h ago" / "Yesterday" labels users see.
             let key = calendar.startOfDay(for: item.createdAt)
             if current?.key != key {
                 if let c = current { result.append(c) }
@@ -178,13 +305,13 @@ private struct DayGroup {
 // MARK: - Filter chips
 
 private struct FilterChipBar: View {
-    let selected: ActivityViewModel.Filter
-    let onSelect: (ActivityViewModel.Filter) -> Void
+    let selected: ActivityView.Filter
+    let onSelect: (ActivityView.Filter) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Space.sm) {
-                ForEach(ActivityViewModel.Filter.allCases) { filter in
+                ForEach(ActivityView.Filter.allCases) { filter in
                     let isActive = filter == selected
                     Button {
                         onSelect(filter)
@@ -311,106 +438,10 @@ private struct ActivityRow: View {
     }
 }
 
-// MARK: - Skeletons
-
-private struct FirstLoadSkeleton: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(0..<3, id: \.self) { groupIdx in
-                if groupIdx > 0 {
-                    Color.clear.frame(height: Space.xl)
-                }
-                // Day header bone
-                HStack(spacing: Space.sm) {
-                    Circle().fill(Tokens.paper2).frame(width: 6, height: 6)
-                    PulseBone()
-                        .frame(width: 80, height: 12)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                    Spacer()
-                }
-                .padding(.horizontal, Space.lg)
-                .frame(height: 36)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Tokens.divider).frame(height: 0.5)
-                }
-
-                ForEach(0..<4, id: \.self) { rowIdx in
-                    SkeletonRow()
-                    if rowIdx < 3 {
-                        Rectangle()
-                            .fill(Tokens.divider)
-                            .frame(height: 0.5)
-                            .padding(.leading, Space.lg)
-                    }
-                }
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct NextPageSkeleton: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            SkeletonRow()
-            Rectangle().fill(Tokens.divider).frame(height: 0.5).padding(.leading, Space.lg)
-            SkeletonRow()
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct SkeletonRow: View {
-    var body: some View {
-        HStack(alignment: .center, spacing: Space.md) {
-            PulseBone()
-                .frame(width: 32, height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                PulseBone()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 12)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                    .padding(.trailing, 100) // simulate ~60% width
-                PulseBone()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 10)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                    .padding(.trailing, 30)
-            }
-
-            PulseBone()
-                .frame(width: 32, height: 12)
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-        }
-        .padding(.horizontal, Space.lg)
-        .padding(.vertical, Space.md)
-    }
-}
-
-/// 1.4s ease-in-out opacity pulse on `Tokens.paper2`. Honours the system
-/// reduced-motion preference by holding at a static 55% opacity.
-private struct PulseBone: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animate = false
-
-    var body: some View {
-        Tokens.paper2
-            .opacity(reduceMotion ? 0.55 : (animate ? 0.7 : 0.4))
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
-                    animate = true
-                }
-            }
-    }
-}
-
 // MARK: - Empty state
 
 private struct EmptyStateView: View {
-    let filter: ActivityViewModel.Filter
+    let filter: ActivityView.Filter
 
     var body: some View {
         VStack(spacing: Space.sm) {
