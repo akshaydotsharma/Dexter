@@ -63,12 +63,10 @@ struct TasksView: View {
         .task { await viewModel.load() }
         .onAppear {
             // Activity timeline deep-link consumption. The Activity surface
-            // sets `router.focus` to ActivityFocus(section: .tasks, id: serverId)
-            // before pushing the section. Local todos are keyed by clientUUID,
-            // so the integer id can't currently be resolved back to a SwiftData
-            // row; we clear the field here so the focus doesn't fire again on
-            // the next appearance. If a serverId column is added to the local
-            // model later, scroll + pulse can be implemented in this hook.
+            // sets `router.focus` to ActivityFocus(section: .tasks, id: clientUUID)
+            // before pushing the section. Scroll + pulse on the matching row
+            // is a follow-up; for now we clear the field so the focus doesn't
+            // fire again on the next appearance.
             if router.focus?.section == .tasks {
                 router.focus = nil
             }
