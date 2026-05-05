@@ -17,14 +17,21 @@ struct ListsView: View {
 
             VStack(spacing: 0) {
                 if let id = selectedListId, let list = viewModel.lists.first(where: { $0.id == id }) {
-                    ListDetailHeader(title: list.title, onBack: {
-                        withAnimation(.easeOut(duration: 0.2)) { selectedListId = nil }
-                    }, onDelete: {
-                        Task {
-                            await viewModel.delete(list)
-                            selectedListId = nil
+                    ListDetailHeader(
+                        title: list.title,
+                        onBack: {
+                            withAnimation(.easeOut(duration: 0.2)) { selectedListId = nil }
+                        },
+                        onRename: { newTitle in
+                            Task { await viewModel.rename(list, to: newTitle) }
+                        },
+                        onDelete: {
+                            Task {
+                                await viewModel.delete(list)
+                                selectedListId = nil
+                            }
                         }
-                    })
+                    )
                     ListDetailContent(viewModel: viewModel, listId: id)
                 } else {
                     TopBar(
@@ -124,7 +131,12 @@ struct ListsView: View {
 private struct ListDetailHeader: View {
     let title: String
     let onBack: () -> Void
+    let onRename: (String) -> Void
     let onDelete: () -> Void
+
+    @State private var isEditing = false
+    @State private var draft = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: Space.md) {
@@ -139,10 +151,31 @@ private struct ListDetailHeader: View {
                 .contentShape(Rectangle())
             }
             Spacer()
-            Text(title)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-                .lineLimit(1)
+            if isEditing {
+                TextField("", text: $draft)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.center)
+                    .submitLabel(.done)
+                    .focused($focused)
+                    .onSubmit { commit() }
+                    .onChange(of: focused) { _, nowFocused in
+                        if !nowFocused { commit() }
+                    }
+                    .accessibilityLabel("List title")
+            } else {
+                Text(title)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        draft = title
+                        isEditing = true
+                        focused = true
+                    }
+                    .accessibilityLabel("List title, tap to rename")
+            }
             Spacer()
             Button(action: onDelete) {
                 Image(systemName: "trash")
@@ -156,6 +189,15 @@ private struct ListDetailHeader: View {
         .background(Tokens.paper.overlay(alignment: .bottom) {
             Rectangle().fill(Tokens.divider).frame(height: 0.5)
         })
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty && trimmed != title {
+            onRename(trimmed)
+        }
+        isEditing = false
+        focused = false
     }
 }
 
@@ -255,12 +297,19 @@ private struct ListDetailContent: View {
                 } else {
                     List {
                         ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
-                            ItemRow(item: item) {
-                                Task { await viewModel.toggleItem(in: list, at: index) }
-                            } onDelete: {
-                                Haptics.destructive()
-                                Task { await viewModel.removeItem(from: list, at: index) }
-                            }
+                            ItemRow(
+                                item: item,
+                                onToggle: {
+                                    Task { await viewModel.toggleItem(in: list, at: index) }
+                                },
+                                onRename: { newText in
+                                    Task { await viewModel.renameItem(in: list, at: index, to: newText) }
+                                },
+                                onDelete: {
+                                    Haptics.destructive()
+                                    Task { await viewModel.removeItem(from: list, at: index) }
+                                }
+                            )
                             .listRowBackground(Tokens.paper)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
@@ -335,7 +384,12 @@ private struct ListDetailContent: View {
 private struct ItemRow: View {
     let item: ChecklistItem
     let onToggle: () -> Void
+    let onRename: (String) -> Void
     let onDelete: () -> Void
+
+    @State private var isEditing = false
+    @State private var draft = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: Space.md) {
@@ -354,22 +408,53 @@ private struct ItemRow: View {
                 .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
+            .disabled(isEditing)
 
-            Text(item.text)
-                .font(.edBody)
-                .strikethrough(item.checked)
-                .foregroundStyle(item.checked ? Tokens.mutedSoft : Tokens.ink)
+            if isEditing {
+                TextField("", text: $draft)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .submitLabel(.done)
+                    .focused($focused)
+                    .onSubmit { commit() }
+                    .onChange(of: focused) { _, nowFocused in
+                        if !nowFocused { commit() }
+                    }
+                    .accessibilityLabel("Rename item")
+            } else {
+                Text(item.text)
+                    .font(.edBody)
+                    .strikethrough(item.checked)
+                    .foregroundStyle(item.checked ? Tokens.mutedSoft : Tokens.ink)
+            }
             Spacer()
         }
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
         .contentShape(Rectangle())
-        .onTapGesture { onToggle() }
+        .onTapGesture {
+            if !isEditing { beginEditing() }
+        }
         .contextMenu {
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    private func beginEditing() {
+        draft = item.text
+        isEditing = true
+        DispatchQueue.main.async { focused = true }
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty && trimmed != item.text {
+            onRename(trimmed)
+        }
+        isEditing = false
+        focused = false
     }
 }
 
