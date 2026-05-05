@@ -4,10 +4,10 @@ import UIKit
 /// Custom swipe-left-to-delete container that replaces the stock
 /// `.swipeActions` modifier (which renders edge-to-edge rectangles with
 /// no separation between row and action). When a row is dragged left,
-/// the row card slides left and a standalone destructive pill appears
-/// on the trailing edge with a `Space.sm` gap between the two. Matches
-/// the rounded, capsule-led design language used everywhere else in the
-/// app.
+/// the row content slides left and a standalone destructive pill
+/// appears on the trailing edge with a `Space.sm` gap between the two.
+/// Matches the rounded, capsule-led design language used everywhere
+/// else in the app.
 ///
 /// The container handles native iOS swipe semantics:
 ///   - Partial swipe past `restingPillWidth / 2` snaps the row open.
@@ -17,13 +17,11 @@ import UIKit
 /// Apply via the `.swipeToDelete(...)` modifier on each row inside a
 /// `List`. Set `listRowInsets` leading/trailing to `0` so the wrapper
 /// owns the row's edge padding (the Delete pill has to sit inside the
-/// trailing margin to read as a separate object).
+/// trailing margin to read as a separate object). The wrapper paints
+/// nothing under the row itself: the row keeps the same look at rest
+/// and during swipe — only the standalone red pill appears.
 struct SwipeToDelete<Content: View>: View {
     let cornerRadius: CGFloat
-    /// Optional pill fill that fades in only while the row is being
-    /// dragged. Use for rows that don't ship their own card surface
-    /// (TaskRow, ItemRow) so the at-rest appearance is unchanged.
-    let revealedBackground: Color?
     let outerPadding: CGFloat
     let onDelete: () -> Void
     @ViewBuilder let content: () -> Content
@@ -68,7 +66,6 @@ struct SwipeToDelete<Content: View>: View {
             .accessibilityHidden(!pillVisible)
 
             content()
-                .background(revealedFill)
                 .background(heightProbe)
                 .overlay(closeOverlay)
                 .padding(.horizontal, outerPadding)
@@ -76,15 +73,6 @@ struct SwipeToDelete<Content: View>: View {
                 .gesture(dragGesture)
         }
         .onPreferenceChange(SwipeRowHeightKey.self) { rowHeight = $0 }
-    }
-
-    @ViewBuilder
-    private var revealedFill: some View {
-        if let bg = revealedBackground {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(bg)
-                .opacity(min(1, max(0, Double(-offset / 24))))
-        }
     }
 
     private var heightProbe: some View {
@@ -171,20 +159,15 @@ extension View {
     /// Wrap a row with the pill-with-gap swipe-to-delete treatment from
     /// issue #39. Pair with `.listRowInsets(EdgeInsets(top: …, leading: 0,
     /// bottom: …, trailing: 0))` so the wrapper owns horizontal padding.
-    ///
-    /// Pass `revealedBackground: Tokens.surface` for rows that don't have
-    /// their own card surface (TaskRow, ItemRow) so they read as a pill
-    /// during the swipe; leave `nil` for rows that already render on a
-    /// rounded card (NoteRow, FolderRow, ListSummaryRow).
+    /// The row keeps its own appearance at rest and during swipe; only
+    /// the standalone red Delete pill appears.
     func swipeToDelete(
         cornerRadius: CGFloat = Radius.md,
-        revealedBackground: Color? = nil,
         outerPadding: CGFloat = Space.lg,
         perform action: @escaping () -> Void
     ) -> some View {
         SwipeToDelete(
             cornerRadius: cornerRadius,
-            revealedBackground: revealedBackground,
             outerPadding: outerPadding,
             onDelete: action
         ) {

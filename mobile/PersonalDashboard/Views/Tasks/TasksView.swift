@@ -200,7 +200,7 @@ struct TasksView: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
-                .swipeToDelete(revealedBackground: Tokens.surface) {
+                .swipeToDelete {
                     Task { await viewModel.delete(todo) }
                 }
             }
@@ -222,7 +222,7 @@ struct TasksView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
-                    .swipeToDelete(revealedBackground: Tokens.surface) {
+                    .swipeToDelete {
                         Task { await viewModel.delete(todo) }
                     }
                 }

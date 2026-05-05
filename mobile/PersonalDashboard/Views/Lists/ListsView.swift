@@ -313,7 +313,7 @@ private struct ListDetailContent: View {
                             .listRowBackground(Tokens.paper)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
-                            .swipeToDelete(revealedBackground: Tokens.surface) {
+                            .swipeToDelete {
                                 Task { await viewModel.removeItem(from: list, at: index) }
                             }
                         }
