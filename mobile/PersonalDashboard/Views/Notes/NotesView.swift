@@ -131,12 +131,12 @@ struct NotesView: View {
                                 withAnimation(.easeOut(duration: 0.2)) { selectedFolder = folder }
                             }
                         )
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                         .swipeToDeleteTrash {
                             Task { await viewModel.deleteFolder(folder) }
                         }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                     }
                 } header: {
                     sectionEyebrow("Folders")
@@ -148,12 +148,12 @@ struct NotesView: View {
                 Section {
                     ForEach(unfiled) { note in
                         NoteRow(note: note) { open(note: note) }
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                             .swipeToDeleteTrash {
                                 Task { await viewModel.deleteNote(note) }
                             }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                     }
                 } header: {
                     sectionEyebrow("Unfiled")
@@ -198,12 +198,12 @@ struct NotesView: View {
             } else {
                 ForEach(inFolder) { note in
                     NoteRow(note: note) { open(note: note) }
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                         .swipeToDeleteTrash {
                             Task { await viewModel.deleteNote(note) }
                         }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                 }
             }
 
