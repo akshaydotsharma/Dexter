@@ -197,6 +197,7 @@ struct TasksView: View {
                 } onTap: {
                     editingTodo = todo
                 }
+                .swipeProgressTint()
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
@@ -219,6 +220,7 @@ struct TasksView: View {
                     } onTap: {
                         editingTodo = todo
                     }
+                    .swipeProgressTint()
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
