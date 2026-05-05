@@ -133,8 +133,8 @@ struct NotesView: View {
                         )
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                        .swipeToDeleteTrash {
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: 0, bottom: Space.xs, trailing: 0))
+                        .swipeToDelete {
                             Task { await viewModel.deleteFolder(folder) }
                         }
                     }
@@ -150,8 +150,8 @@ struct NotesView: View {
                         NoteRow(note: note) { open(note: note) }
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                            .swipeToDeleteTrash {
+                            .listRowInsets(EdgeInsets(top: Space.xs, leading: 0, bottom: Space.xs, trailing: 0))
+                            .swipeToDelete {
                                 Task { await viewModel.deleteNote(note) }
                             }
                     }
@@ -200,8 +200,8 @@ struct NotesView: View {
                     NoteRow(note: note) { open(note: note) }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                        .swipeToDeleteTrash {
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: 0, bottom: Space.xs, trailing: 0))
+                        .swipeToDelete {
                             Task { await viewModel.deleteNote(note) }
                         }
                 }

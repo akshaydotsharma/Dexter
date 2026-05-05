@@ -199,8 +199,8 @@ struct TasksView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                .swipeToDeleteTrash {
+                .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
+                .swipeToDelete(revealedBackground: Tokens.surface) {
                     Task { await viewModel.delete(todo) }
                 }
             }
@@ -221,8 +221,8 @@ struct TasksView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                    .swipeToDeleteTrash {
+                    .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
+                    .swipeToDelete(revealedBackground: Tokens.surface) {
                         Task { await viewModel.delete(todo) }
                     }
                 }

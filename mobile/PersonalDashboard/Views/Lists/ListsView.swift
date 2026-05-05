@@ -108,8 +108,8 @@ struct ListsView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                    .swipeToDeleteTrash {
+                    .listRowInsets(EdgeInsets(top: Space.xs, leading: 0, bottom: Space.xs, trailing: 0))
+                    .swipeToDelete {
                         Task { await viewModel.delete(list) }
                     }
                 }
@@ -312,8 +312,8 @@ private struct ListDetailContent: View {
                             )
                             .listRowBackground(Tokens.paper)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                            .swipeToDeleteTrash {
+                            .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
+                            .swipeToDelete(revealedBackground: Tokens.surface) {
                                 Task { await viewModel.removeItem(from: list, at: index) }
                             }
                         }
