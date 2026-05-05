@@ -30,6 +30,13 @@ struct SwipeToDelete<Content: View>: View {
 
     @State private var offset: CGFloat = 0
     @State private var isOpen: Bool = false
+    /// Measured height of the row content. Drives the Delete pill's
+    /// height so the pill matches the row visually. The row's content
+    /// has to size the pill, not the other way around — using
+    /// `maxHeight: .infinity` on the pill makes the row claim infinite
+    /// vertical space and forces `List` to allocate hundreds of points
+    /// to each row.
+    @State private var rowHeight: CGFloat = 0
 
     private var restingPillWidth: CGFloat { 84 }
     private var gap: CGFloat { Space.sm }
@@ -38,6 +45,12 @@ struct SwipeToDelete<Content: View>: View {
     var body: some View {
         let pillReveal = max(0, -offset - gap)
         let pillVisible = pillReveal > 0.5
+        // Always pass an explicit, finite height to the Button's outer
+        // frame. Without this fallback, the inner `maxHeight: .infinity`
+        // on the label would propagate up through the ZStack and force
+        // `List` to allocate hundreds of points to each row before the
+        // PreferenceKey settles.
+        let pillHeight: CGFloat = rowHeight > 0 ? rowHeight : 44
 
         ZStack(alignment: .trailing) {
             // Standalone destructive pill anchored to the trailing edge.
@@ -47,7 +60,7 @@ struct SwipeToDelete<Content: View>: View {
                 deletePillLabel
             }
             .buttonStyle(.plain)
-            .frame(width: pillReveal)
+            .frame(width: pillReveal, height: pillHeight)
             .padding(.trailing, outerPadding)
             .opacity(pillVisible ? 1 : 0)
             .allowsHitTesting(pillReveal >= restingPillWidth * 0.5)
@@ -56,11 +69,13 @@ struct SwipeToDelete<Content: View>: View {
 
             content()
                 .background(revealedFill)
+                .background(heightProbe)
                 .overlay(closeOverlay)
                 .padding(.horizontal, outerPadding)
                 .offset(x: offset)
                 .gesture(dragGesture)
         }
+        .onPreferenceChange(SwipeRowHeightKey.self) { rowHeight = $0 }
     }
 
     @ViewBuilder
@@ -69,6 +84,12 @@ struct SwipeToDelete<Content: View>: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(bg)
                 .opacity(min(1, max(0, Double(-offset / 24))))
+        }
+    }
+
+    private var heightProbe: some View {
+        GeometryReader { geo in
+            Color.clear.preference(key: SwipeRowHeightKey.self, value: geo.size.height)
         }
     }
 
@@ -136,6 +157,13 @@ struct SwipeToDelete<Content: View>: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             onDelete()
         }
+    }
+}
+
+private struct SwipeRowHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
