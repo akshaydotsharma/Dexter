@@ -103,13 +103,8 @@ struct ListsView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            Haptics.destructive()
-                            Task { await viewModel.delete(list) }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                    .swipeToDeleteTrash {
+                        Task { await viewModel.delete(list) }
                     }
                 }
             }
@@ -270,29 +265,17 @@ private struct ListDetailContent: View {
                             .listRowBackground(Tokens.paper)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    Haptics.destructive()
-                                    Task { await viewModel.removeItem(from: list, at: index) }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+                            .swipeToDeleteTrash {
+                                Task { await viewModel.removeItem(from: list, at: index) }
                             }
                         }
                         .onMove { source, destination in
                             Task { await viewModel.reorderItems(in: list, from: source, to: destination) }
                         }
-                        .onDelete { offsets in
-                            for index in offsets {
-                                Haptics.destructive()
-                                Task { await viewModel.removeItem(from: list, at: index) }
-                            }
-                        }
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
-                    .environment(\.editMode, .constant(.active))
                 }
 
                 addItemBar(list: list)

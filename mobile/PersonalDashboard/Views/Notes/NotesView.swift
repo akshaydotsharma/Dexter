@@ -155,13 +155,8 @@ struct NotesView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                Haptics.destructive()
-                                Task { await viewModel.deleteFolder(folder) }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                        .swipeToDeleteTrash {
+                            Task { await viewModel.deleteFolder(folder) }
                         }
                     }
                 } header: {
@@ -177,13 +172,8 @@ struct NotesView: View {
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    Haptics.destructive()
-                                    Task { await viewModel.deleteNote(note) }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+                            .swipeToDeleteTrash {
+                                Task { await viewModel.deleteNote(note) }
                             }
                     }
                 } header: {
@@ -232,13 +222,8 @@ struct NotesView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                Haptics.destructive()
-                                Task { await viewModel.deleteNote(note) }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                        .swipeToDeleteTrash {
+                            Task { await viewModel.deleteNote(note) }
                         }
                 }
             }
