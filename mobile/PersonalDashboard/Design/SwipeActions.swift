@@ -40,10 +40,13 @@ private struct SwipeToDeleteWithTint: ViewModifier {
 
     private let revealedWidth: CGFloat = 80
     private let tintColor: Color = Tokens.borderStrong
-    /// Pill-shaped corners (like iOS Reminders / Mail). 999pt clips to
-    /// half the height so the row card and the trash button both
-    /// terminate in perfect semicircles.
-    private let cornerRadius: CGFloat = Radius.pill
+    /// Cap for the corner radius. For short rows (~50pt — tasks,
+    /// folders, list summaries) the pill clamps to half-height
+    /// (~25pt) so it terminates in semicircles like Reminders.
+    /// For tall rows (notes with body preview) the cap holds at
+    /// 28pt so the shape stays a nicely rounded rectangle instead
+    /// of stretching into a vertical pill.
+    private let maxCornerRadius: CGFloat = 28
     /// Spacing between the row's right edge and the trash pill's
     /// left edge, so they read as two distinct objects.
     private let pillGap: CGFloat = Space.sm
@@ -61,6 +64,7 @@ private struct SwipeToDeleteWithTint: ViewModifier {
         let progress = 0.5 - 0.5 * cos(.pi * linear)
         let pillWidth = max(0, dragDistance - pillGap)
         let pillHeight: CGFloat = rowHeight > 0 ? rowHeight : 44
+        let cornerRadius = min(pillHeight / 2, maxCornerRadius)
 
         ZStack(alignment: .trailing) {
             // Standalone pill-shaped red button on the trailing edge
