@@ -106,12 +106,12 @@ struct ListsView: View {
                             selectedListId = list.id
                         }
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                     .swipeToDeleteTrash {
                         Task { await viewModel.delete(list) }
                     }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                 }
             }
 
@@ -310,12 +310,12 @@ private struct ListDetailContent: View {
                                     Task { await viewModel.removeItem(from: list, at: index) }
                                 }
                             )
-                            .listRowBackground(Tokens.paper)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                             .swipeToDeleteTrash {
                                 Task { await viewModel.removeItem(from: list, at: index) }
                             }
+                            .listRowBackground(Tokens.paper)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                         }
                         .onMove { source, destination in
                             Task { await viewModel.reorderItems(in: list, from: source, to: destination) }

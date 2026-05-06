@@ -197,12 +197,12 @@ struct TasksView: View {
                 } onTap: {
                     editingTodo = todo
                 }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                 .swipeToDeleteTrash {
                     Task { await viewModel.delete(todo) }
                 }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
             }
         } header: {
             sectionHeader(title: title, count: count, accent: accent, soft: soft)
@@ -219,12 +219,12 @@ struct TasksView: View {
                     } onTap: {
                         editingTodo = todo
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                     .swipeToDeleteTrash {
                         Task { await viewModel.delete(todo) }
                     }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                 }
             }
         } header: {
