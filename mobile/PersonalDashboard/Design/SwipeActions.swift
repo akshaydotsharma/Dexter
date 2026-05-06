@@ -7,12 +7,11 @@ extension View {
     /// trailing edge, with a soft gray card fading in behind the
     /// row to differentiate the swiped state.
     ///
-    /// The drag uses `.simultaneousGesture` with a 10pt activation
-    /// threshold so it coexists with rows that wrap their content
-    /// in a Button (folders, list summaries, note rows) — the
-    /// Button's tap fires for short touches; the drag fires once
-    /// horizontal movement exceeds 10pt and Button's own tolerance
-    /// cancels its tap.
+    /// The drag uses `.highPriorityGesture` with a 10pt activation
+    /// threshold so it preempts the Button-wrapped rows (folders,
+    /// list summaries, note rows) — short touches stay below the
+    /// threshold and fall through to the Button's tap; deliberate
+    /// drags activate the swipe and the Button's tap is cancelled.
     ///
     /// Full-swipe-commit requires a deliberate 70%+ drag (no
     /// velocity-only commit) so a quick flick can never silently
@@ -32,7 +31,7 @@ private struct SwipeRowHeightKey: PreferenceKey {
 private struct SwipeToDeleteWithTint: ViewModifier {
     let onDelete: () -> Void
 
-    @State private var offset: CGFloat = 0
+    @State private var offset: CGFloat = 0  // change to test reveal states
     @State private var isOpen: Bool = false
     /// Measured row height — used to size the gray fade-in card so
     /// it matches the row, and to vertically center the fixed-size
@@ -68,10 +67,13 @@ private struct SwipeToDeleteWithTint: ViewModifier {
         let outerHeight: CGFloat = rowHeight > 0 ? rowHeight : 44
 
         ZStack(alignment: .trailing) {
-            // Always-rendered 52pt circle. At rest, content covers
-            // it; as content slides left it's revealed underneath,
-            // so visibility is purely a side-effect of the drag —
-            // no width animation, the circle stays a circle.
+            // 52pt circle, opacity tied to drag distance. Invisible
+            // at rest (so the circle's edges can't bleed through
+            // gaps in the row's rounded background), fades in over
+            // the first 20pt of drag, fully visible by the snap-open
+            // point. As content slides left underneath, the circle
+            // is revealed purely as a side-effect of the offset —
+            // no width animation, the shape stays a circle.
             Button(action: commit) {
                 Image(systemName: "trash")
                     .font(.system(size: 18, weight: .regular))
@@ -81,6 +83,7 @@ private struct SwipeToDeleteWithTint: ViewModifier {
             }
             .buttonStyle(.plain)
             .frame(maxHeight: outerHeight, alignment: .center)
+            .opacity(min(1.0, dragDistance / 20))
             .allowsHitTesting(dragDistance >= revealedWidth * 0.6)
             .accessibilityLabel("Delete")
 
@@ -97,14 +100,17 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                 )
                 .overlay(closeOverlay)
                 .offset(x: offset)
-                // simultaneousGesture so the drag coexists with the
-                // row's tap (which fires on Button-wrapped rows like
-                // folders and list summaries). With minimumDistance:
-                // 10, brief touches stay below the threshold and
-                // pass through to the Button; deliberate horizontal
-                // drags activate the swipe and Button cancels its
-                // own tap due to movement.
-                .simultaneousGesture(dragGesture)
+                // highPriorityGesture so the drag preempts the row's
+                // Button tap (folders, list summaries, note rows
+                // wrap their content in a Button that navigates on
+                // tap). With simultaneousGesture both gestures
+                // recognised on release, so the row would snap open
+                // AND fire the Button's onTap. highPriority kills
+                // the Button's tap once the drag activates, but
+                // brief touches that stay below minimumDistance: 10
+                // never activate the drag and fall through to the
+                // Button as expected.
+                .highPriorityGesture(dragGesture)
         }
         .onPreferenceChange(SwipeRowHeightKey.self) { rowHeight = $0 }
     }
