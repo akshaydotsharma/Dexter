@@ -32,32 +32,40 @@ private struct SwipeToDeleteWithTint: ViewModifier {
 
     @State private var offset: CGFloat = 0
     @State private var isOpen: Bool = false
-    /// Measured row height drives the trailing red button so it stays
-    /// edge-to-edge with the row. Without an explicit height the
-    /// inner `.frame(maxHeight: .infinity)` would propagate and force
-    /// `List` to allocate hundreds of points to each row.
+    /// Measured row height drives the trailing trash pill so it
+    /// stays the same height as the row. Without an explicit height
+    /// the inner `.frame(maxHeight: .infinity)` would propagate and
+    /// force `List` to allocate hundreds of points to each row.
     @State private var rowHeight: CGFloat = 0
 
     private let revealedWidth: CGFloat = 80
     private let tintColor: Color = Tokens.borderStrong
-    private let cornerRadius: CGFloat = Radius.md
+    /// Curved corner radius used for both the row's gray fade-in
+    /// and the trailing trash pill so they read as a matched pair.
+    private let cornerRadius: CGFloat = Radius.lg
+    /// Spacing between the row's right edge and the trash pill's
+    /// left edge, so they read as two distinct objects.
+    private let pillGap: CGFloat = Space.sm
 
     func body(content: Content) -> some View {
         let dragDistance = -offset
         let progress = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
-        let pillWidth = max(0, dragDistance)
+        let pillWidth = max(0, dragDistance - pillGap)
         let pillHeight: CGFloat = rowHeight > 0 ? rowHeight : 44
 
         ZStack(alignment: .trailing) {
-            // Edge-to-edge red rectangle with a white trash icon — the
-            // stock `.swipeActions` look. Width grows with the swipe so
-            // the action is revealed live, not just on release.
+            // Standalone rounded red pill on the trailing edge with a
+            // white trash icon. Width grows with the swipe so the
+            // action is revealed live, not just on release.
             Button(action: commit) {
                 Image(systemName: "trash")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(.white)
                     .frame(width: pillWidth, height: pillHeight)
-                    .background(Tokens.danger)
+                    .background(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Tokens.danger)
+                    )
             }
             .buttonStyle(.plain)
             .opacity(pillWidth > 0.5 ? 1 : 0)
