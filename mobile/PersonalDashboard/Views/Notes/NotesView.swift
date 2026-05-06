@@ -14,7 +14,7 @@ struct NotesView: View {
     @Binding var schemePref: ColorSchemePref
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -53,11 +53,6 @@ struct NotesView: View {
                     )
                     rootList
                 }
-            }
-
-            // Hide FAB while editing a note so it doesn't fight the keyboard.
-            if selectedNoteId == nil {
-                ChatFAB { router.popToChat() }
             }
         }
         .activeSection(.notes)

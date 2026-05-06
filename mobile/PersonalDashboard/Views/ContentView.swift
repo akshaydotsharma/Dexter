@@ -31,9 +31,19 @@ struct ContentView: View {
                     .transition(.move(edge: .trailing))
             }
 
+            // Bottom tab bar — anchored at the root so it persists across
+            // surface transitions. Lives above the surface stack but below
+            // the drawer scrim so opening the drawer dims the bar too.
+            VStack(spacing: 0) {
+                Spacer()
+                BottomTabBar(router: router)
+            }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            .zIndex(2)
+
             // Drawer on top of everything.
             SideDrawer(router: router, schemePref: schemePref)
-                .zIndex(2)
+                .zIndex(3)
         }
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
         .activeSection(router.currentSection)
@@ -107,6 +117,8 @@ struct ContentView: View {
             SettingsView(router: router, schemePref: schemePref)
         case .today:
             TodayView(router: router, schemePref: schemePref)
+        case .helpCenter:
+            HelpCenterView(router: router, schemePref: schemePref)
         }
     }
 }
@@ -117,7 +129,7 @@ private struct PlaceholderView: View {
     @Binding var schemePref: ColorSchemePref
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
             VStack(spacing: 0) {
                 TopBar(
@@ -136,7 +148,6 @@ private struct PlaceholderView: View {
                 }
                 Spacer()
             }
-            ChatFAB { router.popToChat() }
         }
         .activeSection(section)
     }

@@ -1,9 +1,11 @@
 import SwiftUI
+import UIKit
 
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
     @State private var resolvedDrafts: [UUID: DraftPreviewCard.Resolution] = [:]
     @State private var pendingViewMore: Bool = false
+    @State private var keyboardVisible: Bool = false
 
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
@@ -44,10 +46,19 @@ struct ChatView: View {
                 )
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.sm)
-                .padding(.bottom, Space.md)
+                // Reserve room for the bottom tab bar so the input bar
+                // doesn't hide behind it. When the keyboard is up, the bar
+                // hides and the keyboard pushes the input up directly.
+                .padding(.bottom, keyboardVisible ? Space.md : (Space.md + BottomTabBarMetrics.height))
             }
         }
         .background(Tokens.paper)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = false }
+        }
         .alert("Something went wrong",
                isPresented: Binding(
                    get: { viewModel.errorMessage != nil },

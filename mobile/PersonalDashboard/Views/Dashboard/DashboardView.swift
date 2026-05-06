@@ -7,7 +7,7 @@ struct DashboardView: View {
     @Binding var schemePref: ColorSchemePref
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -42,8 +42,6 @@ struct DashboardView: View {
                 }
                 .refreshable { await viewModel.load() }
             }
-
-            ChatFAB { router.popToChat() }
         }
         .activeSection(.dashboard)
         .task { await viewModel.load() }

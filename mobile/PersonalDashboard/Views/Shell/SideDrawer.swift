@@ -82,43 +82,41 @@ struct SideDrawer: View {
 
     private var drawerPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Wordmark
-            HStack(spacing: Space.sm) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(Tokens.paper)
-                    .frame(width: 28, height: 28)
-                    .background(Tokens.ink, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
-                Text("Dashy")
-                    .font(.edTitle)
+            // User name header. The bottom tab bar now owns the primary
+            // surfaces (Notes / Lists / Chat / Tasks / Activity), so the
+            // drawer is repurposed for "the user's stuff" — name, Today,
+            // help, settings (Navigation v3, issue #48).
+            //
+            // Hardcoded "Akshay" matches the footer pattern; the iOS app
+            // has no auth so there's no real account to fetch from.
+            HStack(spacing: Space.md) {
+                Text("AS")
+                    .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
+                    .frame(width: 36, height: 36)
+                    .background(Tokens.paper2, in: Circle())
+                    .overlay(Circle().stroke(Tokens.border, lineWidth: 0.5))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Akshay")
+                        .font(.edTitle)
+                        .foregroundStyle(Tokens.ink)
+                    Text("Personal dashboard")
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.muted)
+                }
                 Spacer()
             }
             .padding(.horizontal, Space.lg)
             .padding(.top, Space.xl)
             .padding(.bottom, Space.xl)
 
-            // Primary
+            DrawerDivider()
+
+            // Three rows: Today, Help center, Settings. Primary surfaces
+            // (Notes, Lists, Tasks, Activity) and Chat now live in the
+            // bottom tab bar. Dashboard remains hidden (issue #30).
             DrawerRow(section: .today, router: router)
-            DrawerRow(section: .chat, router: router)
-
-            DrawerDivider()
-
-            // Surfaces
-            DrawerRow(section: .tasks, router: router)
-            DrawerRow(section: .notes, router: router)
-            DrawerRow(section: .lists, router: router)
-
-            DrawerDivider()
-
-            // Activity (read-only chronological feed of all creations).
-            // Dashboard surface is hidden (issue #30) — files retained for a
-            // future repurpose into a forward-looking plan/focus view.
-            DrawerRow(section: .activity, router: router)
-
-            DrawerDivider()
-
-            // Settings
+            DrawerRow(section: .helpCenter, router: router)
             DrawerRow(section: .settings, router: router)
 
             Spacer()

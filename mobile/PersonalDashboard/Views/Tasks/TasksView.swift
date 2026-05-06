@@ -11,7 +11,7 @@ struct TasksView: View {
     @Binding var schemePref: ColorSchemePref
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -56,8 +56,6 @@ struct TasksView: View {
                 .background(Tokens.paper)
                 .refreshable { await viewModel.load() }
             }
-
-            ChatFAB { router.popToChat() }
         }
         .activeSection(.tasks)
         .task { await viewModel.load() }
