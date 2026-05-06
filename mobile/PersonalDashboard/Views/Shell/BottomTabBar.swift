@@ -3,47 +3,59 @@ import UIKit
 
 /// Layout metrics for the bottom tab bar so surfaces can reserve space
 /// above their content (especially sticky-bottom UI like the chat input).
+///
+/// `height` is the visual footprint occupied above the home-indicator safe
+/// area: pill height + the bottom gap between the pill and the safe-area
+/// inset. The chat circle's lift above the pill is intentionally NOT
+/// included — surfaces reserve space for the pill body, and the lifted
+/// circle is allowed to overlap the surface above (it's a floating
+/// element, not a strip of chrome).
 enum BottomTabBarMetrics {
-    /// Height of the flat tab strip, excluding the safe-area inset.
-    static let height: CGFloat = 56
+    /// Total height reserved above the bottom safe area (pill + bottom gap).
+    static let height: CGFloat = 74
 }
 
-/// Persistent bottom tab bar (Navigation v3, issue #48).
+/// Floating-pill bottom tab bar (Navigation v3, issue #48).
 ///
-/// Five symmetric positions: Notes, Lists, [Chat], Tasks, Activity.
-/// The centre Chat button sits in a circular pill that lifts above the bar
-/// (Stocks / Threads compose pattern), visually separating "summon the AI"
-/// from the four passive surfaces.
+/// A capsule-shaped pill insets from the screen edges and floats above the
+/// safe area, with a soft drop shadow so it reads as lifted. Four flat tabs
+/// sit inside the pill (Notes, Lists, Tasks, Activity); the active tab gets
+/// a soft accent-tinted rounded rect behind its icon+label that springs
+/// between positions when switching.
 ///
-/// The bar is anchored at the root in `ContentView` so it stays visible
-/// across surface transitions (tap a note, tap a list — bar stays put).
-/// Hides itself while the keyboard is visible so it doesn't fight a
-/// chat input bar, inline list-item entry, or the note compose surface
-/// (mirrors the previous `ChatFAB` keyboard rule from issue #29).
+/// The Chat button is rendered as a separate circular button that floats
+/// ABOVE the pill at the centre, overlapping the pill's top edge by ~40%.
+/// This preserves the "summon the AI" elevation while keeping the pill
+/// itself a clean, unbroken capsule (no notch / cutout).
+///
+/// Hides itself while the keyboard is visible so it doesn't fight a chat
+/// input bar, inline list-item entry, or note compose surfaces.
 struct BottomTabBar: View {
     @Bindable var router: AppRouter
 
     @State private var keyboardVisible = false
+    @Namespace private var activePillNamespace
 
-    /// Tabs in display order. The centre slot is rendered as the elevated
-    /// chat button rather than a flat tab, so the array describes the four
-    /// flat tabs only; the centre is interleaved at index 2 in the body.
+    /// Flat tabs (4 positions inside the pill — chat is the floating circle
+    /// rendered separately above).
     private let tabs: [AppSection] = [.notes, .lists, .tasks, .activity]
 
-    /// Height of the flat-tab strip (excluding the safe-area inset and the
-    /// portion of the chat circle that lifts above the bar).
-    private let barHeight: CGFloat = 56
+    // MARK: Pill geometry
+    private let pillHeight: CGFloat = 64
+    private let pillHorizontalInset: CGFloat = 14
+    private let pillBottomGap: CGFloat = 10
 
-    /// Diameter of the elevated chat circle.
-    private let chatDiameter: CGFloat = 56
-
-    /// How far the centre button rises above the top edge of the bar.
-    private let chatLift: CGFloat = 14
+    // MARK: Chat circle geometry
+    private let chatDiameter: CGFloat = 60
+    /// Fraction of the chat diameter that sits ABOVE the pill's top edge.
+    /// 0.40 = 40% above, 60% inside the pill. Matches the floating-pill
+    /// reference where the centre action overlaps the bar from above.
+    private let chatOverlapFraction: CGFloat = 0.40
 
     var body: some View {
         ZStack {
             if !keyboardVisible {
-                bar
+                pill
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -55,35 +67,40 @@ struct BottomTabBar: View {
         }
     }
 
-    // MARK: - Bar layout
+    // MARK: - Pill
 
-    private var bar: some View {
+    private var pill: some View {
+        // Use a ZStack so the chat circle can float above the pill's top
+        // edge without affecting the pill's intrinsic layout.
         ZStack(alignment: .top) {
-            // Flat strip: 5 equal slots, the middle one left empty so the
-            // elevated chat circle drops into it without overlapping a tab.
+            // The capsule itself with the four flat tabs inside.
             HStack(spacing: 0) {
-                tab(for: tabs[0])     // Notes
-                tab(for: tabs[1])     // Lists
-                Color.clear           // centre slot reserved for chat
+                tab(for: tabs[0])               // Notes
+                tab(for: tabs[1])               // Lists
+                Color.clear                     // centre slot reserved for chat circle overlap
                     .frame(maxWidth: .infinity)
-                tab(for: tabs[2])     // Tasks
-                tab(for: tabs[3])     // Activity
+                tab(for: tabs[2])               // Tasks
+                tab(for: tabs[3])               // Activity
             }
-            .frame(height: barHeight)
+            .frame(height: pillHeight)
             .background(
-                Tokens.surface
-                    .overlay(alignment: .top) {
-                        Rectangle()
-                            .fill(Tokens.divider)
-                            .frame(height: 0.5)
-                    }
-                    .ignoresSafeArea(edges: .bottom)
+                Capsule(style: .continuous)
+                    .fill(Tokens.surface)
             )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Tokens.border, lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 8)
+            .padding(.horizontal, pillHorizontalInset)
+            .padding(.bottom, pillBottomGap)
 
-            // Elevated chat button — anchored to the bar's top edge,
-            // floats up by `chatLift`.
+            // Floating chat circle, anchored to the centre of the pill and
+            // lifted so a fraction of the diameter sits above the pill's
+            // top edge (Option A — clean unbroken capsule + overlapping
+            // FAB-style action).
             chatButton
-                .offset(y: -chatLift)
+                .offset(y: -(chatDiameter * chatOverlapFraction))
         }
         .frame(maxWidth: .infinity)
     }
@@ -97,14 +114,29 @@ struct BottomTabBar: View {
         return Button {
             router.go(to: section)
         } label: {
-            VStack(spacing: 2) {
-                Image(systemName: section.icon)
-                    .font(.system(size: 20, weight: isActive ? .semibold : .regular))
-                    .foregroundStyle(isActive ? accent : Tokens.muted)
+            ZStack {
+                // The active-state rounded rect "pill" sits BEHIND the
+                // icon+label. Only the active tab renders it; the
+                // matchedGeometryEffect makes it slide between positions
+                // when the user switches tabs.
+                if isActive {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(accent.opacity(0.14))
+                        .matchedGeometryEffect(id: "activePill", in: activePillNamespace)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 8)
+                }
 
-                Text(section.displayName)
-                    .font(.system(size: 10, weight: isActive ? .semibold : .regular))
-                    .foregroundStyle(isActive ? accent : Tokens.muted)
+                VStack(spacing: 3) {
+                    Image(systemName: section.icon)
+                        .font(.system(size: 20, weight: isActive ? .semibold : .regular))
+                        .foregroundStyle(isActive ? accent : Tokens.muted)
+
+                    Text(section.displayName)
+                        .font(.system(size: 12, weight: isActive ? .semibold : .regular))
+                        .foregroundStyle(isActive ? accent : Tokens.muted)
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -112,9 +144,10 @@ struct BottomTabBar: View {
         .buttonStyle(.plain)
         .accessibilityLabel(section.displayName)
         .accessibilityAddTraits(isActive ? [.isSelected] : [])
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: router.currentSection)
     }
 
-    // MARK: - Centre chat button
+    // MARK: - Floating chat circle
 
     private var chatButton: some View {
         let isActive = router.currentSection == .chat
@@ -126,18 +159,21 @@ struct BottomTabBar: View {
                 Circle()
                     .fill(Tokens.ink)
                     .frame(width: chatDiameter, height: chatDiameter)
-                    .shadowMd()
+
+                // Subtle outer rim so the circle reads as a distinct object
+                // when it overlaps the pill, even at the same tonality.
+                Circle()
+                    .stroke(Tokens.surface, lineWidth: 3)
+                    .frame(width: chatDiameter, height: chatDiameter)
+
                 Image(systemName: "sparkles")
                     .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(Tokens.paper)
             }
-            // Subtle ring when chat is active so the user can read state at
-            // a glance even though chat is the implicit "home" surface.
-            .overlay(
-                Circle()
-                    .stroke(Tokens.accentChat.opacity(isActive ? 0 : 0), lineWidth: 0)
-                    .frame(width: chatDiameter + 6, height: chatDiameter + 6)
-            )
+            // Heavier shadow than the pill so the circle reads as floating
+            // even higher.
+            .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 6)
+            .scaleEffect(isActive ? 1.0 : 1.0)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Chat")

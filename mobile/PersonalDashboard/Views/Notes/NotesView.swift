@@ -480,6 +480,7 @@ private struct NoteDetailContent: View {
                 .padding(.top, Space.lg)
                 .padding(.bottom, Space.xxxl)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
         .background(Tokens.paper)
         .onAppear {

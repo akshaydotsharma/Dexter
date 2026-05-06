@@ -18,7 +18,18 @@ struct ChatView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper
+                .ignoresSafeArea()
+                // Tap on empty paper background dismisses the keyboard so
+                // the floating tab bar comes back into view (issue #48).
+                .onTapGesture {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil,
+                        from: nil,
+                        for: nil
+                    )
+                }
 
             VStack(spacing: 0) {
                 TopBar(
@@ -124,6 +135,9 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Space.lg) {
+                    // Keep ScrollView empty-area taps dismissing the keyboard
+                    // (in addition to drag-to-dismiss below) so users can
+                    // tap a message bubble's empty margin to dismiss too.
                     ForEach(viewModel.turns) { turn in
                         TurnView(
                             turn: turn,
@@ -162,6 +176,7 @@ struct ChatView: View {
                 .frame(maxWidth: 640)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: viewModel.turns.count) { _, _ in
                 if let last = viewModel.turns.last {
                     withAnimation(.easeOut(duration: 0.2)) {

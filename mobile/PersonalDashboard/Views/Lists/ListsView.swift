@@ -122,6 +122,7 @@ struct ListsView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
+        .scrollDismissesKeyboard(.interactively)
         .refreshable { await viewModel.load() }
     }
 }
@@ -322,6 +323,7 @@ private struct ListDetailContent: View {
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
+                    .scrollDismissesKeyboard(.interactively)
                 }
 
                 addItemBar(list: list)
