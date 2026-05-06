@@ -3,15 +3,20 @@ import UIKit
 
 extension View {
     /// Swipe-left-to-delete affordance: the row content slides left
-    /// and reveals a fixed-size red square trash button on the
-    /// trailing edge, with a curved gray card fading in behind the
+    /// and reveals a fixed-size circular red trash button on the
+    /// trailing edge, with a soft gray card fading in behind the
     /// row to differentiate the swiped state.
     ///
-    /// Designed to coexist with row tap navigation — the drag has a
-    /// 10pt activation threshold so brief touches always pass
-    /// through to the underlying button. Full-swipe-commit requires
-    /// a deliberate 70%+ drag (no velocity-only commit) so a quick
-    /// flick can never silently delete the row.
+    /// The drag uses `.simultaneousGesture` with a 10pt activation
+    /// threshold so it coexists with rows that wrap their content
+    /// in a Button (folders, list summaries, note rows) — the
+    /// Button's tap fires for short touches; the drag fires once
+    /// horizontal movement exceeds 10pt and Button's own tolerance
+    /// cancels its tap.
+    ///
+    /// Full-swipe-commit requires a deliberate 70%+ drag (no
+    /// velocity-only commit) so a quick flick can never silently
+    /// delete a row.
     func swipeToDeleteTrash(perform action: @escaping () -> Void) -> some View {
         modifier(SwipeToDeleteWithTint(onDelete: action))
     }
@@ -31,24 +36,23 @@ private struct SwipeToDeleteWithTint: ViewModifier {
     @State private var isOpen: Bool = false
     /// Measured row height — used to size the gray fade-in card so
     /// it matches the row, and to vertically center the fixed-size
-    /// trash square inside taller rows like notes with body preview.
+    /// trash circle inside taller rows like notes with body preview.
     @State private var rowHeight: CGFloat = 0
 
-    /// Fixed square trash button. Same size on every row regardless
-    /// of row height, so tasks / lists / notes all reveal an
-    /// identical-looking action.
+    /// Fixed circle diameter. Same on every row regardless of row
+    /// height, so tasks / lists / notes all reveal an identical
+    /// circular action.
     private let buttonSize: CGFloat = 52
     /// Distance the row must travel for the trash to be fully revealed.
     /// Equals buttonSize plus the trailing gap, so at full reveal the
-    /// button sits exactly `pillGap` from the row's right edge.
+    /// circle sits exactly `pillGap` from the row's right edge.
     private let revealedWidth: CGFloat = 60
-    /// Spacing between the row's right edge and the trash square's
+    /// Spacing between the row's right edge and the trash circle's
     /// left edge — reads as two distinct objects.
     private let pillGap: CGFloat = Space.sm
-    /// Soft-square corner radius. Small enough that the trash always
-    /// looks like a rounded square (never a pill); large enough that
-    /// the gray card behind tall rows reads as soft, not sharp.
-    private let cornerRadius: CGFloat = 14
+    /// Soft corner radius for the gray fade-in card. The trash itself
+    /// is a Circle (corner radius doesn't apply).
+    private let cardCornerRadius: CGFloat = 14
     private let tintColor: Color = Tokens.borderStrong
     /// Vivid iOS-system red used by Reminders / Mail for destructive
     /// swipe actions.
@@ -61,37 +65,28 @@ private struct SwipeToDeleteWithTint: ViewModifier {
         // point.
         let linear = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
         let progress = 0.5 - 0.5 * cos(.pi * linear)
-        // Trash button width grows with drag but caps at buttonSize.
-        // Past the snap-open point the row keeps moving (rubber-band
-        // in dragGesture) but the button stops growing, so it stays
-        // a square.
-        let buttonWidth = max(0, min(dragDistance - pillGap, buttonSize))
         let outerHeight: CGFloat = rowHeight > 0 ? rowHeight : 44
 
         ZStack(alignment: .trailing) {
-            // Trash square — `.frame(maxHeight:)` set to the measured
-            // row height with center alignment, so the button sits
-            // vertically centered inside taller rows. ZStack alignment
-            // .trailing pins it to the right edge.
+            // Always-rendered 52pt circle. At rest, content covers
+            // it; as content slides left it's revealed underneath,
+            // so visibility is purely a side-effect of the drag —
+            // no width animation, the circle stays a circle.
             Button(action: commit) {
                 Image(systemName: "trash")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(.white)
-                    .frame(width: buttonWidth, height: buttonSize)
-                    .background(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(trashColor)
-                    )
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(Circle().fill(trashColor))
             }
             .buttonStyle(.plain)
             .frame(maxHeight: outerHeight, alignment: .center)
-            .opacity(buttonWidth > 0.5 ? 1 : 0)
-            .allowsHitTesting(buttonWidth >= buttonSize * 0.6)
+            .allowsHitTesting(dragDistance >= revealedWidth * 0.6)
             .accessibilityLabel("Delete")
 
             content
                 .background(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
                         .fill(tintColor)
                         .opacity(progress)
                 )
@@ -102,7 +97,14 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                 )
                 .overlay(closeOverlay)
                 .offset(x: offset)
-                .gesture(dragGesture)
+                // simultaneousGesture so the drag coexists with the
+                // row's tap (which fires on Button-wrapped rows like
+                // folders and list summaries). With minimumDistance:
+                // 10, brief touches stay below the threshold and
+                // pass through to the Button; deliberate horizontal
+                // drags activate the swipe and Button cancels its
+                // own tap due to movement.
+                .simultaneousGesture(dragGesture)
         }
         .onPreferenceChange(SwipeRowHeightKey.self) { rowHeight = $0 }
     }
@@ -117,12 +119,9 @@ private struct SwipeToDeleteWithTint: ViewModifier {
     }
 
     private var dragGesture: some Gesture {
-        // 10pt activation threshold so brief touches pass through to
-        // the row's underlying tap (folder/list rows navigate on tap;
-        // a 4pt threshold was hijacking those taps).
         DragGesture(minimumDistance: 10)
             .onChanged { value in
-                // Vertical drags (scroll) shouldn't move the row.
+                // Vertical drags (List scroll) shouldn't move the row.
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
                 let raw = (isOpen ? -revealedWidth : 0) + value.translation.width
                 offset = applyRubberBand(to: raw)
@@ -131,14 +130,10 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                 let endRaw = (isOpen ? -revealedWidth : 0) + value.translation.width
                 // Commit only on a deliberate full-swipe past 70% of
                 // the screen width. No velocity-based commit — a
-                // quick flick must never silently delete a row, the
-                // user has to drag the row almost off the screen to
-                // confirm.
+                // quick flick must never silently delete a row.
                 if -endRaw > UIScreen.main.bounds.width * 0.7 {
                     commit()
                 } else if -endRaw > revealedWidth * 0.4 {
-                    // Snap open: relatively low threshold so a short
-                    // deliberate swipe reliably reveals the trash.
                     open()
                 } else {
                     close()
@@ -157,8 +152,6 @@ private struct SwipeToDeleteWithTint: ViewModifier {
 
     private func open() {
         isOpen = true
-        // Softer spring than before so the snap-open settles rather
-        // than hard-clicks into place.
         withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
             offset = -revealedWidth
         }
