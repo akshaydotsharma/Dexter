@@ -40,23 +40,32 @@ private struct SwipeToDeleteWithTint: ViewModifier {
 
     private let revealedWidth: CGFloat = 80
     private let tintColor: Color = Tokens.borderStrong
-    /// Curved corner radius used for both the row's gray fade-in
-    /// and the trailing trash pill so they read as a matched pair.
-    private let cornerRadius: CGFloat = Radius.lg
+    /// Pill-shaped corners (like iOS Reminders / Mail). 999pt clips to
+    /// half the height so the row card and the trash button both
+    /// terminate in perfect semicircles.
+    private let cornerRadius: CGFloat = Radius.pill
     /// Spacing between the row's right edge and the trash pill's
     /// left edge, so they read as two distinct objects.
     private let pillGap: CGFloat = Space.sm
+    /// Vivid iOS-system red used by Reminders / Mail for destructive
+    /// swipe actions. Brighter and more saturated than `Tokens.danger`.
+    private let trashColor: Color = Color(.sRGB, red: 1.0, green: 0.231, blue: 0.188, opacity: 1.0)
 
     func body(content: Content) -> some View {
         let dragDistance = -offset
-        let progress = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
+        // Smooth ease-in-out so the gray doesn't pop in. Linear ramp
+        // feels jumpy because the eye sees a step from 0% to ~15%
+        // opacity in the first few points of drag; cosine starts
+        // imperceptibly and accelerates toward the snap-open point.
+        let linear = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
+        let progress = 0.5 - 0.5 * cos(.pi * linear)
         let pillWidth = max(0, dragDistance - pillGap)
         let pillHeight: CGFloat = rowHeight > 0 ? rowHeight : 44
 
         ZStack(alignment: .trailing) {
-            // Standalone rounded red pill on the trailing edge with a
-            // white trash icon. Width grows with the swipe so the
-            // action is revealed live, not just on release.
+            // Standalone pill-shaped red button on the trailing edge
+            // with a white trash icon. Width grows with the swipe so
+            // the action is revealed live, not just on release.
             Button(action: commit) {
                 Image(systemName: "trash")
                     .font(.system(size: 18, weight: .regular))
@@ -64,7 +73,7 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     .frame(width: pillWidth, height: pillHeight)
                     .background(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(Tokens.danger)
+                            .fill(trashColor)
                     )
             }
             .buttonStyle(.plain)
@@ -100,7 +109,11 @@ private struct SwipeToDeleteWithTint: ViewModifier {
     }
 
     private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 12)
+        // Small minimumDistance so the row starts tracking the
+        // finger immediately. 12pt felt laggy because the row sat
+        // still for the first 12pt of finger travel before
+        // suddenly catching up.
+        DragGesture(minimumDistance: 4)
             .onChanged { value in
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
                 let proposed = (isOpen ? -revealedWidth : 0) + value.translation.width
@@ -122,14 +135,17 @@ private struct SwipeToDeleteWithTint: ViewModifier {
 
     private func open() {
         isOpen = true
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+        // Slightly softer spring than before — 0.38 response with
+        // 0.82 damping reads as "settles into place" rather than
+        // "hard snap", matching Reminders' open-close feel.
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
             offset = -revealedWidth
         }
     }
 
     private func close() {
         isOpen = false
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
             offset = 0
         }
     }
