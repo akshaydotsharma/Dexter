@@ -79,9 +79,10 @@ mkdir -p "${OTA_DIR}"
 
 # ---- Versioning: a.b.c (d) ----
 # a.b live in mobile/VERSION (manually bumped on big refactors / minor cuts).
-# c   = commits on the current branch since mobile/VERSION last changed —
-#       so it auto-resets to 0 when you bump a or b, and increments by 1
-#       on every merge to main thereafter.
+# c   = commits AFTER the one that last touched mobile/VERSION —
+#       so the first ship after a major.minor bump reads as a.b.0
+#       (matching semver "1.0.0 = first stable cut"), and each subsequent
+#       merge to main bumps c by 1.
 # d   = local build counter at mobile/.build_count (gitignored). Each
 #       ship-lan.sh run bumps it by 1; plain Xcode builds keep their own
 #       project.yml default ("1") since they don't go through this script.
@@ -91,22 +92,15 @@ BUILD_COUNT_FILE="${MOBILE_DIR}/.build_count"
 MAJOR_MINOR="$(tr -d '[:space:]' < "${VERSION_FILE}" 2>/dev/null)"
 MAJOR_MINOR="${MAJOR_MINOR:-0.1}"
 
-# Hash of the commit where mobile/VERSION was last touched. We count from
-# its PARENT (^) so that the VERSION-change merge itself counts toward c —
-# i.e. the first build after introducing a new major.minor reads as
-# a.b.1 rather than a.b.0 (matches the user-facing rule "every merge bumps
-# c by 1"). If the bump commit is the very first commit in the repo,
-# fall back to total commit count.
+# Hash of the commit where mobile/VERSION was last touched. We count
+# commits strictly AFTER it (BUMP..HEAD, exclusive) so the bump commit
+# itself does NOT count toward c — first ship after a bump = a.b.0.
 VERSION_BUMP_COMMIT="$(git -C "${MOBILE_DIR}/.." log -1 --format=%H -- "${VERSION_FILE}" 2>/dev/null)"
 if [ -n "${VERSION_BUMP_COMMIT}" ]; then
-    if git -C "${MOBILE_DIR}/.." rev-parse "${VERSION_BUMP_COMMIT}^" >/dev/null 2>&1; then
-        PATCH="$(git -C "${MOBILE_DIR}/.." rev-list --count "${VERSION_BUMP_COMMIT}^..HEAD" 2>/dev/null || echo "1")"
-    else
-        PATCH="$(git -C "${MOBILE_DIR}/.." rev-list --count HEAD 2>/dev/null || echo "1")"
-    fi
+    PATCH="$(git -C "${MOBILE_DIR}/.." rev-list --count "${VERSION_BUMP_COMMIT}..HEAD" 2>/dev/null || echo "0")"
 else
     # VERSION not committed yet (e.g. brand-new branch with uncommitted file)
-    PATCH="1"
+    PATCH="0"
 fi
 
 # Local build counter (d) — per change-cycle, not lifetime. Resets to 1
