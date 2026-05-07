@@ -13,8 +13,7 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 TopBar(
                     title: "Settings",
-                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
-                    onToggleTheme: { schemePref = schemePref.next }
+                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                 )
 
                 ScrollView {

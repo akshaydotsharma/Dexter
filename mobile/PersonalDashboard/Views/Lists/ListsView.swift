@@ -9,7 +9,6 @@ struct ListsView: View {
     }()
 
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     var body: some View {
         ZStack {
@@ -36,8 +35,7 @@ struct ListsView: View {
                 } else {
                     TopBar(
                         title: "Lists",
-                        onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
-                        onToggleTheme: { schemePref = schemePref.next }
+                        onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                     )
                     rootList
                 }

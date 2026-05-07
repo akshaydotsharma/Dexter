@@ -4,7 +4,6 @@ struct DashboardView: View {
     @State private var viewModel = DashboardViewModel()
 
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     var body: some View {
         ZStack {
@@ -13,8 +12,7 @@ struct DashboardView: View {
             VStack(spacing: 0) {
                 TopBar(
                     title: "Dashboard",
-                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
-                    onToggleTheme: { schemePref = schemePref.next }
+                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                 )
 
                 ScrollView {

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct TodayView: View {
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     @State private var todosVM = TodosViewModel()
     @State private var notesVM = NotesViewModel()
@@ -15,8 +14,7 @@ struct TodayView: View {
             VStack(spacing: 0) {
                 TopBar(
                     title: nil,
-                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
-                    onToggleTheme: { schemePref = schemePref.next }
+                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                 )
 
                 ScrollView {

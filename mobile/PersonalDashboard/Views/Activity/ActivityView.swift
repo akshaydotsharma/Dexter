@@ -44,7 +44,6 @@ struct ActivityView: View {
     }
 
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     @Query(filter: #Predicate<LocalTodo> { $0.deletedAt == nil })
     private var todos: [LocalTodo]
@@ -74,8 +73,7 @@ struct ActivityView: View {
                     title: "Activity",
                     onMenu: {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
-                    },
-                    onToggleTheme: { schemePref = schemePref.next }
+                    }
                 )
 
                 Text("Everything you have captured, newest first.")

@@ -13,7 +13,6 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
 
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     private let examples = [
         "Remind me to call John tomorrow at 3",
@@ -48,9 +47,6 @@ struct ChatView: View {
                         title: viewModel.turns.isEmpty ? nil : "Chat",
                         onMenu: {
                             router.openDrawer()
-                        },
-                        onToggleTheme: {
-                            schemePref = schemePref.next
                         }
                     )
 
