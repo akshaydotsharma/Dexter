@@ -105,9 +105,12 @@ struct ContentView: View {
                 let shouldOpen = translation > drawerWidth * 0.4 || velocity > 500
                 withAnimation(.easeOut(duration: 0.2)) {
                     router.drawerDragOffset = 0
-                    if shouldOpen {
-                        router.drawerOpen = true
-                    }
+                }
+                if shouldOpen {
+                    // openDrawer() resigns first responder before flipping the
+                    // flag so the keyboard goes away before the drawer slides
+                    // in over the chat input (issue #54).
+                    router.openDrawer()
                 }
             }
     }

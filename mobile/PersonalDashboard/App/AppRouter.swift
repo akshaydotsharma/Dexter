@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import Observation
 
 /// Activity timeline deep-link payload. The Activity surface sets this when
@@ -50,6 +51,22 @@ final class AppRouter {
     /// this on `task` / `onAppear`, applies the scroll + pulse, then sets it
     /// back to nil so it doesn't fire again on the next appearance.
     var focus: ActivityFocus?
+
+    /// Open the side drawer and dismiss any active keyboard so the drawer
+    /// renders cleanly above the chat input (issue #54). Both the top-bar
+    /// menu tap and the edge-swipe gesture route through here so the
+    /// keyboard-dismiss behaviour is consistent.
+    func openDrawer() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        withAnimation(.easeOut(duration: 0.2)) {
+            drawerOpen = true
+        }
+    }
 
     /// Push a section into the chat-rooted stack and close the drawer.
     func go(to section: AppSection) {
