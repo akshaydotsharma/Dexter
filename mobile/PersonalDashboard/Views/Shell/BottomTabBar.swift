@@ -101,15 +101,25 @@ struct BottomTabBar: View {
                 tab(for: tabs[3])               // Activity
             }
             .frame(height: pillHeight)
+            // Liquid-glass pill — `.ultraThinMaterial` blurs the content
+            // behind the bar so it adapts to the surface (dark/light, busy
+            // list, empty space) instead of fighting the background with a
+            // solid fill. A whisper of `Tokens.surface` on top keeps the
+            // bar legible when the content underneath is pure black or
+            // pure paper.
             .background(
                 Capsule(style: .continuous)
-                    .fill(Tokens.surface)
+                    .fill(.ultraThinMaterial)
+            )
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Tokens.surface.opacity(0.35))
             )
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(Tokens.border, lineWidth: 0.5)
+                    .stroke(Tokens.border.opacity(0.6), lineWidth: 0.5)
             )
-            .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 8)
+            .shadow(color: .black.opacity(0.18), radius: 22, x: 0, y: 10)
             .padding(.horizontal, pillHorizontalInset)
             .padding(.bottom, pillBottomGap)
 
@@ -160,7 +170,11 @@ struct BottomTabBar: View {
                         ? Tokens.muted.opacity(0.18)
                         : accent.opacity(0.14)
 
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    // Capsule-shaped highlight so the leftmost (Notes) and
+                    // rightmost (Activity) tabs' active backgrounds nest
+                    // cleanly inside the pill's rounded ends instead of
+                    // colliding with them at 90° corners.
+                    Capsule(style: .continuous)
                         .fill(highlightFill)
                         .matchedGeometryEffect(id: "activePill", in: activePillNamespace)
                         .padding(.horizontal, 6)
