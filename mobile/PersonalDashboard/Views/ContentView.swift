@@ -24,11 +24,14 @@ struct ContentView: View {
             chatRoot
                 .zIndex(0)
 
-            // Surface overlays — chosen via router state.
+            // Surface overlays — chosen via router state. Page swaps are
+            // instant (no slide / fade transition); the only animation
+            // when switching tabs is the active-pill indicator inside
+            // BottomTabBar, which keeps its spring for tactile feedback.
             if let section = router.path.first {
                 surfaceView(for: section)
                     .zIndex(1)
-                    .transition(.move(edge: .trailing))
+                    .transition(.identity)
             }
 
             // Bottom tab bar — anchored at the root so it persists across
@@ -47,7 +50,6 @@ struct ContentView: View {
         }
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
         .activeSection(router.currentSection)
-        .animation(.easeOut(duration: 0.2), value: router.path)
         .coordinateSpace(name: edgeCoordinateSpace)
         // Edge-swipe-to-open lives on the root so it works on every primary
         // surface. `simultaneousGesture` keeps taps reaching the underlying

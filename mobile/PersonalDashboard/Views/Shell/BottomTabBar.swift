@@ -18,15 +18,18 @@ enum BottomTabBarMetrics {
 /// Floating-pill bottom tab bar (Navigation v3, issue #48).
 ///
 /// A capsule-shaped pill insets from the screen edges and floats above the
-/// safe area, with a soft drop shadow so it reads as lifted. Four flat tabs
-/// sit inside the pill (Notes, Lists, Tasks, Activity); the active tab gets
-/// a soft accent-tinted rounded rect behind its icon+label that springs
-/// between positions when switching.
+/// safe area, with a soft drop shadow so it reads as lifted. Four icon-only
+/// flat tabs sit inside the pill (Notes, Lists, Tasks, Activity); the
+/// active tab gets a soft accent-tinted rounded rect behind its icon that
+/// springs between positions when switching.
 ///
 /// The Chat button is rendered as a separate circular button that floats
-/// ABOVE the pill at the centre, overlapping the pill's top edge by ~40%.
-/// This preserves the "summon the AI" elevation while keeping the pill
-/// itself a clean, unbroken capsule (no notch / cutout).
+/// ABOVE the pill at the centre, overlapping the pill's top edge by a
+/// small fraction so it reads as "elevated but anchored" rather than
+/// floating away. On the Chat surface itself the circle is hidden (it
+/// would be redundant and would overlap the chat input) — the centre slot
+/// stays reserved as a transparent spacer so the four flat tabs don't
+/// shift position when navigating between Chat and other surfaces.
 ///
 /// Hides itself while the keyboard is visible so it doesn't fight a chat
 /// input bar, inline list-item entry, or note compose surfaces.
@@ -48,9 +51,11 @@ struct BottomTabBar: View {
     // MARK: Chat circle geometry
     private let chatDiameter: CGFloat = 60
     /// Fraction of the chat diameter that sits ABOVE the pill's top edge.
-    /// 0.40 = 40% above, 60% inside the pill. Matches the floating-pill
-    /// reference where the centre action overlaps the bar from above.
-    private let chatOverlapFraction: CGFloat = 0.40
+    /// 0.18 = 18% above, 82% inside the pill — the circle reads as a
+    /// distinct lifted button (heavier shadow + surface-coloured rim) but
+    /// stays anchored to the bar instead of looking like a free-floating
+    /// object hovering away from it.
+    private let chatOverlapFraction: CGFloat = 0.18
 
     var body: some View {
         ZStack {
@@ -99,8 +104,21 @@ struct BottomTabBar: View {
             // lifted so a fraction of the diameter sits above the pill's
             // top edge (Option A — clean unbroken capsule + overlapping
             // FAB-style action).
-            chatButton
-                .offset(y: -(chatDiameter * chatOverlapFraction))
+            //
+            // On the Chat surface the circle would be redundant AND would
+            // overlap the chat input bar, so we render a transparent
+            // spacer of the same frame instead. This keeps the pill's
+            // centre slot reserved at the same width so the four flat
+            // tabs don't shift position when switching to/from Chat.
+            Group {
+                if router.currentSection == .chat {
+                    Color.clear
+                        .frame(width: chatDiameter, height: chatDiameter)
+                } else {
+                    chatButton
+                }
+            }
+            .offset(y: -(chatDiameter * chatOverlapFraction))
         }
         .frame(maxWidth: .infinity)
     }
@@ -127,16 +145,13 @@ struct BottomTabBar: View {
                         .padding(.vertical, 8)
                 }
 
-                VStack(spacing: 3) {
-                    Image(systemName: section.icon)
-                        .font(.system(size: 20, weight: isActive ? .semibold : .regular))
-                        .foregroundStyle(isActive ? accent : Tokens.muted)
-
-                    Text(section.displayName)
-                        .font(.system(size: 12, weight: isActive ? .semibold : .regular))
-                        .foregroundStyle(isActive ? accent : Tokens.muted)
-                        .lineLimit(1)
-                }
+                // Icon-only tab — labels were dropped after on-device
+                // review of the floating-pill layout (the pill is narrow
+                // and the icons are recognisable on their own; the
+                // accent-tinted active background is enough state cue).
+                Image(systemName: section.icon)
+                    .font(.system(size: 22, weight: isActive ? .semibold : .regular))
+                    .foregroundStyle(isActive ? accent : Tokens.muted)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
