@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Deks app icon
+  ---------------------------------------------------------------
+  Concept: a small filled dot (you / presence) sitting just inside
+  the open mouth of a thin three-quarter arc (the right-hand
+  assistant: nearby, attentive, oriented forward). The opening
+  faces the lower-right so the composition reads slightly
+  asymmetric, not a static logo halo.
+
+  No letter D. Single-glyph, warm off-black background, soft
+  cream stroke + dot. Designed to stay legible at 60x60.
+
+  Background is solid (no transparency) — iOS clips the corner
+  radius itself.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1024 1024"
+     width="1024" height="1024">
+
+  <!-- Warm off-black background. NOT pure #000 — slightly warm so it
+       doesn't read as cold tech-black next to other home-screen icons. -->
+  <rect width="1024" height="1024" fill="#14131A"/>
+
+  <!--
+    Three-quarter arc, centered.
+    - Center (512, 512), radius 300.
+    - Stroke is hairline-feeling but ships at 28px so it survives
+      the 60x60 home-screen render without disappearing.
+    - The arc spans 270 degrees, leaving a 90-degree opening that
+      points to the lower-right. Start angle 315 deg, end angle
+      225 deg (going clockwise through 0/90/180).
+    - Endpoints (315 deg and 225 deg) computed:
+        315 deg -> (512 + 300*cos(-45), 512 + 300*sin(-45))
+                 = (512 + 212.13, 512 - 212.13)
+                 = (724.13, 299.87)
+        225 deg -> (512 + 300*cos(-135), 512 + 300*sin(-135))
+                 = (512 - 212.13, 512 - 212.13)  -- wrong, let me redo
+      Going *clockwise* from 315 to 225 the long way passes through
+      0 (right), 90 (down), 180 (left), so the arc covers the top,
+      left, and bottom of the circle and the gap is on the
+      upper-right -> lower-right -> bottom-right side. To put the
+      gap on the LOWER-right specifically, start at 0 deg (3 o'clock,
+      right side) going clockwise 270 deg to land at 270 deg (top,
+      12 o'clock).
+    - Final choice: opening on the right side, slightly biased
+      down so the dot sits at the threshold of the opening.
+        Start at angle  -30 deg  -> ( 772.0,  362.0 )
+        End   at angle   60 deg  -> ( 662.0,  771.84 )
+      Sweep clockwise 270 degrees through left and top.
+  -->
+  <path
+    d="M 772.0 362.0
+       A 300 300 0 1 0 662.0 771.84"
+    fill="none"
+    stroke="#F5F1EA"
+    stroke-width="28"
+    stroke-linecap="round"/>
+
+  <!--
+    The dot. Sits just inside the opening, slightly inset from the
+    arc plane so the eye reads them as two related-but-distinct
+    objects. Radius 56 reads cleanly at 60x60.
+  -->
+  <circle cx="640" cy="540" r="56" fill="#F5F1EA"/>
+</svg>

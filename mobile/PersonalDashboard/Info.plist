@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Dashboard</string>
+	<string>Deks</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -34,7 +34,7 @@
 		<string>_http._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Personal Dashboard talks to your Mac dev server over wifi when you're on the same network.</string>
+	<string>Deks talks to your Mac dev server over wifi when you're on the same network.</string>
 	<key>OTA_API_URL</key>
 	<string>$(OTA_API_URL)</string>
 	<key>UIAppFonts</key>
