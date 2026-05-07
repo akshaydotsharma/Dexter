@@ -37,6 +37,8 @@ mobile/DerivedData/
 mobile/*.ipa
 mobile/*.xcarchive
 mobile/.swiftpm/
+# Local build counter — bumps every ship, not committed (each dev/machine has its own)
+mobile/.build_count
 **/xcuserdata/
 **/*.xcuserstate
 
