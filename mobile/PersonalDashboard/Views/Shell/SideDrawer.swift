@@ -123,10 +123,10 @@ struct SideDrawer: View {
 
             // Footer
             VStack(alignment: .leading, spacing: Space.xs) {
-                Text("v\(Self.shortVersion) (\(Self.buildNumber))")
+                Text("v\(Self.shortVersion) (\(Self.buildNumber)) · \(Self.gitCommitSha)")
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.muted)
-                    .accessibilityLabel("App version \(Self.shortVersion), build \(Self.buildNumber)")
+                    .accessibilityLabel("App version \(Self.shortVersion), build \(Self.buildNumber), commit \(Self.gitCommitSha)")
 
                 HStack(spacing: Space.md) {
                     Button {
@@ -181,6 +181,12 @@ struct SideDrawer: View {
 
     private static var buildNumber: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+    }
+
+    /// Short git SHA of the archived commit. Populated by ship-lan.sh; falls
+    /// back to "dev" for local Xcode-only builds.
+    private static var gitCommitSha: String {
+        Bundle.main.infoDictionary?["GIT_COMMIT_SHA"] as? String ?? "dev"
     }
 }
 
