@@ -83,8 +83,10 @@ struct ChatView: View {
                 .padding(.top, Space.sm)
                 // Reserve room for the bottom tab bar so the input bar
                 // doesn't hide behind it. When the keyboard is up, the bar
-                // hides and the keyboard pushes the input up directly.
-                .padding(.bottom, keyboardVisible ? Space.md : (Space.md + BottomTabBarMetrics.height))
+                // hides and the keyboard pushes the input up directly. The
+                // gap above the tab bar is intentionally small so the input
+                // sits visually close to the floating pill.
+                .padding(.bottom, keyboardVisible ? Space.md : BottomTabBarMetrics.height)
             }
         }
         .background(Tokens.paper)
