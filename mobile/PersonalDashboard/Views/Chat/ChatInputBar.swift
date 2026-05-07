@@ -7,7 +7,11 @@ struct ChatInputBar: View {
     var onSend: () -> Void
     var onMic: (() -> Void)? = nil
 
-    @FocusState private var focused: Bool
+    /// Owned by the parent so the parent can auto-focus the input when the
+    /// chat surface becomes active (issue #48 — tapping the chat icon should
+    /// land in the keyboard-up state). The parent declares
+    /// `@FocusState private var inputFocused: Bool` and passes `$inputFocused`.
+    @FocusState.Binding var focused: Bool
 
     var body: some View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

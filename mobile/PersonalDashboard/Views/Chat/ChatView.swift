@@ -1,9 +1,16 @@
 import SwiftUI
+import UIKit
 
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
     @State private var resolvedDrafts: [UUID: DraftPreviewCard.Resolution] = [:]
     @State private var pendingViewMore: Bool = false
+    @State private var keyboardVisible: Bool = false
+
+    /// Owned here so we can auto-focus the input bar when the user lands on
+    /// chat (issue #48 — tapping the chat icon should pop the keyboard
+    /// straight away so the surface defaults to "ready to type").
+    @FocusState private var inputFocused: Bool
 
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
@@ -16,38 +23,96 @@ struct ChatView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper
+                .ignoresSafeArea()
+                // Tap on empty paper background dismisses the keyboard so
+                // the floating tab bar comes back into view (issue #48).
+                .onTapGesture {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil,
+                        from: nil,
+                        for: nil
+                    )
+                }
 
             VStack(spacing: 0) {
-                TopBar(
-                    title: viewModel.turns.isEmpty ? nil : "Chat",
-                    onMenu: {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            router.drawerOpen = true
+                // Top bar + body area: any tap dismisses the keyboard.
+                // simultaneousGesture fires ALONGSIDE child gestures, so
+                // scrolling, tapping messages, and tapping suggestion chips
+                // all keep working — they just additionally drop the
+                // keyboard. The ChatInputBar is intentionally outside this
+                // gesture so tapping the text field still focuses it.
+                VStack(spacing: 0) {
+                    TopBar(
+                        title: viewModel.turns.isEmpty ? nil : "Chat",
+                        onMenu: {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                router.drawerOpen = true
+                            }
+                        },
+                        onToggleTheme: {
+                            schemePref = schemePref.next
                         }
-                    },
-                    onToggleTheme: {
-                        schemePref = schemePref.next
+                    )
+
+                    if viewModel.turns.isEmpty {
+                        emptyState
+                    } else {
+                        conversation
+                    }
+                }
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder),
+                            to: nil,
+                            from: nil,
+                            for: nil
+                        )
                     }
                 )
-
-                if viewModel.turns.isEmpty {
-                    emptyState
-                } else {
-                    conversation
-                }
 
                 ChatInputBar(
                     text: $viewModel.draftInput,
                     isSending: viewModel.isSending,
-                    onSend: send
+                    onSend: send,
+                    focused: $inputFocused
                 )
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.sm)
-                .padding(.bottom, Space.md)
+                // Reserve room for the bottom tab bar so the input bar
+                // doesn't hide behind it. When the keyboard is up, the bar
+                // hides and the keyboard pushes the input up directly.
+                .padding(.bottom, keyboardVisible ? Space.md : (Space.md + BottomTabBarMetrics.height))
             }
         }
         .background(Tokens.paper)
+        .onAppear {
+            // Land in keyboard-up state on first appearance. The small
+            // delay gives SwiftUI time to lay the view tree out before
+            // we ask the TextField to take first responder.
+            if router.currentSection == .chat {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    inputFocused = true
+                }
+            }
+        }
+        .onChange(of: router.currentSection) { _, newSection in
+            // Tapping the chat circle from any other surface should drop
+            // the user straight into typing (issue #48).
+            if newSection == .chat {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                    inputFocused = true
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = false }
+        }
         .alert("Something went wrong",
                isPresented: Binding(
                    get: { viewModel.errorMessage != nil },
@@ -113,6 +178,9 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Space.lg) {
+                    // Keep ScrollView empty-area taps dismissing the keyboard
+                    // (in addition to drag-to-dismiss below) so users can
+                    // tap a message bubble's empty margin to dismiss too.
                     ForEach(viewModel.turns) { turn in
                         TurnView(
                             turn: turn,
@@ -151,6 +219,7 @@ struct ChatView: View {
                 .frame(maxWidth: 640)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: viewModel.turns.count) { _, _ in
                 if let last = viewModel.turns.last {
                     withAnimation(.easeOut(duration: 0.2)) {

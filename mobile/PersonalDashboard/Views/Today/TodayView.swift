@@ -9,7 +9,7 @@ struct TodayView: View {
     @State private var listsVM = ListsViewModel()
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -32,8 +32,6 @@ struct TodayView: View {
                 }
                 .refreshable { await loadAll() }
             }
-
-            ChatFAB { router.popToChat() }
         }
         .activeSection(.today)
         .task { await loadAll() }

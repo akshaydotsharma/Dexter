@@ -7,7 +7,7 @@ struct SettingsView: View {
     @State private var showingCacheCleared = false
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -30,8 +30,6 @@ struct SettingsView: View {
                     .padding(.bottom, 96)
                 }
             }
-
-            ChatFAB { router.popToChat() }
         }
         .activeSection(.settings)
         .alert("Cache cleared",

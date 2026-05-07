@@ -66,7 +66,7 @@ struct ActivityView: View {
     private static let pageSize = 100
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -142,8 +142,6 @@ struct ActivityView: View {
                     visibleCount = Self.pageSize
                 }
             }
-
-            ChatFAB { router.popToChat() }
         }
         .activeSection(.activity)
     }

@@ -12,33 +12,36 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case activity
     case settings
+    case helpCenter
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .chat:      return "Chat"
-        case .today:     return "Today"
-        case .tasks:     return "Tasks"
-        case .notes:     return "Notes"
-        case .lists:     return "Lists"
-        case .dashboard: return "Dashboard"
-        case .activity:  return "Activity"
-        case .settings:  return "Settings"
+        case .chat:       return "Chat"
+        case .today:      return "Today"
+        case .tasks:      return "Tasks"
+        case .notes:      return "Notes"
+        case .lists:      return "Lists"
+        case .dashboard:  return "Dashboard"
+        case .activity:   return "Activity"
+        case .settings:   return "Settings"
+        case .helpCenter: return "Help center"
         }
     }
 
-    /// SF Symbol used in the side drawer.
+    /// SF Symbol used in the side drawer and bottom tab bar.
     var icon: String {
         switch self {
-        case .chat:      return "bubble.left"
-        case .today:     return "calendar"
-        case .tasks:     return "checkmark.square"
-        case .notes:     return "doc.text"
-        case .lists:     return "list.bullet"
-        case .dashboard: return "rectangle.grid.2x2"
-        case .activity:  return "clock.arrow.circlepath"
-        case .settings:  return "gearshape"
+        case .chat:       return "sparkles"
+        case .today:      return "calendar"
+        case .tasks:      return "checkmark.square"
+        case .notes:      return "doc.text"
+        case .lists:      return "list.bullet"
+        case .dashboard:  return "rectangle.grid.2x2"
+        case .activity:   return "clock.arrow.circlepath"
+        case .settings:   return "gearshape"
+        case .helpCenter: return "questionmark.circle"
         }
     }
 }
@@ -86,6 +89,7 @@ enum Tokens {
     static let accentDashboard = Color.paper(0x1F1B16, 0xF2EBDA)
     static let accentActivity  = Color.paper(0x7C3F58, 0xE5A3BA)
     static let accentSettings  = Color.paper(0x475569, 0x94A3B8)
+    static let accentHelp      = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)
 
     // Semantics
@@ -99,14 +103,15 @@ enum Tokens {
 
     static func accent(for section: AppSection) -> Color {
         switch section {
-        case .chat:      return accentChat
-        case .today:     return accentToday
-        case .tasks:     return accentTasks
-        case .notes:     return accentNotes
-        case .lists:     return accentLists
-        case .dashboard: return accentDashboard
-        case .activity:  return accentActivity
-        case .settings:  return accentSettings
+        case .chat:       return accentChat
+        case .today:      return accentToday
+        case .tasks:      return accentTasks
+        case .notes:      return accentNotes
+        case .lists:      return accentLists
+        case .dashboard:  return accentDashboard
+        case .activity:   return accentActivity
+        case .settings:   return accentSettings
+        case .helpCenter: return accentHelp
         }
     }
 }

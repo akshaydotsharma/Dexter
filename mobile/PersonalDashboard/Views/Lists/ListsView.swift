@@ -12,7 +12,7 @@ struct ListsView: View {
     @Binding var schemePref: ColorSchemePref
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -42,8 +42,6 @@ struct ListsView: View {
                     rootList
                 }
             }
-
-            ChatFAB { router.popToChat() }
         }
         .activeSection(.lists)
         .task { await viewModel.load() }
@@ -124,6 +122,7 @@ struct ListsView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
+        .scrollDismissesKeyboard(.interactively)
         .refreshable { await viewModel.load() }
     }
 }
@@ -324,6 +323,7 @@ private struct ListDetailContent: View {
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
+                    .scrollDismissesKeyboard(.interactively)
                 }
 
                 addItemBar(list: list)

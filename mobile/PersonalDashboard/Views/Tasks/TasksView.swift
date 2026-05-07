@@ -11,7 +11,7 @@ struct TasksView: View {
     @Binding var schemePref: ColorSchemePref
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -54,10 +54,9 @@ struct TasksView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
+                .scrollDismissesKeyboard(.interactively)
                 .refreshable { await viewModel.load() }
             }
-
-            ChatFAB { router.popToChat() }
         }
         .activeSection(.tasks)
         .task { await viewModel.load() }
@@ -436,6 +435,7 @@ private struct TaskEditorSheet: View {
                     }
                     .padding(Space.lg)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle(isEditing ? "Edit task" : "New task")
             .navigationBarTitleDisplayMode(.inline)
