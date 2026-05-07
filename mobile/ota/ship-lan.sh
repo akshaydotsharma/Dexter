@@ -77,19 +77,37 @@ xcodegen generate >/dev/null
 rm -rf "${OTA_DIR}"
 mkdir -p "${OTA_DIR}"
 
-# ---- Bundle version: timestamp-based ----
-BUNDLE_VERSION="$(date +%s)"
-# SHORT_VERSION lives in project.yml's settings.base.MARKETING_VERSION (Info.plist
-# CFBundleShortVersionString resolves it via $(MARKETING_VERSION)). Bump it there
-# when the marketing version actually changes; the build number below changes
-# every ship so the drawer's "v0.1.0 (BUILD)" line always reflects the latest IPA.
-SHORT_VERSION="$(awk '/^[[:space:]]+MARKETING_VERSION:/{gsub(/"/,"",$2); print $2; exit}' "${MOBILE_DIR}/project.yml" 2>/dev/null)"
-SHORT_VERSION="${SHORT_VERSION:-0.1.0}"
+# ---- Versioning: a.b.c (d) ----
+# a.b live in mobile/VERSION (manually bumped on big refactors / minor cuts).
+# c   = commits on the current branch since mobile/VERSION last changed —
+#       so it auto-resets to 0 when you bump a or b, and increments by 1
+#       on every merge to main thereafter.
+# d   = local build counter at mobile/.build_count (gitignored). Each
+#       ship-lan.sh run bumps it by 1; plain Xcode builds keep their own
+#       project.yml default ("1") since they don't go through this script.
+VERSION_FILE="${MOBILE_DIR}/VERSION"
+BUILD_COUNT_FILE="${MOBILE_DIR}/.build_count"
 
-# Short git SHA of the archived commit, baked into Info.plist as GIT_COMMIT_SHA
-# so the drawer can print exactly which commit is installed on the phone.
-GIT_COMMIT_SHA="$(git -C "${MOBILE_DIR}/.." rev-parse --short HEAD 2>/dev/null || echo "dev")"
-echo "-> versioning: v${SHORT_VERSION} (${BUNDLE_VERSION}) commit ${GIT_COMMIT_SHA}"
+MAJOR_MINOR="$(tr -d '[:space:]' < "${VERSION_FILE}" 2>/dev/null)"
+MAJOR_MINOR="${MAJOR_MINOR:-0.1}"
+
+# Hash of the commit where mobile/VERSION was last touched. If the file was
+# never committed (fresh checkout), fall back to HEAD so the patch is 0.
+VERSION_BUMP_COMMIT="$(git -C "${MOBILE_DIR}/.." log -1 --format=%H -- "${VERSION_FILE}" 2>/dev/null)"
+if [ -n "${VERSION_BUMP_COMMIT}" ]; then
+    PATCH="$(git -C "${MOBILE_DIR}/.." rev-list --count "${VERSION_BUMP_COMMIT}..HEAD" 2>/dev/null || echo "0")"
+else
+    PATCH="0"
+fi
+
+# Bump local build counter.
+PREV_BUILD="$(cat "${BUILD_COUNT_FILE}" 2>/dev/null || echo "0")"
+BUILD_NUMBER=$((PREV_BUILD + 1))
+echo "${BUILD_NUMBER}" > "${BUILD_COUNT_FILE}"
+
+SHORT_VERSION="${MAJOR_MINOR}.${PATCH}"
+BUNDLE_VERSION="${BUILD_NUMBER}"
+echo "-> versioning: v${SHORT_VERSION} (${BUNDLE_VERSION})"
 
 # ---- Archive (Release, dev signing) ----
 ARCHIVE_PATH="${OTA_DIR}/PersonalDashboard.xcarchive"
@@ -102,7 +120,6 @@ xcodebuild \
     -archivePath "${ARCHIVE_PATH}" \
     CURRENT_PROJECT_VERSION="${BUNDLE_VERSION}" \
     MARKETING_VERSION="${SHORT_VERSION}" \
-    GIT_COMMIT_SHA="${GIT_COMMIT_SHA}" \
     OTA_API_URL="${API_URL}" \
     ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
     archive \
