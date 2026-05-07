@@ -61,7 +61,8 @@ struct ActivityView: View {
     @State private var visibleCount: Int = pageSize
 
     /// First page size and the increment per "load more" tap. Generous because
-    /// SwiftData fetches are cheap and LazyVStack only renders what's on screen.
+    /// SwiftData fetches are cheap and the dataset is small (single-device,
+    /// personal scope).
     private static let pageSize = 100
 
     var body: some View {
@@ -101,24 +102,29 @@ struct ActivityView: View {
                 let total = totalAfterFilter
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    // Plain VStack (not LazyVStack) because the dataset is small
+                    // (single-device personal scope, hundreds of items at most).
+                    // LazyVStack + `pinnedViews: [.sectionHeaders]` triggered a
+                    // SwiftUI layout bug where sections with varying row counts
+                    // left reserved blank space until a gesture forced a layout
+                    // pass. Issue #63.
+                    VStack(alignment: .leading, spacing: 0) {
                         if pageItems.isEmpty {
                             EmptyStateView(filter: filter)
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, Space.xxxl)
                         } else {
                             ForEach(groups(for: pageItems), id: \.key) { group in
-                                Section(header: dayHeader(for: group)) {
-                                    ForEach(Array(group.items.enumerated()), id: \.element.rowKey) { idx, item in
-                                        ActivityRow(item: item) {
-                                            handleTap(item: item)
-                                        }
-                                        if idx < group.items.count - 1 {
-                                            Rectangle()
-                                                .fill(Tokens.divider)
-                                                .frame(height: 0.5)
-                                                .padding(.leading, Space.lg)
-                                        }
+                                dayHeader(for: group)
+                                ForEach(Array(group.items.enumerated()), id: \.element.rowKey) { idx, item in
+                                    ActivityRow(item: item) {
+                                        handleTap(item: item)
+                                    }
+                                    if idx < group.items.count - 1 {
+                                        Rectangle()
+                                            .fill(Tokens.divider)
+                                            .frame(height: 0.5)
+                                            .padding(.leading, Space.lg)
                                     }
                                 }
                             }
