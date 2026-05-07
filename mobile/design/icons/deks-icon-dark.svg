@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Deks app icon — dark variant
+  ---------------------------------------------------------------
+  iOS 18 dark-appearance counterpart to deks-icon.svg.
+
+  Same composition: three pill-capped horizontal bars stacked on a
+  common left edge (widths 55% / 85% / 70%), accent dot to the
+  right of the top bar. Only the palette flips:
+
+    background   #14131A  (warm dark — matches brand dark, not pure black)
+    bars         linear gradient #FFFFFF top -> #F5F1EA bottom
+    accent dot   #FFFFFF (top-of-gradient white, kept solid for punch)
+
+  The vertical white-to-cream gradient on each bar is the one
+  intentional departure from the original "no gradient" rule —
+  it gives the dark icon a touch more visual life without
+  breaking the silhouette. Soft, not flashy.
+
+  Solid background, no transparency — iOS clips the corner radius.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1024 1024"
+     width="1024" height="1024">
+
+  <defs>
+    <!--
+      Bar gradient. Vertical, white at the top of each bar
+      (y=300, the top of the topmost bar) easing to warm cream
+      at the bottom (y=724, the bottom of the bottom bar).
+      Spanning the full stack means each bar inherits a slightly
+      different slice — the top bar reads brightest, the bottom
+      bar warms toward cream — reinforcing the natural top-down
+      read of a list.
+    -->
+    <linearGradient id="barGradient"
+                    x1="0" y1="300"
+                    x2="0" y2="724"
+                    gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F5F1EA"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Warm dark background. Matches brand dark, not pure #000. -->
+  <rect width="1024" height="1024" fill="#14131A"/>
+
+  <!-- Top bar: 55% width — the "first item". -->
+  <rect x="77"  y="300" width="563" height="88" rx="44" ry="44" fill="url(#barGradient)"/>
+
+  <!-- Middle bar: 85% width — anchor of the stack. -->
+  <rect x="77"  y="468" width="870" height="88" rx="44" ry="44" fill="url(#barGradient)"/>
+
+  <!-- Bottom bar: 70% width. -->
+  <rect x="77"  y="636" width="717" height="88" rx="44" ry="44" fill="url(#barGradient)"/>
+
+  <!--
+    Active-item marker. Pure white to keep punch on the dark
+    background — the dot is the smallest element and needs to
+    survive at 60x60.
+  -->
+  <circle cx="700" cy="344" r="24" fill="#FFFFFF"/>
+</svg>
