@@ -47,9 +47,7 @@ struct ChatView: View {
                     TopBar(
                         title: viewModel.turns.isEmpty ? nil : "Chat",
                         onMenu: {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                router.drawerOpen = true
-                            }
+                            router.openDrawer()
                         },
                         onToggleTheme: {
                             schemePref = schemePref.next
