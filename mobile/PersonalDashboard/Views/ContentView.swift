@@ -34,6 +34,29 @@ struct ContentView: View {
                     .transition(.identity)
             }
 
+            // Bottom fade — surface content that scrolls into the pill's
+            // region softly fades to paper so it doesn't fight the floating
+            // bar for attention (matches the Flow / Threads pattern).
+            // Renders ABOVE the surface stack but BELOW the bar so the
+            // pill itself stays crisp.
+            VStack(spacing: 0) {
+                Spacer()
+                LinearGradient(
+                    stops: [
+                        .init(color: Tokens.paper.opacity(0.0), location: 0.0),
+                        .init(color: Tokens.paper.opacity(0.55), location: 0.45),
+                        .init(color: Tokens.paper.opacity(0.95), location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: BottomTabBarMetrics.height + 60)
+                .allowsHitTesting(false)
+            }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            .ignoresSafeArea(edges: .bottom)
+            .zIndex(2)
+
             // Bottom tab bar — anchored at the root so it persists across
             // surface transitions. Lives above the surface stack but below
             // the drawer scrim so opening the drawer dims the bar too.
@@ -42,11 +65,11 @@ struct ContentView: View {
                 BottomTabBar(router: router)
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .zIndex(2)
+            .zIndex(3)
 
             // Drawer on top of everything.
             SideDrawer(router: router, schemePref: schemePref)
-                .zIndex(3)
+                .zIndex(4)
         }
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
         .activeSection(router.currentSection)

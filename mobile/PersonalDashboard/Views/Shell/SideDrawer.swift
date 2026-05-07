@@ -123,10 +123,10 @@ struct SideDrawer: View {
 
             // Footer
             VStack(alignment: .leading, spacing: Space.xs) {
-                Text("v\(Self.shortVersion) (\(Self.buildNumber)) · \(Self.gitCommitSha)")
+                Text("v\(Self.shortVersion) · \(Self.gitCommitSha)")
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.muted)
-                    .accessibilityLabel("App version \(Self.shortVersion), build \(Self.buildNumber), commit \(Self.gitCommitSha)")
+                    .accessibilityLabel("App version \(Self.shortVersion), commit \(Self.gitCommitSha)")
 
                 HStack(spacing: Space.md) {
                     Button {

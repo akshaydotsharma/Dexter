@@ -45,8 +45,12 @@ struct BottomTabBar: View {
 
     // MARK: Pill geometry
     private let pillHeight: CGFloat = 64
-    private let pillHorizontalInset: CGFloat = 14
-    private let pillBottomGap: CGFloat = 10
+    /// Inset from the screen edges. Wider inset reads as a "floating
+    /// island" rather than a full-width strip — matches the floating
+    /// nav-bar pattern in apps like Flow / Threads.
+    private let pillHorizontalInset: CGFloat = 22
+    /// Gap between the pill's bottom edge and the home-indicator safe area.
+    private let pillBottomGap: CGFloat = 6
 
     // MARK: Chat circle geometry
     private let chatDiameter: CGFloat = 60
@@ -113,13 +117,13 @@ struct BottomTabBar: View {
             )
             .background(
                 Capsule(style: .continuous)
-                    .fill(Tokens.surface.opacity(0.35))
+                    .fill(Tokens.surface.opacity(0.18))
             )
             .overlay(
                 Capsule(style: .continuous)
-                    .stroke(Tokens.border.opacity(0.6), lineWidth: 0.5)
+                    .stroke(Tokens.border.opacity(0.5), lineWidth: 0.5)
             )
-            .shadow(color: .black.opacity(0.18), radius: 22, x: 0, y: 10)
+            .shadow(color: .black.opacity(0.20), radius: 24, x: 0, y: 12)
             .padding(.horizontal, pillHorizontalInset)
             .padding(.bottom, pillBottomGap)
 
