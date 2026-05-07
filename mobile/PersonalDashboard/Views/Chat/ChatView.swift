@@ -32,23 +32,41 @@ struct ChatView: View {
                 }
 
             VStack(spacing: 0) {
-                TopBar(
-                    title: viewModel.turns.isEmpty ? nil : "Chat",
-                    onMenu: {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            router.drawerOpen = true
+                // Top bar + body area: any tap dismisses the keyboard.
+                // simultaneousGesture fires ALONGSIDE child gestures, so
+                // scrolling, tapping messages, and tapping suggestion chips
+                // all keep working — they just additionally drop the
+                // keyboard. The ChatInputBar is intentionally outside this
+                // gesture so tapping the text field still focuses it.
+                VStack(spacing: 0) {
+                    TopBar(
+                        title: viewModel.turns.isEmpty ? nil : "Chat",
+                        onMenu: {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                router.drawerOpen = true
+                            }
+                        },
+                        onToggleTheme: {
+                            schemePref = schemePref.next
                         }
-                    },
-                    onToggleTheme: {
-                        schemePref = schemePref.next
+                    )
+
+                    if viewModel.turns.isEmpty {
+                        emptyState
+                    } else {
+                        conversation
+                    }
+                }
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder),
+                            to: nil,
+                            from: nil,
+                            for: nil
+                        )
                     }
                 )
-
-                if viewModel.turns.isEmpty {
-                    emptyState
-                } else {
-                    conversation
-                }
 
                 ChatInputBar(
                     text: $viewModel.draftInput,
