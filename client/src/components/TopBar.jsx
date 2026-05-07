@@ -1,7 +1,6 @@
 import { Menu, Search } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import Kbd from './Kbd';
-import ThemeToggle from './ThemeToggle';
 
 const ROUTE_LABELS = {
   today: 'Today',
@@ -22,7 +21,7 @@ function deriveSection(pathname) {
  * v2 TopBar — desktop chrome at 56px. Left: mobile hamburger (md-hidden).
  * Center/left: a small Calistoga breadcrumb of the current section.
  * Right: a Cmd+K trigger pill (placeholder onClick — palette ships in
- * step 5), the theme toggle, and a profile pip placeholder.
+ * step 5) and a profile pip placeholder.
  */
 export default function TopBar({ onOpenMobileSidebar, onOpenCommandPalette }) {
   const location = useLocation();
@@ -67,8 +66,6 @@ export default function TopBar({ onOpenMobileSidebar, onOpenCommandPalette }) {
         >
           <Search size={18} strokeWidth={1.75} aria-hidden="true" />
         </button>
-
-        <ThemeToggle />
 
         <div
           aria-label="Profile"

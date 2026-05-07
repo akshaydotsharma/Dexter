@@ -13,7 +13,6 @@ import {
   X,
 } from 'lucide-react';
 import { usePreferences } from '../contexts/preferences-context';
-import ThemeToggle from './ThemeToggle';
 
 /**
  * v2 Sidebar — collapsed at 64px, expands on hover to 248px (200ms).
@@ -134,22 +133,19 @@ function SidebarBody({ expanded, onNavigate, wordmark }) {
         </ul>
       </nav>
 
-      {/* Footer: theme toggle + profile pip placeholder */}
+      {/* Footer: profile pip placeholder */}
       <div className="px-2 py-3 border-t border-divider">
-        <div className="flex items-center gap-2">
-          <ThemeToggle />
-          <div
-            aria-label="Profile"
-            className={
-              'flex-1 flex items-center gap-2 h-9 px-2 rounded-lg overflow-hidden ' +
-              (expanded ? 'opacity-100' : 'opacity-0 pointer-events-none')
-            }
-          >
-            <span className="w-7 h-7 rounded-full bg-paper-2 border border-border flex items-center justify-center text-[11px] font-medium text-ink-soft">
-              AS
-            </span>
-            <span className="text-xs text-muted truncate">Akshay</span>
-          </div>
+        <div
+          aria-label="Profile"
+          className={
+            'flex items-center gap-2 h-9 px-2 rounded-lg overflow-hidden ' +
+            (expanded ? 'opacity-100' : 'opacity-0 pointer-events-none')
+          }
+        >
+          <span className="w-7 h-7 rounded-full bg-paper-2 border border-border flex items-center justify-center text-[11px] font-medium text-ink-soft">
+            AS
+          </span>
+          <span className="text-xs text-muted truncate">Akshay</span>
         </div>
       </div>
     </div>
