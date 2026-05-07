@@ -91,13 +91,22 @@ BUILD_COUNT_FILE="${MOBILE_DIR}/.build_count"
 MAJOR_MINOR="$(tr -d '[:space:]' < "${VERSION_FILE}" 2>/dev/null)"
 MAJOR_MINOR="${MAJOR_MINOR:-0.1}"
 
-# Hash of the commit where mobile/VERSION was last touched. If the file was
-# never committed (fresh checkout), fall back to HEAD so the patch is 0.
+# Hash of the commit where mobile/VERSION was last touched. We count from
+# its PARENT (^) so that the VERSION-change merge itself counts toward c —
+# i.e. the first build after introducing a new major.minor reads as
+# a.b.1 rather than a.b.0 (matches the user-facing rule "every merge bumps
+# c by 1"). If the bump commit is the very first commit in the repo,
+# fall back to total commit count.
 VERSION_BUMP_COMMIT="$(git -C "${MOBILE_DIR}/.." log -1 --format=%H -- "${VERSION_FILE}" 2>/dev/null)"
 if [ -n "${VERSION_BUMP_COMMIT}" ]; then
-    PATCH="$(git -C "${MOBILE_DIR}/.." rev-list --count "${VERSION_BUMP_COMMIT}..HEAD" 2>/dev/null || echo "0")"
+    if git -C "${MOBILE_DIR}/.." rev-parse "${VERSION_BUMP_COMMIT}^" >/dev/null 2>&1; then
+        PATCH="$(git -C "${MOBILE_DIR}/.." rev-list --count "${VERSION_BUMP_COMMIT}^..HEAD" 2>/dev/null || echo "1")"
+    else
+        PATCH="$(git -C "${MOBILE_DIR}/.." rev-list --count HEAD 2>/dev/null || echo "1")"
+    fi
 else
-    PATCH="0"
+    # VERSION not committed yet (e.g. brand-new branch with uncommitted file)
+    PATCH="1"
 fi
 
 # Bump local build counter.
