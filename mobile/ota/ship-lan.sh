@@ -109,10 +109,32 @@ else
     PATCH="1"
 fi
 
-# Bump local build counter.
-PREV_BUILD="$(cat "${BUILD_COUNT_FILE}" 2>/dev/null || echo "0")"
-BUILD_NUMBER=$((PREV_BUILD + 1))
-echo "${BUILD_NUMBER}" > "${BUILD_COUNT_FILE}"
+# Local build counter (d) — per change-cycle, not lifetime. Resets to 1
+# whenever the branch changes OR the local main tip advances (i.e. a merge
+# happened since the last ship). Same branch + same main tip = same change,
+# so iterative re-ships during one ticket increment as expected.
+#
+# State format: <branch>:<main_tip>:<count>. Falls back gracefully for
+# legacy formats ("<branch>:<count>" or just "<count>") by treating them
+# as a fresh start.
+LAST_LINE="$(cat "${BUILD_COUNT_FILE}" 2>/dev/null || echo "")"
+LAST_BRANCH=""
+LAST_MAIN_TIP=""
+LAST_COUNT="0"
+IFS=':' read -r f1 f2 f3 <<<"${LAST_LINE}"
+if [ -n "${f3}" ]; then
+    LAST_BRANCH="${f1}"; LAST_MAIN_TIP="${f2}"; LAST_COUNT="${f3}"
+fi
+
+CURRENT_BRANCH="$(git -C "${MOBILE_DIR}/.." rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")"
+CURRENT_MAIN_TIP="$(git -C "${MOBILE_DIR}/.." rev-parse main 2>/dev/null || echo "")"
+
+if [ "${LAST_BRANCH}" = "${CURRENT_BRANCH}" ] && [ "${LAST_MAIN_TIP}" = "${CURRENT_MAIN_TIP}" ]; then
+    BUILD_NUMBER=$((LAST_COUNT + 1))
+else
+    BUILD_NUMBER=1
+fi
+echo "${CURRENT_BRANCH}:${CURRENT_MAIN_TIP}:${BUILD_NUMBER}" > "${BUILD_COUNT_FILE}"
 
 SHORT_VERSION="${MAJOR_MINOR}.${PATCH}"
 BUNDLE_VERSION="${BUILD_NUMBER}"
