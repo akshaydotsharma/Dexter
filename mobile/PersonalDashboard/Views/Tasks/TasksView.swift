@@ -8,7 +8,6 @@ struct TasksView: View {
     @State private var completedExpanded: Bool = false
 
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     var body: some View {
         ZStack {
@@ -19,8 +18,7 @@ struct TasksView: View {
                     title: "Tasks",
                     onMenu: {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
-                    },
-                    onToggleTheme: { schemePref = schemePref.next }
+                    }
                 )
 
                 // Using `List` (not `ScrollView { LazyVStack }`) so each row

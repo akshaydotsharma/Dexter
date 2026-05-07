@@ -6,7 +6,6 @@ import SwiftUI
 /// release notes) lands here later.
 struct HelpCenterView: View {
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     var body: some View {
         ZStack {
@@ -17,8 +16,7 @@ struct HelpCenterView: View {
                     title: "Help center",
                     onMenu: {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
-                    },
-                    onToggleTheme: { schemePref = schemePref.next }
+                    }
                 )
 
                 Spacer()

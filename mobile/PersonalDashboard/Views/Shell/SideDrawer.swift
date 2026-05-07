@@ -8,7 +8,6 @@ import SwiftUI
 /// - Closing: a finger-tracking pan on the panel (and a tap on the scrim).
 struct SideDrawer: View {
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     /// Velocity threshold for "fling" snaps (pt/s). Above this, the drawer
     /// snaps to the direction of motion regardless of distance.
@@ -129,18 +128,6 @@ struct SideDrawer: View {
                     .accessibilityLabel("App version \(Self.shortVersion) build \(Self.buildNumber)")
 
                 HStack(spacing: Space.md) {
-                    Button {
-                        schemePref = schemePref.next
-                    } label: {
-                        Image(systemName: schemeIcon)
-                            .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(Tokens.muted)
-                            .frame(width: 36, height: 36)
-                            .background(Tokens.paper2, in: Circle())
-                            .overlay(Circle().stroke(Tokens.border, lineWidth: 0.5))
-                    }
-                    .accessibilityLabel("Theme: \(schemePref.rawValue)")
-
                     Text("AS")
                         .font(.edFootnote)
                         .foregroundStyle(Tokens.ink)
@@ -162,14 +149,6 @@ struct SideDrawer: View {
                     .fill(Tokens.divider)
                     .frame(height: 0.5)
             }
-        }
-    }
-
-    private var schemeIcon: String {
-        switch schemePref {
-        case .system: return "circle.lefthalf.filled"
-        case .light:  return "sun.max"
-        case .dark:   return "moon"
         }
     }
 

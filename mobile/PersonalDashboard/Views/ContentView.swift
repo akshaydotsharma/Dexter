@@ -68,7 +68,7 @@ struct ContentView: View {
             .zIndex(3)
 
             // Drawer on top of everything.
-            SideDrawer(router: router, schemePref: schemePref)
+            SideDrawer(router: router)
                 .zIndex(4)
         }
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
@@ -117,7 +117,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var chatRoot: some View {
-        ChatView(router: router, schemePref: schemePref)
+        ChatView(router: router)
             .activeSection(.chat)
     }
 
@@ -128,25 +128,25 @@ struct ContentView: View {
             // shouldn't render — chat is the root, not an overlay.
             EmptyView()
         case .tasks:
-            TasksView(router: router, schemePref: schemePref)
+            TasksView(router: router)
         case .notes:
-            NotesView(router: router, schemePref: schemePref)
+            NotesView(router: router)
         case .lists:
-            ListsView(router: router, schemePref: schemePref)
+            ListsView(router: router)
         case .dashboard:
             // Dashboard surface is hidden (issue #30). The drawer entry has
             // been removed and the LAUNCH_SECTION deep-link redirects to
             // .activity, so this case is unreachable. Restore by replacing
-            // EmptyView() with `DashboardView(router: router, schemePref: schemePref)`.
+            // EmptyView() with `DashboardView(router: router)`.
             EmptyView()
         case .activity:
-            ActivityView(router: router, schemePref: schemePref)
+            ActivityView(router: router)
         case .settings:
             SettingsView(router: router, schemePref: schemePref)
         case .today:
-            TodayView(router: router, schemePref: schemePref)
+            TodayView(router: router)
         case .helpCenter:
-            HelpCenterView(router: router, schemePref: schemePref)
+            HelpCenterView(router: router)
         }
     }
 }
@@ -154,7 +154,6 @@ struct ContentView: View {
 private struct PlaceholderView: View {
     let section: AppSection
     @Bindable var router: AppRouter
-    @Binding var schemePref: ColorSchemePref
 
     var body: some View {
         ZStack {
@@ -162,8 +161,7 @@ private struct PlaceholderView: View {
             VStack(spacing: 0) {
                 TopBar(
                     title: section.displayName,
-                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
-                    onToggleTheme: { schemePref = schemePref.next }
+                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                 )
                 Spacer()
                 VStack(spacing: Space.md) {
