@@ -79,11 +79,24 @@ struct BottomTabBar: View {
         // edge without affecting the pill's intrinsic layout.
         ZStack(alignment: .top) {
             // The capsule itself with the four flat tabs inside.
+            //
+            // Centre slot:
+            // - On non-chat surfaces, an invisible spacer the floating chat
+            //   circle hovers above (Option A overlap pattern).
+            // - On the Chat surface itself, a flat chat tab takes the slot
+            //   so the bar reads as a normal 5-tab capsule with the active
+            //   tab highlighted in place.
             HStack(spacing: 0) {
                 tab(for: tabs[0])               // Notes
                 tab(for: tabs[1])               // Lists
-                Color.clear                     // centre slot reserved for chat circle overlap
-                    .frame(maxWidth: .infinity)
+                Group {
+                    if router.currentSection == .chat {
+                        tab(for: .chat)         // flat chat tab with active highlight
+                    } else {
+                        Color.clear             // reserved for the floating circle
+                            .frame(maxWidth: .infinity)
+                    }
+                }
                 tab(for: tabs[2])               // Tasks
                 tab(for: tabs[3])               // Activity
             }
@@ -138,8 +151,17 @@ struct BottomTabBar: View {
                 // matchedGeometryEffect makes it slide between positions
                 // when the user switches tabs.
                 if isActive {
+                    // Neutral muted highlight for the Chat tab (its accent
+                    // is cream in dark mode and reads as a near-white pill,
+                    // which is too loud for an "active" cue). Per-tab
+                    // accents continue to drive the highlight on every
+                    // other tab.
+                    let highlightFill: Color = section == .chat
+                        ? Tokens.muted.opacity(0.18)
+                        : accent.opacity(0.14)
+
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(accent.opacity(0.14))
+                        .fill(highlightFill)
                         .matchedGeometryEffect(id: "activePill", in: activePillNamespace)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 8)

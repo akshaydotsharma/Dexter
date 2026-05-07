@@ -7,6 +7,11 @@ struct ChatView: View {
     @State private var pendingViewMore: Bool = false
     @State private var keyboardVisible: Bool = false
 
+    /// Owned here so we can auto-focus the input bar when the user lands on
+    /// chat (issue #48 — tapping the chat icon should pop the keyboard
+    /// straight away so the surface defaults to "ready to type").
+    @FocusState private var inputFocused: Bool
+
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
 
@@ -71,7 +76,8 @@ struct ChatView: View {
                 ChatInputBar(
                     text: $viewModel.draftInput,
                     isSending: viewModel.isSending,
-                    onSend: send
+                    onSend: send,
+                    focused: $inputFocused
                 )
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.sm)
@@ -82,6 +88,25 @@ struct ChatView: View {
             }
         }
         .background(Tokens.paper)
+        .onAppear {
+            // Land in keyboard-up state on first appearance. The small
+            // delay gives SwiftUI time to lay the view tree out before
+            // we ask the TextField to take first responder.
+            if router.currentSection == .chat {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    inputFocused = true
+                }
+            }
+        }
+        .onChange(of: router.currentSection) { _, newSection in
+            // Tapping the chat circle from any other surface should drop
+            // the user straight into typing (issue #48).
+            if newSection == .chat {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                    inputFocused = true
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = true }
         }
