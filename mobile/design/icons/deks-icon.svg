@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Deks app icon
+  ---------------------------------------------------------------
+  Concept: three stacked horizontal bars on a warm cream ground —
+  the "decks" homophone made literal. A short list of items,
+  neatly stacked, like ordered cards or a notebook page.
+
+  Three bars at varied widths (55% / 85% / 70% of canvas) all
+  sharing a common left edge, so they read as a real list rather
+  than a hamburger-menu glyph. Bars are fully rounded (pill caps)
+  to soften the geometry. A small dot to the right of the top
+  bar marks "active item / next" — the productivity beat
+  without resorting to a checkmark.
+
+  No letter D. No frame. No gradient. Single-glyph, warm cream
+  page with warm-dark ink. Solid background — iOS clips the
+  corner radius itself.
+
+  Designed to stay legible at 60x60: the thinnest element (the
+  dot) is ~5% of canvas width.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1024 1024"
+     width="1024" height="1024">
+
+  <!-- Warm cream background. Paper / notebook page. -->
+  <rect width="1024" height="1024" fill="#F5F1EA"/>
+
+  <!--
+    Three stacked bars, common left edge at x=77.
+    Bar height 88 (~8.6% of canvas), pill caps via rx=44.
+    Vertical rhythm: y = 300, 468, 636 (88px tall, 80px gap).
+    Total stack height 424, centered vertically (top margin 300, bottom 300).
+    Widths step 55% -> 85% -> 70% so the silhouette varies and the
+    middle bar visually anchors the stack.
+  -->
+
+  <!-- Top bar: 55% width — the "first item". -->
+  <rect x="77"  y="300" width="563" height="88" rx="44" ry="44" fill="#1F1A1F"/>
+
+  <!-- Middle bar: 85% width — anchor of the stack. -->
+  <rect x="77"  y="468" width="870" height="88" rx="44" ry="44" fill="#1F1A1F"/>
+
+  <!-- Bottom bar: 70% width. -->
+  <rect x="77"  y="636" width="717" height="88" rx="44" ry="44" fill="#1F1A1F"/>
+
+  <!--
+    Active-item marker. A small filled dot to the right of the
+    top bar, vertically centered with it. r=24 (~4.7% of canvas
+    width), gap of 36px from the bar's right end so they read
+    as related-but-distinct.
+  -->
+  <circle cx="700" cy="344" r="24" fill="#1F1A1F"/>
+</svg>

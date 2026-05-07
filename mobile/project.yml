@@ -24,7 +24,7 @@ targets:
     info:
       path: PersonalDashboard/Info.plist
       properties:
-        CFBundleDisplayName: Dashboard
+        CFBundleDisplayName: Deks
         # Versioning scheme: "a.b.c (d)" — see mobile/ota/ship-lan.sh for the
         # derivation. a.b come from mobile/VERSION; c is auto-derived from
         # git history (commits since VERSION last changed); d is a local
@@ -46,7 +46,7 @@ targets:
           NSAllowsArbitraryLoads: true
         # Triggers the iOS local-network permission prompt the first time
         # the App Intent or main app reaches a LAN IP.
-        NSLocalNetworkUsageDescription: "Personal Dashboard talks to your Mac dev server over wifi when you're on the same network."
+        NSLocalNetworkUsageDescription: "Deks talks to your Mac dev server over wifi when you're on the same network."
         # Bonjour service types our launch primer browses for. Required
         # alongside NSLocalNetworkUsageDescription, otherwise the browse
         # silently fails and the prompt never appears.
