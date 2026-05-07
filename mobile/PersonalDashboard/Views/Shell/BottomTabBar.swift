@@ -50,7 +50,9 @@ struct BottomTabBar: View {
     /// nav-bar pattern in apps like Flow / Threads.
     private let pillHorizontalInset: CGFloat = 22
     /// Gap between the pill's bottom edge and the home-indicator safe area.
-    private let pillBottomGap: CGFloat = 6
+    /// 0pt = pill sits flush against the safe-area top; the home indicator
+    /// still gets its standard inset below.
+    private let pillBottomGap: CGFloat = 0
 
     // MARK: Chat circle geometry
     private let chatDiameter: CGFloat = 60
@@ -215,19 +217,15 @@ struct BottomTabBar: View {
                     .fill(Tokens.ink)
                     .frame(width: chatDiameter, height: chatDiameter)
 
-                // Subtle outer rim so the circle reads as a distinct object
-                // when it overlaps the pill, even at the same tonality.
-                Circle()
-                    .stroke(Tokens.surface, lineWidth: 3)
-                    .frame(width: chatDiameter, height: chatDiameter)
-
                 Image(systemName: "sparkles")
                     .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(Tokens.paper)
             }
-            // Heavier shadow than the pill so the circle reads as floating
-            // even higher.
-            .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 6)
+            // Shadow alone lifts the circle off the pill in both themes —
+            // a paper/surface rim was producing a white halo in light mode
+            // (the dark circle already has plenty of natural contrast
+            // against a light pill, so the rim was over-engineering).
+            .shadow(color: .black.opacity(0.22), radius: 16, x: 0, y: 7)
             .scaleEffect(isActive ? 1.0 : 1.0)
         }
         .buttonStyle(.plain)
