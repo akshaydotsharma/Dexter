@@ -82,11 +82,23 @@ struct ContentView: View {
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
         .activeSection(router.currentSection)
         .coordinateSpace(name: edgeCoordinateSpace)
-        // Edge-swipe-to-open lives on the root so it works on every primary
-        // surface. `simultaneousGesture` keeps taps reaching the underlying
-        // views; only drags whose start lands in the leading 20pt strip
-        // hijack the gesture to drag the drawer.
-        .simultaneousGesture(edgeOpenGesture)
+        // Edge-swipe-to-open is scoped to a 20pt-wide leading strip overlay,
+        // NOT a screen-wide `.simultaneousGesture`. A root-level DragGesture
+        // with `minimumDistance: 8` claims arbitration on any 8pt drag — that
+        // starves the inner List's vertical scroll, even with the
+        // `startLocation.x <= edgeSwipeWidth` guard (the guard runs after
+        // the gesture has already won). Constraining the gesture host to a
+        // thin leading strip leaves the rest of the screen free for the
+        // List's native scroll + `.swipeActions` arbitration. (#79)
+        .overlay(alignment: .leading) {
+            Color.clear
+                .frame(width: edgeSwipeWidth)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(edgeOpenGesture)
+                .ignoresSafeArea()
+                .allowsHitTesting(!router.drawerOpen)
+        }
     }
 
     private var edgeOpenGesture: some Gesture {
