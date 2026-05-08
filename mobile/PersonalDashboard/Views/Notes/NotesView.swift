@@ -334,18 +334,19 @@ private struct NoteRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
+        let trimmedBody = (note.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasBody = !trimmedBody.isEmpty
+
+        return Button(action: onTap) {
             VStack(alignment: .leading, spacing: 4) {
                 Text((note.title?.isEmpty == false ? note.title! : "Untitled"))
                     .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
-                if let content = note.content, !content.isEmpty {
-                    Text(content)
-                        .font(.edSubheadline)
-                        .foregroundStyle(Tokens.muted)
-                        .lineLimit(1)
-                }
+                Text(hasBody ? trimmedBody : "No additional text")
+                    .font(.edSubheadline)
+                    .foregroundStyle(hasBody ? Tokens.muted : Tokens.mutedSoft)
+                    .lineLimit(1)
                 Text(note.updatedAt, style: .relative)
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
