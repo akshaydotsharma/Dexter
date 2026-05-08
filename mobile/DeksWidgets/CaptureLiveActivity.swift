@@ -7,9 +7,16 @@ import WidgetKit
 /// Why it exists: when the iPhone Action Button runs the Capture
 /// shortcut, iOS shows a generic "AppIcon thumbnail" treatment in the
 /// Dynamic Island while the App Intent is processing. We replace that
-/// with the icon's three-line motif, animating like a soft waveform so
-/// the user has visible proof the pipeline is alive. The system Dictate
-/// Text sheet is untouched — only the Dynamic Island region.
+/// with an animated `waveform` SF Symbol so the user has visible proof
+/// the pipeline is alive. The system Dictate Text sheet is untouched —
+/// only the Dynamic Island region.
+///
+/// Why SF Symbol over the previous 3-line motif: `TimelineView(.animation)`
+/// does NOT drive continuous motion in the *compact* island view (iOS
+/// renders compact as a static snapshot). `.symbolEffect` DOES animate
+/// in compact. We trade a sliver of AppIcon continuity for actual visible
+/// motion in the always-visible pill — the surface the user reads 99% of
+/// the time.
 ///
 /// Lifecycle is owned by `CaptureToDashboardIntent`, not the activity
 /// itself. The intent starts the activity in `.processing`, updates to
@@ -27,7 +34,7 @@ struct CaptureLiveActivity: Widget {
                 // EXPANDED — visible when the user taps + holds the
                 // island. Same surfaces a system "summary card" view.
                 DynamicIslandExpandedRegion(.leading) {
-                    CaptureLogoLines(phase: context.state.phase, size: .expandedLeading, tint: .white)
+                    CaptureWaveformSymbol(phase: context.state.phase, slot: .expandedLeading)
                         .padding(.leading, 6)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
@@ -53,16 +60,16 @@ struct CaptureLiveActivity: Widget {
                         .padding(.bottom, 2)
                 }
             } compactLeading: {
-                CaptureLogoLines(phase: context.state.phase, size: .compactLeading, tint: .white)
+                CaptureWaveformSymbol(phase: context.state.phase, slot: .compactLeading)
                     .padding(.leading, 4)
             } compactTrailing: {
                 StatusPip(phase: context.state.phase)
                     .padding(.trailing, 4)
             } minimal: {
                 // Reduced when another activity is on the trailing side.
-                // Rendered inside the small system pill — the lines need
+                // Rendered inside the small system pill — the symbol needs
                 // to hold up at ~16pt wide.
-                CaptureLogoLines(phase: context.state.phase, size: .minimal, tint: .white)
+                CaptureWaveformSymbol(phase: context.state.phase, slot: .minimal)
             }
             .keylineTint(.white.opacity(0.6))
             .widgetURL(URL(string: "deks://capture"))
@@ -128,8 +135,11 @@ private struct LockScreenView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            CaptureLogoLines(phase: state.phase, size: .banner, tint: ink)
-                .frame(width: 84, height: 52)
+            // SF Symbol everywhere for visual consistency with the
+            // compact + expanded island slots. The banner has the room
+            // for a richer treatment, but coherence beats novelty here.
+            CaptureWaveformSymbol(phase: state.phase, slot: .banner)
+                .frame(width: 68, height: 50)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(eyebrow)
