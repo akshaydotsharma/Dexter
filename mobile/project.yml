@@ -2,7 +2,7 @@ name: PersonalDashboard
 options:
   bundleIdPrefix: com.akshaysharma
   deploymentTarget:
-    iOS: "18.0"
+    iOS: "17.0"
   developmentLanguage: en
   createIntermediateGroups: true
 

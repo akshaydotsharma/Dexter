@@ -1,55 +1,100 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Deks app icon
+  Deks app icon — Liquid Glass treatment
   ---------------------------------------------------------------
-  Concept: three stacked horizontal bars on a warm cream ground —
-  the "decks" homophone made literal. A short list of items,
-  neatly stacked, like ordered cards or a notebook page.
+  Single icon, both home-screen modes show this. Same composition
+  as the original dark variant: three pill-capped horizontal bars
+  on a common left edge (widths 55% / 85% / 70%), accent dot just
+  right of the top bar.
 
-  Three bars at varied widths (55% / 85% / 70% of canvas) all
-  sharing a common left edge, so they read as a real list rather
-  than a hamburger-menu glyph. Bars are fully rounded (pill caps)
-  to soften the geometry. A small dot to the right of the top
-  bar marks "active item / next" — the productivity beat
-  without resorting to a checkmark.
+  What's new is the material: Apple's Liquid Glass cues applied
+  statically.
 
-  No letter D. No frame. No gradient. Single-glyph, warm cream
-  page with warm-dark ink. Solid background — iOS clips the
-  corner radius itself.
+    background    radial-ish dark, #1A1620 top -> #0F0E14 bottom
+    bar body      vertical gradient #FFFFFF top -> #F5F1EA bottom
+                  (carries the warmth of the brand cream)
+    top edge      bright specular highlight (the single most
+                  recognisable Liquid Glass cue)
+    rim           hairline lighter edge around the silhouette
+    drop shadow   soft underglow displaced ~3px down, ~10% opacity
+    accent dot    same glass treatment — highlight + shadow
 
-  Designed to stay legible at 60x60: the thinnest element (the
-  dot) is ~5% of canvas width.
+  No transparency on the canvas itself — iOS clips its own radius.
+  Pillow renderer (render_icons.py) is the source of truth for
+  the gaussian-blurred shadow; this SVG is the documented spec.
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      viewBox="0 0 1024 1024"
      width="1024" height="1024">
 
-  <!-- Warm cream background. Paper / notebook page. -->
-  <rect width="1024" height="1024" fill="#F5F1EA"/>
+  <defs>
+    <!-- Background gradient: warm dark, slightly lighter at top. -->
+    <linearGradient id="bgGradient" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#1A1620"/>
+      <stop offset="100%" stop-color="#0F0E14"/>
+    </linearGradient>
 
-  <!--
-    Three stacked bars, common left edge at x=77.
-    Bar height 88 (~8.6% of canvas), pill caps via rx=44.
-    Vertical rhythm: y = 300, 468, 636 (88px tall, 80px gap).
-    Total stack height 424, centered vertically (top margin 300, bottom 300).
-    Widths step 55% -> 85% -> 70% so the silhouette varies and the
-    middle bar visually anchors the stack.
-  -->
+    <!-- Bar body gradient: bright top, warming to cream at the bottom. -->
+    <linearGradient id="barGradient" x1="0" y1="300" x2="0" y2="724" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F5F1EA"/>
+    </linearGradient>
 
-  <!-- Top bar: 55% width — the "first item". -->
-  <rect x="77"  y="300" width="563" height="88" rx="44" ry="44" fill="#1F1A1F"/>
+    <!-- Specular highlight: a brighter band in the top ~12% of each bar. -->
+    <linearGradient id="barHighlight" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%"    stop-color="#FFFFFF" stop-opacity="1.0"/>
+      <stop offset="35%"   stop-color="#FFFFFF" stop-opacity="0.0"/>
+    </linearGradient>
 
-  <!-- Middle bar: 85% width — anchor of the stack. -->
-  <rect x="77"  y="468" width="870" height="88" rx="44" ry="44" fill="#1F1A1F"/>
+    <!-- Soft drop shadow filter — gaussian blur, slight downward offset. -->
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="0" dy="3" result="offsetBlur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.18"/></feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Warm dark background with subtle vertical gradient. -->
+  <rect width="1024" height="1024" fill="url(#bgGradient)"/>
+
+  <!-- Three glass bars. Each is rendered as: shadow (implicit via filter)
+       + body gradient + edge rim (hairline stroke) + top specular highlight. -->
+
+  <!-- Top bar: 55% width. -->
+  <g filter="url(#dropShadow)">
+    <rect x="77" y="300" width="563" height="88" rx="44" ry="44"
+          fill="url(#barGradient)"
+          stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+    <rect x="77" y="300" width="563" height="88" rx="44" ry="44"
+          fill="url(#barHighlight)"/>
+  </g>
+
+  <!-- Middle bar: 85% width. -->
+  <g filter="url(#dropShadow)">
+    <rect x="77" y="468" width="870" height="88" rx="44" ry="44"
+          fill="url(#barGradient)"
+          stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+    <rect x="77" y="468" width="870" height="88" rx="44" ry="44"
+          fill="url(#barHighlight)"/>
+  </g>
 
   <!-- Bottom bar: 70% width. -->
-  <rect x="77"  y="636" width="717" height="88" rx="44" ry="44" fill="#1F1A1F"/>
+  <g filter="url(#dropShadow)">
+    <rect x="77" y="636" width="717" height="88" rx="44" ry="44"
+          fill="url(#barGradient)"
+          stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+    <rect x="77" y="636" width="717" height="88" rx="44" ry="44"
+          fill="url(#barHighlight)"/>
+  </g>
 
-  <!--
-    Active-item marker. A small filled dot to the right of the
-    top bar, vertically centered with it. r=24 (~4.7% of canvas
-    width), gap of 36px from the bar's right end so they read
-    as related-but-distinct.
-  -->
-  <circle cx="700" cy="344" r="24" fill="#1F1A1F"/>
+  <!-- Accent dot: same glass treatment, scaled down. -->
+  <g filter="url(#dropShadow)">
+    <circle cx="700" cy="344" r="24" fill="#FFFFFF"
+            stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="1"/>
+    <circle cx="700" cy="338" r="20" fill="url(#barHighlight)"/>
+  </g>
 </svg>
