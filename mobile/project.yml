@@ -21,10 +21,6 @@ targets:
         buildPhase: resources
       - path: PersonalDashboard/Resources/Assets.xcassets
         buildPhase: resources
-      # Shared with the DeksWidgets extension. Today only the
-      # ActivityAttributes for the Capture Live Activity, but kept under
-      # mobile/Shared/ so future cross-target types land in one place.
-      - path: Shared
     dependencies:
       - target: DeksWidgets
         embed: true
@@ -93,7 +89,14 @@ targets:
     platform: iOS
     sources:
       - path: DeksWidgets
-      - path: Shared
+      # ActivityAttributes for the Capture Live Activity. Lives under the
+      # main app's Intents/ folder (where the controller and intent that
+      # use it live), and we list it explicitly here so the widget
+      # extension compiles against the same type without owning a
+      # separate copy. Adding the directory itself would drag the rest of
+      # the app's Intents into the widget module — we only want this one
+      # file.
+      - path: PersonalDashboard/Intents/CaptureActivityAttributes.swift
     info:
       path: DeksWidgets/Info.plist
       properties:
