@@ -52,6 +52,14 @@ final class AppRouter {
     /// back to nil so it doesn't fire again on the next appearance.
     var focus: ActivityFocus?
 
+    /// When non-nil, an edge-swipe-from-leading on the active surface routes
+    /// through this handler instead of opening the side drawer. Notes and
+    /// Lists set this when the user is inside a sub-screen (folder, note,
+    /// list detail) so swipe-right pops back to the section root, mirroring
+    /// the iOS-native interactive back gesture. Cleared when the surface
+    /// returns to its root.
+    var leadingEdgeBackHandler: (() -> Void)?
+
     /// Open the side drawer and dismiss any active keyboard so the drawer
     /// renders cleanly above the chat input (issue #54). Both the top-bar
     /// menu tap and the edge-swipe gesture route through here so the

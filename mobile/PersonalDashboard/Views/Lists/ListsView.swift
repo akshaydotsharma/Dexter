@@ -62,7 +62,16 @@ struct ListsView: View {
             if router.focus?.section == .lists {
                 router.focus = nil
             }
+            syncBackHandler()
         }
+        .onDisappear {
+            // Don't strip a back handler we didn't install — another surface
+            // may have set its own when this view was off-screen.
+            if selectedListId != nil {
+                router.leadingEdgeBackHandler = nil
+            }
+        }
+        .onChange(of: selectedListId) { _, _ in syncBackHandler() }
         .sheet(isPresented: $showingNewList) {
             NewListSheet(viewModel: viewModel)
         }
@@ -75,6 +84,24 @@ struct ListsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(viewModel.errorMessage ?? "")
+        }
+    }
+
+    // MARK: - Back-swipe wiring
+    //
+    // Captures the @State binding so the closure stored on the router can
+    // pop the list detail back to the lists root. Mirror of NotesView's
+    // syncBackHandler — see that file for the rationale.
+    private func syncBackHandler() {
+        let listBinding = $selectedListId
+        if selectedListId != nil {
+            router.leadingEdgeBackHandler = {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    listBinding.wrappedValue = nil
+                }
+            }
+        } else {
+            router.leadingEdgeBackHandler = nil
         }
     }
 

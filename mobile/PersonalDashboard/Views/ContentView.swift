@@ -119,6 +119,14 @@ struct ContentView: View {
                         for: nil
                     )
                 }
+                // When the active surface owns the edge swipe (it's inside
+                // a sub-screen that should pop on right-swipe), suppress the
+                // drawer peek mid-drag — the gesture is being recognised as
+                // a back swipe, not a drawer open.
+                if router.leadingEdgeBackHandler != nil {
+                    router.drawerDragOffset = 0
+                    return
+                }
                 let drawerWidth = min(280, UIScreen.main.bounds.width * 0.8)
                 router.drawerDragOffset = min(drawerWidth, value.translation.width)
             }
@@ -135,15 +143,22 @@ struct ContentView: View {
                 let drawerWidth = min(280, UIScreen.main.bounds.width * 0.8)
                 let translation = value.translation.width
                 let velocity = value.predictedEndTranslation.width - translation
-                let shouldOpen = translation > drawerWidth * 0.4 || velocity > 500
+                let shouldCommit = translation > drawerWidth * 0.4 || velocity > 500
                 withAnimation(.easeOut(duration: 0.2)) {
                     router.drawerDragOffset = 0
-                    if shouldOpen {
-                        // Keyboard was already dismissed in onChanged; flip
-                        // the flag inside the same animation block as the
-                        // drag-offset reset so the panel snaps to its open
-                        // position smoothly.
-                        router.drawerOpen = true
+                    if shouldCommit {
+                        if let backHandler = router.leadingEdgeBackHandler {
+                            // Sub-screen active: pop back instead of opening
+                            // the drawer. The handler runs its own animation
+                            // for the screen swap.
+                            backHandler()
+                        } else {
+                            // Keyboard was already dismissed in onChanged; flip
+                            // the flag inside the same animation block as the
+                            // drag-offset reset so the panel snaps to its open
+                            // position smoothly.
+                            router.drawerOpen = true
+                        }
                     }
                 }
             }

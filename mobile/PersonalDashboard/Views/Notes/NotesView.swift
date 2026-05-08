@@ -49,25 +49,35 @@ struct NotesView: View {
                         title: "Notes",
                         onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                     )
+                    // Create-folder affordance overlays the top-right of the
+                    // list area so it doesn't take layout space — the
+                    // Folders/Unfiled sections start at the same vertical
+                    // level as Lists/Tasks. The button sits between the top
+                    // bar (with the AS pip) and the first row of content.
                     rootList
+                        .overlay(alignment: .topTrailing) {
+                            Button {
+                                showingNewFolder = true
+                            } label: {
+                                Image(systemName: "folder.badge.plus")
+                                    .font(.system(size: 18, weight: .regular))
+                                    .foregroundStyle(Tokens.ink)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .accessibilityLabel("New folder")
+                            .padding(.trailing, Space.sm)
+                        }
                 }
             }
 
             if selectedNoteId == nil && selectedFolder == nil {
-                HStack(spacing: Space.sm) {
-                    Button {
-                        showingNewFolder = true
-                    } label: {
-                        Image(systemName: "folder.badge.plus")
-                    }
-                    .buttonStyle(EdIconCircleButtonStyle(kind: .secondary))
-                    Button {
-                        Task { await createBlankNote(folderId: nil) }
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+                Button {
+                    Task { await createBlankNote(folderId: nil) }
+                } label: {
+                    Image(systemName: "plus")
                 }
+                .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
                 .padding(.trailing, 22)
                 .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -90,7 +100,18 @@ struct NotesView: View {
             if router.focus?.section == .notes {
                 router.focus = nil
             }
+            syncBackHandler()
         }
+        .onDisappear {
+            // Don't strip a back handler we didn't install. NotesView appears
+            // and disappears when toggled in/out of the surface stack; another
+            // surface may have set its own handler in the meantime.
+            if selectedNoteId != nil || selectedFolder != nil {
+                router.leadingEdgeBackHandler = nil
+            }
+        }
+        .onChange(of: selectedNoteId) { _, _ in syncBackHandler() }
+        .onChange(of: selectedFolder?.id) { _, _ in syncBackHandler() }
         .sheet(isPresented: $showingNewFolder) {
             NewFolderSheet(viewModel: viewModel)
         }
@@ -220,6 +241,33 @@ struct NotesView: View {
     private func createBlankNote(folderId: UUID?) async {
         guard let new = await viewModel.createNote(title: nil, content: nil, folderId: folderId) else { return }
         withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = new.id }
+    }
+
+    // MARK: - Back-swipe wiring
+    //
+    // Captures @State via Bindings so the closures stored on the router can
+    // mutate this view's selection state. Setting `wrappedValue = nil` writes
+    // back through to @State storage, mirroring how SwiftUI passes bindings
+    // around. Re-runs whenever sub-state changes so the handler always pops
+    // the most-nested screen first (note before folder).
+    private func syncBackHandler() {
+        let noteBinding = $selectedNoteId
+        let folderBinding = $selectedFolder
+        if selectedNoteId != nil {
+            router.leadingEdgeBackHandler = {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    noteBinding.wrappedValue = nil
+                }
+            }
+        } else if selectedFolder != nil {
+            router.leadingEdgeBackHandler = {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    folderBinding.wrappedValue = nil
+                }
+            }
+        } else {
+            router.leadingEdgeBackHandler = nil
+        }
     }
 }
 
