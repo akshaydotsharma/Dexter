@@ -5,6 +5,9 @@ struct TasksView: View {
     @State private var showingEditor = false
     @State private var editingTodo: Todo?
     @State private var completedExpanded: Bool = false
+    // Tap-below inline draft state. nil = no draft active; "" = draft active (empty field).
+    @State private var draftText: String? = nil
+    @FocusState private var draftFocused: Bool
 
     @Bindable var router: AppRouter
 
@@ -32,6 +35,30 @@ struct TasksView: View {
                         placeholderRow("No tasks yet. Tap + to start.")
                     } else {
                         taskGroups
+                    }
+
+                    // Tap-below affordance — sits above FAB clearance so the empty
+                    // visual gap above the FAB is tappable to start a quick inline task.
+                    if let text = Binding($draftText) {
+                        // Draft active: show inline editable row.
+                        DraftTaskRow(
+                            text: text,
+                            isFocused: $draftFocused,
+                            onSubmit: { commitDraft(keepFocus: true) },
+                            onFocusLost: { commitDraft(keepFocus: false) }
+                        )
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                    } else {
+                        // No draft: clear tap target — gives a meaty ~120pt tap zone.
+                        Color.clear
+                            .frame(minHeight: 120)
+                            .contentShape(Rectangle())
+                            .onTapGesture { startDraft() }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets())
                     }
 
                     // FAB clearance — keeps the last row scrollable above the floating + button.
@@ -84,6 +111,36 @@ struct TasksView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(viewModel.errorMessage ?? "")
+        }
+    }
+
+    // MARK: - Tap-below helpers
+
+    private func startDraft() {
+        draftText = ""
+        // Give the List time to insert DraftTaskRow into the hierarchy before focusing.
+        DispatchQueue.main.async { draftFocused = true }
+    }
+
+    /// Commits the current draftText as a new no-date task.
+    /// - keepFocus: true = chain creation (Return key); false = dismiss (focus-loss path).
+    private func commitDraft(keepFocus: Bool) {
+        let text = draftText ?? ""
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            // Empty draft: silently dismiss.
+            draftText = nil
+            draftFocused = false
+            return
+        }
+        // Non-empty: create a no-date task and optionally chain.
+        Task { await viewModel.create(title: trimmed) }
+        if keepFocus {
+            draftText = ""
+            DispatchQueue.main.async { draftFocused = true }
+        } else {
+            draftText = nil
+            draftFocused = false
         }
     }
 
@@ -241,6 +298,45 @@ struct TasksView: View {
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+    }
+}
+
+// MARK: - Inline draft row
+
+/// Inline draft row that appears when the user taps below the last task.
+/// Mirrors the visual shape of TaskRow: stroked circle bullet + text field.
+private struct DraftTaskRow: View {
+    @Binding var text: String
+    var isFocused: FocusState<Bool>.Binding
+    let onSubmit: () -> Void
+    let onFocusLost: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            // Empty stroked circle — identical to TaskRow's unchecked bullet.
+            Circle()
+                .stroke(Tokens.borderStrong, lineWidth: 2)
+                .frame(width: 22, height: 22)
+                .frame(width: 24, height: 24)
+                // Align circle center to firstTextBaseline as TaskRow does.
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
+
+            TextField("New task", text: $text)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .submitLabel(.return)
+                .focused(isFocused)
+                .onSubmit { onSubmit() }
+                .onChange(of: isFocused.wrappedValue) { _, nowFocused in
+                    if !nowFocused { onFocusLost() }
+                }
+                .accessibilityLabel("New task")
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, Space.sm)
+        .padding(.horizontal, Space.md)
+        .contentShape(Rectangle())
     }
 }
 
