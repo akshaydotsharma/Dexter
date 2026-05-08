@@ -3,9 +3,15 @@ import UIKit
 
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
+    @State private var transcriber = SpeechTranscriber()
     @State private var resolvedDrafts: [UUID: DraftPreviewCard.Resolution] = [:]
     @State private var pendingViewMore: Bool = false
     @State private var keyboardVisible: Bool = false
+    /// Whatever the user had typed at the moment they tapped the mic.
+    /// While recording we replace the input field with `baseline + transcript`
+    /// so partials feel live; tapping mic-stop with an empty transcript
+    /// restores the baseline so we don't clobber typed text on a misfire.
+    @State private var preMicBaseline: String = ""
 
     /// Owned here so we can auto-focus the input bar when the user lands on
     /// chat (issue #48 — tapping the chat icon should pop the keyboard
@@ -67,10 +73,39 @@ struct ChatView: View {
                     }
                 )
 
+                if let micError = transcriber.errorMessage {
+                    // Restrained inline note above the input bar — matches
+                    // the design vocabulary (Tokens.surface bg, muted text).
+                    // Tap to dismiss so the bar reclaims its room.
+                    HStack(spacing: Space.xs) {
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Tokens.muted)
+                        Text(micError)
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, Space.md)
+                    .padding(.vertical, Space.sm)
+                    .background(
+                        Tokens.surface,
+                        in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    )
+                    .paperBorder(Tokens.border, radius: Radius.md)
+                    .padding(.horizontal, Space.lg)
+                    .padding(.bottom, Space.xs)
+                    .onTapGesture { transcriber.errorMessage = nil }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+
                 ChatInputBar(
                     text: $viewModel.draftInput,
                     isSending: viewModel.isSending,
                     onSend: send,
+                    onMic: { Task { await toggleMic() } },
+                    isMicActive: transcriber.isRecording,
                     focused: $inputFocused
                 )
                 .padding(.horizontal, Space.lg)
@@ -101,6 +136,20 @@ struct ChatView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
                     inputFocused = true
                 }
+            }
+        }
+        .onChange(of: transcriber.transcript) { _, newTranscript in
+            // Mirror live partials into the existing TextField so the user
+            // sees the transcription appear in real time. Append to the
+            // baseline (whatever was typed before mic-tap) instead of
+            // replacing — keeps already-typed context intact.
+            guard transcriber.isRecording else { return }
+            if newTranscript.isEmpty {
+                viewModel.draftInput = preMicBaseline
+            } else if preMicBaseline.isEmpty {
+                viewModel.draftInput = newTranscript
+            } else {
+                viewModel.draftInput = preMicBaseline + " " + newTranscript
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -227,7 +276,23 @@ struct ChatView: View {
     }
 
     private func send() {
+        // Flush any in-flight transcription first so the final partial
+        // lands in `draftInput` before the message ships.
+        if transcriber.isRecording {
+            transcriber.stop()
+        }
         Task { await viewModel.send() }
+    }
+
+    private func toggleMic() async {
+        if transcriber.isRecording {
+            transcriber.stop()
+        } else {
+            // Snapshot what's already in the field so live partials append
+            // to it rather than overwriting typed context.
+            preMicBaseline = viewModel.draftInput
+            await transcriber.toggle()
+        }
     }
 
     private var hasLiveAssistantTurn: Bool {

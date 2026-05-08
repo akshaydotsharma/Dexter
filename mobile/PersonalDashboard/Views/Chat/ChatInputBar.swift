@@ -6,6 +6,10 @@ struct ChatInputBar: View {
     var isSending: Bool
     var onSend: () -> Void
     var onMic: (() -> Void)? = nil
+    /// True while `SpeechTranscriber` is actively listening. Swaps the mic
+    /// glyph for a stop indicator and tints it `Tokens.danger` so the user
+    /// has a clear "tap again to stop" affordance (issue #83).
+    var isMicActive: Bool = false
 
     /// Owned by the parent so the parent can auto-focus the input when the
     /// chat surface becomes active (issue #48 — tapping the chat icon should
@@ -43,10 +47,12 @@ struct ChatInputBar: View {
 
             if let onMic {
                 Button(action: onMic) {
-                    Image(systemName: "mic")
+                    Image(systemName: isMicActive ? "stop.fill" : "mic")
+                        .symbolRenderingMode(.monochrome)
                 }
-                .buttonStyle(EdIconButtonStyle())
-                .accessibilityLabel("Voice input")
+                .buttonStyle(EdIconButtonStyle(tint: isMicActive ? Tokens.danger : Tokens.muted))
+                .accessibilityLabel(isMicActive ? "Stop voice input" : "Voice input")
+                .accessibilityAddTraits(isMicActive ? .isSelected : [])
             }
 
             Button {

@@ -52,6 +52,11 @@ targets:
         # silently fails and the prompt never appears.
         NSBonjourServices:
           - _http._tcp
+        # Voice input in chat (issue #83). On-device only — audio never
+        # leaves the phone. Both keys are required: Speech for transcription,
+        # Microphone for the audio capture that feeds it.
+        NSSpeechRecognitionUsageDescription: "Deks transcribes your voice into chat messages on-device. Audio never leaves your phone."
+        NSMicrophoneUsageDescription: "Deks listens to your voice so it can transcribe what you say into the chat."
         UIAppFonts:
           - Calistoga-Regular.ttf
           - Inter-Regular.ttf
