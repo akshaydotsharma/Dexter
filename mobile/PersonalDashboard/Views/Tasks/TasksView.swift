@@ -160,9 +160,13 @@ struct TasksView: View {
                 onSubmit: { commitDraft(keepFocus: true) },
                 onFocusLost: { commitDraft(keepFocus: false) }
             )
+            // Same height-stabilisation as the per-section draft rows: lock to 60pt
+            // so swapping the empty-state tap-zone for the draft row doesn't jump.
+            .frame(minHeight: 60)
+            .padding(.horizontal, Space.lg)
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+            .listRowInsets(EdgeInsets())
         } else {
             Color.clear
                 .frame(minHeight: 120)
@@ -259,9 +263,17 @@ struct TasksView: View {
                         onSubmit: { commitDraft(keepFocus: true) },
                         onFocusLost: { commitDraft(keepFocus: false) }
                     )
+                    // Match the tap-zone's 60pt height exactly so swapping clear→draft
+                    // doesn't shift the "No Date" header (and everything below) by ~16pt
+                    // as the keyboard appears. EdgeInsets() + .padding(.horizontal, Space.lg)
+                    // at the call site reproduces the same leading/trailing gutter as
+                    // the existing TaskRow rows (.listRowInsets leading/trailing Space.lg
+                    // + internal .padding(.horizontal, Space.md)).
+                    .frame(minHeight: 60)
+                    .padding(.horizontal, Space.lg)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                    .listRowInsets(EdgeInsets())
                 } else {
                     // Clear tap target — 60pt is enough per section without bloating the list.
                     Color.clear
