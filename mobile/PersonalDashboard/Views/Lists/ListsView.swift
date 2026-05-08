@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ListsView: View {
     @State private var viewModel = ListsViewModel()
@@ -316,7 +317,8 @@ private struct ListDetailContent: View {
                                 onDelete: {
                                     Haptics.destructive()
                                     Task { await viewModel.removeItem(from: list, at: index) }
-                                }
+                                },
+                                isDraftActive: draftText != nil
                             )
                             .swipeToDeleteTrash {
                                 Task { await viewModel.removeItem(from: list, at: index) }
@@ -388,6 +390,9 @@ private struct ListDetailContent: View {
             // Empty draft: silently dismiss.
             draftText = nil
             draftFocused = false
+            // Belt-and-braces: ensure keyboard collapses even if something else
+            // would try to steal first responder (e.g. an ItemRow tap).
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             return
         }
         // Non-empty: commit and optionally chain.
@@ -401,6 +406,7 @@ private struct ListDetailContent: View {
         } else {
             draftText = nil
             draftFocused = false
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
     }
 
@@ -488,6 +494,9 @@ private struct ItemRow: View {
     let onToggle: () -> Void
     let onRename: (String) -> Void
     let onDelete: () -> Void
+    /// When a tap-below draft is active in the parent, suppress beginEditing so the
+    /// tap only dismisses the draft keyboard — nothing re-steals first responder.
+    var isDraftActive: Bool = false
 
     @State private var isEditing = false
     @State private var draft = ""
@@ -535,6 +544,10 @@ private struct ItemRow: View {
         .padding(.horizontal, Space.md)
         .contentShape(Rectangle())
         .onTapGesture {
+            // When a tap-below draft is active, ignore the tap entirely.
+            // The draft's TextField loses focus naturally, commitDraft fires,
+            // and the keyboard collapses without anything re-stealing focus.
+            guard !isDraftActive else { return }
             if !isEditing { beginEditing() }
         }
         .contextMenu {
