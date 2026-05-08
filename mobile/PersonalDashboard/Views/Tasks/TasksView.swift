@@ -27,22 +27,15 @@ struct TasksView: View {
                 // backgrounds, hidden separators, and `.scrollContentBackground`
                 // hidden so `Tokens.paper` shows through.
                 List {
-                    Section {
-                        addRow
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: 0, trailing: Space.lg))
-                    }
-
                     if viewModel.isLoading && viewModel.todos.isEmpty {
                         placeholderRow("Loading…")
                     } else if viewModel.todos.isEmpty {
-                        placeholderRow("No tasks yet. Add one above.")
+                        placeholderRow("No tasks yet. Add one below.")
                     } else {
                         taskGroups
                     }
 
-                    // FAB clearance — keeps the last row scrollable above the chat FAB.
+                    // FAB clearance — keeps the last row scrollable above the docked add row.
                     Color.clear
                         .frame(height: 96)
                         .listRowBackground(Color.clear)
@@ -54,6 +47,17 @@ struct TasksView: View {
                 .background(Tokens.paper)
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await viewModel.load() }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    addRow
+                        .padding(.horizontal, Space.lg)
+                        .padding(.vertical, Space.md)
+                        .padding(.bottom, BottomTabBarMetrics.height)
+                        .background(
+                            Tokens.paper.overlay(alignment: .top) {
+                                Rectangle().fill(Tokens.border).frame(height: 0.5)
+                            }
+                        )
+                }
             }
         }
         .activeSection(.tasks)

@@ -40,6 +40,18 @@ struct ListsView: View {
                     rootList
                 }
             }
+
+            if selectedListId == nil {
+                Button {
+                    showingNewList = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(EdIconSquareButtonStyle(kind: .primary))
+                .padding(.trailing, 22)
+                .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
         }
         .activeSection(.lists)
         .task { await viewModel.load() }
@@ -71,23 +83,8 @@ struct ListsView: View {
         // into native `.swipeActions`. Paper aesthetic preserved via clear
         // row backgrounds, hidden separators, and `.scrollContentBackground`.
         List {
-            Section {
-                HStack {
-                    Spacer()
-                    Button {
-                        showingNewList = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(EdIconSquareButtonStyle(kind: .primary))
-                }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: Space.sm, trailing: Space.lg))
-            }
-
             if viewModel.lists.isEmpty && !viewModel.isLoading {
-                Text("No lists yet. Tap “New list” to start.")
+                Text("No lists yet. Tap + to start.")
                     .font(.edBody)
                     .foregroundStyle(Tokens.muted)
                     .frame(maxWidth: .infinity, alignment: .center)
