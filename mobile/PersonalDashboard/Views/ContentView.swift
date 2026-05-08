@@ -1,8 +1,16 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @State private var router = AppRouter()
     @AppStorage("colorSchemePref") private var schemePrefRaw: String = ColorSchemePref.system.rawValue
+
+    /// Tracks whether we've already resigned first responder for the active
+    /// edge-swipe. Without this, every `onChanged` tick would fire another
+    /// `resignFirstResponder` send-action — once the keyboard is down, the
+    /// repeated calls are a no-op but still wasted work. Reset on `onEnded`
+    /// so the next swipe gets a fresh dismiss.
+    @State private var didDismissKeyboardForEdgeSwipe: Bool = false
 
     private var schemePref: Binding<ColorSchemePref> {
         Binding(
@@ -87,10 +95,23 @@ struct ContentView: View {
                 guard !router.drawerOpen else { return }
                 guard value.startLocation.x <= edgeSwipeWidth else { return }
                 guard value.translation.width > 0 else { return }
+                // Drop the keyboard the moment the drag qualifies as an
+                // edge-open — keyboard slide-down and drawer slide-in then
+                // happen simultaneously, finger-tracked (issue #54).
+                if !didDismissKeyboardForEdgeSwipe {
+                    didDismissKeyboardForEdgeSwipe = true
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil,
+                        from: nil,
+                        for: nil
+                    )
+                }
                 let drawerWidth = min(280, UIScreen.main.bounds.width * 0.8)
                 router.drawerDragOffset = min(drawerWidth, value.translation.width)
             }
             .onEnded { value in
+                defer { didDismissKeyboardForEdgeSwipe = false }
                 guard !router.drawerOpen else {
                     router.drawerDragOffset = 0
                     return
@@ -105,12 +126,13 @@ struct ContentView: View {
                 let shouldOpen = translation > drawerWidth * 0.4 || velocity > 500
                 withAnimation(.easeOut(duration: 0.2)) {
                     router.drawerDragOffset = 0
-                }
-                if shouldOpen {
-                    // openDrawer() resigns first responder before flipping the
-                    // flag so the keyboard goes away before the drawer slides
-                    // in over the chat input (issue #54).
-                    router.openDrawer()
+                    if shouldOpen {
+                        // Keyboard was already dismissed in onChanged; flip
+                        // the flag inside the same animation block as the
+                        // drag-offset reset so the panel snaps to its open
+                        // position smoothly.
+                        router.drawerOpen = true
+                    }
                 }
             }
     }
