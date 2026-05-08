@@ -47,10 +47,14 @@ struct CaptureToDashboardIntent: AppIntent {
         }
 
         // Take over the Dynamic Island for the duration of the on-device
-        // pipeline. The activity is purely visual — failures to start it
-        // (Live Activities disabled at system level, etc.) must not
-        // block the capture itself, so the controller swallows errors.
-        let liveActivity = CaptureLiveActivityController()
+        // pipeline. Uses the shared controller so that if the user wired
+        // the preflight `StartCaptureLiveActivityIntent` ahead of Dictate
+        // Text in their Shortcut, this `start()` no-ops and we update the
+        // already-running activity. If the preflight isn't wired in,
+        // `start()` falls through to the original behaviour and spawns a
+        // fresh activity here. Either way, the controller swallows errors
+        // — the pipeline outcome is the source of truth for the dialog.
+        let liveActivity = CaptureLiveActivityController.shared
         await liveActivity.start()
 
         let service = CaptureService()
