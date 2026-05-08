@@ -46,24 +46,40 @@ struct CaptureToDashboardIntent: AppIntent {
             return .result(dialog: "Nothing to capture.")
         }
 
+        // Take over the Dynamic Island for the duration of the on-device
+        // pipeline. The activity is purely visual — failures to start it
+        // (Live Activities disabled at system level, etc.) must not
+        // block the capture itself, so the controller swallows errors.
+        let liveActivity = CaptureLiveActivityController()
+        await liveActivity.start()
+
         let service = CaptureService()
         let response: CaptureResponse
         do {
             response = try await service.capture(input: trimmed)
         } catch {
-            return .result(dialog: IntentDialog(stringLiteral: "Couldn't capture — \(error.localizedDescription)"))
+            let message = "Couldn't capture — \(error.localizedDescription)"
+            await liveActivity.end(state: .failed(message: message))
+            return .result(dialog: IntentDialog(stringLiteral: message))
         }
 
         switch response.status {
         case .executed:
             let summary = Self.executedDialog(for: response.executed ?? [])
+            await liveActivity.end(state: .complete(summary: summary))
             return .result(dialog: IntentDialog(stringLiteral: summary))
         case .needsClarification:
             let q = response.followUpQuestion ?? "I need a bit more detail."
+            // No persistence happened, but the LLM has a question for the
+            // user. Surface it as the final island state — the user
+            // reads the dialog from the Action Button toast either way.
+            await liveActivity.end(state: .complete(summary: q))
             return .result(dialog: IntentDialog(stringLiteral: q))
         case .error:
             let first = response.errors?.first?.message ?? "something went wrong"
-            return .result(dialog: IntentDialog(stringLiteral: "Couldn't capture — \(first)"))
+            let message = "Couldn't capture — \(first)"
+            await liveActivity.end(state: .failed(message: message))
+            return .result(dialog: IntentDialog(stringLiteral: message))
         }
     }
 
