@@ -261,11 +261,20 @@ private struct ListDetailContent: View {
     @Bindable var viewModel: ListsViewModel
     let listId: UUID
     @State private var newItemText: String = ""
+    // Tap-below inline draft state. Modelled the same way as TasksView:
+    // a boolean flag for "draft active" plus a non-optional String for the
+    // text. The earlier optional-binding pattern (`Binding($draftText)` from
+    // a `String?`) crashed when commitDraft set draftText = nil while the
+    // TextField was still mid-edit.
+    @State private var draftActive: Bool = false
+    @State private var draftText: String = ""
+    @FocusState private var draftFocused: Bool
 
     var body: some View {
         if let list = viewModel.lists.first(where: { $0.id == listId }) {
             VStack(spacing: 0) {
                 // Header strip — count + "Edit" affordance is implicit via long-press.
+                // Tapping the strip while a draft is active dismisses the draft.
                 HStack(spacing: Space.sm) {
                     Text("\(list.items.filter(\.checked).count) of \(list.items.count) items")
                         .font(.edCaption)
@@ -280,20 +289,29 @@ private struct ListDetailContent: View {
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.lg)
                 .padding(.bottom, Space.sm)
+                .contentShape(Rectangle())
+                .onTapGesture { if draftActive { draftFocused = false } }
 
                 Rectangle().fill(Tokens.divider).frame(height: 0.5)
                     .padding(.horizontal, Space.lg)
 
-                // Items list — using SwiftUI List so `.onMove` works.
+                // Items list — always rendered so tap-below works even when empty.
                 // Chrome stripped to keep the editorial calm look.
-                if list.items.isEmpty {
-                    Text("No items yet. Add one below.")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.muted)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .padding(.vertical, Space.xxxl)
-                } else {
-                    List {
+                List {
+                    // Existing items live in their own section so .onMove stays scoped to them.
+                    Section {
+                        // Empty state row — only when no items and no draft is active.
+                        if list.items.isEmpty && !draftActive {
+                            Text("No items yet. Add one below.")
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.muted)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, Space.lg)
+                                .listRowBackground(Tokens.paper)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                        }
+
                         ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
                             ItemRow(
                                 item: item,
@@ -306,7 +324,9 @@ private struct ListDetailContent: View {
                                 onDelete: {
                                     Haptics.destructive()
                                     Task { await viewModel.removeItem(from: list, at: index) }
-                                }
+                                },
+                                isDraftActive: draftActive,
+                                onTapWhileDraftActive: { draftFocused = false }
                             )
                             .swipeToDeleteTrash {
                                 Task { await viewModel.removeItem(from: list, at: index) }
@@ -319,13 +339,49 @@ private struct ListDetailContent: View {
                             Task { await viewModel.reorderItems(in: list, from: source, to: destination) }
                         }
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .background(Tokens.paper)
-                    .scrollDismissesKeyboard(.interactively)
+
+                    // Tap-below section — lives after items, before addItemBar.
+                    Section {
+                        if draftActive {
+                            // Draft is active: show an inline editable row mirroring ItemRow.
+                            DraftItemRow(
+                                text: $draftText,
+                                isFocused: $draftFocused,
+                                onSubmit: { commitDraft(in: list, keepFocus: true) },
+                                onFocusLost: { commitDraft(in: list, keepFocus: false) }
+                            )
+                            .listRowBackground(Tokens.paper)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                        }
+                        // Tap-below zone, always rendered:
+                        // - no draft → tap to start a draft.
+                        // - draft active → tap to dismiss the draft (resigns focus → commitDraft via onChange).
+                        Color.clear
+                            .frame(minHeight: 200)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if draftActive {
+                                    draftFocused = false
+                                } else {
+                                    startDraft()
+                                }
+                            }
+                            .listRowBackground(Tokens.paper)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets())
+                    }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Tokens.paper)
+                .scrollDismissesKeyboard(.interactively)
 
                 addItemBar(list: list)
+                    // Tapping the addItemBar while a draft is active dismisses the draft.
+                    // simultaneousGesture fires alongside the inner TextField tap so the
+                    // bar's own text field can still receive focus normally.
+                    .simultaneousGesture(TapGesture().onEnded { if draftActive { draftFocused = false } })
             }
         } else {
             Spacer()
@@ -333,6 +389,41 @@ private struct ListDetailContent: View {
                 .font(.edBody)
                 .foregroundStyle(Tokens.muted)
             Spacer()
+        }
+    }
+
+    // MARK: - Tap-below helpers
+
+    private func startDraft() {
+        draftActive = true
+        draftText = ""
+        // Give the List time to insert the DraftItemRow into the hierarchy before focusing.
+        DispatchQueue.main.async { draftFocused = true }
+    }
+
+    /// Commits whatever is in draftText.
+    /// - keepFocus: true = chain creation (Return key path); false = dismiss (focus-loss path).
+    private func commitDraft(in list: Checklist, keepFocus: Bool) {
+        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            // Empty draft: silently dismiss.
+            draftActive = false
+            draftText = ""
+            draftFocused = false
+            return
+        }
+        // Non-empty: commit and optionally chain.
+        let snapshot = list
+        Task { await viewModel.addItem(to: snapshot, text: trimmed) }
+        if keepFocus {
+            // Chain: clear text, keep focus for next entry.
+            draftText = ""
+            // Re-assert focus after the text clears (SwiftUI may drop it briefly).
+            DispatchQueue.main.async { draftFocused = true }
+        } else {
+            draftActive = false
+            draftText = ""
+            draftFocused = false
         }
     }
 
@@ -380,11 +471,52 @@ private struct ListDetailContent: View {
     }
 }
 
+/// Inline draft row that appears when the user taps below the last item.
+/// Mirrors the visual shape of ItemRow: stroked circle bullet + text field.
+private struct DraftItemRow: View {
+    @Binding var text: String
+    var isFocused: FocusState<Bool>.Binding
+    let onSubmit: () -> Void
+    let onFocusLost: () -> Void
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            // Empty stroked circle — identical to ItemRow's unchecked bullet.
+            Circle()
+                .stroke(Tokens.borderStrong, lineWidth: 2)
+                .frame(width: 22, height: 22)
+                .frame(width: 24, height: 24)
+
+            TextField("New item", text: $text)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .submitLabel(.return)
+                .focused(isFocused)
+                .onSubmit { onSubmit() }
+                .onChange(of: isFocused.wrappedValue) { _, nowFocused in
+                    if !nowFocused { onFocusLost() }
+                }
+                .accessibilityLabel("New item")
+
+            Spacer()
+        }
+        .padding(.vertical, Space.sm)
+        .padding(.horizontal, Space.md)
+        .contentShape(Rectangle())
+    }
+}
+
 private struct ItemRow: View {
     let item: ChecklistItem
     let onToggle: () -> Void
     let onRename: (String) -> Void
     let onDelete: () -> Void
+    /// When a tap-below draft is active in the parent, suppress beginEditing so the
+    /// tap only dismisses the draft keyboard — nothing re-steals first responder.
+    var isDraftActive: Bool = false
+    /// Called back to the parent when this row is tapped while a draft is active,
+    /// so the parent can flip draftFocused = false and trigger the focus-loss → commitDraft cycle.
+    var onTapWhileDraftActive: () -> Void = {}
 
     @State private var isEditing = false
     @State private var draft = ""
@@ -432,6 +564,13 @@ private struct ItemRow: View {
         .padding(.horizontal, Space.md)
         .contentShape(Rectangle())
         .onTapGesture {
+            // When a tap-below draft is active, actively flip draftFocused in the parent
+            // so the focus-loss → commitDraft → dismiss cycle fires immediately.
+            // We still return early so this row does not enter its own edit flow.
+            if isDraftActive {
+                onTapWhileDraftActive()
+                return
+            }
             if !isEditing { beginEditing() }
         }
         .contextMenu {
