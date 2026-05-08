@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 struct TasksView: View {
     @State private var viewModel = TodosViewModel()
@@ -44,8 +43,11 @@ struct TasksView: View {
                     }
 
                     // FAB clearance — keeps the last row scrollable above the floating + button.
+                    // Also acts as a tap-to-dismiss zone for any active inline draft.
                     Color.clear
                         .frame(height: 96)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if draftBucket != nil { draftFocused = false } }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets())
@@ -65,6 +67,11 @@ struct TasksView: View {
             .padding(.trailing, 22)
             .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            // Hide the FAB while an inline draft is active — the user is already
+            // adding a task inline, so the FAB is redundant and visually distracting.
+            .opacity(draftBucket == nil ? 1 : 0)
+            .allowsHitTesting(draftBucket == nil)
+            .animation(.easeOut(duration: 0.15), value: draftBucket)
         }
         .activeSection(.tasks)
         .task { await viewModel.load() }
@@ -113,7 +120,6 @@ struct TasksView: View {
         if trimmed.isEmpty {
             draftBucket = nil
             draftFocused = false
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             return
         }
         let due = suggestedDueDate(for: bucket)
@@ -124,7 +130,6 @@ struct TasksView: View {
         } else {
             draftBucket = nil
             draftFocused = false
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
     }
 
@@ -234,7 +239,8 @@ struct TasksView: View {
                     todo: todo,
                     isDraftActive: draftBucket != nil,
                     onToggle: { Task { await viewModel.toggleCompleted(todo) } },
-                    onTap: { editingTodo = todo }
+                    onTap: { editingTodo = todo },
+                    onTapWhileDraftActive: { draftFocused = false }
                 )
                 .swipeToDeleteTrash {
                     Task { await viewModel.delete(todo) }
@@ -281,7 +287,8 @@ struct TasksView: View {
                         todo: todo,
                         isDraftActive: draftBucket != nil,
                         onToggle: { Task { await viewModel.toggleCompleted(todo) } },
-                        onTap: { editingTodo = todo }
+                        onTap: { editingTodo = todo },
+                        onTapWhileDraftActive: { draftFocused = false }
                     )
                     .swipeToDeleteTrash {
                         Task { await viewModel.delete(todo) }
@@ -319,6 +326,9 @@ struct TasksView: View {
             .padding(.bottom, Space.xs)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Tokens.paper)
+            // Dismiss draft alongside the expand/collapse toggle so keyboard
+            // collapses when the user taps the Completed header.
+            .simultaneousGesture(TapGesture().onEnded { if draftBucket != nil { draftFocused = false } })
         }
     }
 
@@ -341,6 +351,9 @@ struct TasksView: View {
         .padding(.bottom, Space.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.paper)
+        // Tapping a section header while a draft is active dismisses the draft.
+        .contentShape(Rectangle())
+        .onTapGesture { if draftBucket != nil { draftFocused = false } }
     }
 
     private func placeholderRow(_ text: String) -> some View {
@@ -403,6 +416,9 @@ private struct TaskRow: View {
     var isDraftActive: Bool = false
     let onToggle: () -> Void
     let onTap: () -> Void
+    /// Called back to the parent when this row is tapped while a draft is active,
+    /// so the parent can flip draftFocused = false and trigger the focus-loss → commitDraft cycle.
+    var onTapWhileDraftActive: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -470,9 +486,13 @@ private struct TaskRow: View {
         .background(Color.clear)
         .contentShape(Rectangle())
         .onTapGesture {
-            // When a tap-below draft is active, ignore the tap so the editor sheet
-            // doesn't open over the dismissing keyboard.
-            guard !isDraftActive else { return }
+            // When a tap-below draft is active, actively flip draftFocused in the parent
+            // so the focus-loss → commitDraft → dismiss cycle fires immediately.
+            // We still return early so the editor sheet does not open over the keyboard.
+            if isDraftActive {
+                onTapWhileDraftActive()
+                return
+            }
             onTap()
         }
     }
