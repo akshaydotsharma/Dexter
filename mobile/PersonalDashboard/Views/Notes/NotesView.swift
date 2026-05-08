@@ -52,6 +52,26 @@ struct NotesView: View {
                     rootList
                 }
             }
+
+            if selectedNoteId == nil && selectedFolder == nil {
+                HStack(spacing: Space.sm) {
+                    Button {
+                        showingNewFolder = true
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                    }
+                    .buttonStyle(EdIconCircleButtonStyle(kind: .secondary))
+                    Button {
+                        Task { await createBlankNote(folderId: nil) }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+                }
+                .padding(.trailing, 22)
+                .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
         }
         .activeSection(.notes)
         .task {
@@ -93,27 +113,6 @@ struct NotesView: View {
         // opt into native `.swipeActions`. Paper aesthetic preserved with
         // clear row backgrounds and hidden separators.
         List {
-            Section {
-                HStack {
-                    Spacer()
-                    Button {
-                        showingNewFolder = true
-                    } label: {
-                        Label("New folder", systemImage: "folder.badge.plus")
-                    }
-                    .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-                    Button {
-                        Task { await createBlankNote(folderId: selectedFolder?.id) }
-                    } label: {
-                        Label("New note", systemImage: "plus")
-                    }
-                    .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
-                }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: Space.sm, trailing: Space.lg))
-            }
-
             if !viewModel.folders.isEmpty {
                 Section {
                     ForEach(viewModel.folders) { folder in
@@ -154,7 +153,7 @@ struct NotesView: View {
             }
 
             if viewModel.folders.isEmpty && viewModel.notes.isEmpty && !viewModel.isLoading {
-                Text("No notes yet. Tap “New note” to start.")
+                Text("No notes yet. Tap + to start.")
                     .font(.edBody)
                     .foregroundStyle(Tokens.muted)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -210,17 +209,6 @@ struct NotesView: View {
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
         .refreshable { await viewModel.load() }
-    }
-
-    private func sectionEyebrow(_ title: String) -> some View {
-        Text(title)
-            .eyebrow()
-            .textCase(nil)
-            .padding(.horizontal, Space.lg)
-            .padding(.top, Space.lg)
-            .padding(.bottom, Space.xs)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Tokens.paper)
     }
 
     // MARK: - Note actions

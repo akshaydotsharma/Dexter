@@ -4,7 +4,6 @@ struct TasksView: View {
     @State private var viewModel = TodosViewModel()
     @State private var showingEditor = false
     @State private var editingTodo: Todo?
-    @State private var newTaskText: String = ""
     @State private var completedExpanded: Bool = false
 
     @Bindable var router: AppRouter
@@ -27,22 +26,15 @@ struct TasksView: View {
                 // backgrounds, hidden separators, and `.scrollContentBackground`
                 // hidden so `Tokens.paper` shows through.
                 List {
-                    Section {
-                        addRow
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: 0, trailing: Space.lg))
-                    }
-
                     if viewModel.isLoading && viewModel.todos.isEmpty {
                         placeholderRow("Loading…")
                     } else if viewModel.todos.isEmpty {
-                        placeholderRow("No tasks yet. Add one above.")
+                        placeholderRow("No tasks yet. Tap + to start.")
                     } else {
                         taskGroups
                     }
 
-                    // FAB clearance — keeps the last row scrollable above the chat FAB.
+                    // FAB clearance — keeps the last row scrollable above the floating + button.
                     Color.clear
                         .frame(height: 96)
                         .listRowBackground(Color.clear)
@@ -52,9 +44,18 @@ struct TasksView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
-                .scrollDismissesKeyboard(.interactively)
                 .refreshable { await viewModel.load() }
             }
+
+            Button {
+                showingEditor = true
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+            .padding(.trailing, 22)
+            .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
         .activeSection(.tasks)
         .task { await viewModel.load() }
@@ -84,51 +85,6 @@ struct TasksView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
-    }
-
-    // MARK: - Add row
-
-    private var addRow: some View {
-        HStack(spacing: Space.sm) {
-            ZStack(alignment: .leading) {
-                if newTaskText.isEmpty {
-                    Text("Add a new task…")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.mutedSoft)
-                        .padding(.horizontal, Space.md)
-                        .allowsHitTesting(false)
-                }
-                TextField("", text: $newTaskText)
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-                    .padding(.horizontal, Space.md)
-                    .padding(.vertical, 10)
-                    .submitLabel(.done)
-                    .onSubmit(addTaskInline)
-            }
-            .frame(minHeight: 40)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
-
-            Button {
-                if !newTaskText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    addTaskInline()
-                } else {
-                    showingEditor = true
-                }
-            } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(EdSendButtonStyle(enabled: true))
-            .accessibilityLabel("Add task")
-        }
-    }
-
-    private func addTaskInline() {
-        let trimmed = newTaskText.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        newTaskText = ""
-        Task { await viewModel.create(title: trimmed, description: nil, dueDate: nil, tag: nil) }
     }
 
     // MARK: - Grouped tasks

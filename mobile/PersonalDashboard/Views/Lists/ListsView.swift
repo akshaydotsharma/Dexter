@@ -40,6 +40,18 @@ struct ListsView: View {
                     rootList
                 }
             }
+
+            if selectedListId == nil {
+                Button {
+                    showingNewList = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+                .padding(.trailing, 22)
+                .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
         }
         .activeSection(.lists)
         .task { await viewModel.load() }
@@ -72,43 +84,32 @@ struct ListsView: View {
         // row backgrounds, hidden separators, and `.scrollContentBackground`.
         List {
             Section {
-                HStack {
-                    Spacer()
-                    Button {
-                        showingNewList = true
-                    } label: {
-                        Label("New list", systemImage: "plus")
-                    }
-                    .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
-                }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: Space.lg, leading: Space.lg, bottom: Space.sm, trailing: Space.lg))
-            }
-
-            if viewModel.lists.isEmpty && !viewModel.isLoading {
-                Text("No lists yet. Tap “New list” to start.")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.muted)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, Space.xxxl)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
-            } else {
-                ForEach(viewModel.lists) { list in
-                    ListSummaryRow(list: list) {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            selectedListId = list.id
+                if viewModel.lists.isEmpty && !viewModel.isLoading {
+                    Text("No lists yet. Tap + to start.")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.muted)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, Space.xxxl)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+                } else {
+                    ForEach(viewModel.lists) { list in
+                        ListSummaryRow(list: list) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                selectedListId = list.id
+                            }
                         }
+                        .swipeToDeleteTrash {
+                            Task { await viewModel.delete(list) }
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                     }
-                    .swipeToDeleteTrash {
-                        Task { await viewModel.delete(list) }
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                 }
+            } header: {
+                sectionEyebrow("All Lists")
             }
 
             Color.clear

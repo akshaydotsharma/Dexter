@@ -87,6 +87,32 @@ struct EdIconButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Icon-circle button (48pt floating FAB, for Notes / Lists overlay actions)
+
+struct EdIconCircleButtonStyle: ButtonStyle {
+    var kind: ButtonKind = .primary
+
+    func makeBody(configuration: Configuration) -> some View {
+        let (fg, bg, stroke): (Color, Color, Color?) = {
+            switch kind {
+            case .primary:   return (Tokens.paper, Tokens.ink, nil)
+            case .secondary: return (Tokens.ink, Tokens.surface, Tokens.border)
+            case .ghost:     return (Tokens.muted, .clear, nil)
+            }
+        }()
+
+        return configuration.label
+            .font(.system(size: 17, weight: .regular))
+            .foregroundStyle(fg)
+            .frame(width: 48, height: 48)
+            .background(bg, in: Circle())
+            .overlay(Circle().stroke(stroke ?? .clear, lineWidth: stroke == nil ? 0 : 0.5))
+            .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
 // MARK: - Send button (filled accent square)
 
 struct EdSendButtonStyle: ButtonStyle {
