@@ -38,6 +38,30 @@ import os.log
 ///     three-line widths from the new phase.
 ///   - Best-effort. If iOS throttles `activity.update` we DON'T retry
 ///     harder; the user gets whatever cadence iOS allows.
+/// Outcome of a `start()` call. Lets callers (chiefly the in-app
+/// diagnostic UI) tell apart the silent return paths the controller
+/// previously collapsed into a void return.
+///
+/// Production intents (`StartCaptureLiveActivityIntent`,
+/// `CaptureToDashboardIntent`) ignore the value — they discard with `_`
+/// and rely on the os_log breadcrumbs as before. The debug button in
+/// `ChatView` is the one consumer that branches on the case.
+enum CaptureLiveActivityStartOutcome {
+    /// `ActivityAuthorizationInfo().areActivitiesEnabled` returned false.
+    /// Either the user disabled Live Activities for this app in Settings,
+    /// or some system-level gate (Focus, low battery, etc.) is blocking.
+    case skippedAuthDisabled
+    /// A non-terminal activity is already attached to the controller (or
+    /// was reattached from `Activity.activities`). The caller did NOT
+    /// spawn a new one. The associated id is the existing activity's.
+    case skippedExistingActivity(id: String)
+    /// A fresh activity was requested and accepted by the system.
+    case requested(id: String)
+    /// `Activity.request(...)` threw. The error is surfaced for the
+    /// diagnostic UI; production paths just log and move on.
+    case failed(error: Error)
+}
+
 actor CaptureLiveActivityController {
     /// The shared instance both intents target.
     static let shared = CaptureLiveActivityController()
@@ -49,6 +73,62 @@ actor CaptureLiveActivityController {
     /// Latest known phase value. The ticker reads + bumps this so the
     /// compact view redraws against a moving sine wave.
     private var animationPhase: Double = 0
+    /// Optional observer for the diagnostic UI. Fires once per ticker
+    /// `update(...)` call with the tick count and the new phase value.
+    /// Production intents leave this nil so there's zero overhead in the
+    /// real flow. The debug button assigns a closure before calling
+    /// `start()` and receives ticks until `end()` clears it.
+    ///
+    /// Always invoked from the actor's executor — callers that want to
+    /// touch SwiftUI state must hop to `@MainActor` themselves. Marked
+    /// `@Sendable` so the closure can be safely shipped across the actor
+    /// boundary without strict-concurrency warnings.
+    private var onTickUpdate: (@Sendable (Int, Double) -> Void)?
+    /// Running tick count, surfaced via `onTickUpdate` so the diagnostic
+    /// UI can label updates `#1`, `#2`, ... without keeping its own counter.
+    private var tickCount: Int = 0
+
+    /// Snapshot of the currently-attached activity id (if any). Surfaced
+    /// for the diagnostic UI; production callers don't need it.
+    var currentActivityID: String? {
+        activity?.id
+    }
+
+    /// Install (or clear) the diagnostic tick observer.
+    func setOnTickUpdate(_ callback: (@Sendable (Int, Double) -> Void)?) {
+        onTickUpdate = callback
+    }
+
+    /// Force-end every in-flight `CaptureActivityAttributes` activity the
+    /// system knows about. Used by the diagnostic flow to guarantee that
+    /// the very next `start()` actually spawns a new activity rather than
+    /// reattaching to a zombie from a previous run. Returns the count
+    /// ended so the diagnostic UI can surface it.
+    ///
+    /// Why immediate dismissal: we don't want a stale activity hanging
+    /// around in the island while the new one is trying to claim the
+    /// slot — it confuses the diagnostic and (anecdotally) iOS sometimes
+    /// refuses to render the new activity until the old one is gone.
+    @discardableResult
+    func forceClearStaleActivities() async -> Int {
+        cancelTicker()
+        let known = Activity<CaptureActivityAttributes>.activities
+        var ended = 0
+        for existing in known {
+            // `dismissalPolicy: .immediate` tells iOS to drop the island
+            // slot now rather than after the default lingering window.
+            await existing.end(nil, dismissalPolicy: .immediate)
+            ended += 1
+        }
+        // Drop our internal handle too so the next start() spawns clean.
+        activity = nil
+        animationPhase = 0
+        tickCount = 0
+        if ended > 0 {
+            Self.log.info("forceClearStaleActivities ended \(ended, privacy: .public) stale activities")
+        }
+        return ended
+    }
 
     /// Tick cadence. ~500 ms is a balance: faster looks smoother but iOS
     /// throttles aggressively; slower looks like a slideshow. Tunable.
@@ -67,10 +147,16 @@ actor CaptureLiveActivityController {
     /// activity already exists (because the preflight intent fired, or a
     /// previous run hasn't fully dismissed), this no-ops instead of
     /// spawning a duplicate.
-    func start() async {
+    ///
+    /// Returns a `CaptureLiveActivityStartOutcome` describing which path
+    /// the call took. Production intents discard the value with `_`; the
+    /// in-app diagnostic flow branches on it.
+    @discardableResult
+    func start() async -> CaptureLiveActivityStartOutcome {
         // Cancel any previous ticker before we spin up a fresh activity.
         // Idempotency: re-firing start() must not stack tickers.
         cancelTicker()
+        tickCount = 0
 
         // Reattach to any existing live activity in case the controller
         // singleton lost its reference but the system kept the activity
@@ -91,14 +177,14 @@ actor CaptureLiveActivityController {
         if let existing = activity, existing.activityState != .ended && existing.activityState != .dismissed {
             Self.log.info("start() reusing existing activity id=\(existing.id, privacy: .public) state=\(String(describing: existing.activityState), privacy: .public)")
             startTicker()
-            return
+            return .skippedExistingActivity(id: existing.id)
         }
 
         // Guard against the user disabling Live Activities at the system
         // level. Without this check, `request(...)` throws every time.
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             Self.log.info("start() skipped, areActivitiesEnabled=false")
-            return
+            return .skippedAuthDisabled
         }
 
         let attributes = CaptureActivityAttributes()
@@ -122,11 +208,15 @@ actor CaptureLiveActivityController {
             activity = started
             Self.log.info("start() activity id=\(started.id, privacy: .public)")
             startTicker()
+            return .requested(id: started.id)
         } catch {
-            // Falling through silently is intentional — the pipeline
-            // outcome is the source of truth for the user-facing dialog.
+            // Falling through silently is intentional for production — the
+            // pipeline outcome is the source of truth for the user-facing
+            // dialog. The diagnostic UI surfaces the error via the
+            // returned `.failed` case.
             Self.log.error("start() failed: \(error.localizedDescription, privacy: .public)")
             activity = nil
+            return .failed(error: error)
         }
     }
 
@@ -157,6 +247,9 @@ actor CaptureLiveActivityController {
         // End is always terminal — kill the ticker before we touch the
         // activity so a stray tick can't race the .ended transition.
         cancelTicker()
+        // Clear the diagnostic observer so a future start() doesn't keep
+        // streaming ticks into a closure whose owning view is gone.
+        onTickUpdate = nil
         guard let activity else {
             Self.log.info("end() no-op, no activity")
             return
@@ -216,6 +309,7 @@ actor CaptureLiveActivityController {
             return
         }
         animationPhase += step
+        tickCount += 1
         let nextState = CaptureActivityAttributes.State(
             phase: .processing,
             statusText: snapshot.statusText,
@@ -227,6 +321,10 @@ actor CaptureLiveActivityController {
             staleDate: Date().addingTimeInterval(30)
         )
         await activity.update(content)
+        // Fire after the update so observers see the cadence iOS actually
+        // accepted (we ignore throttling — if iOS dropped the update we
+        // still bumped the counter, the diagnostic just sees the call).
+        onTickUpdate?(tickCount, animationPhase)
     }
 
     /// Idempotent ticker shutdown. Safe to call from any path.

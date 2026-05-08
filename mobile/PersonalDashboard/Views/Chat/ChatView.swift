@@ -1,5 +1,8 @@
 import SwiftUI
 import UIKit
+#if DEBUG || DEKS_DEBUG_TOOLS
+import ActivityKit
+#endif
 
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
@@ -12,6 +15,19 @@ struct ChatView: View {
     /// so partials feel live; tapping mic-stop with an empty transcript
     /// restores the baseline so we don't clobber typed text on a misfire.
     @State private var preMicBaseline: String = ""
+
+    #if DEBUG || DEKS_DEBUG_TOOLS
+    /// Step-by-step record of the most recent "Test Live Activity" run.
+    /// Each line is appended on the main actor so the view re-renders
+    /// in real time while the diagnostic flow walks through the
+    /// controller's lifecycle. The user can screenshot this list and
+    /// share the exact path the code took.
+    @State private var diagnosticLog: [String] = []
+    /// Latch so the user can't fire two diagnostic runs concurrently —
+    /// they'd race over the shared controller state and the log would
+    /// interleave noise.
+    @State private var diagnosticRunning: Bool = false
+    #endif
 
     /// Owned here so we can auto-focus the input bar when the user lands on
     /// chat (issue #48 — tapping the chat icon should pop the keyboard
@@ -212,38 +228,46 @@ struct ChatView: View {
 
                 #if DEBUG || DEKS_DEBUG_TOOLS
                 // Diagnostic: directly drives the Capture Live Activity
-                // without going through Shortcuts / Dictate Text. Lets the
-                // user see whether the Dynamic Island rendering itself is
-                // working in isolation from the Action Button → Shortcut
-                // → preflight intent chain. Background the app after
-                // tapping; the activity runs for ~25 s in `.processing`
-                // (so the three lines should visibly dance), then settles
-                // in `.complete` for ~4 s before dismissing.
-                Button {
-                    // Detached so SwiftUI view-task cancellation can't
-                    // kill the 25 s hold (a plain `Task {}` inherits the
-                    // parent's cancellation tree).
-                    Task.detached {
-                        let controller = CaptureLiveActivityController.shared
-                        await controller.start()
-                        try? await Task.sleep(nanoseconds: 25 * 1_000_000_000)
-                        await controller.end(state: .complete(summary: "Test"), linger: 4)
+                // without going through Shortcuts / Dictate Text. Lets
+                // the user see whether the Dynamic Island rendering
+                // itself is working in isolation from the Action Button
+                // → Shortcut → preflight intent chain.
+                //
+                // Background the app after tapping; the activity runs
+                // for ~25 s in `.processing` (so the three lines should
+                // visibly dance), then settles in `.complete` for ~4 s
+                // before dismissing.
+                //
+                // The user-facing log under the button surfaces every
+                // step the controller takes — auth check, existing
+                // activity count, request outcome, ticker updates — so
+                // a screenshot is enough to diagnose which silent return
+                // path is firing if the island stays empty.
+                VStack(spacing: Space.sm) {
+                    Button {
+                        runLiveActivityDiagnostic()
+                    } label: {
+                        HStack(spacing: Space.xs) {
+                            Image(systemName: diagnosticRunning ? "hourglass" : "stethoscope")
+                                .font(.system(size: 11, weight: .medium))
+                            Text(diagnosticRunning ? "Running..." : "Test Live Activity")
+                                .font(.edCaption)
+                        }
+                        .foregroundStyle(Tokens.muted)
+                        .padding(.horizontal, Space.sm)
+                        .padding(.vertical, Space.xs)
+                        .overlay(
+                            Capsule().stroke(Tokens.border.opacity(0.6), lineWidth: 0.5)
+                        )
                     }
-                } label: {
-                    HStack(spacing: Space.xs) {
-                        Image(systemName: "stethoscope")
-                            .font(.system(size: 11, weight: .medium))
-                        Text("Test Live Activity")
-                            .font(.edCaption)
+                    .buttonStyle(.plain)
+                    .disabled(diagnosticRunning)
+
+                    if !diagnosticLog.isEmpty {
+                        LiveActivityDiagnosticPanel(lines: diagnosticLog)
+                            .frame(maxWidth: 360)
                     }
-                    .foregroundStyle(Tokens.muted)
-                    .padding(.horizontal, Space.sm)
-                    .padding(.vertical, Space.xs)
-                    .overlay(
-                        Capsule().stroke(Tokens.border.opacity(0.6), lineWidth: 0.5)
-                    )
                 }
-                .buttonStyle(.plain)
                 .padding(.top, Space.lg)
                 #endif
             }
@@ -336,7 +360,167 @@ struct ChatView: View {
     private var hasLiveAssistantTurn: Bool {
         viewModel.turns.last?.isStreaming == true
     }
+
+    #if DEBUG || DEKS_DEBUG_TOOLS
+    // MARK: - Live Activity diagnostic
+
+    /// Walks the controller through a full lifecycle (force-clear ->
+    /// auth check -> request -> tick observation -> end) and surfaces
+    /// each step on screen. The activity runs in `.processing` for
+    /// ~25 s so the user can background the app and see the Dynamic
+    /// Island animate; we then settle into `.complete` for the linger
+    /// window before dismissing.
+    ///
+    /// `Task.detached` so SwiftUI view-task cancellation can't kill the
+    /// 25 s hold mid-run (a plain `Task {}` inherits the parent's
+    /// cancellation tree, which can drop when the user navigates away).
+    /// All state mutation happens via `appendDiagnostic(...)` which
+    /// hops to MainActor.
+    private func runLiveActivityDiagnostic() {
+        guard !diagnosticRunning else { return }
+        diagnosticRunning = true
+        diagnosticLog = []
+
+        Task.detached {
+            let controller = CaptureLiveActivityController.shared
+            await appendDiagnostic("[tap] tapped at \(Self.diagnosticTimestamp())")
+
+            // 1. Auth check - we read this BEFORE forceClear so the
+            //    "areActivitiesEnabled" line reflects the system state
+            //    independent of whether we had stale activities.
+            let authEnabled = ActivityAuthorizationInfo().areActivitiesEnabled
+            await appendDiagnostic("[auth] areActivitiesEnabled = \(authEnabled)")
+
+            // 2. Snapshot existing activities BEFORE we clear them so
+            //    the user sees how many were stuck. The diagnostic is
+            //    most useful when this number is non-zero on a fresh
+            //    tap — that reveals the early-return path.
+            let preExisting = Activity<CaptureActivityAttributes>.activities
+            let preStates = preExisting.map { Self.shortStateLabel($0.activityState) }
+            await appendDiagnostic("[existing] live activities: \(preExisting.count); states: \(preStates)")
+
+            // 3. Force-clear so start() is guaranteed to take the
+            //    spawn path rather than the reattach early-return.
+            let cleared = await controller.forceClearStaleActivities()
+            await appendDiagnostic("[cleanup] ended \(cleared) stale activities")
+
+            // 4. Install the tick observer BEFORE start() so we don't
+            //    miss the first tick. The closure hops to MainActor
+            //    inside appendDiagnostic.
+            await controller.setOnTickUpdate { count, phase in
+                let phaseRounded = String(format: "%.2f", phase)
+                Task { await appendDiagnostic("[ticker] update #\(count) phase=\(phaseRounded)") }
+            }
+
+            // 5. Request the activity. The outcome enum tells us
+            //    exactly which path we took.
+            await appendDiagnostic("[request] calling Activity<CaptureActivityAttributes>.request(...)")
+            let outcome = await controller.start()
+            switch outcome {
+            case .skippedAuthDisabled:
+                await appendDiagnostic("[request] SKIPPED: areActivitiesEnabled=false")
+            case .skippedExistingActivity(let id):
+                await appendDiagnostic("[request] SKIPPED: existing activity id=\(id)")
+            case .requested(let id):
+                await appendDiagnostic("[request] activity id = \(id)")
+            case .failed(let error):
+                await appendDiagnostic("[request] FAILED: \(error.localizedDescription)")
+            }
+
+            // If we never got a live activity, no point waiting 25 s —
+            // the user will see the failure path on screen and can
+            // act on it. End the diagnostic early.
+            let didStart: Bool
+            switch outcome {
+            case .requested, .skippedExistingActivity: didStart = true
+            case .skippedAuthDisabled, .failed: didStart = false
+            }
+            if !didStart {
+                await appendDiagnostic("[end] aborting — no active live activity")
+                await controller.setOnTickUpdate(nil)
+                await MainActor.run { diagnosticRunning = false }
+                return
+            }
+
+            // 6. Hold for 25 s in .processing so the user can
+            //    background the app and watch the island animate.
+            //    The ticker fires at ~500 ms cadence so a few of those
+            //    ticks will land in the diagnostic log too.
+            try? await Task.sleep(nanoseconds: 25 * 1_000_000_000)
+
+            // 7. Settle.
+            await appendDiagnostic("[end] settling to .complete after 25 s")
+            await controller.end(state: .complete(summary: "Test"), linger: 4)
+            // Linger covers the visible "complete" window. After it
+            // expires the system actually clears the slot.
+            try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+            await appendDiagnostic("[end] dismissed")
+            await MainActor.run { diagnosticRunning = false }
+        }
+    }
+
+    /// Hop to MainActor and append a single line. Cap at 200 lines so
+    /// a runaway tick loop can't blow up the view's render tree.
+    @MainActor
+    private func appendDiagnostic(_ line: String) {
+        diagnosticLog.append(line)
+        if diagnosticLog.count > 200 {
+            diagnosticLog.removeFirst(diagnosticLog.count - 200)
+        }
+    }
+
+    private static func diagnosticTimestamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: Date())
+    }
+
+    private static func shortStateLabel(_ state: ActivityState) -> String {
+        switch state {
+        case .active:    return "active"
+        case .ended:     return "ended"
+        case .dismissed: return "dismissed"
+        case .stale:     return "stale"
+        @unknown default: return "unknown"
+        }
+    }
+    #endif
 }
+
+#if DEBUG || DEKS_DEBUG_TOOLS
+/// Tight monospace panel that renders the diagnostic log under the
+/// "Test Live Activity" button. Sized to about 12 lines visible — if
+/// the run pushes past that, the panel scrolls.
+private struct LiveActivityDiagnosticPanel: View {
+    let lines: [String]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Tokens.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, Space.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 180)
+        .background(
+            Tokens.surface,
+            in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                .stroke(Tokens.border.opacity(0.6), lineWidth: 0.5)
+        )
+    }
+}
+#endif
 
 private struct TurnView: View {
     let turn: ChatTurn
