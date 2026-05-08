@@ -135,6 +135,11 @@ BUNDLE_VERSION="${BUILD_NUMBER}"
 echo "-> versioning: v${SHORT_VERSION} (${BUNDLE_VERSION})"
 
 # ---- Archive (Release, dev signing) ----
+# `DEKS_DEBUG_TOOLS` is a custom Swift compilation flag that gates
+# debug-only diagnostics (e.g. the "Test Live Activity" button in chat).
+# We're building Release here so #if DEBUG is OFF; this flag turns the
+# diagnostics back ON for personal dev OTA builds without weakening the
+# Release config for any future App Store path.
 ARCHIVE_PATH="${OTA_DIR}/PersonalDashboard.xcarchive"
 echo "-> archiving (1-2 min)"
 xcodebuild \
@@ -148,6 +153,7 @@ xcodebuild \
     MARKETING_VERSION="${SHORT_VERSION}" \
     OTA_API_URL="${API_URL}" \
     ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) DEKS_DEBUG_TOOLS' \
     archive \
     2>&1 | grep -E "(error:|warning: .*\.swift:|\*\* )" || true
 

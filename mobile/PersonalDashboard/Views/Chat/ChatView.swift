@@ -209,6 +209,43 @@ struct ChatView: View {
                     }
                 }
                 .padding(.top, Space.md)
+
+                #if DEBUG || DEKS_DEBUG_TOOLS
+                // Diagnostic: directly drives the Capture Live Activity
+                // without going through Shortcuts / Dictate Text. Lets the
+                // user see whether the Dynamic Island rendering itself is
+                // working in isolation from the Action Button → Shortcut
+                // → preflight intent chain. Background the app after
+                // tapping; the activity runs for ~25 s in `.processing`
+                // (so the three lines should visibly dance), then settles
+                // in `.complete` for ~4 s before dismissing.
+                Button {
+                    // Detached so SwiftUI view-task cancellation can't
+                    // kill the 25 s hold (a plain `Task {}` inherits the
+                    // parent's cancellation tree).
+                    Task.detached {
+                        let controller = CaptureLiveActivityController.shared
+                        await controller.start()
+                        try? await Task.sleep(nanoseconds: 25 * 1_000_000_000)
+                        await controller.end(state: .complete(summary: "Test"), linger: 4)
+                    }
+                } label: {
+                    HStack(spacing: Space.xs) {
+                        Image(systemName: "stethoscope")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Test Live Activity")
+                            .font(.edCaption)
+                    }
+                    .foregroundStyle(Tokens.muted)
+                    .padding(.horizontal, Space.sm)
+                    .padding(.vertical, Space.xs)
+                    .overlay(
+                        Capsule().stroke(Tokens.border.opacity(0.6), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.top, Space.lg)
+                #endif
             }
             .padding(.horizontal, Space.xl)
 
@@ -216,6 +253,7 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
 
     // MARK: - Conversation list
 
