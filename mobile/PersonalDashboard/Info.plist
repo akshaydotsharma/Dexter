@@ -39,6 +39,8 @@
 	<string>Deks listens to your voice so it can transcribe what you say into the chat.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Deks transcribes your voice into chat messages on-device. Audio never leaves your phone.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>OTA_API_URL</key>
 	<string>$(OTA_API_URL)</string>
 	<key>UIAppFonts</key>

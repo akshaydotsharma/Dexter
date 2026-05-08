@@ -143,6 +143,7 @@ xcodebuild \
     -configuration Release \
     -destination 'generic/platform=iOS' \
     -archivePath "${ARCHIVE_PATH}" \
+    -allowProvisioningUpdates \
     CURRENT_PROJECT_VERSION="${BUNDLE_VERSION}" \
     MARKETING_VERSION="${SHORT_VERSION}" \
     OTA_API_URL="${API_URL}" \
