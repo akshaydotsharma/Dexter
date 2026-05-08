@@ -7,16 +7,21 @@ import WidgetKit
 /// Why it exists: when the iPhone Action Button runs the Capture
 /// shortcut, iOS shows a generic "AppIcon thumbnail" treatment in the
 /// Dynamic Island while the App Intent is processing. We replace that
-/// with an animated `waveform` SF Symbol so the user has visible proof
-/// the pipeline is alive. The system Dictate Text sheet is untouched —
-/// only the Dynamic Island region.
+/// with the Deks brand mark — three horizontal lines — so the user has
+/// visible proof the pipeline is alive AND the surface stays continuous
+/// with the AppIcon. The system Dictate Text sheet is untouched — only
+/// the Dynamic Island region.
 ///
-/// Why SF Symbol over the previous 3-line motif: `TimelineView(.animation)`
-/// does NOT drive continuous motion in the *compact* island view (iOS
-/// renders compact as a static snapshot). `.symbolEffect` DOES animate
-/// in compact. We trade a sliver of AppIcon continuity for actual visible
-/// motion in the always-visible pill — the surface the user reads 99% of
-/// the time.
+/// How the compact view animates:
+///   iOS does NOT redraw `TimelineView(.animation)` in the compact
+///   Dynamic Island slot — compact is a static snapshot. The only
+///   mechanism we have for compact-view motion is `activity.update(...)`,
+///   which forces a redraw on every state change. So
+///   `CaptureLiveActivityController` ticks `state.animationPhase` every
+///   ~500 ms while the activity is in `.processing`, and `CaptureLogoLines`
+///   reads that phase to compute each line's modulated width. iOS may
+///   throttle update frequency in practice — we accept whatever cadence
+///   it gives us; this is best-effort.
 ///
 /// Lifecycle is owned by `CaptureToDashboardIntent`, not the activity
 /// itself. The intent starts the activity in `.processing`, updates to
@@ -34,8 +39,12 @@ struct CaptureLiveActivity: Widget {
                 // EXPANDED — visible when the user taps + holds the
                 // island. Same surfaces a system "summary card" view.
                 DynamicIslandExpandedRegion(.leading) {
-                    CaptureWaveformSymbol(phase: context.state.phase, slot: .expandedLeading)
-                        .padding(.leading, 6)
+                    CaptureLogoLines(
+                        phase: context.state.phase,
+                        animationPhase: context.state.animationPhase,
+                        size: .expandedLeading
+                    )
+                    .padding(.leading, 6)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     StatusPip(phase: context.state.phase)
@@ -60,16 +69,24 @@ struct CaptureLiveActivity: Widget {
                         .padding(.bottom, 2)
                 }
             } compactLeading: {
-                CaptureWaveformSymbol(phase: context.state.phase, slot: .compactLeading)
-                    .padding(.leading, 4)
+                CaptureLogoLines(
+                    phase: context.state.phase,
+                    animationPhase: context.state.animationPhase,
+                    size: .compactLeading
+                )
+                .padding(.leading, 4)
             } compactTrailing: {
                 StatusPip(phase: context.state.phase)
                     .padding(.trailing, 4)
             } minimal: {
                 // Reduced when another activity is on the trailing side.
-                // Rendered inside the small system pill — the symbol needs
+                // Rendered inside the small system pill — the lines need
                 // to hold up at ~16pt wide.
-                CaptureWaveformSymbol(phase: context.state.phase, slot: .minimal)
+                CaptureLogoLines(
+                    phase: context.state.phase,
+                    animationPhase: context.state.animationPhase,
+                    size: .minimal
+                )
             }
             .keylineTint(.white.opacity(0.6))
             .widgetURL(URL(string: "deks://capture"))
@@ -135,11 +152,15 @@ private struct LockScreenView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            // SF Symbol everywhere for visual consistency with the
-            // compact + expanded island slots. The banner has the room
-            // for a richer treatment, but coherence beats novelty here.
-            CaptureWaveformSymbol(phase: state.phase, slot: .banner)
-                .frame(width: 68, height: 50)
+            // Lines everywhere for visual consistency with the compact +
+            // expanded island slots. The banner has the room for a richer
+            // treatment, but coherence beats novelty here.
+            CaptureLogoLines(
+                phase: state.phase,
+                animationPhase: state.animationPhase,
+                size: .banner
+            )
+            .frame(width: 68, height: 50)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(eyebrow)

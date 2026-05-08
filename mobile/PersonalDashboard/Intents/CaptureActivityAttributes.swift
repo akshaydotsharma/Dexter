@@ -26,11 +26,26 @@ struct CaptureActivityAttributes: ActivityAttributes {
         public var phase: Phase
         public var statusText: String
         public var startedAt: Date
+        /// Animation phase used by the compact view to oscillate the
+        /// three logo lines. iOS does NOT redraw `TimelineView(.animation)`
+        /// in the compact Dynamic Island slot — the only mechanism we have
+        /// for compact-view motion is `activity.update(...)`, which forces
+        /// a redraw on every state change. The controller ticks this
+        /// field every ~500 ms so the compact pill animates while
+        /// processing. Settled phases keep this at the last value (no
+        /// further updates fire after `.complete` / `.failed`).
+        public var animationPhase: Double
 
-        public init(phase: Phase, statusText: String, startedAt: Date = Date()) {
+        public init(
+            phase: Phase,
+            statusText: String,
+            startedAt: Date = Date(),
+            animationPhase: Double = 0
+        ) {
             self.phase = phase
             self.statusText = statusText
             self.startedAt = startedAt
+            self.animationPhase = animationPhase
         }
     }
 
@@ -45,15 +60,17 @@ extension CaptureActivityAttributes.State {
     /// Convenience factory for the initial "we just kicked off the
     /// pipeline" state. Keeps the call site in `CaptureToDashboardIntent`
     /// readable without leaking literal strings into the intent file.
-    static var processing: Self {
-        .init(phase: .processing, statusText: "Capturing")
+    /// Defaults `animationPhase` to 0; the controller's ticker takes
+    /// over from there.
+    static func processing(animationPhase: Double = 0) -> Self {
+        .init(phase: .processing, statusText: "Capturing", animationPhase: animationPhase)
     }
 
-    static func complete(summary: String) -> Self {
-        .init(phase: .complete, statusText: summary)
+    static func complete(summary: String, animationPhase: Double = 0) -> Self {
+        .init(phase: .complete, statusText: summary, animationPhase: animationPhase)
     }
 
-    static func failed(message: String) -> Self {
-        .init(phase: .failed, statusText: message)
+    static func failed(message: String, animationPhase: Double = 0) -> Self {
+        .init(phase: .failed, statusText: message, animationPhase: animationPhase)
     }
 }
