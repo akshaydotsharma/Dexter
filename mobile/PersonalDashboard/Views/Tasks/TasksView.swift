@@ -53,6 +53,7 @@ struct TasksView: View {
                         .listRowInsets(EdgeInsets())
                 }
                 .listStyle(.plain)
+                .listSectionSpacing(0)
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
                 .refreshable { await viewModel.load() }
@@ -334,7 +335,7 @@ struct TasksView: View {
             .buttonStyle(.plain)
             .textCase(nil)
             .padding(.horizontal, Space.lg)
-            .padding(.top, Space.lg)
+            .padding(.top, Space.sm)
             .padding(.bottom, Space.xs)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Tokens.paper)
@@ -359,7 +360,7 @@ struct TasksView: View {
         }
         .textCase(nil)
         .padding(.horizontal, Space.lg)
-        .padding(.top, Space.lg)
+        .padding(.top, Space.sm)
         .padding(.bottom, Space.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.paper)
