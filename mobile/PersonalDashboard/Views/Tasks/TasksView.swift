@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct TasksView: View {
     @State private var viewModel = TodosViewModel()
@@ -6,6 +7,7 @@ struct TasksView: View {
     @State private var editingTodo: Todo?
     @State private var newTaskText: String = ""
     @State private var completedExpanded: Bool = false
+    @State private var keyboardVisible = false
 
     @Bindable var router: AppRouter
 
@@ -47,11 +49,14 @@ struct TasksView: View {
                 .background(Tokens.paper)
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable { await viewModel.load() }
+                .simultaneousGesture(TapGesture().onEnded {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                })
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     addRow
                         .padding(.horizontal, Space.lg)
                         .padding(.vertical, Space.md)
-                        .padding(.bottom, BottomTabBarMetrics.height)
+                        .padding(.bottom, keyboardVisible ? 0 : BottomTabBarMetrics.height)
                         .background(
                             Tokens.paper.overlay(alignment: .top) {
                                 Rectangle().fill(Tokens.border).frame(height: 0.5)
@@ -61,6 +66,12 @@ struct TasksView: View {
             }
         }
         .activeSection(.tasks)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = false }
+        }
         .task { await viewModel.load() }
         .onAppear {
             // Activity timeline deep-link consumption. The Activity surface

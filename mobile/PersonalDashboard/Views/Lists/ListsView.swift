@@ -83,29 +83,33 @@ struct ListsView: View {
         // into native `.swipeActions`. Paper aesthetic preserved via clear
         // row backgrounds, hidden separators, and `.scrollContentBackground`.
         List {
-            if viewModel.lists.isEmpty && !viewModel.isLoading {
-                Text("No lists yet. Tap + to start.")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.muted)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, Space.xxxl)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
-            } else {
-                ForEach(viewModel.lists) { list in
-                    ListSummaryRow(list: list) {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            selectedListId = list.id
+            Section {
+                if viewModel.lists.isEmpty && !viewModel.isLoading {
+                    Text("No lists yet. Tap + to start.")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.muted)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, Space.xxxl)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+                } else {
+                    ForEach(viewModel.lists) { list in
+                        ListSummaryRow(list: list) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                selectedListId = list.id
+                            }
                         }
+                        .swipeToDeleteTrash {
+                            Task { await viewModel.delete(list) }
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                     }
-                    .swipeToDeleteTrash {
-                        Task { await viewModel.delete(list) }
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
                 }
+            } header: {
+                sectionEyebrow("All Lists")
             }
 
             Color.clear
