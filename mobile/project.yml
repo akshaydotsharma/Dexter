@@ -21,6 +21,13 @@ targets:
         buildPhase: resources
       - path: PersonalDashboard/Resources/Assets.xcassets
         buildPhase: resources
+      # Shared with the DeksWidgets extension. Today only the
+      # ActivityAttributes for the Capture Live Activity, but kept under
+      # mobile/Shared/ so future cross-target types land in one place.
+      - path: Shared
+    dependencies:
+      - target: DeksWidgets
+        embed: true
     info:
       path: PersonalDashboard/Info.plist
       properties:
@@ -57,6 +64,9 @@ targets:
         # Microphone for the audio capture that feeds it.
         NSSpeechRecognitionUsageDescription: "Deks transcribes your voice into chat messages on-device. Audio never leaves your phone."
         NSMicrophoneUsageDescription: "Deks listens to your voice so it can transcribe what you say into the chat."
+        # Required for the Capture App Intent to start a Live Activity in
+        # the Dynamic Island while the on-device pipeline runs (issue #85).
+        NSSupportsLiveActivities: true
         UIAppFonts:
           - Calistoga-Regular.ttf
           - Inter-Regular.ttf
@@ -75,5 +85,35 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Default version values — overridden by ship-lan.sh on every ship.
         # Local Xcode-only builds (Cmd+R) inherit these as-is.
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+
+  DeksWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: DeksWidgets
+      - path: Shared
+    info:
+      path: DeksWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Deks Widgets
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Allow Live Activities. The host app's Info.plist also carries
+        # this key — both are required.
+        NSSupportsLiveActivities: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard.widgets
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: "PJFPUSSNUW"
+        CODE_SIGN_STYLE: Automatic
+        SKIP_INSTALL: NO
+        # Default version values, overridden by ship-lan.sh just like the
+        # main app target.
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
