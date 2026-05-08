@@ -86,6 +86,19 @@ sometimes fail with "Unable to find a destination matching...". Workaround: re-r
 3. In Xcode: Product → Archive → Distribute App → App Store Connect → Upload
 4. App Store Connect → TestFlight tab → add internal testers
 
+## Capture shortcut: enable the animated Dynamic Island
+
+The Capture flow paints the Dynamic Island with our three-line motif while
+the on-device pipeline runs. To get the animation showing during the
+Dictate Text step (instead of iOS's default AppIcon thumbnail), add the
+preflight intent at the top of your shortcut:
+
+1. Open the Shortcuts app and edit your "Capture to Deks" shortcut.
+2. At the very top, add the action **Start Capture Indicator** (search "Deks").
+3. Leave Dictate Text and Capture to Deks below it as-is. Save.
+
+From now on the island shows the animated lines through the whole flow.
+
 ## Common commands
 
 ```bash
