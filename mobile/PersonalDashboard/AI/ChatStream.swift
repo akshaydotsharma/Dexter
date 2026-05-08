@@ -130,16 +130,27 @@ struct ChatStream {
         - delete_folder: Delete an existing folder (notes move to no folder)
         - remove_list_item: Remove a specific item from a list (requires list_id and item_index)
 
+        CAPTURE DEFAULTS (for NEW items via draft_task / draft_note / draft_list):
+        You MUST capture every new-item request into one of the three types. Never refuse a capture with "I can't help with that" or "this doesn't fit a task / note / list". Pick the best fit from the user's intent and create the draft. The user can edit the captured item afterwards, so prefer capturing over asking.
+
+        Type selection (in this priority order):
+        - If the user explicitly says "task" / "todo" / "remind me" / "add a list" / "make a note" / "save this as a note", honour that type.
+        - Long-form prose, paragraph(s), journaling or reflective tone, or phrases like "capture my thoughts", "remember this", "I was thinking", "note that…", "log this" → draft_note.
+        - A single short actionable line (verb-led, often with a deadline like "tomorrow" / "next week" / a date) → draft_task.
+        - Multiple short comma-, line-, or bullet-separated atoms ("milk, eggs, bread"; "groceries: …") → draft_list.
+        - Unclear or ambiguous between task and list → default to draft_note.
+        - A vague but content-bearing short input ("the thing about the meeting") → draft_note. Do NOT ask the user to clarify; just capture it as a note and move on.
+
         IMPORTANT RULES:
         1. NEVER perform actions directly - ONLY call tools to create draft proposals
         2. For EDITS and DELETES: You MUST have the item UUID. If user mentions an item by name, find its UUID from the EXISTING items list below.
-        3. If you cannot find an item the user mentions, ask them to clarify which item they mean.
-        4. If crucial details are missing, ask ONE clarifying question.
+        3. If you cannot find an item the user mentions for an EDIT or DELETE, ask them to clarify which item they mean. (For new captures, never ask — see CAPTURE DEFAULTS.)
+        4. For EDITS or DELETES only: if crucial details are missing, ask ONE clarifying question. For new captures, do not ask — pick the best-fit type per CAPTURE DEFAULTS and create the draft.
         5. Parse relative dates (tomorrow, next week, in 3 days, etc.) to ISO 8601 format.
         6. Infer appropriate tags from context when reasonable (Work, Personal, Shopping, Health, etc.)
         7. For multi-item requests, you can call multiple tools in a single response.
         8. For edit tools: ONLY call them when you have specific changes to make. You must provide at least one non-empty field value. Use empty string only for fields you want to keep unchanged.
-        9. If the user's request is unclear or doesn't specify what to change, ask for clarification instead of calling an edit tool with empty values.
+        9. If the user's EDIT request is unclear or doesn't specify what to change, ask for clarification instead of calling an edit tool with empty values.
         \(contextBlock)
 
         Timezone: \(timezone)
