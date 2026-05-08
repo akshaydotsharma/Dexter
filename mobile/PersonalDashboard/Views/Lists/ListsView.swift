@@ -77,9 +77,9 @@ struct ListsView: View {
                     Button {
                         showingNewList = true
                     } label: {
-                        Label("New list", systemImage: "plus")
+                        Image(systemName: "plus")
                     }
-                    .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+                    .buttonStyle(EdIconSquareButtonStyle(kind: .primary))
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)

@@ -99,15 +99,15 @@ struct NotesView: View {
                     Button {
                         showingNewFolder = true
                     } label: {
-                        Label("New folder", systemImage: "folder.badge.plus")
+                        Image(systemName: "folder.badge.plus")
                     }
-                    .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+                    .buttonStyle(EdIconSquareButtonStyle(kind: .secondary))
                     Button {
                         Task { await createBlankNote(folderId: selectedFolder?.id) }
                     } label: {
-                        Label("New note", systemImage: "plus")
+                        Image(systemName: "plus")
                     }
-                    .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+                    .buttonStyle(EdIconSquareButtonStyle(kind: .primary))
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)

@@ -87,6 +87,34 @@ struct EdIconButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Icon-square button (36×36 filled, for list-header actions)
+
+struct EdIconSquareButtonStyle: ButtonStyle {
+    var kind: ButtonKind = .primary
+
+    func makeBody(configuration: Configuration) -> some View {
+        let (fg, bg, stroke): (Color, Color, Color?) = {
+            switch kind {
+            case .primary:   return (Tokens.paper, Tokens.ink, nil)
+            case .secondary: return (Tokens.ink, Tokens.surface, Tokens.border)
+            case .ghost:     return (Tokens.muted, .clear, nil)
+            }
+        }()
+
+        return configuration.label
+            .font(.system(size: 15, weight: .regular))
+            .foregroundStyle(fg)
+            .frame(width: 36, height: 36)
+            .background(bg, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .stroke(stroke ?? .clear, lineWidth: stroke == nil ? 0 : 0.5)
+            )
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
 // MARK: - Send button (filled accent square)
 
 struct EdSendButtonStyle: ButtonStyle {
