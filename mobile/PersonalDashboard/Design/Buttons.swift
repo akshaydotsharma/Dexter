@@ -87,9 +87,9 @@ struct EdIconButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Icon-square button (36×36 filled, for list-header actions)
+// MARK: - Icon-circle button (48pt floating FAB, for Notes / Lists overlay actions)
 
-struct EdIconSquareButtonStyle: ButtonStyle {
+struct EdIconCircleButtonStyle: ButtonStyle {
     var kind: ButtonKind = .primary
 
     func makeBody(configuration: Configuration) -> some View {
@@ -102,14 +102,12 @@ struct EdIconSquareButtonStyle: ButtonStyle {
         }()
 
         return configuration.label
-            .font(.system(size: 15, weight: .regular))
+            .font(.system(size: 17, weight: .regular))
             .foregroundStyle(fg)
-            .frame(width: 36, height: 36)
-            .background(bg, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    .stroke(stroke ?? .clear, lineWidth: stroke == nil ? 0 : 0.5)
-            )
+            .frame(width: 48, height: 48)
+            .background(bg, in: Circle())
+            .overlay(Circle().stroke(stroke ?? .clear, lineWidth: stroke == nil ? 0 : 0.5))
+            .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }

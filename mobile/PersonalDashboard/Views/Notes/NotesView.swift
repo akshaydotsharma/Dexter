@@ -60,13 +60,13 @@ struct NotesView: View {
                     } label: {
                         Image(systemName: "folder.badge.plus")
                     }
-                    .buttonStyle(EdIconSquareButtonStyle(kind: .secondary))
+                    .buttonStyle(EdIconCircleButtonStyle(kind: .secondary))
                     Button {
                         Task { await createBlankNote(folderId: nil) }
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .buttonStyle(EdIconSquareButtonStyle(kind: .primary))
+                    .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
                 }
                 .padding(.trailing, 22)
                 .padding(.bottom, BottomTabBarMetrics.height + Space.sm)

@@ -47,7 +47,7 @@ struct ListsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(EdIconSquareButtonStyle(kind: .primary))
+                .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
                 .padding(.trailing, 22)
                 .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
