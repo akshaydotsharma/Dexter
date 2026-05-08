@@ -5,6 +5,12 @@ struct TasksView: View {
     @State private var showingEditor = false
     @State private var editingTodo: Todo?
     @State private var completedExpanded: Bool = false
+    // Per-section tap-below inline draft state.
+    // draftBucket == nil → no draft active; non-nil → draft in that section.
+    private enum DraftBucket: String { case today, thisWeek, later, noDate }
+    @State private var draftBucket: DraftBucket? = nil
+    @State private var draftText: String = ""
+    @FocusState private var draftFocused: Bool
 
     @Bindable var router: AppRouter
 
@@ -29,19 +35,25 @@ struct TasksView: View {
                     if viewModel.isLoading && viewModel.todos.isEmpty {
                         placeholderRow("Loading…")
                     } else if viewModel.todos.isEmpty {
-                        placeholderRow("No tasks yet. Tap + to start.")
+                        // Empty-state: single tap-below that seeds a No Date task.
+                        placeholderRow("No tasks yet. Tap below to start.")
+                        emptyStateDraftRow
                     } else {
                         taskGroups
                     }
 
                     // FAB clearance — keeps the last row scrollable above the floating + button.
+                    // Also acts as a tap-to-dismiss zone for any active inline draft.
                     Color.clear
                         .frame(height: 96)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if draftBucket != nil { draftFocused = false } }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets())
                 }
                 .listStyle(.plain)
+                .listSectionSpacing(0)
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
                 .refreshable { await viewModel.load() }
@@ -56,6 +68,11 @@ struct TasksView: View {
             .padding(.trailing, 22)
             .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            // Hide the FAB while an inline draft is active — the user is already
+            // adding a task inline, so the FAB is redundant and visually distracting.
+            .opacity(draftBucket == nil ? 1 : 0)
+            .allowsHitTesting(draftBucket == nil)
+            .animation(.easeOut(duration: 0.15), value: draftBucket)
         }
         .activeSection(.tasks)
         .task { await viewModel.load() }
@@ -87,25 +104,101 @@ struct TasksView: View {
         }
     }
 
+    // MARK: - Tap-below helpers
+
+    private func startDraft(in bucket: DraftBucket) {
+        draftBucket = bucket
+        draftText = ""
+        // Give the List time to insert DraftTaskRow before focusing.
+        DispatchQueue.main.async { draftFocused = true }
+    }
+
+    /// Commits the current draftText as a new task in the active bucket.
+    /// - keepFocus: true = chain creation (Return key); false = dismiss (focus-loss path).
+    private func commitDraft(keepFocus: Bool) {
+        guard let bucket = draftBucket else { return }
+        let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            draftBucket = nil
+            draftFocused = false
+            return
+        }
+        let due = suggestedDueDate(for: bucket)
+        Task { await viewModel.create(title: trimmed, dueDate: due) }
+        if keepFocus {
+            draftText = ""
+            DispatchQueue.main.async { draftFocused = true }
+        } else {
+            draftBucket = nil
+            draftFocused = false
+        }
+    }
+
+    private func suggestedDueDate(for bucket: DraftBucket) -> Date? {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        switch bucket {
+        case .today:
+            return cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)
+        case .thisWeek:
+            let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
+            return cal.date(byAdding: .day, value: 3, to: eod)
+        case .later:
+            let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
+            return cal.date(byAdding: .day, value: 14, to: eod)
+        case .noDate:
+            return nil
+        }
+    }
+
+    // Empty-state fallback: single tap-below seeding a No Date task.
+    @ViewBuilder
+    private var emptyStateDraftRow: some View {
+        if draftBucket == .noDate {
+            DraftTaskRow(
+                text: $draftText,
+                isFocused: $draftFocused,
+                onSubmit: { commitDraft(keepFocus: true) },
+                onFocusLost: { commitDraft(keepFocus: false) }
+            )
+            // Same height-stabilisation as the per-section draft rows: lock to 60pt
+            // so swapping the empty-state tap-zone for the draft row doesn't jump.
+            .frame(minHeight: 60)
+            .padding(.horizontal, Space.lg)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
+        } else {
+            Color.clear
+                .frame(minHeight: 120)
+                .contentShape(Rectangle())
+                .onTapGesture { startDraft(in: .noDate) }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
+        }
+    }
+
     // MARK: - Grouped tasks
 
     @ViewBuilder
     private var taskGroups: some View {
         let buckets = computeBuckets()
+        // Overdue: no tap-below (adding a new overdue task is incoherent).
         if !buckets.overdue.isEmpty {
-            taskSection(title: "Overdue", count: buckets.overdue.count, accent: Tokens.danger, soft: Tokens.dangerSoft, todos: buckets.overdue)
+            taskSection(title: "Overdue", count: buckets.overdue.count, accent: Tokens.danger, soft: Tokens.dangerSoft, todos: buckets.overdue, bucket: nil)
         }
-        if !buckets.today.isEmpty {
-            taskSection(title: "Today", count: buckets.today.count, accent: Tokens.warning, soft: Tokens.warningSoft, todos: buckets.today)
+        if !buckets.today.isEmpty || draftBucket == .today {
+            taskSection(title: "Today", count: buckets.today.count, accent: Tokens.warning, soft: Tokens.warningSoft, todos: buckets.today, bucket: .today)
         }
-        if !buckets.thisWeek.isEmpty {
-            taskSection(title: "This Week", count: buckets.thisWeek.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.thisWeek)
+        if !buckets.thisWeek.isEmpty || draftBucket == .thisWeek {
+            taskSection(title: "This Week", count: buckets.thisWeek.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.thisWeek, bucket: .thisWeek)
         }
-        if !buckets.later.isEmpty {
-            taskSection(title: "Later", count: buckets.later.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.later)
+        if !buckets.later.isEmpty || draftBucket == .later {
+            taskSection(title: "Later", count: buckets.later.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.later, bucket: .later)
         }
-        if !buckets.noDate.isEmpty {
-            taskSection(title: "No Date", count: buckets.noDate.count, accent: Tokens.muted, soft: Tokens.paper2, todos: buckets.noDate)
+        if !buckets.noDate.isEmpty || draftBucket == .noDate {
+            taskSection(title: "No Date", count: buckets.noDate.count, accent: Tokens.muted, soft: Tokens.paper2, todos: buckets.noDate, bucket: .noDate)
         }
         if !buckets.completed.isEmpty {
             completedSection(buckets.completed)
@@ -141,21 +234,57 @@ struct TasksView: View {
         return b
     }
 
+    /// Renders a task section with an optional per-section tap-below affordance.
+    /// Pass `bucket: nil` for sections that should not have tap-below (e.g. Overdue).
     @ViewBuilder
-    private func taskSection(title: String, count: Int, accent: Color, soft: Color, todos: [Todo]) -> some View {
+    private func taskSection(title: String, count: Int, accent: Color, soft: Color, todos: [Todo], bucket: DraftBucket?) -> some View {
         Section {
             ForEach(todos) { todo in
-                TaskRow(todo: todo) {
-                    Task { await viewModel.toggleCompleted(todo) }
-                } onTap: {
-                    editingTodo = todo
-                }
+                TaskRow(
+                    todo: todo,
+                    isDraftActive: draftBucket != nil,
+                    onToggle: { Task { await viewModel.toggleCompleted(todo) } },
+                    onTap: { editingTodo = todo },
+                    onTapWhileDraftActive: { draftFocused = false }
+                )
                 .swipeToDeleteTrash {
                     Task { await viewModel.delete(todo) }
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+            }
+
+            // Tap-below affordance for this section (skipped for Overdue).
+            if let bucket {
+                if draftBucket == bucket {
+                    DraftTaskRow(
+                        text: $draftText,
+                        isFocused: $draftFocused,
+                        onSubmit: { commitDraft(keepFocus: true) },
+                        onFocusLost: { commitDraft(keepFocus: false) }
+                    )
+                    // Match the tap-zone's 40pt height exactly so swapping clear→draft
+                    // doesn't shift the "No Date" header (and everything below) by ~16pt
+                    // as the keyboard appears. EdgeInsets() + .padding(.horizontal, Space.lg)
+                    // at the call site reproduces the same leading/trailing gutter as
+                    // the existing TaskRow rows (.listRowInsets leading/trailing Space.lg
+                    // + internal .padding(.horizontal, Space.md)).
+                    .frame(minHeight: 40)
+                    .padding(.horizontal, Space.lg)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
+                } else {
+                    // Clear tap target — 40pt keeps sections tight while staying tappable.
+                    Color.clear
+                        .frame(minHeight: 40)
+                        .contentShape(Rectangle())
+                        .onTapGesture { startDraft(in: bucket) }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                }
             }
         } header: {
             sectionHeader(title: title, count: count, accent: accent, soft: soft)
@@ -167,11 +296,13 @@ struct TasksView: View {
         Section {
             if completedExpanded {
                 ForEach(todos) { todo in
-                    TaskRow(todo: todo) {
-                        Task { await viewModel.toggleCompleted(todo) }
-                    } onTap: {
-                        editingTodo = todo
-                    }
+                    TaskRow(
+                        todo: todo,
+                        isDraftActive: draftBucket != nil,
+                        onToggle: { Task { await viewModel.toggleCompleted(todo) } },
+                        onTap: { editingTodo = todo },
+                        onTapWhileDraftActive: { draftFocused = false }
+                    )
                     .swipeToDeleteTrash {
                         Task { await viewModel.delete(todo) }
                     }
@@ -204,10 +335,13 @@ struct TasksView: View {
             .buttonStyle(.plain)
             .textCase(nil)
             .padding(.horizontal, Space.lg)
-            .padding(.top, Space.lg)
+            .padding(.top, Space.sm)
             .padding(.bottom, Space.xs)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Tokens.paper)
+            // Dismiss draft alongside the expand/collapse toggle so keyboard
+            // collapses when the user taps the Completed header.
+            .simultaneousGesture(TapGesture().onEnded { if draftBucket != nil { draftFocused = false } })
         }
     }
 
@@ -226,10 +360,13 @@ struct TasksView: View {
         }
         .textCase(nil)
         .padding(.horizontal, Space.lg)
-        .padding(.top, Space.lg)
+        .padding(.top, Space.sm)
         .padding(.bottom, Space.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.paper)
+        // Tapping a section header while a draft is active dismisses the draft.
+        .contentShape(Rectangle())
+        .onTapGesture { if draftBucket != nil { draftFocused = false } }
     }
 
     private func placeholderRow(_ text: String) -> some View {
@@ -244,12 +381,57 @@ struct TasksView: View {
     }
 }
 
+// MARK: - Inline draft row
+
+/// Inline draft row that appears when the user taps below the last task.
+/// Mirrors the visual shape of TaskRow: stroked circle bullet + text field.
+private struct DraftTaskRow: View {
+    @Binding var text: String
+    var isFocused: FocusState<Bool>.Binding
+    let onSubmit: () -> Void
+    let onFocusLost: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            // Empty stroked circle — identical to TaskRow's unchecked bullet.
+            Circle()
+                .stroke(Tokens.borderStrong, lineWidth: 2)
+                .frame(width: 22, height: 22)
+                .frame(width: 24, height: 24)
+                // Align circle center to firstTextBaseline as TaskRow does.
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
+
+            TextField("New task", text: $text)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .submitLabel(.return)
+                .focused(isFocused)
+                .onSubmit { onSubmit() }
+                .onChange(of: isFocused.wrappedValue) { _, nowFocused in
+                    if !nowFocused { onFocusLost() }
+                }
+                .accessibilityLabel("New task")
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, Space.sm)
+        .padding(.horizontal, Space.md)
+        .contentShape(Rectangle())
+    }
+}
+
 // MARK: - Row
 
 private struct TaskRow: View {
     let todo: Todo
+    /// When a tap-below draft is active, suppress opening the editor sheet so the tap
+    /// only dismisses the draft keyboard — nothing re-steals first responder.
+    var isDraftActive: Bool = false
     let onToggle: () -> Void
     let onTap: () -> Void
+    /// Called back to the parent when this row is tapped while a draft is active,
+    /// so the parent can flip draftFocused = false and trigger the focus-loss → commitDraft cycle.
+    var onTapWhileDraftActive: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -316,7 +498,16 @@ private struct TaskRow: View {
         .padding(.horizontal, Space.md)
         .background(Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
+        .onTapGesture {
+            // When a tap-below draft is active, actively flip draftFocused in the parent
+            // so the focus-loss → commitDraft → dismiss cycle fires immediately.
+            // We still return early so the editor sheet does not open over the keyboard.
+            if isDraftActive {
+                onTapWhileDraftActive()
+                return
+            }
+            onTap()
+        }
     }
 
     private func dueColor(for date: Date) -> Color {
