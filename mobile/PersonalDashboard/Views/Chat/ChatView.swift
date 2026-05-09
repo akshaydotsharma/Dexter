@@ -298,85 +298,161 @@ struct ChatView: View {
 
 /// Three pill-capped bars + accent dot mirroring the Deks logo (top 55%,
 /// middle 85%, bottom 70%, dot just past the end of the top bar). While
-/// the chat empty state is showing and the input is untouched, a soft
-/// highlight travels left-to-right across each bar on a staggered loop —
-/// the bars themselves stay put. The shimmer pauses the moment the user
-/// starts typing.
+/// the chat empty state is showing and the input is untouched, the bar
+/// thickness itself ripples in a horizontal sine wave that travels from
+/// the leading to the trailing edge on loop — the bars stay solid (no
+/// overlay), they just bulge and pinch. The wave snaps flat the moment
+/// the user starts typing.
 private struct LogoBars: View {
     let isAnimating: Bool
 
     private let middleWidth: CGFloat = 48
-    private let barHeight: CGFloat = 5
+    private let baseHeight: CGFloat = 5
+    private let amplitude: CGFloat = 1.0
+    private let wavelength: CGFloat = 18
     private let gap: CGFloat = 4
     private let dotDiameter: CGFloat = 4
     private let topRatio: CGFloat = 55.0 / 85.0
     private let bottomRatio: CGFloat = 70.0 / 85.0
     /// Logo: top bar ends at x=640, dot center at x=700 (delta 60 of 870).
     private let dotGapRatio: CGFloat = 60.0 / 870.0
-    private let cycle: Double = 2.4
-    private let stagger: Double = 0.12
+    private let cycleSeconds: Double = 2.6
 
     var body: some View {
         let topWidth = middleWidth * topRatio
         let bottomWidth = middleWidth * bottomRatio
         let dotLeading = topWidth + middleWidth * dotGapRatio - dotDiameter / 2
+        let rowHeight = baseHeight + amplitude * 2
 
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isAnimating)) { ctx in
-            let phase = isAnimating ? loopPhase(at: ctx.date) : -1
+            let phase = currentPhase(at: ctx.date)
+            let amp = isAnimating ? amplitude : 0
 
             VStack(alignment: .leading, spacing: gap) {
                 ZStack(alignment: .leading) {
-                    shimmerBar(width: topWidth, phase: phase)
+                    WavyBar(
+                        phase: phase,
+                        amplitude: amp,
+                        wavelength: wavelength,
+                        baseHeight: baseHeight
+                    )
+                    .fill(Tokens.ink)
+                    .frame(width: topWidth, height: rowHeight)
+
                     Circle()
                         .fill(Tokens.ink)
                         .frame(width: dotDiameter, height: dotDiameter)
                         .offset(x: dotLeading)
                 }
-                .frame(height: barHeight)
+                .frame(height: rowHeight)
 
-                shimmerBar(width: middleWidth, phase: shifted(phase, by: -stagger))
-                shimmerBar(width: bottomWidth, phase: shifted(phase, by: -stagger * 2))
+                WavyBar(
+                    phase: phase,
+                    amplitude: amp,
+                    wavelength: wavelength,
+                    baseHeight: baseHeight
+                )
+                .fill(Tokens.ink)
+                .frame(width: middleWidth, height: rowHeight)
+
+                WavyBar(
+                    phase: phase,
+                    amplitude: amp,
+                    wavelength: wavelength,
+                    baseHeight: baseHeight
+                )
+                .fill(Tokens.ink)
+                .frame(width: bottomWidth, height: rowHeight)
             }
             .frame(width: middleWidth + dotDiameter, alignment: .leading)
         }
     }
 
-    private func loopPhase(at date: Date) -> Double {
+    /// Phase advances negatively over time so the wave pattern travels from
+    /// the leading edge toward the trailing edge.
+    private func currentPhase(at date: Date) -> Double {
         let t = date.timeIntervalSinceReferenceDate
-        return t.truncatingRemainder(dividingBy: cycle) / cycle
+        let normalised = t.truncatingRemainder(dividingBy: cycleSeconds) / cycleSeconds
+        return -normalised * 2 * .pi
+    }
+}
+
+/// A pill-shaped bar whose thickness varies along its length following a
+/// sine wave. `phase` shifts the wave horizontally; advancing it negatively
+/// over time makes the bulge travel left-to-right. Amplitude tapers to
+/// zero at both ends so the wavy interior meets clean semicircular pill
+/// caps.
+private struct WavyBar: Shape {
+    var phase: Double
+    var amplitude: CGFloat
+    var wavelength: CGFloat
+    var baseHeight: CGFloat
+    var endTaper: CGFloat = 0.22
+
+    var animatableData: Double {
+        get { phase }
+        set { phase = newValue }
     }
 
-    private func shifted(_ phase: Double, by offset: Double) -> Double {
-        guard phase >= 0 else { return phase }
-        let p = phase + offset
-        return p - floor(p)
-    }
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let r = baseHeight / 2
+        let midY = rect.midY
+        let leftCenterX = rect.minX + r
+        let rightCenterX = rect.maxX - r
+        let usableWidth = max(rightCenterX - leftCenterX, 0.0001)
+        let stepCount = max(Int(usableWidth.rounded()) * 2, 24)
 
-    /// A bar with a soft brighter band sliding from leading to trailing edge.
-    /// `phase` ranges 0..1 across one cycle; <0 means "paused, no shimmer".
-    private func shimmerBar(width target: CGFloat, phase: Double) -> some View {
-        let bandWidth = target * 0.55
-        let bandX = -bandWidth + (target + bandWidth) * max(phase, 0)
-
-        return Capsule(style: .continuous)
-            .fill(Tokens.ink)
-            .frame(width: target, height: barHeight)
-            .overlay(alignment: .leading) {
-                if phase >= 0 {
-                    LinearGradient(
-                        stops: [
-                            .init(color: Color.clear,           location: 0.0),
-                            .init(color: Tokens.paper.opacity(0.55), location: 0.5),
-                            .init(color: Color.clear,           location: 1.0)
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: bandWidth, height: barHeight)
-                    .offset(x: bandX)
-                }
+        func halfThickness(at x: CGFloat) -> CGFloat {
+            let local = x - leftCenterX
+            let normalised = local / usableWidth
+            let taper: CGFloat
+            if normalised < endTaper {
+                taper = max(0, normalised / endTaper)
+            } else if normalised > 1 - endTaper {
+                taper = max(0, (1 - normalised) / endTaper)
+            } else {
+                taper = 1
             }
-            .clipShape(Capsule(style: .continuous))
+            let s = sin(2 * .pi * Double(local) / Double(wavelength) + phase)
+            return r + amplitude * CGFloat(s) * taper
+        }
+
+        // Start of left semicircle (top of cap).
+        path.move(to: CGPoint(x: leftCenterX, y: midY - r))
+
+        // Top edge: leading center -> trailing center.
+        for i in 1...stepCount {
+            let x = leftCenterX + usableWidth * CGFloat(i) / CGFloat(stepCount)
+            path.addLine(to: CGPoint(x: x, y: midY - halfThickness(at: x)))
+        }
+
+        // Right pill cap.
+        path.addArc(
+            center: CGPoint(x: rightCenterX, y: midY),
+            radius: r,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(90),
+            clockwise: false
+        )
+
+        // Bottom edge: trailing center -> leading center.
+        for i in stride(from: stepCount - 1, through: 0, by: -1) {
+            let x = leftCenterX + usableWidth * CGFloat(i) / CGFloat(stepCount)
+            path.addLine(to: CGPoint(x: x, y: midY + halfThickness(at: x)))
+        }
+
+        // Left pill cap, closing the path.
+        path.addArc(
+            center: CGPoint(x: leftCenterX, y: midY),
+            radius: r,
+            startAngle: .degrees(90),
+            endAngle: .degrees(270),
+            clockwise: false
+        )
+
+        path.closeSubpath()
+        return path
     }
 }
 
