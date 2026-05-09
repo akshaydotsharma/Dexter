@@ -147,6 +147,7 @@ xcodebuild \
     MARKETING_VERSION="${SHORT_VERSION}" \
     OTA_API_URL="${API_URL}" \
     ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+    -allowProvisioningUpdates \
     archive \
     2>&1 | grep -E "(error:|warning: .*\.swift:|\*\* )" || true
 
