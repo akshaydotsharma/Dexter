@@ -177,13 +177,7 @@ struct ChatView: View {
             Spacer(minLength: Space.xxxl)
 
             VStack(spacing: Space.lg) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 32, weight: .regular))
-                    .foregroundStyle(Tokens.muted)
-
-                Rectangle()
-                    .fill(Tokens.accentChat)
-                    .frame(width: 32, height: 2)
+                LogoBars()
 
                 VStack(spacing: Space.md) {
                     Text("What can I help you organize?")
@@ -297,6 +291,44 @@ struct ChatView: View {
 
     private var hasLiveAssistantTurn: Bool {
         viewModel.turns.last?.isStreaming == true
+    }
+}
+
+/// Three pill-capped horizontal bars mirroring the Deks logo (top 55%,
+/// middle 85%, bottom 70%). On first appearance each bar sweeps out from
+/// the leading edge to its target width with a small stagger between them.
+private struct LogoBars: View {
+    private let middleWidth: CGFloat = 96
+    private let barHeight: CGFloat = 10
+    private let topRatio: CGFloat = 55.0 / 85.0
+    private let bottomRatio: CGFloat = 70.0 / 85.0
+
+    @State private var revealed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            bar(width: middleWidth * topRatio, delay: 0.00)
+            bar(width: middleWidth,            delay: 0.08)
+            bar(width: middleWidth * bottomRatio, delay: 0.16)
+        }
+        .frame(width: middleWidth, alignment: .leading)
+        .onAppear {
+            revealed = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                revealed = true
+            }
+        }
+    }
+
+    private func bar(width target: CGFloat, delay: Double) -> some View {
+        Capsule(style: .continuous)
+            .fill(Tokens.ink)
+            .frame(width: revealed ? target : 0, height: barHeight)
+            .frame(width: target, alignment: .leading)
+            .animation(
+                .spring(response: 0.55, dampingFraction: 0.85).delay(delay),
+                value: revealed
+            )
     }
 }
 
