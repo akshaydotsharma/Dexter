@@ -244,7 +244,10 @@ struct TasksView: View {
                     todo: todo,
                     isDraftActive: draftBucket != nil,
                     onToggle: { Task { await viewModel.toggleCompleted(todo) } },
-                    onTap: { editingTodo = todo },
+                    onInfoTap: { editingTodo = todo },
+                    onTitleCommit: { newTitle in
+                        Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
+                    },
                     onTapWhileDraftActive: { draftFocused = false }
                 )
                 .swipeToDeleteTrash {
@@ -300,7 +303,10 @@ struct TasksView: View {
                         todo: todo,
                         isDraftActive: draftBucket != nil,
                         onToggle: { Task { await viewModel.toggleCompleted(todo) } },
-                        onTap: { editingTodo = todo },
+                        onInfoTap: { editingTodo = todo },
+                        onTitleCommit: { newTitle in
+                            Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
+                        },
                         onTapWhileDraftActive: { draftFocused = false }
                     )
                     .swipeToDeleteTrash {
@@ -312,36 +318,45 @@ struct TasksView: View {
                 }
             }
         } header: {
-            Button {
-                withAnimation(.easeOut(duration: 0.2)) { completedExpanded.toggle() }
-            } label: {
-                HStack(spacing: Space.sm) {
-                    Image(systemName: completedExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(Tokens.muted)
-                    Text("Completed")
-                        .font(.edHeading)
-                        .foregroundStyle(Tokens.muted)
-                    Text("\(todos.count)")
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.muted)
-                        .padding(.horizontal, Space.sm)
-                        .padding(.vertical, 2)
-                        .background(Tokens.paper2, in: Capsule())
-                    Spacer()
+            VStack(spacing: 0) {
+                // Hairline demarcating the boundary between open and completed tasks.
+                Rectangle()
+                    .fill(Tokens.border)
+                    .frame(height: 1)
+                    .padding(.horizontal, Space.lg)
+                    .padding(.top, Space.md)
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { completedExpanded.toggle() }
+                } label: {
+                    HStack(spacing: Space.sm) {
+                        Image(systemName: completedExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(Tokens.muted)
+                        Text("Completed")
+                            .font(.edHeading)
+                            .foregroundStyle(Tokens.muted)
+                        Text("\(todos.count)")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                            .padding(.horizontal, Space.sm)
+                            .padding(.vertical, 2)
+                            .background(Tokens.paper2, in: Capsule())
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .textCase(nil)
+                .padding(.horizontal, Space.lg)
+                .padding(.top, Space.md)
+                .padding(.bottom, Space.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Dismiss draft alongside the expand/collapse toggle so keyboard
+                // collapses when the user taps the Completed header.
+                .simultaneousGesture(TapGesture().onEnded { if draftBucket != nil { draftFocused = false } })
             }
-            .buttonStyle(.plain)
-            .textCase(nil)
-            .padding(.horizontal, Space.lg)
-            .padding(.top, Space.sm)
-            .padding(.bottom, Space.xs)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Tokens.paper)
-            // Dismiss draft alongside the expand/collapse toggle so keyboard
-            // collapses when the user taps the Completed header.
-            .simultaneousGesture(TapGesture().onEnded { if draftBucket != nil { draftFocused = false } })
         }
     }
 
@@ -428,10 +443,17 @@ private struct TaskRow: View {
     /// only dismisses the draft keyboard — nothing re-steals first responder.
     var isDraftActive: Bool = false
     let onToggle: () -> Void
-    let onTap: () -> Void
+    /// Tapping the trailing info icon opens the full editor sheet.
+    let onInfoTap: () -> Void
+    /// Inline title commit (tap row body → edit title → submit / focus loss).
+    let onTitleCommit: (String) -> Void
     /// Called back to the parent when this row is tapped while a draft is active,
     /// so the parent can flip draftFocused = false and trigger the focus-loss → commitDraft cycle.
     var onTapWhileDraftActive: () -> Void = {}
+
+    @State private var isEditing: Bool = false
+    @State private var editText: String = ""
+    @FocusState private var titleFocused: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -456,11 +478,23 @@ private struct TaskRow: View {
             .accessibilityLabel(todo.completed ? "Mark incomplete" : "Mark complete")
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(todo.title)
-                    .font(.edBody)
-                    .strikethrough(todo.completed)
-                    .foregroundStyle(todo.completed ? Tokens.mutedSoft : Tokens.ink)
-                    .multilineTextAlignment(.leading)
+                if isEditing {
+                    TextField("", text: $editText)
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                        .submitLabel(.done)
+                        .focused($titleFocused)
+                        .onSubmit { commitInlineEdit() }
+                        .onChange(of: titleFocused) { _, nowFocused in
+                            if !nowFocused { commitInlineEdit() }
+                        }
+                } else {
+                    Text(todo.title)
+                        .font(.edBody)
+                        .strikethrough(todo.completed)
+                        .foregroundStyle(todo.completed ? Tokens.mutedSoft : Tokens.ink)
+                        .multilineTextAlignment(.leading)
+                }
 
                 if let desc = todo.description, !desc.isEmpty {
                     Text(desc)
@@ -492,7 +526,19 @@ private struct TaskRow: View {
                     }
                 }
             }
+
             Spacer(minLength: 0)
+
+            Button(action: onInfoTap) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(Tokens.warning)
+                    .frame(width: 32, height: 32, alignment: .trailing)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
+            .accessibilityLabel("Edit task details")
         }
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
@@ -506,8 +552,25 @@ private struct TaskRow: View {
                 onTapWhileDraftActive()
                 return
             }
-            onTap()
+            // Completed rows ignore body taps; the info icon still works.
+            if todo.completed { return }
+            // Already in inline-edit; let the TextField own the tap.
+            if isEditing { return }
+            editText = todo.title
+            isEditing = true
+            // DispatchQueue.main.async lets the TextField mount before we focus it.
+            DispatchQueue.main.async { titleFocused = true }
         }
+    }
+
+    private func commitInlineEdit() {
+        let trimmed = editText.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer {
+            isEditing = false
+            editText = ""
+        }
+        guard !trimmed.isEmpty, trimmed != todo.title else { return }
+        onTitleCommit(trimmed)
     }
 
     private func dueColor(for date: Date) -> Color {
