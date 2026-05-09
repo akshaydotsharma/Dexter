@@ -177,7 +177,9 @@ struct ChatView: View {
             Spacer(minLength: Space.xxxl)
 
             VStack(spacing: Space.lg) {
-                LogoBars()
+                LogoBars(
+                    isAnimating: viewModel.draftInput.trimmingCharacters(in: .whitespaces).isEmpty
+                )
 
                 VStack(spacing: Space.md) {
                     Text("What can I help you organize?")
@@ -294,62 +296,87 @@ struct ChatView: View {
     }
 }
 
-/// Three pill-capped horizontal bars + accent dot mirroring the Deks logo
-/// (top 55%, middle 85%, bottom 70%, dot just past the end of the top bar).
-/// On appear each bar sweeps from the leading edge to its target width with
-/// a left-to-right stagger; the dot fades in once the bars have settled.
+/// Three pill-capped bars + accent dot mirroring the Deks logo (top 55%,
+/// middle 85%, bottom 70%, dot just past the end of the top bar). While
+/// the chat empty state is showing and the input is untouched, a soft
+/// highlight travels left-to-right across each bar on a staggered loop —
+/// the bars themselves stay put. The shimmer pauses the moment the user
+/// starts typing.
 private struct LogoBars: View {
-    private let middleWidth: CGFloat = 72
-    private let barHeight: CGFloat = 8
-    private let gap: CGFloat = 6
+    let isAnimating: Bool
+
+    private let middleWidth: CGFloat = 48
+    private let barHeight: CGFloat = 5
+    private let gap: CGFloat = 4
+    private let dotDiameter: CGFloat = 4
     private let topRatio: CGFloat = 55.0 / 85.0
     private let bottomRatio: CGFloat = 70.0 / 85.0
     /// Logo: top bar ends at x=640, dot center at x=700 (delta 60 of 870).
     private let dotGapRatio: CGFloat = 60.0 / 870.0
-    private let dotDiameter: CGFloat = 6
-
-    @State private var revealed = false
+    private let cycle: Double = 2.4
+    private let stagger: Double = 0.12
 
     var body: some View {
         let topWidth = middleWidth * topRatio
         let bottomWidth = middleWidth * bottomRatio
         let dotLeading = topWidth + middleWidth * dotGapRatio - dotDiameter / 2
 
-        VStack(alignment: .leading, spacing: gap) {
-            ZStack(alignment: .leading) {
-                bar(width: topWidth, delay: 0.00)
-                Circle()
-                    .fill(Tokens.ink)
-                    .frame(width: dotDiameter, height: dotDiameter)
-                    .offset(x: dotLeading)
-                    .opacity(revealed ? 1 : 0)
-                    .scaleEffect(revealed ? 1 : 0.4, anchor: .center)
-                    .animation(
-                        .easeOut(duration: 0.35).delay(0.45),
-                        value: revealed
-                    )
-            }
-            .frame(height: barHeight)
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isAnimating)) { ctx in
+            let phase = isAnimating ? loopPhase(at: ctx.date) : -1
 
-            bar(width: middleWidth, delay: 0.15)
-            bar(width: bottomWidth, delay: 0.30)
-        }
-        .frame(width: middleWidth + dotDiameter, alignment: .leading)
-        .onAppear {
-            revealed = false
-            DispatchQueue.main.async { revealed = true }
+            VStack(alignment: .leading, spacing: gap) {
+                ZStack(alignment: .leading) {
+                    shimmerBar(width: topWidth, phase: phase)
+                    Circle()
+                        .fill(Tokens.ink)
+                        .frame(width: dotDiameter, height: dotDiameter)
+                        .offset(x: dotLeading)
+                }
+                .frame(height: barHeight)
+
+                shimmerBar(width: middleWidth, phase: shifted(phase, by: -stagger))
+                shimmerBar(width: bottomWidth, phase: shifted(phase, by: -stagger * 2))
+            }
+            .frame(width: middleWidth + dotDiameter, alignment: .leading)
         }
     }
 
-    private func bar(width target: CGFloat, delay: Double) -> some View {
-        Capsule(style: .continuous)
+    private func loopPhase(at date: Date) -> Double {
+        let t = date.timeIntervalSinceReferenceDate
+        return t.truncatingRemainder(dividingBy: cycle) / cycle
+    }
+
+    private func shifted(_ phase: Double, by offset: Double) -> Double {
+        guard phase >= 0 else { return phase }
+        let p = phase + offset
+        return p - floor(p)
+    }
+
+    /// A bar with a soft brighter band sliding from leading to trailing edge.
+    /// `phase` ranges 0..1 across one cycle; <0 means "paused, no shimmer".
+    private func shimmerBar(width target: CGFloat, phase: Double) -> some View {
+        let bandWidth = target * 0.55
+        let bandX = -bandWidth + (target + bandWidth) * max(phase, 0)
+
+        return Capsule(style: .continuous)
             .fill(Tokens.ink)
-            .frame(width: revealed ? target : 0, height: barHeight)
-            .frame(width: target, alignment: .leading)
-            .animation(
-                .easeOut(duration: 0.55).delay(delay),
-                value: revealed
-            )
+            .frame(width: target, height: barHeight)
+            .overlay(alignment: .leading) {
+                if phase >= 0 {
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color.clear,           location: 0.0),
+                            .init(color: Tokens.paper.opacity(0.55), location: 0.5),
+                            .init(color: Color.clear,           location: 1.0)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: bandWidth, height: barHeight)
+                    .offset(x: bandX)
+                }
+            }
+            .clipShape(Capsule(style: .continuous))
     }
 }
 
