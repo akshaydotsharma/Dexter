@@ -1,13 +1,13 @@
 import AppIntents
 
 /// Registers our App Intents with iOS so they appear automatically in:
-///   - the Shortcuts app under "Deks"
+///   - the Shortcuts app under "Dexter"
 ///   - the Action Button picker (Settings -> Action Button -> Shortcut)
 ///   - Spotlight / Siri voice triggers via the listed phrases
 ///
 /// The intended runtime path is a user-built 3-step Shortcut:
 ///   1. Dictate Text (after short pause)
-///   2. Capture to Deks (input = Dictated Text)
+///   2. Capture to Dexter (input = Dictated Text)
 ///   3. Show Notification (text = Result of the previous step)
 ///
 /// Bound to the Action Button (or back-tap, or a Lock Screen control)

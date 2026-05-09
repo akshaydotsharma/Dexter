@@ -15,9 +15,9 @@ import Foundation
 ///     persisted.
 ///   - failure -> dialog surfaces a brief error.
 struct CaptureToDashboardIntent: AppIntent {
-    static var title: LocalizedStringResource = "Capture to Deks"
+    static var title: LocalizedStringResource = "Capture to Dexter"
     static var description = IntentDescription(
-        "Add a task, note, or list to Deks from text or voice. Runs on-device against your local data, no server hop."
+        "Add a task, note, or list to Dexter from text or voice. Runs on-device against your local data, no server hop."
     )
 
     /// Stay backgrounded so the side button feels instant and the user
@@ -37,7 +37,7 @@ struct CaptureToDashboardIntent: AppIntent {
     var input: String
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Capture \(\.$input) to Deks")
+        Summary("Capture \(\.$input) to Dexter")
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {

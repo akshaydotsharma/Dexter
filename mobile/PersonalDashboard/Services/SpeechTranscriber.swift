@@ -104,12 +104,12 @@ final class SpeechTranscriber {
         // before we touch the audio engine, otherwise `installTap` traps.
         let speechOK = await Self.requestSpeechAuthorization()
         guard speechOK else {
-            errorMessage = "Enable Speech Recognition for Deks in Settings."
+            errorMessage = "Enable Speech Recognition for Dexter in Settings."
             return
         }
         let micOK = await Self.requestMicrophonePermission()
         guard micOK else {
-            errorMessage = "Enable Microphone access for Deks in Settings."
+            errorMessage = "Enable Microphone access for Dexter in Settings."
             return
         }
 
