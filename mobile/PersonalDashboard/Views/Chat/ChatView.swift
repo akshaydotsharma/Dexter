@@ -297,162 +297,86 @@ struct ChatView: View {
 }
 
 /// Three pill-capped bars + accent dot mirroring the Deks logo (top 55%,
-/// middle 85%, bottom 70%, dot just past the end of the top bar). While
-/// the chat empty state is showing and the input is untouched, the bar
-/// thickness itself ripples in a horizontal sine wave that travels from
-/// the leading to the trailing edge on loop — the bars stay solid (no
-/// overlay), they just bulge and pinch. The wave snaps flat the moment
-/// the user starts typing.
+/// middle 85%, bottom 70%, dot just past the end of the top bar). The
+/// bars are anchored at the leading edge; each bar's *length* oscillates
+/// continuously around its logo width, with its own period and phase so
+/// the trio feels organic rather than metronomic. The accent dot rides
+/// the right edge of the top bar so the silhouette stays coherent. When
+/// the user starts typing, the bars snap back to exact logo widths.
 private struct LogoBars: View {
     let isAnimating: Bool
 
     private let middleWidth: CGFloat = 48
-    private let baseHeight: CGFloat = 5
-    private let amplitude: CGFloat = 1.0
-    private let wavelength: CGFloat = 18
+    private let barHeight: CGFloat = 5
     private let gap: CGFloat = 4
     private let dotDiameter: CGFloat = 4
     private let topRatio: CGFloat = 55.0 / 85.0
     private let bottomRatio: CGFloat = 70.0 / 85.0
     /// Logo: top bar ends at x=640, dot center at x=700 (delta 60 of 870).
     private let dotGapRatio: CGFloat = 60.0 / 870.0
-    private let cycleSeconds: Double = 2.6
+    /// Maximum length deviation from the logo width, as a fraction.
+    private let modulation: CGFloat = 0.18
 
     var body: some View {
-        let topWidth = middleWidth * topRatio
-        let bottomWidth = middleWidth * bottomRatio
-        let dotLeading = topWidth + middleWidth * dotGapRatio - dotDiameter / 2
-        let rowHeight = baseHeight + amplitude * 2
+        let topBase = middleWidth * topRatio
+        let bottomBase = middleWidth * bottomRatio
+        let maxMiddle = middleWidth * (1 + modulation)
+        let containerWidth = maxMiddle + middleWidth * dotGapRatio + dotDiameter
 
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isAnimating)) { ctx in
-            let phase = currentPhase(at: ctx.date)
-            let amp = isAnimating ? amplitude : 0
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let mod = isAnimating ? modulation : 0
+
+            // Each bar runs on its own period and phase so the three never
+            // line up — keeps the motion feeling unscripted.
+            let topW    = animatedWidth(base: topBase,     time: t, period: 1.70, phase: 0.0, modulation: mod)
+            let middleW = animatedWidth(base: middleWidth, time: t, period: 2.40, phase: 0.6, modulation: mod)
+            let bottomW = animatedWidth(base: bottomBase,  time: t, period: 3.10, phase: 1.2, modulation: mod)
+
+            // Dot rides the right edge of the top bar with the same offset
+            // ratio as the logo (60 / 870 of the middle width).
+            let dotLeading = topW + middleWidth * dotGapRatio - dotDiameter / 2
 
             VStack(alignment: .leading, spacing: gap) {
                 ZStack(alignment: .leading) {
-                    WavyBar(
-                        phase: phase,
-                        amplitude: amp,
-                        wavelength: wavelength,
-                        baseHeight: baseHeight
-                    )
-                    .fill(Tokens.ink)
-                    .frame(width: topWidth, height: rowHeight)
+                    Capsule(style: .continuous)
+                        .fill(Tokens.ink)
+                        .frame(width: topW, height: barHeight)
 
                     Circle()
                         .fill(Tokens.ink)
                         .frame(width: dotDiameter, height: dotDiameter)
                         .offset(x: dotLeading)
                 }
-                .frame(height: rowHeight)
+                .frame(height: barHeight)
 
-                WavyBar(
-                    phase: phase,
-                    amplitude: amp,
-                    wavelength: wavelength,
-                    baseHeight: baseHeight
-                )
-                .fill(Tokens.ink)
-                .frame(width: middleWidth, height: rowHeight)
+                Capsule(style: .continuous)
+                    .fill(Tokens.ink)
+                    .frame(width: middleW, height: barHeight)
 
-                WavyBar(
-                    phase: phase,
-                    amplitude: amp,
-                    wavelength: wavelength,
-                    baseHeight: baseHeight
-                )
-                .fill(Tokens.ink)
-                .frame(width: bottomWidth, height: rowHeight)
+                Capsule(style: .continuous)
+                    .fill(Tokens.ink)
+                    .frame(width: bottomW, height: barHeight)
             }
-            .frame(width: middleWidth + dotDiameter, alignment: .leading)
+            .frame(width: containerWidth, alignment: .leading)
         }
     }
 
-    /// Phase advances negatively over time so the wave pattern travels from
-    /// the leading edge toward the trailing edge.
-    private func currentPhase(at date: Date) -> Double {
-        let t = date.timeIntervalSinceReferenceDate
-        let normalised = t.truncatingRemainder(dividingBy: cycleSeconds) / cycleSeconds
-        return -normalised * 2 * .pi
-    }
-}
-
-/// A pill-shaped bar whose thickness varies along its length following a
-/// sine wave. `phase` shifts the wave horizontally; advancing it negatively
-/// over time makes the bulge travel left-to-right. Amplitude tapers to
-/// zero at both ends so the wavy interior meets clean semicircular pill
-/// caps.
-private struct WavyBar: Shape {
-    var phase: Double
-    var amplitude: CGFloat
-    var wavelength: CGFloat
-    var baseHeight: CGFloat
-    var endTaper: CGFloat = 0.22
-
-    var animatableData: Double {
-        get { phase }
-        set { phase = newValue }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let r = baseHeight / 2
-        let midY = rect.midY
-        let leftCenterX = rect.minX + r
-        let rightCenterX = rect.maxX - r
-        let usableWidth = max(rightCenterX - leftCenterX, 0.0001)
-        let stepCount = max(Int(usableWidth.rounded()) * 2, 24)
-
-        func halfThickness(at x: CGFloat) -> CGFloat {
-            let local = x - leftCenterX
-            let normalised = local / usableWidth
-            let taper: CGFloat
-            if normalised < endTaper {
-                taper = max(0, normalised / endTaper)
-            } else if normalised > 1 - endTaper {
-                taper = max(0, (1 - normalised) / endTaper)
-            } else {
-                taper = 1
-            }
-            let s = sin(2 * .pi * Double(local) / Double(wavelength) + phase)
-            return r + amplitude * CGFloat(s) * taper
-        }
-
-        // Start of left semicircle (top of cap).
-        path.move(to: CGPoint(x: leftCenterX, y: midY - r))
-
-        // Top edge: leading center -> trailing center.
-        for i in 1...stepCount {
-            let x = leftCenterX + usableWidth * CGFloat(i) / CGFloat(stepCount)
-            path.addLine(to: CGPoint(x: x, y: midY - halfThickness(at: x)))
-        }
-
-        // Right pill cap.
-        path.addArc(
-            center: CGPoint(x: rightCenterX, y: midY),
-            radius: r,
-            startAngle: .degrees(-90),
-            endAngle: .degrees(90),
-            clockwise: false
-        )
-
-        // Bottom edge: trailing center -> leading center.
-        for i in stride(from: stepCount - 1, through: 0, by: -1) {
-            let x = leftCenterX + usableWidth * CGFloat(i) / CGFloat(stepCount)
-            path.addLine(to: CGPoint(x: x, y: midY + halfThickness(at: x)))
-        }
-
-        // Left pill cap, closing the path.
-        path.addArc(
-            center: CGPoint(x: leftCenterX, y: midY),
-            radius: r,
-            startAngle: .degrees(90),
-            endAngle: .degrees(270),
-            clockwise: false
-        )
-
-        path.closeSubpath()
-        return path
+    /// Width of a bar at time `t`. A primary sine carries the breath, a
+    /// shorter secondary sine adds wobble so the cycle never reads as a
+    /// clean sinusoid.
+    private func animatedWidth(
+        base: CGFloat,
+        time t: Double,
+        period: Double,
+        phase: Double,
+        modulation: CGFloat
+    ) -> CGFloat {
+        guard modulation > 0 else { return base }
+        let primary = sin(2 * .pi * t / period + phase)
+        let wobble = sin(2 * .pi * t / (period * 0.62) + phase * 1.4) * 0.45
+        let combined = CGFloat((primary + wobble) / 1.45)
+        return base * (1 + modulation * combined)
     }
 }
 
