@@ -16,11 +16,12 @@ import UIKit
 /// UIKit's UIPanGestureRecognizer fixes this via
 /// `gestureRecognizerShouldBegin`: returning false for
 /// vertical-dominant velocity transitions the recognizer to
-/// `.failed`, freeing the parent List's pan to begin. Tap
-/// arbitration is preserved by `cancelsTouchesInView = false` plus
-/// `shouldRecognizeSimultaneouslyWith` returning true — short
-/// touches never reach the pan threshold, so the underlying SwiftUI
-/// Button's tap fires normally.
+/// `.failed`, freeing the parent List's pan to begin. Inner buttons
+/// (toggle, info icon) keep their tap behavior because short taps
+/// never trigger the pan in the first place; once the pan does
+/// claim a horizontal touch, `cancelsTouchesInView = true` cancels
+/// the row's onTapGesture so the same swipe doesn't ALSO navigate
+/// into the row.
 extension View {
     func swipeToDeleteTrash(perform action: @escaping () -> Void) -> some View {
         modifier(SwipeToDeleteWithTint(onDelete: action))
@@ -44,19 +45,17 @@ private struct SwipeToDeleteWithTint: ViewModifier {
         let linear = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
         let progress = 0.5 - 0.5 * cos(.pi * linear)
 
+        // Z-order matters: the trash button is drawn IN FRONT of the
+        // pan-capture wrapper so that its 52pt frame at the trailing
+        // edge claims taps directly. Drawing it behind (the original
+        // arrangement) meant the wrapper's full-width close-on-tap
+        // overlay swallowed every tap on the visible trash — SwiftUI's
+        // `.offset(x:)` translates content visually but does NOT shift
+        // hit testing, so the overlay's hit area still covered the
+        // trash region after the swipe revealed it. Result: 1st tap
+        // closed the row, 2nd tap re-opened, 3rd tap finally deleted.
+        // (#94)
         ZStack(alignment: .trailing) {
-            Button(action: commit) {
-                Image(systemName: "trash")
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(Circle().fill(trashColor))
-            }
-            .buttonStyle(.plain)
-            .opacity(min(1.0, dragDistance / 20))
-            .allowsHitTesting(dragDistance >= revealedWidth * 0.6)
-            .accessibilityLabel("Delete")
-
             HorizontalPanCapture(
                 onChanged: { dx in
                     let raw = (isOpen ? -revealedWidth : 0) + dx
@@ -66,7 +65,11 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     let endRaw = (isOpen ? -revealedWidth : 0) + dx
                     if -endRaw > UIScreen.main.bounds.width * 0.7 {
                         commit()
-                    } else if -endRaw > revealedWidth * 0.4 {
+                    } else if -endRaw > revealedWidth * 0.55 {
+                        // Tighter snap-open threshold so a casual drift
+                        // doesn't reveal the trash. Was 0.4, but that
+                        // felt over-sensitive once accidental tap-fall-
+                        // through was eliminated. Drag past ~33pt now.
                         open()
                     } else {
                         close()
@@ -82,6 +85,22 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     .overlay(closeOverlay)
                     .offset(x: offset)
             }
+
+            Button(action: commit) {
+                Image(systemName: "trash")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(.white)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(Circle().fill(trashColor))
+            }
+            .buttonStyle(.plain)
+            .opacity(min(1.0, dragDistance / 20))
+            // Only intercept taps once the swipe has clearly revealed
+            // the trash. Below that threshold we leave hit testing to
+            // the underlying content so partial drags / scroll handoff
+            // stay unaffected.
+            .allowsHitTesting(isOpen && dragDistance >= revealedWidth * 0.6)
+            .accessibilityLabel("Delete")
         }
     }
 
@@ -116,13 +135,14 @@ private struct SwipeToDeleteWithTint: ViewModifier {
     }
 
     private func commit() {
+        // Fire delete on the same runloop tick as the tap so the
+        // List's native row-removal animation kicks in immediately.
+        // The bespoke slide-off + 0.2s deferred call previously made
+        // every confirmed delete feel ~250ms laggy and let the user
+        // queue up a second tap mid-animation. (#94)
         Haptics.destructive()
-        withAnimation(.easeOut(duration: 0.22)) {
-            offset = -UIScreen.main.bounds.width
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            onDelete()
-        }
+        isOpen = false
+        onDelete()
     }
 }
 
@@ -180,7 +200,18 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
             action: #selector(Coordinator.handle(_:))
         )
         pan.delegate = context.coordinator
-        pan.cancelsTouchesInView = false
+        // Hold touches from the SwiftUI subtree until the pan decides
+        // whether to begin. cancelsTouchesInView alone wasn't enough on
+        // SwiftUI `Button(action:)` rows (Lists): the button's gesture
+        // had already started tracking before the cancel arrived, so a
+        // swipe still fired the button's action on touch-up. With
+        // delaysTouchesBegan = true, the buffered touch is pushed
+        // through only when the pan fails (vertical / no motion); taps
+        // on rows still fire, and horizontal swipes never leak into the
+        // row's tap. Same pattern UIScrollView's panGesture uses to
+        // arbitrate scroll vs. tap.
+        pan.delaysTouchesBegan = true
+        pan.cancelsTouchesInView = true
         container.addGestureRecognizer(pan)
 
         return container
