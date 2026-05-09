@@ -200,13 +200,17 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
             action: #selector(Coordinator.handle(_:))
         )
         pan.delegate = context.coordinator
-        // Once the pan claims a horizontal touch, cancel any other
-        // recognizers in the row's view tree (the row's onTapGesture for
-        // inline edit, NavigationLink-style taps on Notes/Lists). With
-        // this set to false, a swipe used to ALSO fire the underlying
-        // tap, navigating into the item right after the trash revealed
-        // — see #94 follow-up. Short taps still fire normally because
-        // they never trigger the pan in the first place.
+        // Hold touches from the SwiftUI subtree until the pan decides
+        // whether to begin. cancelsTouchesInView alone wasn't enough on
+        // SwiftUI `Button(action:)` rows (Lists): the button's gesture
+        // had already started tracking before the cancel arrived, so a
+        // swipe still fired the button's action on touch-up. With
+        // delaysTouchesBegan = true, the buffered touch is pushed
+        // through only when the pan fails (vertical / no motion); taps
+        // on rows still fire, and horizontal swipes never leak into the
+        // row's tap. Same pattern UIScrollView's panGesture uses to
+        // arbitrate scroll vs. tap.
+        pan.delaysTouchesBegan = true
         pan.cancelsTouchesInView = true
         container.addGestureRecognizer(pan)
 
