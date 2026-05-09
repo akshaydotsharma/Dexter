@@ -16,11 +16,12 @@ import UIKit
 /// UIKit's UIPanGestureRecognizer fixes this via
 /// `gestureRecognizerShouldBegin`: returning false for
 /// vertical-dominant velocity transitions the recognizer to
-/// `.failed`, freeing the parent List's pan to begin. Tap
-/// arbitration is preserved by `cancelsTouchesInView = false` plus
-/// `shouldRecognizeSimultaneouslyWith` returning true — short
-/// touches never reach the pan threshold, so the underlying SwiftUI
-/// Button's tap fires normally.
+/// `.failed`, freeing the parent List's pan to begin. Inner buttons
+/// (toggle, info icon) keep their tap behavior because short taps
+/// never trigger the pan in the first place; once the pan does
+/// claim a horizontal touch, `cancelsTouchesInView = true` cancels
+/// the row's onTapGesture so the same swipe doesn't ALSO navigate
+/// into the row.
 extension View {
     func swipeToDeleteTrash(perform action: @escaping () -> Void) -> some View {
         modifier(SwipeToDeleteWithTint(onDelete: action))
@@ -64,7 +65,11 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     let endRaw = (isOpen ? -revealedWidth : 0) + dx
                     if -endRaw > UIScreen.main.bounds.width * 0.7 {
                         commit()
-                    } else if -endRaw > revealedWidth * 0.4 {
+                    } else if -endRaw > revealedWidth * 0.55 {
+                        // Tighter snap-open threshold so a casual drift
+                        // doesn't reveal the trash. Was 0.4, but that
+                        // felt over-sensitive once accidental tap-fall-
+                        // through was eliminated. Drag past ~33pt now.
                         open()
                     } else {
                         close()
@@ -195,7 +200,14 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
             action: #selector(Coordinator.handle(_:))
         )
         pan.delegate = context.coordinator
-        pan.cancelsTouchesInView = false
+        // Once the pan claims a horizontal touch, cancel any other
+        // recognizers in the row's view tree (the row's onTapGesture for
+        // inline edit, NavigationLink-style taps on Notes/Lists). With
+        // this set to false, a swipe used to ALSO fire the underlying
+        // tap, navigating into the item right after the trash revealed
+        // — see #94 follow-up. Short taps still fire normally because
+        // they never trigger the pan in the first place.
+        pan.cancelsTouchesInView = true
         container.addGestureRecognizer(pan)
 
         return container
