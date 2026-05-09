@@ -44,19 +44,17 @@ private struct SwipeToDeleteWithTint: ViewModifier {
         let linear = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
         let progress = 0.5 - 0.5 * cos(.pi * linear)
 
+        // Z-order matters: the trash button is drawn IN FRONT of the
+        // pan-capture wrapper so that its 52pt frame at the trailing
+        // edge claims taps directly. Drawing it behind (the original
+        // arrangement) meant the wrapper's full-width close-on-tap
+        // overlay swallowed every tap on the visible trash — SwiftUI's
+        // `.offset(x:)` translates content visually but does NOT shift
+        // hit testing, so the overlay's hit area still covered the
+        // trash region after the swipe revealed it. Result: 1st tap
+        // closed the row, 2nd tap re-opened, 3rd tap finally deleted.
+        // (#94)
         ZStack(alignment: .trailing) {
-            Button(action: commit) {
-                Image(systemName: "trash")
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(Circle().fill(trashColor))
-            }
-            .buttonStyle(.plain)
-            .opacity(min(1.0, dragDistance / 20))
-            .allowsHitTesting(dragDistance >= revealedWidth * 0.6)
-            .accessibilityLabel("Delete")
-
             HorizontalPanCapture(
                 onChanged: { dx in
                     let raw = (isOpen ? -revealedWidth : 0) + dx
@@ -82,6 +80,22 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     .overlay(closeOverlay)
                     .offset(x: offset)
             }
+
+            Button(action: commit) {
+                Image(systemName: "trash")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(.white)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(Circle().fill(trashColor))
+            }
+            .buttonStyle(.plain)
+            .opacity(min(1.0, dragDistance / 20))
+            // Only intercept taps once the swipe has clearly revealed
+            // the trash. Below that threshold we leave hit testing to
+            // the underlying content so partial drags / scroll handoff
+            // stay unaffected.
+            .allowsHitTesting(isOpen && dragDistance >= revealedWidth * 0.6)
+            .accessibilityLabel("Delete")
         }
     }
 
@@ -116,13 +130,14 @@ private struct SwipeToDeleteWithTint: ViewModifier {
     }
 
     private func commit() {
+        // Fire delete on the same runloop tick as the tap so the
+        // List's native row-removal animation kicks in immediately.
+        // The bespoke slide-off + 0.2s deferred call previously made
+        // every confirmed delete feel ~250ms laggy and let the user
+        // queue up a second tap mid-animation. (#94)
         Haptics.destructive()
-        withAnimation(.easeOut(duration: 0.22)) {
-            offset = -UIScreen.main.bounds.width
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            onDelete()
-        }
+        isOpen = false
+        onDelete()
     }
 }
 
