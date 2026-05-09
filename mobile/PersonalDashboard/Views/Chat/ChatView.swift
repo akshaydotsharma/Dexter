@@ -177,13 +177,9 @@ struct ChatView: View {
             Spacer(minLength: Space.xxxl)
 
             VStack(spacing: Space.lg) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 32, weight: .regular))
-                    .foregroundStyle(Tokens.muted)
-
-                Rectangle()
-                    .fill(Tokens.accentChat)
-                    .frame(width: 32, height: 2)
+                LogoBars(
+                    isAnimating: viewModel.draftInput.trimmingCharacters(in: .whitespaces).isEmpty
+                )
 
                 VStack(spacing: Space.md) {
                     Text("What can I help you organize?")
@@ -297,6 +293,90 @@ struct ChatView: View {
 
     private var hasLiveAssistantTurn: Bool {
         viewModel.turns.last?.isStreaming == true
+    }
+}
+
+/// Three pill-capped bars + accent dot mirroring the Deks logo (top 55%,
+/// middle 85%, bottom 70%, dot just past the end of the top bar). The
+/// bars are anchored at the leading edge; each bar's *length* oscillates
+/// continuously around its logo width, with its own period and phase so
+/// the trio feels organic rather than metronomic. The accent dot rides
+/// the right edge of the top bar so the silhouette stays coherent. When
+/// the user starts typing, the bars snap back to exact logo widths.
+private struct LogoBars: View {
+    let isAnimating: Bool
+
+    private let middleWidth: CGFloat = 48
+    private let barHeight: CGFloat = 5
+    private let gap: CGFloat = 4
+    private let dotDiameter: CGFloat = 4
+    private let topRatio: CGFloat = 55.0 / 85.0
+    private let bottomRatio: CGFloat = 70.0 / 85.0
+    /// Logo: top bar ends at x=640, dot center at x=700 (delta 60 of 870).
+    private let dotGapRatio: CGFloat = 60.0 / 870.0
+    /// Maximum length deviation from the logo width, as a fraction.
+    private let modulation: CGFloat = 0.18
+
+    var body: some View {
+        let topBase = middleWidth * topRatio
+        let bottomBase = middleWidth * bottomRatio
+        let maxMiddle = middleWidth * (1 + modulation)
+        let containerWidth = maxMiddle + middleWidth * dotGapRatio + dotDiameter
+
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isAnimating)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let mod = isAnimating ? modulation : 0
+
+            // Each bar runs on its own period and phase so the three never
+            // line up — keeps the motion feeling unscripted.
+            let topW    = animatedWidth(base: topBase,     time: t, period: 1.70, phase: 0.0, modulation: mod)
+            let middleW = animatedWidth(base: middleWidth, time: t, period: 2.40, phase: 0.6, modulation: mod)
+            let bottomW = animatedWidth(base: bottomBase,  time: t, period: 3.10, phase: 1.2, modulation: mod)
+
+            // Dot rides the right edge of the top bar with the same offset
+            // ratio as the logo (60 / 870 of the middle width).
+            let dotLeading = topW + middleWidth * dotGapRatio - dotDiameter / 2
+
+            VStack(alignment: .leading, spacing: gap) {
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(Tokens.ink)
+                        .frame(width: topW, height: barHeight)
+
+                    Circle()
+                        .fill(Tokens.ink)
+                        .frame(width: dotDiameter, height: dotDiameter)
+                        .offset(x: dotLeading)
+                }
+                .frame(height: barHeight)
+
+                Capsule(style: .continuous)
+                    .fill(Tokens.ink)
+                    .frame(width: middleW, height: barHeight)
+
+                Capsule(style: .continuous)
+                    .fill(Tokens.ink)
+                    .frame(width: bottomW, height: barHeight)
+            }
+            .frame(width: containerWidth, alignment: .leading)
+        }
+    }
+
+    /// Width of a bar at time `t`. A primary sine carries the breath, a
+    /// shorter secondary sine adds wobble so the cycle never reads as a
+    /// clean sinusoid.
+    private func animatedWidth(
+        base: CGFloat,
+        time t: Double,
+        period: Double,
+        phase: Double,
+        modulation: CGFloat
+    ) -> CGFloat {
+        guard modulation > 0 else { return base }
+        let primary = sin(2 * .pi * t / period + phase)
+        let wobble = sin(2 * .pi * t / (period * 0.62) + phase * 1.4) * 0.45
+        let combined = CGFloat((primary + wobble) / 1.45)
+        return base * (1 + modulation * combined)
     }
 }
 
