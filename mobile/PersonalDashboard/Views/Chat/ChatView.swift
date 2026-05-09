@@ -294,29 +294,50 @@ struct ChatView: View {
     }
 }
 
-/// Three pill-capped horizontal bars mirroring the Deks logo (top 55%,
-/// middle 85%, bottom 70%). On first appearance each bar sweeps out from
-/// the leading edge to its target width with a small stagger between them.
+/// Three pill-capped horizontal bars + accent dot mirroring the Deks logo
+/// (top 55%, middle 85%, bottom 70%, dot just past the end of the top bar).
+/// On appear each bar sweeps from the leading edge to its target width with
+/// a left-to-right stagger; the dot fades in once the bars have settled.
 private struct LogoBars: View {
-    private let middleWidth: CGFloat = 96
-    private let barHeight: CGFloat = 10
+    private let middleWidth: CGFloat = 72
+    private let barHeight: CGFloat = 8
+    private let gap: CGFloat = 6
     private let topRatio: CGFloat = 55.0 / 85.0
     private let bottomRatio: CGFloat = 70.0 / 85.0
+    /// Logo: top bar ends at x=640, dot center at x=700 (delta 60 of 870).
+    private let dotGapRatio: CGFloat = 60.0 / 870.0
+    private let dotDiameter: CGFloat = 6
 
     @State private var revealed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            bar(width: middleWidth * topRatio, delay: 0.00)
-            bar(width: middleWidth,            delay: 0.08)
-            bar(width: middleWidth * bottomRatio, delay: 0.16)
+        let topWidth = middleWidth * topRatio
+        let bottomWidth = middleWidth * bottomRatio
+        let dotLeading = topWidth + middleWidth * dotGapRatio - dotDiameter / 2
+
+        VStack(alignment: .leading, spacing: gap) {
+            ZStack(alignment: .leading) {
+                bar(width: topWidth, delay: 0.00)
+                Circle()
+                    .fill(Tokens.ink)
+                    .frame(width: dotDiameter, height: dotDiameter)
+                    .offset(x: dotLeading)
+                    .opacity(revealed ? 1 : 0)
+                    .scaleEffect(revealed ? 1 : 0.4, anchor: .center)
+                    .animation(
+                        .easeOut(duration: 0.35).delay(0.45),
+                        value: revealed
+                    )
+            }
+            .frame(height: barHeight)
+
+            bar(width: middleWidth, delay: 0.15)
+            bar(width: bottomWidth, delay: 0.30)
         }
-        .frame(width: middleWidth, alignment: .leading)
+        .frame(width: middleWidth + dotDiameter, alignment: .leading)
         .onAppear {
             revealed = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                revealed = true
-            }
+            DispatchQueue.main.async { revealed = true }
         }
     }
 
@@ -326,7 +347,7 @@ private struct LogoBars: View {
             .frame(width: revealed ? target : 0, height: barHeight)
             .frame(width: target, alignment: .leading)
             .animation(
-                .spring(response: 0.55, dampingFraction: 0.85).delay(delay),
+                .easeOut(duration: 0.55).delay(delay),
                 value: revealed
             )
     }
