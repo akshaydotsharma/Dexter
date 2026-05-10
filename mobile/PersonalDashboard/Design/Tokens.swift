@@ -11,6 +11,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case lists
     case dashboard
     case activity
+    case vocabulary
     case settings
     case helpCenter
 
@@ -25,6 +26,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .lists:      return "Lists"
         case .dashboard:  return "Dashboard"
         case .activity:   return "Activity"
+        case .vocabulary: return "Personal vocabulary"
         case .settings:   return "Settings"
         case .helpCenter: return "Help center"
         }
@@ -40,6 +42,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .lists:      return "list.bullet"
         case .dashboard:  return "rectangle.grid.2x2"
         case .activity:   return "clock.arrow.circlepath"
+        case .vocabulary: return "character.book.closed"
         case .settings:   return "gearshape"
         case .helpCenter: return "questionmark.circle"
         }
@@ -88,6 +91,7 @@ enum Tokens {
     static let accentLists     = Color.paper(0x0F766E, 0x2DD4BF)
     static let accentDashboard = Color.paper(0x1F1B16, 0xF2EBDA)
     static let accentActivity  = Color.paper(0x7C3F58, 0xE5A3BA)
+    static let accentVocabulary = Color.paper(0x57534E, 0xB7B0A2)
     static let accentSettings  = Color.paper(0x475569, 0x94A3B8)
     static let accentHelp      = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)
@@ -110,6 +114,7 @@ enum Tokens {
         case .lists:      return accentLists
         case .dashboard:  return accentDashboard
         case .activity:   return accentActivity
+        case .vocabulary: return accentVocabulary
         case .settings:   return accentSettings
         case .helpCenter: return accentHelp
         }

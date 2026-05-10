@@ -4,51 +4,12 @@ struct SettingsView: View {
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
 
-    /// Settings is a top-level surface, not a NavigationStack — to push
-    /// sub-pages (Personal Vocabulary today; possibly more later) we follow
-    /// the same boolean-state + leadingEdgeBackHandler pattern Lists/Notes
-    /// use, so the iOS-native swipe-from-leading back gesture pops the
-    /// sub-page rather than opening the side drawer.
-    @State private var showingVocabulary = false
-
     var body: some View {
         ZStack {
             Tokens.paper.ignoresSafeArea()
-
-            if showingVocabulary {
-                PersonalVocabularyView(
-                    onBack: {
-                        withAnimation(.easeOut(duration: 0.2)) { showingVocabulary = false }
-                    }
-                )
-            } else {
-                rootContent
-            }
+            rootContent
         }
         .activeSection(.settings)
-        .onAppear { syncBackHandler() }
-        .onDisappear {
-            // Don't strip a back handler we didn't install — another surface
-            // may have set its own when this view was off-screen.
-            if showingVocabulary {
-                router.leadingEdgeBackHandler = nil
-            }
-        }
-        .onChange(of: showingVocabulary) { _, _ in syncBackHandler() }
-    }
-
-    // MARK: - Back-swipe wiring
-
-    private func syncBackHandler() {
-        if showingVocabulary {
-            router.leadingEdgeBackHandler = {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    showingVocabulary = false
-                }
-            }
-        } else {
-            router.leadingEdgeBackHandler = nil
-        }
     }
 
     // MARK: - Root
@@ -63,7 +24,6 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.xl) {
                     appearanceSection
-                    assistantSection
                     aboutSection
                     footer
                 }
@@ -86,20 +46,6 @@ struct SettingsView: View {
                 ThemePicker(value: $schemePref)
             }
             .padding(Space.lg)
-        }
-    }
-
-    private var assistantSection: some View {
-        SettingsSection(title: "Assistant") {
-            VStack(spacing: 0) {
-                SettingsLinkRow(
-                    label: "Personal vocabulary",
-                    detail: "Words it might mishear",
-                    onTap: {
-                        withAnimation(.easeOut(duration: 0.2)) { showingVocabulary = true }
-                    }
-                )
-            }
         }
     }
 
@@ -185,41 +131,6 @@ private struct SettingsRow: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
-    }
-}
-
-/// Tappable row that pushes a sub-screen. Trailing chevron signals the
-/// affordance — same convention iOS Settings uses for nested screens.
-private struct SettingsLinkRow: View {
-    let label: String
-    let detail: String?
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label)
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.ink)
-                    if let detail {
-                        Text(detail)
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                    }
-                }
-
-                Spacer(minLength: Space.md)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Tokens.mutedSoft)
-            }
-            .padding(.horizontal, Space.lg)
-            .padding(.vertical, Space.md)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 

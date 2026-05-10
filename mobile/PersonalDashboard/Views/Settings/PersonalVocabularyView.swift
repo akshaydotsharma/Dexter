@@ -1,9 +1,14 @@
 import SwiftUI
 import SwiftData
 
-/// Settings sub-page where the user teaches the assistant their personal
+/// Top-level surface where the user teaches the assistant their personal
 /// vocabulary — company names, products, jargon — so the LLM prefers those
 /// terms when speech-to-text gets them wrong.
+///
+/// Lives in the side drawer (issue #100 follow-up). Mirrors the shell shape
+/// of `TodayView` / `HelpCenterView`: shared `TopBar` with a hamburger that
+/// opens the drawer, no leading-edge back handler (the drawer is the way
+/// out of this surface).
 ///
 /// Data lives in `LocalKeyword` (SwiftData). The list reads via FetchDescriptor
 /// keyed on `term` ascending. Add / edit go through a single sheet
@@ -11,13 +16,13 @@ import SwiftData
 struct PersonalVocabularyView: View {
     @Environment(\.modelContext) private var modelContext
 
+    @Bindable var router: AppRouter
+
     /// Surface state. `editing` drives the sheet: `.new` for a fresh entry,
     /// `.existing(_)` for editing a row. The sheet binding is the
     /// `Identifiable` wrapper, so SwiftUI re-renders the editor each time
     /// the user taps a different row.
     @State private var editing: EditorTarget?
-
-    let onBack: () -> Void
 
     /// Live keyword list, sorted by term ascending. Decoupled from the
     /// SwiftData fetch via `@Query` so updates from the editor sheet (insert,
@@ -29,7 +34,10 @@ struct PersonalVocabularyView: View {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                header
+                TopBar(
+                    title: "Personal vocabulary",
+                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
+                )
                 content
             }
 
@@ -45,47 +53,12 @@ struct PersonalVocabularyView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .accessibilityLabel("Add term")
         }
+        .activeSection(.vocabulary)
         .sheet(item: $editing) { target in
             KeywordEditorSheet(target: target)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: Space.md) {
-            Button(action: onBack) {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                    Text("Settings")
-                }
-                .font(.edBody)
-                .foregroundStyle(Tokens.muted)
-                .frame(height: 44)
-                .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Back to settings")
-
-            Spacer()
-
-            Text("Vocabulary")
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-                .lineLimit(1)
-
-            Spacer()
-
-            // Keep the layout symmetric with the chevron-back so the title
-            // remains optically centred. No action — just a 44pt placeholder.
-            Color.clear.frame(width: 44, height: 44)
-        }
-        .padding(.horizontal, Space.md)
-        .frame(height: 56)
-        .background(Tokens.paper.overlay(alignment: .bottom) {
-            Rectangle().fill(Tokens.divider).frame(height: 0.5)
-        })
     }
 
     // MARK: - Content
