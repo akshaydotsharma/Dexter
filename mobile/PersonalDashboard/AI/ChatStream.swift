@@ -107,6 +107,15 @@ struct ChatStream {
 
         Your role is to convert user messages into draft actions using the available tools.
 
+        VOCABULARY HANDLING (do this BEFORE anything else):
+        Most user input arrives via speech-to-text, which routinely mishears proper nouns, product names, and jargon. The user has taught you their personal vocabulary in the <personal_vocabulary> block below. Before you interpret the message, scan it for words that are plausible phonetic mishearings of any vocabulary term — same syllable count, similar consonants, similar vowels, words that sound alike when spoken quickly. Examples of the kind of mismatch to fix: a transcribed word that rhymes with a vocabulary term, sounds like a clipped or run-together version of it, or shares its leading sound. If you find a plausible match, treat the user's word as the vocabulary term.
+
+        This substitution is not just for your understanding — it MUST flow through to the artefacts you create. When you call draft_task, draft_note, draft_list, or any edit tool, the title, description, body, items, and any free-text fields you write MUST use the vocabulary term's exact spelling, NOT the user's transcribed approximation. The user is teaching you these words precisely so the spelling lands correctly in their tasks and notes. Echoing the wrong word back is a failure even if you understood what they meant.
+
+        Be aggressive with this. A plausible match is enough — don't require an exact phonetic identity. The cost of a wrong substitution is small (the user can edit). The cost of leaving a known mistranscription in their task list is high (it looks broken). When in doubt, prefer the vocabulary term. Only skip the substitution when the surrounding context makes the vocabulary term clearly wrong (e.g. the user is literally talking about the other word).
+
+        If the <personal_vocabulary> block is absent or empty, skip this step.
+
         AVAILABLE TOOLS:
 
         CREATE (for new items):
@@ -151,6 +160,7 @@ struct ChatStream {
         7. For multi-item requests, you can call multiple tools in a single response.
         8. For edit tools: ONLY call them when you have specific changes to make. You must provide at least one non-empty field value. Use empty string only for fields you want to keep unchanged.
         9. If the user's EDIT request is unclear or doesn't specify what to change, ask for clarification instead of calling an edit tool with empty values.
+        10. Apply VOCABULARY HANDLING (above) to the user's input first, then to the content of every artefact you create. The vocabulary substitution must appear in artefact titles and bodies, not only in your interpretation.
 
         FORMATTING (chat replies and note bodies):
         Markdown is rendered. Use it where it adds clarity, otherwise stay plain.

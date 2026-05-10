@@ -7,26 +7,31 @@ struct SettingsView: View {
     var body: some View {
         ZStack {
             Tokens.paper.ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                TopBar(
-                    title: "Settings",
-                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
-                )
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Space.xl) {
-                        appearanceSection
-                        aboutSection
-                        footer
-                    }
-                    .padding(.horizontal, Space.lg)
-                    .padding(.top, Space.lg)
-                    .padding(.bottom, 96)
-                }
-            }
+            rootContent
         }
         .activeSection(.settings)
+    }
+
+    // MARK: - Root
+
+    private var rootContent: some View {
+        VStack(spacing: 0) {
+            TopBar(
+                title: "Settings",
+                onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
+            )
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.xl) {
+                    appearanceSection
+                    aboutSection
+                    footer
+                }
+                .padding(.horizontal, Space.lg)
+                .padding(.top, Space.lg)
+                .padding(.bottom, 96)
+            }
+        }
     }
 
     // MARK: - Sections

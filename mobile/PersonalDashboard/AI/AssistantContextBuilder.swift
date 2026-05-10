@@ -117,6 +117,28 @@ struct AssistantContextBuilder {
             }.joined(separator: "\n")
         }
 
+        // Personal vocabulary: words the user has explicitly taught the
+        // assistant so the model can prefer them over close-sounding
+        // mistranscriptions ("envisso" vs. "in visa", "Dexter" vs. "Dexter
+        // [unrelated]"). Emitted as XML-tagged so the prompt can refer to it
+        // by name. Skipped entirely when empty so we don't ship a stub block.
+        if let keywords = try? context.fetch(
+            FetchDescriptor<LocalKeyword>(
+                sortBy: [SortDescriptor(\.term, order: .forward)]
+            )
+        ), !keywords.isEmpty {
+            out += "\n\n<personal_vocabulary>\n"
+            out += keywords.map { keyword -> String in
+                let trimmedNotes = keyword.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmedNotes.isEmpty {
+                    return "- \(keyword.term)"
+                }
+                let oneLineNotes = trimmedNotes.replacingOccurrences(of: "\n", with: " ")
+                return "- \(keyword.term): \(oneLineNotes)"
+            }.joined(separator: "\n")
+            out += "\n</personal_vocabulary>"
+        }
+
         return out
     }
 
