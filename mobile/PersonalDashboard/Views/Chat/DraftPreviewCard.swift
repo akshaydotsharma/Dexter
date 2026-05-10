@@ -48,10 +48,15 @@ struct DraftPreviewCard: View {
             }
 
             if let body = draft.bodyPreview, !body.isEmpty {
-                Text(body)
-                    .font(.edSubheadline)
-                    .foregroundStyle(Tokens.inkSoft)
-                    .lineLimit(4)
+                // Body previews can contain the same markdown the AI emits in
+                // chat (lists, bold, etc.). Render through MarkdownView with
+                // a small line-limit so the card stays preview-sized.
+                MarkdownView(
+                    text: body,
+                    lineLimit: 4,
+                    bodyFont: .edSubheadline,
+                    bodyColor: Tokens.inkSoft
+                )
             }
 
             // Chips
