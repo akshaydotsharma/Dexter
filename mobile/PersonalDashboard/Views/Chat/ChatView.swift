@@ -4,7 +4,6 @@ import UIKit
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
     @State private var transcriber = SpeechTranscriber()
-    @State private var resolvedDrafts: [UUID: DraftPreviewCard.Resolution] = [:]
     @State private var pendingViewMore: Bool = false
     @State private var keyboardVisible: Bool = false
     /// Whatever the user had typed at the moment they tapped the mic.
@@ -189,7 +188,7 @@ struct ChatView: View {
                         .tracking(-0.4)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("Ask for a task, a note, or a list. I'll draft it for you to confirm.")
+                    Text("Ask for a task, a note, or a list. I'll add it for you and link straight to it.")
                         .font(.edBody)
                         .foregroundStyle(Tokens.muted)
                         .multilineTextAlignment(.center)
@@ -225,23 +224,7 @@ struct ChatView: View {
                     ForEach(viewModel.turns) { turn in
                         TurnView(
                             turn: turn,
-                            resolvedDrafts: resolvedDrafts,
-                            onConfirm: { draft in
-                                Task {
-                                    let ok = await viewModel.confirm(draft)
-                                    if ok {
-                                        resolvedDrafts[draft.id] = .confirmed
-                                    }
-                                }
-                            },
-                            onCancel: { draft in
-                                // Reject is purely a UI operation now — record
-                                // the resolution before the model removes the
-                                // draft from its turn so the card animates out
-                                // showing the "Cancelled" state.
-                                resolvedDrafts[draft.id] = .cancelled
-                                viewModel.reject(draft)
-                            }
+                            onOpen: { result in openResult(result) }
                         )
                         .id(turn.id)
                     }
@@ -293,6 +276,20 @@ struct ChatView: View {
 
     private var hasLiveAssistantTurn: Bool {
         viewModel.turns.last?.isStreaming == true
+    }
+
+    /// Resolve the result's deep-link target and route. We set the focus
+    /// payload BEFORE pushing the section so the destination view's
+    /// `onAppear` reads a non-nil focus on the very first render and the
+    /// row scroll + accent pulse fires without a frame of empty content.
+    private func openResult(_ result: ChatActionResult) {
+        guard let outcome = result.outcome,
+              let section = result.deepLinkSection,
+              let uuid = UUID(uuidString: outcome.id)
+        else { return }
+        let isFolder = outcome.type == "folder"
+        router.focus = ActivityFocus(section: section, id: uuid, isFolder: isFolder)
+        router.go(to: section)
     }
 }
 
@@ -382,9 +379,7 @@ private struct LogoBars: View {
 
 private struct TurnView: View {
     let turn: ChatTurn
-    let resolvedDrafts: [UUID: DraftPreviewCard.Resolution]
-    let onConfirm: (ChatDraft) -> Void
-    let onCancel: (ChatDraft) -> Void
+    let onOpen: (ChatActionResult) -> Void
 
     var body: some View {
         VStack(alignment: turn.role == .user ? .trailing : .leading, spacing: Space.md) {
@@ -396,13 +391,10 @@ private struct TurnView: View {
                 }
             }
 
-            ForEach(turn.drafts) { draft in
-                DraftPreviewCard(
-                    draft: draft,
-                    resolved: resolvedDrafts[draft.id],
-                    onConfirm: { onConfirm(draft) },
-                    onEdit: nil,
-                    onCancel: { onCancel(draft) }
+            ForEach(turn.results) { result in
+                ChatResultCard(
+                    result: result,
+                    onOpen: result.supportsDeepLink ? { onOpen(result) } : nil
                 )
             }
         }
