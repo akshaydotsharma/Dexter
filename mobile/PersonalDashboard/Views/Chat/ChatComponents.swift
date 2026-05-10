@@ -31,11 +31,11 @@ struct AIProse: View {
         if text.isEmpty {
             EmptyView()
         } else {
-            Text(text)
-                .font(.edBody)
-                .foregroundStyle(Tokens.inkSoft)
+            // Markdown is rendered block-by-block so headings, lists, and
+            // bold inline elements show up the way the model intended rather
+            // than as raw `**` / `##` characters.
+            MarkdownView(text: text)
                 .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 640, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
