@@ -464,7 +464,10 @@ private struct NoteDetailContent: View {
     @State private var content: String = ""
     @State private var folderId: UUID?
     @State private var hasLoaded = false
+    @State private var mode: NoteEditMode = .edit
     @FocusState private var contentFocused: Bool
+
+    enum NoteEditMode { case edit, preview }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -503,13 +506,7 @@ private struct NoteDetailContent: View {
 
                     Rectangle().fill(Tokens.divider).frame(height: 0.5)
 
-                    TextEditor(text: $content)
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.ink)
-                        .scrollContentBackground(.hidden)
-                        .background(Tokens.paper)
-                        .frame(minHeight: 320)
-                        .focused($contentFocused)
+                    bodyEditor
                 }
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.lg)
@@ -528,6 +525,39 @@ private struct NoteDetailContent: View {
         }
         .onDisappear {
             Task { await persistIfChanged() }
+        }
+    }
+
+    @ViewBuilder
+    private var bodyEditor: some View {
+        switch mode {
+        case .edit:
+            // MarkdownEditor wraps UITextView so the format toolbar can wrap
+            // the user's selection (or insert at cursor) when they tap a
+            // formatting button. The toolbar lives in the textView's
+            // inputAccessoryView, so it rides above the keyboard.
+            MarkdownEditor(
+                text: $content,
+                isFocused: $contentFocused,
+                minHeight: 320,
+                placeholder: "Start writing. Use the bar above the keyboard for headings, bold, lists…"
+            )
+            .frame(minHeight: 320)
+        case .preview:
+            // Empty notes shouldn't render an empty MarkdownView (which would
+            // collapse to zero height and look broken). Show a quiet hint
+            // pointing the user back to edit mode.
+            if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Nothing to preview yet. Tap the pencil to write.")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, Space.xl)
+            } else {
+                MarkdownView(text: content, bodyColor: Tokens.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
         }
     }
 
@@ -552,6 +582,24 @@ private struct NoteDetailContent: View {
             Text(note.updatedAt, style: .relative)
                 .font(.edCaption)
                 .foregroundStyle(Tokens.mutedSoft)
+            Button {
+                // Drop the keyboard before flipping to preview so the
+                // accessory toolbar doesn't briefly hang around.
+                if mode == .edit { contentFocused = false }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    mode = (mode == .edit) ? .preview : .edit
+                }
+                if mode == .edit {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        contentFocused = true
+                    }
+                }
+            } label: {
+                Image(systemName: mode == .edit ? "eye" : "pencil")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(Tokens.muted)
+            }
+            .accessibilityLabel(mode == .edit ? "Preview note" : "Edit note")
             Button {
                 Task {
                     await viewModel.deleteNote(note)

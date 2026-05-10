@@ -227,6 +227,16 @@ struct ChatToDrafts {
         8. For edit tools: ONLY call them when you have specific changes to make. You must provide at least one non-empty field value. Use empty string only for fields you want to keep unchanged.
         9. If the user's EDIT request is unclear or doesn't specify what to change, ask for clarification instead of calling an edit tool with empty values.
         10. Apply VOCABULARY HANDLING (above) to the user's input first, then to the content of every artefact you create. The vocabulary substitution must appear in artefact titles and bodies, not only in your interpretation.
+
+        FORMATTING (chat replies and note bodies):
+        Markdown is rendered. Use it where it adds clarity, otherwise stay plain.
+        - `## Subsection` and `### Detail` for section breaks in longer notes.
+        - `**bold**` for emphasis on key phrases. `*italic*` sparingly.
+        - `- ` bullet lists or `1. ` numbered lists for enumerable items.
+        - `> ` for quoted lines.
+        - `` `inline code` `` for identifiers, `` ``` `` fenced blocks for code.
+        - One-line confirmations / acknowledgements stay plain — don't decorate them.
+        - Note bodies (draft_note / edit_note `body`): structure them with headings + lists when the content is long enough to benefit; short notes stay as plain prose.
         \(contextBlock)
 
         Timezone: \(timezone)
