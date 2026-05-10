@@ -217,6 +217,7 @@ struct ChatToDrafts {
         7. For multi-item requests, you can call multiple tools in a single response.
         8. For edit tools: ONLY call them when you have specific changes to make. You must provide at least one non-empty field value. Use empty string only for fields you want to keep unchanged.
         9. If the user's EDIT request is unclear or doesn't specify what to change, ask for clarification instead of calling an edit tool with empty values.
+        10. If the user's input contains a word that closely matches a term in <personal_vocabulary>, prefer the vocabulary term unless the surrounding context clearly rules it out. The vocabulary captures speech-to-text mistranscriptions of names, products, and jargon the user cares about.
         \(contextBlock)
 
         Timezone: \(timezone)
