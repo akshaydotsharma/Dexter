@@ -64,6 +64,7 @@ struct MarkdownEditor: UIViewRepresentable {
             let safeLocation = min(savedRange.location, (uiView.text as NSString).length)
             uiView.selectedRange = NSRange(location: safeLocation, length: 0)
             uiView.refreshPlaceholder()
+            uiView.invalidateIntrinsicContentSize()
         }
         if uiView.placeholderText != placeholder {
             uiView.placeholderText = placeholder
@@ -72,6 +73,17 @@ struct MarkdownEditor: UIViewRepresentable {
         if isFocused, !uiView.isFirstResponder {
             DispatchQueue.main.async { uiView.becomeFirstResponder() }
         }
+    }
+
+    /// SwiftUI hands us the proposed width here. Without this, UITextView with
+    /// `isScrollEnabled = false` reports its intrinsic size based on a layout
+    /// that hasn't been width-constrained yet and the text spills off-screen
+    /// as one infinite line. We measure with the proposed width so the
+    /// textView wraps and only then ask SwiftUI for vertical space.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: PaddedTextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0, width.isFinite else { return nil }
+        let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: max(measured.height, minHeight))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -113,6 +125,8 @@ final class PaddedTextView: UITextView {
         didSet { placeholderLabel.text = placeholderText }
     }
 
+    private var lastBoundsWidth: CGFloat = 0
+
     private let placeholderLabel: UILabel = {
         let l = UILabel()
         l.numberOfLines = 0
@@ -142,8 +156,29 @@ final class PaddedTextView: UITextView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// With `isScrollEnabled = false`, UITextView's intrinsicContentSize is
+    /// what SwiftUI uses to lay us out vertically. We measure against our
+    /// current bounds.width so the textView wraps to the column SwiftUI gave
+    /// us instead of trying to fit every line on one infinite-width row.
+    override var intrinsicContentSize: CGSize {
+        guard bounds.width > 0 else {
+            return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+        }
+        let measured = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude))
+        return CGSize(width: UIView.noIntrinsicMetric, height: measured.height)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.width != lastBoundsWidth {
+            lastBoundsWidth = bounds.width
+            invalidateIntrinsicContentSize()
+        }
+    }
+
     @objc func refreshPlaceholder() {
         placeholderLabel.isHidden = !text.isEmpty
+        invalidateIntrinsicContentSize()
     }
 }
 
