@@ -35,7 +35,7 @@ struct PersonalVocabularyView: View {
 
             VStack(spacing: 0) {
                 TopBar(
-                    title: "Personal vocabulary",
+                    title: "Vocabulary",
                     onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                 )
                 content
