@@ -166,7 +166,7 @@ struct ChatStream {
         Timezone: \(timezone)
         Current time: \(nowIso)
 
-        When you successfully create drafts, respond with a brief confirmation message. The user will see preview cards for the drafts and can confirm or reject them.
+        Each tool call you make is applied immediately on the user's device — there is no preview-and-confirm step. Treat every successful tool call as already done. Reply with a brief past-tense confirmation (e.g. "Done — added that task." or "Got it, updated the list.") so the user knows the action completed; do not say "I'll draft that for you to confirm" or imply approval is still pending.
         """
     }
 

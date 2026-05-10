@@ -5,14 +5,16 @@ struct ChatTurn: Identifiable, Hashable {
     let id: UUID
     var role: Role
     var text: String
-    var drafts: [ChatDraft]
+    /// Auto-executed action results for this turn. Each item represents a
+    /// tool call the model issued that we already applied to SwiftData.
+    var results: [ChatActionResult]
     var isStreaming: Bool
 
-    init(id: UUID = UUID(), role: Role, text: String, drafts: [ChatDraft], isStreaming: Bool = false) {
+    init(id: UUID = UUID(), role: Role, text: String, results: [ChatActionResult] = [], isStreaming: Bool = false) {
         self.id = id
         self.role = role
         self.text = text
-        self.drafts = drafts
+        self.results = results
         self.isStreaming = isStreaming
     }
 
@@ -43,7 +45,8 @@ final class ChatViewModel {
         self.sessionId = UUID().uuidString
 
         // Optional QA seeding: if SEED_CHAT=1 is in the launch env we render
-        // a deterministic conversation for screenshot capture.
+        // a deterministic conversation for screenshot capture. The seeded
+        // result is rendered as if it had already executed successfully.
         if ProcessInfo.processInfo.environment["SEED_CHAT"] == "1" {
             let demoInput: AnthropicJSONValue = .object([
                 "title": .string("Call John"),
@@ -51,14 +54,22 @@ final class ChatViewModel {
                 "due_at": .string(Self.demoDueISO),
                 "tag": .string("Work")
             ])
-            let demo = ChatDraft(
+            let demoOutcome = DraftActionOutcome(
+                type: "todo",
+                action: ActionString.created,
+                id: UUID().uuidString.lowercased(),
+                title: "Call John",
+                dueDate: Self.parseDemoDue(),
+                addedNames: nil
+            )
+            let demoResult = ChatActionResult(
                 actionType: .createTodo,
                 input: demoInput,
-                preview: ChatDraft.makePreview(actionType: .createTodo, input: demoInput)
+                outcome: demoOutcome
             )
             self.turns = [
-                ChatTurn(role: .user, text: "remind me to call John tomorrow at 3", drafts: []),
-                ChatTurn(role: .assistant, text: "Got it. I'll draft that task for you to confirm.", drafts: [demo])
+                ChatTurn(role: .user, text: "remind me to call John tomorrow at 3"),
+                ChatTurn(role: .assistant, text: "Done — added that task.", results: [demoResult])
             ]
         }
     }
@@ -67,7 +78,7 @@ final class ChatViewModel {
         let input = draftInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
         draftInput = ""
-        turns.append(ChatTurn(role: .user, text: input, drafts: []))
+        turns.append(ChatTurn(role: .user, text: input))
         isSending = true
         errorMessage = nil
 
@@ -75,14 +86,19 @@ final class ChatViewModel {
         // isStreaming=true the chat surface won't show the standalone typing
         // indicator — the empty turn itself shows the cursor effect.
         let assistantTurnId = UUID()
-        turns.append(ChatTurn(id: assistantTurnId, role: .assistant, text: "", drafts: [], isStreaming: true))
+        turns.append(ChatTurn(id: assistantTurnId, role: .assistant, text: "", isStreaming: true))
 
         do {
             for try await event in streamingService.parseStream(input: input, sessionId: sessionId) {
                 guard let idx = turns.firstIndex(where: { $0.id == assistantTurnId }) else { break }
                 switch event {
                 case .draft(let d):
-                    turns[idx].drafts.append(d)
+                    // Auto-execute: drafts arrive one-at-a-time as the model
+                    // closes each tool block. Run the executor on each and
+                    // append the success / failure record so the user sees
+                    // a stable card stream alongside the streaming prose.
+                    let result = await execute(draft: d)
+                    turns[idx].results.append(result)
                 case .textChunk(let chunk):
                     turns[idx].text += chunk
                 case .done:
@@ -100,9 +116,9 @@ final class ChatViewModel {
 
         if let idx = turns.firstIndex(where: { $0.id == assistantTurnId }) {
             turns[idx].isStreaming = false
-            // Drop empty assistant turn (no text and no drafts) — happens on
+            // Drop empty assistant turn (no text and no results) — happens on
             // pure follow-up questions where the model returns nothing.
-            if turns[idx].text.isEmpty && turns[idx].drafts.isEmpty {
+            if turns[idx].text.isEmpty && turns[idx].results.isEmpty {
                 turns.remove(at: idx)
             }
         }
@@ -110,30 +126,33 @@ final class ChatViewModel {
         isSending = false
     }
 
-    /// Apply a draft on confirm. Runs the same on-device executor the Shortcut
-    /// path uses, so chat and capture share one persistence path.
-    func confirm(_ draft: ChatDraft) async -> Bool {
+    /// Run the executor against one draft and turn the outcome / error into
+    /// a `ChatActionResult` for the UI. Mirrors the capture path's handling
+    /// in `ChatToDrafts`, but per-card instead of batched.
+    private func execute(draft: ChatDraft) async -> ChatActionResult {
         let dict = draft.input.objectValue ?? [:]
         do {
-            _ = try await executor.run(actionType: draft.actionType, input: dict)
-            return true
+            let outcome = try await executor.run(actionType: draft.actionType, input: dict)
+            return ChatActionResult(
+                id: draft.id,
+                actionType: draft.actionType,
+                input: draft.input,
+                outcome: outcome
+            )
         } catch let err as DraftExecutionError {
-            errorMessage = err.errorDescription
-            return false
+            return ChatActionResult(
+                id: draft.id,
+                actionType: draft.actionType,
+                input: draft.input,
+                errorMessage: err.errorDescription ?? "Action failed"
+            )
         } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
-    }
-
-    /// Drop a draft card from its turn. Without server-side draft state,
-    /// rejection is purely a UI operation.
-    func reject(_ draft: ChatDraft) {
-        for idx in turns.indices {
-            if let cardIdx = turns[idx].drafts.firstIndex(of: draft) {
-                turns[idx].drafts.remove(at: cardIdx)
-                return
-            }
+            return ChatActionResult(
+                id: draft.id,
+                actionType: draft.actionType,
+                input: draft.input,
+                errorMessage: error.localizedDescription
+            )
         }
     }
 
@@ -142,4 +161,10 @@ final class ChatViewModel {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.string(from: Date().addingTimeInterval(3 * 3600))
     }()
+
+    private static func parseDemoDue() -> Date {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: demoDueISO) ?? Date().addingTimeInterval(3 * 3600)
+    }
 }
