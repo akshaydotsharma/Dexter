@@ -1,7 +1,7 @@
 services:
   # Backend API
   - type: web
-    name: personal-dashboard-api
+    name: dexter-api
     runtime: node
     rootDir: server
     buildCommand: npm install
@@ -18,7 +18,7 @@ services:
 
   # Frontend (Static Site)
   - type: web
-    name: personal-dashboard-client
+    name: dexter-client
     runtime: static
     rootDir: client
     buildCommand: npm install && npm run build

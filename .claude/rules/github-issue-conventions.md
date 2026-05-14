@@ -20,4 +20,4 @@ Never ask the user which prefix to use unless the request is genuinely ambiguous
 
 ## Scope
 
-Applies to issues opened in https://github.com/akshaydotsharma/personal-dashboard via `gh issue create` or the GitHub UI. PR titles follow conventional commit prefixes (`feat:`, `fix:`, `chore:`, etc.) — they are NOT bracketed.
+Applies to issues opened in https://github.com/akshaydotsharma/Dexter via `gh issue create` or the GitHub UI. PR titles follow conventional commit prefixes (`feat:`, `fix:`, `chore:`, etc.) — they are NOT bracketed.

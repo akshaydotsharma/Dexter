@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Preferences API**: `GET /api/dashboard/config` hydrates the full preferences object with defaults; `PATCH /api/dashboard/config/preferences` accepts partial updates, validates with Zod, and deep-merges so unrelated keys (like `widgets`) survive partial writes.
 - **Web chat surfaces v2**: paper bubbles, SuccessRow component, `useChat` hook, Editorial Calm design tokens.
 - **Notes "All Notes" view** surfaces unfiled notes; creating from that view leaves the note unfiled.
-- **Server tests**: `server/tests/` with `node --test` against a dedicated `personal_dashboard_test` database. Helpers + migration + reorder + preferences specs.
+- **Server tests**: `server/tests/` with `node --test` against a dedicated `dexter_test` database. Helpers + migration + reorder + preferences specs.
 
 ### Changed
 - **AI provider switched from OpenAI to Anthropic Claude** via `@ai-sdk/anthropic`. `ANTHROPIC_API_KEY` is now required; legacy `OPENAI_API_KEY` only powers diagnostic scripts.

@@ -1,4 +1,4 @@
-# Personal Dashboard iOS — Editorial Calm Design Spec
+# Dexter iOS — Editorial Calm Design Spec
 
 **Target**: SwiftUI, iOS 17+, single-user, online-only (read cache later), TestFlight.
 **Source of truth**: `client/src/index.css` (`@theme` block) and `client/src/pages/ChatPage.jsx`.

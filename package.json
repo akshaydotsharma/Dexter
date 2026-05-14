@@ -1,7 +1,7 @@
 {
-    "name": "personal-dashboard",
+    "name": "dexter",
     "version": "1.0.0",
-    "description": "Personal Dashboard - A unified interface for managing tasks, notes, and lists",
+    "description": "Dexter - A unified interface for managing tasks, notes, and lists",
     "engines": {
         "node": ">=20.0.0"
     },
