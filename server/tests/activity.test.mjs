@@ -1,7 +1,7 @@
 /**
  * Activity timeline endpoint tests for issue #16.
  *
- * Exercises GET /api/dashboard/activity against the personal_dashboard_test DB.
+ * Exercises GET /api/dashboard/activity against the dexter_test DB.
  * Covers: empty state, mixed-type ordering, pagination round-trip, type filter,
  * soft-delete exclusion/inclusion, note parent, list snippet, and limit clamping.
  */

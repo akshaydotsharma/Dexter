@@ -2,10 +2,10 @@
 
 ## System Overview
 
-The Personal Dashboard is a monorepo with three deliverables: a React web client, a Node.js/Express API, and a native SwiftUI iOS app. All three speak the same REST + SSE surface area on port 3000. Tasks, notes, and lists live in PostgreSQL; chat / AI drafts run on Anthropic Claude via the Vercel AI SDK.
+Dexter is a monorepo with three deliverables: a React web client, a Node.js/Express API, and a native SwiftUI iOS app. All three speak the same REST + SSE surface area on port 3000. Tasks, notes, and lists live in PostgreSQL; chat / AI drafts run on Anthropic Claude via the Vercel AI SDK.
 
 ```
-personal-dashboard/
+Dexter/
 ├── client/          # React frontend (web)
 ├── server/          # Express backend
 ├── mobile/          # Native iOS app (SwiftUI)

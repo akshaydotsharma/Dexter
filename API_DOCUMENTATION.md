@@ -1,4 +1,4 @@
-# Personal Dashboard API Documentation
+# Dexter API Documentation
 
 ## Base URL
 - **Local Development:** `http://localhost:3000/api`

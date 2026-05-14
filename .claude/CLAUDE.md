@@ -1,4 +1,4 @@
-# Personal Dashboard
+# Dexter
 
 A solo-built productivity stack. Active surface today: a native iOS app in SwiftUI with all data and AI on-device. The web client (`client/`) and Express backend (`server/`) are paused — see "Project status" below.
 
@@ -14,7 +14,7 @@ If a request would touch the webapp:
 ## Project memory
 
 Long-lived notes about this codebase live at:
-`~/.claude/projects/-Users-akshaysharma-Documents-Projects-personal-dashboard/memory/`
+`~/.claude/projects/-Users-akshaysharma-Documents-Projects-Dexter/memory/`
 
 ## Agent routing
 
@@ -36,7 +36,7 @@ Long-lived notes about this codebase live at:
 ## Tech stack (paused — leave alone)
 
 - Web client: React 19, Vite 7, Tailwind 4. Dev server :5173.
-- Server: Node.js 20+, Express 5, PostgreSQL via `pg`. Default :3000 (falls through to :3001 when squatted). `node --test` against `personal_dashboard_test`.
+- Server: Node.js 20+, Express 5, PostgreSQL via `pg`. Default :3000 (falls through to :3001 when squatted). `node --test` against `dexter_test`.
 - These still build, but no new features are being added. Dashboard stats + Activity timeline on iOS are still server-bound (need either porting or graceful-degrade — tracked as follow-up).
 
 ## Key paths (iOS)

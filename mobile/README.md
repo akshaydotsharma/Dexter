@@ -1,6 +1,6 @@
-# Personal Dashboard iOS App
+# Dexter iOS App
 
-Native SwiftUI iOS app for the personal-dashboard webapp. Talks to the existing Express API.
+Native SwiftUI iOS app for Dexter. Talks to the existing Express API.
 
 ## Stack
 - SwiftUI + Swift 5

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ship a development-signed build of personal-dashboard to your iPhone over the
+# Ship a development-signed build of Dexter to your iPhone over the
 # internet via Tailscale Serve + itms-services OTA install.
 #
 # No App Store Connect, no paid Apple Developer Program required. Works with the

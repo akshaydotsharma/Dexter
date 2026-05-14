@@ -30,7 +30,7 @@ Edits, deletes, and multi-draft batches always require explicit confirmation in 
    1. **Dictate Text**
       - *Language*: matches your speech.
       - *Stop Listening*: **After Short Pause**.
-   2. **Capture to Dashboard** (under Personal Dashboard)
+   2. **Capture to Dashboard** (under Dexter)
       - Set the *Capture* input to the magic variable from step 1 (Dictated Text).
    3. **Show Notification**
       - Body: the magic variable from step 2 (the Capture intent's result text).

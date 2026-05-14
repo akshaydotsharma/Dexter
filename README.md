@@ -1,4 +1,4 @@
-# Personal Dashboard
+# Dexter
 
 A modern, customizable personal dashboard application built with the PERN stack (PostgreSQL, Express, React, Node.js). This application allows you to manage Tasks, Lists, and Notes in a single, beautiful interface.
 
@@ -38,7 +38,7 @@ Current Version: **v0.1.0**
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd personal-dashboard
+   cd Dexter
    ```
 
 2. **Configure environment variables**

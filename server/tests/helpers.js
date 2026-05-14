@@ -1,7 +1,7 @@
 /**
  * Shared test helpers.
  *
- * Tests run against a dedicated DB (default: personal_dashboard_test).
+ * Tests run against a dedicated DB (default: dexter_test).
  * Set TEST_DATABASE_URL to override. Tables are truncated before each
  * suite — never against the dev DB.
  */
@@ -11,7 +11,7 @@ const fs = require('fs');
 const { Pool } = require('pg');
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
-    || 'postgres://localhost:5432/personal_dashboard_test';
+    || 'postgres://localhost:5432/dexter_test';
 
 // Set DATABASE_URL to the test URL BEFORE the server's db module is required
 // so the same connection pool serves the app and the test harness. Tests must
