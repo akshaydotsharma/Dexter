@@ -4,8 +4,8 @@ import SwiftData
 /// SwiftData container singleton.
 ///
 /// The store backs the iOS local-first data layer (#14). It holds
-/// `LocalTodo`, `LocalNote`, `LocalList`, `LocalNoteFolder`, and
-/// `LocalKeyword`.
+/// `LocalTodo`, `LocalNote`, `LocalList`, `LocalNoteFolder`, `LocalKeyword`,
+/// `LocalTrip`, and `LocalItineraryItem`.
 /// SwiftData persists to the app's Application Support directory by default,
 /// which survives cache eviction unlike the legacy JSON cache.
 ///
@@ -27,6 +27,8 @@ final class SwiftDataStore {
                 LocalNote.self,
                 LocalList.self,
                 LocalKeyword.self,
+                LocalTrip.self,
+                LocalItineraryItem.self,
             ])
             // SwiftData defaults the store URL to Application Support, but
             // on a fresh simulator that directory doesn't exist yet and
@@ -59,6 +61,8 @@ final class SwiftDataStore {
                 LocalNote.self,
                 LocalList.self,
                 LocalKeyword.self,
+                LocalTrip.self,
+                LocalItineraryItem.self,
             ])
             let configuration = ModelConfiguration(
                 schema: schema,

@@ -250,6 +250,107 @@ enum ToolDefinitions {
         )
     )
 
+    // MARK: - Itineraries (trips + day-by-day items)
+
+    /// Single itinerary-item shape for the `add_itinerary_item` array.
+    private static let itineraryItemSchema: AnthropicJSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "day_date": .object([
+                "type": .string("string"),
+                "description": .string("ISO 8601 date for the day this item belongs to (e.g., 2026-06-14 or 2026-06-14T00:00:00.000Z). Must fall within the trip's date range.")
+            ]),
+            "kind": .object([
+                "type": .string("string"),
+                "enum": .array([.string("stay"), .string("activity"), .string("place"), .string("restaurant")]),
+                "description": .string("Category of the itinerary item.")
+            ]),
+            "title": .object([
+                "type": .string("string"),
+                "description": .string("Short title (e.g., 'Hotel Roma', 'Vatican tour'). Required.")
+            ]),
+            "notes": .object([
+                "type": .string("string"),
+                "description": .string("Free-form notes. Use empty string if none.")
+            ])
+        ]),
+        "required": .array([.string("day_date"), .string("kind"), .string("title"), .string("notes")])
+    ])
+
+    private static let draftTrip = AnthropicTool(
+        name: "draft_trip",
+        description: "Create a NEW trip in the Itineraries section with a destination name and a date range. IMPORTANT: If the user does not specify start_date AND end_date, do NOT call this tool. Ask the user for the dates first.",
+        input_schema: object(
+            properties: [
+                "name": string("Destination or trip title (e.g., 'Italy', 'Vietnam')."),
+                "start_date": string("First day of the trip in ISO 8601 (e.g., 2026-06-14 or 2026-06-14T00:00:00.000Z). Required."),
+                "end_date": string("Last day of the trip (inclusive) in ISO 8601. Required."),
+                "notes": string("Free-form notes about the trip. Use empty string if none.")
+            ],
+            required: ["name", "start_date", "end_date", "notes"]
+        )
+    )
+
+    private static let addItineraryItem = AnthropicTool(
+        name: "add_itinerary_item",
+        description: "Add one or more day-by-day items (stays, activities, places, restaurants) to an EXISTING trip. The LLM should pick trip_id from the EXISTING TRIPS context block; reject ambiguity by asking which trip the user means rather than guessing. Use this for multi-item adds in a single call.",
+        input_schema: object(
+            properties: [
+                "trip_id": string("The UUID of the existing trip to add items to (from EXISTING TRIPS context)."),
+                "items": arrayOf(itineraryItemSchema, description: "Array of itinerary items to append to the trip.")
+            ],
+            required: ["trip_id", "items"]
+        )
+    )
+
+    private static let editTrip = AnthropicTool(
+        name: "edit_trip",
+        description: "Edit an EXISTING trip's name, date range, or notes. Requires the trip UUID. IMPORTANT: At least one field must actually change. Use empty string for fields you want to keep unchanged. Use the literal string \"null\" ONLY for notes to clear it. Name and dates cannot be cleared.",
+        input_schema: object(
+            properties: [
+                "id": string("The UUID of the existing trip to edit (from EXISTING TRIPS context)."),
+                "name": string("New trip name. Use empty string to keep unchanged."),
+                "start_date": string("New start date in ISO 8601. Use empty string to keep unchanged."),
+                "end_date": string("New end date in ISO 8601. Use empty string to keep unchanged."),
+                "notes": string("New notes. Use empty string to keep unchanged, or the literal \"null\" to clear.")
+            ],
+            required: ["id", "name", "start_date", "end_date", "notes"]
+        )
+    )
+
+    private static let deleteTrip = AnthropicTool(
+        name: "delete_trip",
+        description: "Delete an EXISTING trip and ALL its itinerary items (cascade). Use when the user wants to remove a trip entirely. Requires the trip UUID.",
+        input_schema: object(
+            properties: ["id": string("The UUID of the trip to delete (from EXISTING TRIPS context).")],
+            required: ["id"]
+        )
+    )
+
+    private static let editItineraryItem = AnthropicTool(
+        name: "edit_itinerary_item",
+        description: "Edit an EXISTING itinerary item's day, kind, title, or notes. Requires the item UUID. IMPORTANT: At least one field must actually change. Use empty string for fields to keep unchanged. Use the literal string \"null\" ONLY for notes to clear it. day_date, kind, and title cannot be cleared.",
+        input_schema: object(
+            properties: [
+                "id": string("The UUID of the existing itinerary item to edit (from EXISTING TRIPS context)."),
+                "day_date": string("New day for this item in ISO 8601. Use empty string to keep unchanged."),
+                "kind": string("New kind. Must be one of: stay, activity, place, restaurant. Use empty string to keep unchanged."),
+                "title": string("New title. Use empty string to keep unchanged."),
+                "notes": string("New notes. Use empty string to keep unchanged, or the literal \"null\" to clear.")
+            ],
+            required: ["id", "day_date", "kind", "title", "notes"]
+        )
+    )
+
+    private static let deleteItineraryItem = AnthropicTool(
+        name: "delete_itinerary_item",
+        description: "Delete an EXISTING itinerary item. Use when user wants to remove a single stay/activity/place/restaurant from a trip. Requires the item UUID.",
+        input_schema: object(
+            properties: ["id": string("The UUID of the itinerary item to delete (from EXISTING TRIPS context).")],
+            required: ["id"]
+        )
+    )
+
     // MARK: - Public surface
 
     static let allTools: [AnthropicTool] = [
@@ -267,7 +368,26 @@ enum ToolDefinitions {
         deleteTask,
         deleteNote,
         deleteList,
-        deleteFolder
+        deleteFolder,
+        draftTrip,
+        addItineraryItem,
+        editTrip,
+        deleteTrip,
+        editItineraryItem,
+        deleteItineraryItem
+    ]
+
+    /// Subset of `allTools` excluded from the capture (Shortcut) auto-execute
+    /// path. Capture auto-confirms everything the LLM emits; trip-related
+    /// tools require date confirmation and contextual review that only the
+    /// chat surface offers. Filter applied in `ChatToDrafts.run()`.
+    static let captureExcludedToolNames: Set<String> = [
+        "draft_trip",
+        "add_itinerary_item",
+        "edit_trip",
+        "delete_trip",
+        "edit_itinerary_item",
+        "delete_itinerary_item"
     ]
 
     /// Map tool name → action type. Mirrors `toolToActionType` in
@@ -289,6 +409,12 @@ enum ToolDefinitions {
         "delete_task": .deleteTodo,
         "delete_note": .deleteNote,
         "delete_list": .deleteList,
-        "delete_folder": .deleteFolder
+        "delete_folder": .deleteFolder,
+        "draft_trip": .createTrip,
+        "add_itinerary_item": .addItineraryItems,
+        "edit_trip": .updateTrip,
+        "delete_trip": .deleteTrip,
+        "edit_itinerary_item": .updateItineraryItem,
+        "delete_itinerary_item": .deleteItineraryItem
     ]
 }

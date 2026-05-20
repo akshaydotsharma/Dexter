@@ -124,15 +124,17 @@ extension ChatActionResult {
         case "note": return .notes
         case "list": return .lists
         case "folder": return .notes
+        case "trip", "itinerary_item": return .itineraries
         default: return nil
         }
     }
 
-    /// True when we have a usable id + section to focus a row. Folders skip
-    /// the affordance (the destination view doesn't focus folder rows yet).
+    /// True when we have a usable id + section to focus a row. Folders +
+    /// itinerary items skip the affordance (their destination views don't
+    /// support row-level focus yet — tracked as follow-up for #104).
     var supportsDeepLink: Bool {
         guard let outcome, !isFailure, state != .deleted else { return false }
-        if outcome.type == "folder" { return false }
+        if outcome.type == "folder" || outcome.type == "itinerary_item" { return false }
         return UUID(uuidString: outcome.id) != nil && deepLinkSection != nil
     }
 

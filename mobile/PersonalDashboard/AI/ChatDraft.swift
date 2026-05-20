@@ -106,10 +106,171 @@ extension ChatDraft {
             let count = dict["items"]?.arrayValue?.count ?? 0
             return "List: \"\(dict["title"]?.stringValue ?? "Untitled")\" with \(count) item\(count == 1 ? "" : "s")"
 
+        case .createTrip:
+            let name = dict["name"]?.stringValue ?? "Untitled"
+            let start = (dict["start_date"]?.stringValue).flatMap(Self.parseAnyDate)
+            let end = (dict["end_date"]?.stringValue).flatMap(Self.parseAnyDate)
+            if let start, let end {
+                let range = Self.dateRange(start: start, end: end)
+                let days = Self.inclusiveDays(start: start, end: end)
+                return "\(name) · \(range) · \(days) day\(days == 1 ? "" : "s")"
+            }
+            return "Trip: \"\(name)\""
+
+        case .addItineraryItems:
+            let items = dict["items"]?.arrayValue ?? []
+            if items.count == 1, let only = items.first?.objectValue {
+                let title = only["title"]?.stringValue ?? "Untitled"
+                let kindRaw = (only["kind"]?.stringValue ?? "").lowercased()
+                let kind = ItineraryKind(rawValue: kindRaw)?.displayName ?? "Item"
+                // We don't know Day N without the trip context; show date only.
+                let day = (only["day_date"]?.stringValue).flatMap(Self.parseAnyDate)
+                let dayDisplay = day.map { Self.shortDayMonth.string(from: $0) } ?? ""
+                if !dayDisplay.isEmpty {
+                    return "\(title) · \(kind) · \(dayDisplay)"
+                }
+                return "\(title) · \(kind)"
+            }
+            // Multiple items. Build a comma-joined list of titles and
+            // truncate the joined run to ~40 chars total to stay readable.
+            let titles = items.compactMap { $0.objectValue?["title"]?.stringValue }
+            let joined = titles.joined(separator: ", ")
+            let truncated = joined.count > 40 ? String(joined.prefix(37)) + "…" : joined
+            return "\(items.count) item\(items.count == 1 ? "" : "s"): \(truncated)"
+
+        case .updateTrip:
+            return Self.updateTripSummary(dict: dict)
+
+        case .updateItineraryItem:
+            return Self.updateItineraryItemSummary(dict: dict)
+
+        case .deleteTrip:
+            return "Delete trip (ID: \(dict["id"]?.stringValue ?? "?"))"
+
+        case .deleteItineraryItem:
+            return "Delete itinerary item (ID: \(dict["id"]?.stringValue ?? "?"))"
+
         case .unknown:
             return "Unknown action"
         }
     }
+
+    /// Build the preview for `edit_trip`. Falls back to a generic line if
+    /// no field actually carries a change.
+    private static func updateTripSummary(dict: [String: AnthropicJSONValue]) -> String {
+        var pieces: [String] = []
+        if let name = dict["name"]?.stringValue, !name.isEmpty, name != "null" {
+            pieces.append("Rename to \(name)")
+        }
+        let start = (dict["start_date"]?.stringValue).flatMap { $0.isEmpty || $0 == "null" ? nil : parseAnyDate($0) }
+        let end = (dict["end_date"]?.stringValue).flatMap { $0.isEmpty || $0 == "null" ? nil : parseAnyDate($0) }
+        if let start, let end {
+            pieces.append("Move to \(dateRange(start: start, end: end))")
+        } else if let start {
+            pieces.append("Start \(shortDayMonth.string(from: start))")
+        } else if let end {
+            pieces.append("End \(shortDayMonth.string(from: end))")
+        }
+        if let raw = dict["notes"]?.stringValue {
+            if raw == "null" {
+                pieces.append("Clear notes")
+            } else if !raw.isEmpty {
+                pieces.append("Update notes")
+            }
+        }
+        if pieces.isEmpty {
+            return "Edit trip (ID: \(dict["id"]?.stringValue ?? "?"))"
+        }
+        return pieces.joined(separator: " · ")
+    }
+
+    private static func updateItineraryItemSummary(dict: [String: AnthropicJSONValue]) -> String {
+        var pieces: [String] = []
+        if let title = dict["title"]?.stringValue, !title.isEmpty, title != "null" {
+            pieces.append("Rename to \(title)")
+        }
+        if let raw = dict["day_date"]?.stringValue, !raw.isEmpty, raw != "null",
+           let day = parseAnyDate(raw) {
+            pieces.append("Move to \(shortDayMonth.string(from: day))")
+        }
+        if let raw = dict["kind"]?.stringValue, !raw.isEmpty, raw != "null",
+           let kind = ItineraryKind(rawValue: raw.lowercased()) {
+            pieces.append("Kind \(kind.displayName)")
+        }
+        if let raw = dict["notes"]?.stringValue {
+            if raw == "null" {
+                pieces.append("Clear notes")
+            } else if !raw.isEmpty {
+                pieces.append("Update notes")
+            }
+        }
+        if pieces.isEmpty {
+            return "Edit itinerary item (ID: \(dict["id"]?.stringValue ?? "?"))"
+        }
+        return pieces.joined(separator: " · ")
+    }
+
+    /// Inclusive day count between two dates (day-granularity).
+    private static func inclusiveDays(start: Date, end: Date) -> Int {
+        let cal = Calendar(identifier: .gregorian)
+        let s = cal.startOfDay(for: start)
+        let e = cal.startOfDay(for: end)
+        let comps = cal.dateComponents([.day], from: s, to: e)
+        return max(1, (comps.day ?? 0) + 1)
+    }
+
+    /// "14–21 Jun" / "29 Jun – 5 Jul" / "30 Dec 2026 – 4 Jan 2027".
+    private static func dateRange(start: Date, end: Date) -> String {
+        let cal = Calendar(identifier: .gregorian)
+        let sameYear = cal.component(.year, from: start) == cal.component(.year, from: end)
+        let sameMonth = sameYear && cal.component(.month, from: start) == cal.component(.month, from: end)
+        let currentYear = cal.component(.year, from: Date()) == cal.component(.year, from: start)
+
+        if sameMonth {
+            let day1 = String(cal.component(.day, from: start))
+            let day2 = String(cal.component(.day, from: end))
+            let mon = monthShort.string(from: end)
+            return "\(day1)–\(day2) \(mon)"
+        }
+        if sameYear && currentYear {
+            return "\(dayMonth.string(from: start)) – \(dayMonth.string(from: end))"
+        }
+        // Cross-year (or distant year): include both years.
+        return "\(dayMonthYear.string(from: start)) – \(dayMonthYear.string(from: end))"
+    }
+
+    static func parseAnyDate(_ raw: String) -> Date? {
+        if raw.isEmpty || raw == "null" { return nil }
+        if let d = iso8601Fractional.date(from: raw) { return d }
+        if let d = iso8601.date(from: raw) { return d }
+        if let d = dateOnlyUTC.date(from: raw) { return d }
+        return nil
+    }
+
+    private static let monthShort: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "MMM"; return f
+    }()
+
+    private static let dayMonth: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "d MMM"; return f
+    }()
+
+    private static let dayMonthYear: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "d MMM yyyy"; return f
+    }()
+
+    private static let shortDayMonth: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "d MMM"; return f
+    }()
+
+    private static let dateOnlyUTC: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     private static func parseISODate(_ raw: String) -> Date? {
         if let d = iso8601Fractional.date(from: raw) { return d }

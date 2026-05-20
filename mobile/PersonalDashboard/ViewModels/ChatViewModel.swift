@@ -78,6 +78,21 @@ final class ChatViewModel {
         let input = draftInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
         draftInput = ""
+
+        // Snapshot conversation history BEFORE appending the new user turn,
+        // so the stateless Anthropic API sees what was said earlier (and we
+        // don't double-count the current input). Auto-executed action
+        // results aren't replayed — the system prompt's EXISTING items
+        // context block is the source of truth for current device state.
+        let history: [ChatStream.PriorTurn] = turns.compactMap { turn in
+            let trimmed = turn.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return ChatStream.PriorTurn(
+                role: turn.role == .user ? "user" : "assistant",
+                text: trimmed
+            )
+        }
+
         turns.append(ChatTurn(role: .user, text: input))
         isSending = true
         errorMessage = nil
@@ -89,7 +104,7 @@ final class ChatViewModel {
         turns.append(ChatTurn(id: assistantTurnId, role: .assistant, text: "", isStreaming: true))
 
         do {
-            for try await event in streamingService.parseStream(input: input, sessionId: sessionId) {
+            for try await event in streamingService.parseStream(history: history, input: input, sessionId: sessionId) {
                 guard let idx = turns.firstIndex(where: { $0.id == assistantTurnId }) else { break }
                 switch event {
                 case .draft(let d):

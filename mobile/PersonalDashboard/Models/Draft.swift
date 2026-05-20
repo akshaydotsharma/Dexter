@@ -16,5 +16,11 @@ enum DraftActionType: String, Codable, Hashable, Sendable {
     case deleteNote = "DELETE_NOTE"
     case deleteList = "DELETE_LIST"
     case deleteFolder = "DELETE_FOLDER"
+    case createTrip = "CREATE_TRIP"
+    case addItineraryItems = "ADD_ITINERARY_ITEMS"
+    case updateTrip = "UPDATE_TRIP"
+    case deleteTrip = "DELETE_TRIP"
+    case updateItineraryItem = "UPDATE_ITINERARY_ITEM"
+    case deleteItineraryItem = "DELETE_ITINERARY_ITEM"
     case unknown = "UNKNOWN"
 }
