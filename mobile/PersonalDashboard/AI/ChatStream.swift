@@ -31,7 +31,16 @@ struct ChatStream {
         )
     }
 
-    func run(input: String, timezone: String) -> AsyncThrowingStream<ChatStreamEvent, Error> {
+    /// One prior turn for stateless-API history. Text-only — auto-executed
+    /// tool results aren't replayed back because the system prompt's EXISTING
+    /// TASKS / NOTES / LISTS / TRIPS context block is the source of truth for
+    /// what currently lives on the device.
+    struct PriorTurn: Sendable {
+        let role: String   // "user" or "assistant"
+        let text: String
+    }
+
+    func run(history: [PriorTurn] = [], input: String, timezone: String) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 do {
@@ -41,9 +50,10 @@ struct ChatStream {
                         nowIso: Self.iso8601Fractional.string(from: Date()),
                         contextBlock: contextBlock
                     )
-                    let messages: [AnthropicMessage] = [
-                        AnthropicMessage(role: "user", content: [.text(input)])
-                    ]
+                    var messages: [AnthropicMessage] = history
+                        .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                        .map { AnthropicMessage(role: $0.role, content: [.text($0.text)]) }
+                    messages.append(AnthropicMessage(role: "user", content: [.text(input)]))
 
                     var accumulatedText = ""
                     var draftCount = 0
@@ -122,6 +132,8 @@ struct ChatStream {
         - draft_task: Create a NEW task/todo with title, description, due_at (ISO 8601), and tag
         - draft_note: Create a NEW note with title, body, and optional tags array
         - draft_list: Create a NEW list with title and items array
+        - draft_trip: Create a NEW trip with name, start_date, end_date, notes. Do NOT call unless both start_date AND end_date are known; ask the user for dates first.
+        - add_itinerary_item: Add stays / activities / places / restaurants to an existing trip (multi-item supported via items array; kind enum is stay|activity|place|restaurant)
 
         EDIT (for existing items - requires UUID):
         - complete_task: Mark a task as completed or incomplete
@@ -131,6 +143,8 @@ struct ChatStream {
         - add_to_list: Add new items to an existing list (keeps existing items)
         - edit_list_item: Edit a specific item in a list (requires list_id and item_index from context)
         - edit_folder: Rename an existing folder
+        - edit_trip: Edit an existing trip's name, start_date, end_date, or notes (notes can be cleared with "null")
+        - edit_itinerary_item: Edit an existing itinerary item's day_date, kind, title, or notes
 
         DELETE/REMOVE (for existing items - requires UUID):
         - delete_task: Delete an existing task
@@ -138,17 +152,23 @@ struct ChatStream {
         - delete_list: Delete an existing list
         - delete_folder: Delete an existing folder (notes move to no folder)
         - remove_list_item: Remove a specific item from a list (requires list_id and item_index)
+        - delete_trip: Delete an existing trip (cascades to all its itinerary items)
+        - delete_itinerary_item: Delete a single itinerary item
 
-        CAPTURE DEFAULTS (for NEW items via draft_task / draft_note / draft_list):
-        You MUST capture every new-item request into one of the three types. Never refuse a capture with "I can't help with that" or "this doesn't fit a task / note / list". Pick the best fit from the user's intent and create the draft. The user can edit the captured item afterwards, so prefer capturing over asking.
+        CAPTURE DEFAULTS (for NEW items via draft_task / draft_note / draft_list / draft_trip):
+        You MUST capture every new-item request into the best-fit type. Never refuse a capture with "I can't help with that". Pick the best fit from the user's intent and create the draft. The user can edit the captured item afterwards, so prefer capturing over asking.
 
         Type selection (in this priority order):
+        - Trip / travel planning intent ("plan a trip to X", "build me an itinerary for X", "I'm going to X next week", "vacation to X", "Italy trip") → draft_trip. If the user has NOT specified both start_date AND end_date, ask ONE short question for the dates first; do NOT default to draft_note for trip intents.
+        - Adding stays / activities / places / restaurants to an existing trip ("add a hotel in Rome", "Vatican on day 2", "dinner in Trastevere") when EXISTING TRIPS context has a matching trip → add_itinerary_item. If no trip exists or which trip is ambiguous, ask which trip first.
         - If the user explicitly says "task" / "todo" / "remind me" / "add a list" / "make a note" / "save this as a note", honour that type.
         - Long-form prose, paragraph(s), journaling or reflective tone, or phrases like "capture my thoughts", "remember this", "I was thinking", "note that…", "log this" → draft_note.
         - A single short actionable line (verb-led, often with a deadline like "tomorrow" / "next week" / a date) → draft_task.
         - Multiple short comma-, line-, or bullet-separated atoms ("milk, eggs, bread"; "groceries: …") → draft_list.
         - Unclear or ambiguous between task and list → default to draft_note.
         - A vague but content-bearing short input ("the thing about the meeting") → draft_note. Do NOT ask the user to clarify; just capture it as a note and move on.
+
+        Trip-intent override: travel and itinerary phrasings NEVER fall through to draft_note. They go to draft_trip (with a dates ask-back if needed) or add_itinerary_item.
 
         IMPORTANT RULES:
         1. NEVER perform actions directly - ONLY call tools to create draft proposals

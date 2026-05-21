@@ -11,6 +11,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case lists
     case dashboard
     case activity
+    case itineraries
     case vocabulary
     case settings
     case helpCenter
@@ -19,32 +20,34 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
 
     var displayName: String {
         switch self {
-        case .chat:       return "Chat"
-        case .today:      return "Today"
-        case .tasks:      return "Tasks"
-        case .notes:      return "Notes"
-        case .lists:      return "Lists"
-        case .dashboard:  return "Dashboard"
-        case .activity:   return "Activity"
-        case .vocabulary: return "Vocabulary"
-        case .settings:   return "Settings"
-        case .helpCenter: return "Help center"
+        case .chat:        return "Chat"
+        case .today:       return "Today"
+        case .tasks:       return "Tasks"
+        case .notes:       return "Notes"
+        case .lists:       return "Lists"
+        case .dashboard:   return "Dashboard"
+        case .activity:    return "Activity"
+        case .itineraries: return "Itineraries"
+        case .vocabulary:  return "Vocabulary"
+        case .settings:    return "Settings"
+        case .helpCenter:  return "Help center"
         }
     }
 
     /// SF Symbol used in the side drawer and bottom tab bar.
     var icon: String {
         switch self {
-        case .chat:       return "sparkles"
-        case .today:      return "calendar"
-        case .tasks:      return "checkmark.square"
-        case .notes:      return "doc.text"
-        case .lists:      return "list.bullet"
-        case .dashboard:  return "rectangle.grid.2x2"
-        case .activity:   return "clock.arrow.circlepath"
-        case .vocabulary: return "character.book.closed"
-        case .settings:   return "gearshape"
-        case .helpCenter: return "questionmark.circle"
+        case .chat:        return "sparkles"
+        case .today:       return "calendar"
+        case .tasks:       return "checkmark.square"
+        case .notes:       return "doc.text"
+        case .lists:       return "list.bullet"
+        case .dashboard:   return "rectangle.grid.2x2"
+        case .activity:    return "clock.arrow.circlepath"
+        case .itineraries: return "airplane"
+        case .vocabulary:  return "character.book.closed"
+        case .settings:    return "gearshape"
+        case .helpCenter:  return "questionmark.circle"
         }
     }
 }
@@ -92,6 +95,7 @@ enum Tokens {
     static let accentDashboard = Color.paper(0x1F1B16, 0xF2EBDA)
     static let accentActivity  = Color.paper(0x7C3F58, 0xE5A3BA)
     static let accentVocabulary = Color.paper(0x57534E, 0xB7B0A2)
+    static let accentItineraries = Color.paper(0x6D28D9, 0xA78BFA)
     static let accentSettings  = Color.paper(0x475569, 0x94A3B8)
     static let accentHelp      = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)
@@ -107,16 +111,17 @@ enum Tokens {
 
     static func accent(for section: AppSection) -> Color {
         switch section {
-        case .chat:       return accentChat
-        case .today:      return accentToday
-        case .tasks:      return accentTasks
-        case .notes:      return accentNotes
-        case .lists:      return accentLists
-        case .dashboard:  return accentDashboard
-        case .activity:   return accentActivity
-        case .vocabulary: return accentVocabulary
-        case .settings:   return accentSettings
-        case .helpCenter: return accentHelp
+        case .chat:        return accentChat
+        case .today:       return accentToday
+        case .tasks:       return accentTasks
+        case .notes:       return accentNotes
+        case .lists:       return accentLists
+        case .dashboard:   return accentDashboard
+        case .activity:    return accentActivity
+        case .itineraries: return accentItineraries
+        case .vocabulary:  return accentVocabulary
+        case .settings:    return accentSettings
+        case .helpCenter:  return accentHelp
         }
     }
 }

@@ -117,6 +117,54 @@ struct AssistantContextBuilder {
             }.joined(separator: "\n")
         }
 
+        // Trips: 20 most-recently-updated. The 3 newest get a full day-by-day
+        // breakdown; older trips only emit the header line to keep the prompt
+        // budget reasonable. Match the EXISTING TASKS pattern: skip the
+        // section entirely when there are zero trips.
+        if let trips = try? context.fetch(
+            FetchDescriptor<LocalTrip>(
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+        ).prefix(20), !trips.isEmpty {
+            // Pre-fetch every item once so we don't hit SwiftData N times.
+            let allItems = (try? context.fetch(
+                FetchDescriptor<LocalItineraryItem>(
+                    sortBy: [SortDescriptor(\.dayDate, order: .forward),
+                             SortDescriptor(\.sortOrder, order: .forward),
+                             SortDescriptor(\.createdAt, order: .forward)]
+                )
+            )) ?? []
+            let itemsByTrip = Dictionary(grouping: allItems, by: { $0.tripUUID })
+
+            out += "\n\nEXISTING TRIPS:\n"
+            out += trips.enumerated().map { (idx, trip) -> String in
+                let id = Self.uuidString(trip.clientUUID)
+                let startISO = Self.isoDate.string(from: trip.startDate)
+                let endISO = Self.isoDate.string(from: trip.endDate)
+                let days = max(1, Self.dayCount(from: trip.startDate, to: trip.endDate))
+                let items = itemsByTrip[trip.clientUUID] ?? []
+
+                var line = "- \(id) | \(trip.name) | \(startISO) → \(endISO) (\(days) day\(days == 1 ? "" : "s")) | \(items.count) item\(items.count == 1 ? "" : "s")"
+
+                // Full day-by-day breakdown only for the 3 most-recently-updated trips.
+                if idx < 3, !items.isEmpty {
+                    let groups = Dictionary(grouping: items, by: { $0.dayDate })
+                    let sortedDays = groups.keys.sorted()
+                    for day in sortedDays {
+                        let dayItems = groups[day] ?? []
+                        let dayNumber = Self.dayNumber(start: trip.startDate, day: day)
+                        let dayISO = Self.isoDate.string(from: day)
+                        let pretty = dayItems.map { item -> String in
+                            let kind = ItineraryKind(rawValue: item.kind) ?? .activity
+                            return "\(item.title) (\(kind.rawValue))"
+                        }.joined(separator: ", ")
+                        line += "\n  Day \(dayNumber) (\(dayISO)): \(pretty)"
+                    }
+                }
+                return line
+            }.joined(separator: "\n")
+        }
+
         // Personal vocabulary: words the user has explicitly taught the
         // assistant so the model can prefer them over close-sounding
         // mistranscriptions ("envisso" vs. "in visa", "Dexter" vs. "Dexter
@@ -156,4 +204,29 @@ struct AssistantContextBuilder {
         f.timeStyle = .none
         return f
     }()
+
+    /// `yyyy-MM-dd` for trip start/end and per-day labels. Matches the
+    /// "ISO date" shape the spec calls out for the EXISTING TRIPS block.
+    private static let isoDate: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Inclusive day count between two `startOfDay`-normalised dates.
+    private static func dayCount(from start: Date, to end: Date) -> Int {
+        let cal = Calendar(identifier: .gregorian)
+        let comps = cal.dateComponents([.day], from: start, to: end)
+        return (comps.day ?? 0) + 1
+    }
+
+    /// 1-indexed day number for a given day inside a trip ("Day 1" = startDate).
+    private static func dayNumber(start: Date, day: Date) -> Int {
+        let cal = Calendar(identifier: .gregorian)
+        let comps = cal.dateComponents([.day], from: start, to: day)
+        return (comps.day ?? 0) + 1
+    }
 }

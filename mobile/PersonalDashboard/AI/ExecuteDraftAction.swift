@@ -24,7 +24,7 @@ enum DraftExecutionError: LocalizedError {
 /// Outcome of one applied tool call. Surfaced back to the App Intent for
 /// dialog rendering and to the chat UI for confirmation banners.
 struct DraftActionOutcome {
-    let type: String          // "todo" | "note" | "list" | "folder"
+    let type: String          // "todo" | "note" | "list" | "folder" | "trip" | "itinerary_item"
     let action: String        // see action constants below
     let id: String            // UUID string
     let title: String?
@@ -67,6 +67,12 @@ struct ExecuteDraftAction {
         case .deleteNote: return try deleteNote(input)
         case .deleteList: return try deleteList(input)
         case .deleteFolder: return try deleteFolder(input)
+        case .createTrip: return try createTrip(input)
+        case .addItineraryItems: return try addItineraryItems(input)
+        case .updateTrip: return try updateTrip(input)
+        case .deleteTrip: return try deleteTrip(input)
+        case .updateItineraryItem: return try updateItineraryItem(input)
+        case .deleteItineraryItem: return try deleteItineraryItem(input)
         case .unknown:
             throw DraftExecutionError.invalidArgument(field: "action", reason: "unknown action type")
         }
@@ -412,6 +418,249 @@ struct ExecuteDraftAction {
         )
     }
 
+    // MARK: - TRIPS (Itineraries)
+
+    private func createTrip(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let name = trimmedString(input["name"]) ?? ""
+        guard !name.isEmpty else {
+            throw DraftExecutionError.invalidArgument(field: "name", reason: "required")
+        }
+        guard let startRaw = trimmedString(input["start_date"]), let start = parseAnyISODate(startRaw) else {
+            throw DraftExecutionError.invalidArgument(field: "start_date", reason: "required ISO 8601 date")
+        }
+        guard let endRaw = trimmedString(input["end_date"]), let end = parseAnyISODate(endRaw) else {
+            throw DraftExecutionError.invalidArgument(field: "end_date", reason: "required ISO 8601 date")
+        }
+        let startOfStart = Calendar(identifier: .gregorian).startOfDay(for: start)
+        let startOfEnd = Calendar(identifier: .gregorian).startOfDay(for: end)
+        guard startOfEnd >= startOfStart else {
+            throw DraftExecutionError.invalidArgument(field: "end_date", reason: "must be on or after start_date")
+        }
+
+        let notes = input["notes"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanNotes = notes == "null" ? "" : notes
+
+        let now = Date()
+        let row = LocalTrip(
+            name: name,
+            startDate: startOfStart,
+            endDate: startOfEnd,
+            notes: cleanNotes,
+            createdAt: now,
+            updatedAt: now
+        )
+        store.context.insert(row)
+        try save()
+        return outcome(type: "trip", action: ActionString.created, id: row.clientUUID, title: row.name)
+    }
+
+    private func addItineraryItems(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let tripUUID = try requireUUID(input["trip_id"], entity: "trip")
+        let trip: LocalTrip = try fetchOne(uuid: tripUUID, entity: "trip")
+
+        guard let rawItems = input["items"]?.arrayValue, !rawItems.isEmpty else {
+            throw DraftExecutionError.invalidArgument(field: "items", reason: "required and non-empty")
+        }
+
+        let cal = Calendar(identifier: .gregorian)
+        let now = Date()
+        var addedTitles: [String] = []
+
+        // Snapshot existing items for sortOrder math so we don't refetch per item.
+        let tripFK = tripUUID
+        var existing = (try? store.context.fetch(
+            FetchDescriptor<LocalItineraryItem>(
+                predicate: #Predicate { $0.tripUUID == tripFK }
+            )
+        )) ?? []
+
+        for entry in rawItems {
+            guard let dict = entry.objectValue else { continue }
+            let title = (dict["title"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+
+            guard let dayRaw = dict["day_date"]?.stringValue,
+                  let day = parseAnyISODate(dayRaw) else { continue }
+            let dayStart = cal.startOfDay(for: day)
+
+            // Map kind string; last-resort fallback is .activity per spec.
+            let kindRaw = (dict["kind"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let kind = ItineraryKind(rawValue: kindRaw) ?? .activity
+
+            let notes = (dict["notes"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanNotes = notes == "null" ? "" : notes
+
+            let maxForDay = existing
+                .filter { cal.isDate($0.dayDate, inSameDayAs: dayStart) }
+                .map { $0.sortOrder }
+                .max() ?? -1
+
+            let row = LocalItineraryItem(
+                tripUUID: tripUUID,
+                dayDate: dayStart,
+                kind: kind,
+                title: title,
+                notes: cleanNotes,
+                sortOrder: maxForDay + 1,
+                createdAt: now,
+                updatedAt: now
+            )
+            store.context.insert(row)
+            existing.append(row)
+            addedTitles.append(title)
+        }
+
+        guard !addedTitles.isEmpty else {
+            throw DraftExecutionError.invalidArgument(field: "items", reason: "no valid items provided")
+        }
+
+        trip.updatedAt = now
+        try save()
+
+        return DraftActionOutcome(
+            type: "itinerary_item",
+            action: ActionString.itemsAdded,
+            id: trip.clientUUID.uuidString.lowercased(),
+            title: trip.name,
+            dueDate: nil,
+            addedNames: addedTitles.joined(separator: ", ")
+        )
+    }
+
+    private func updateTrip(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let uuid = try requireUUID(input["id"], entity: "trip")
+        let row: LocalTrip = try fetchOne(uuid: uuid, entity: "trip")
+        let cal = Calendar(identifier: .gregorian)
+
+        var changed = false
+        if let name = trimmedString(input["name"]), !name.isEmpty {
+            row.name = name; changed = true
+        }
+        // start_date / end_date: empty = keep, real value = set. No "null" support (can't clear dates).
+        if let raw = input["start_date"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty, raw != "null",
+           let parsed = parseAnyISODate(raw) {
+            row.startDate = cal.startOfDay(for: parsed); changed = true
+        }
+        if let raw = input["end_date"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty, raw != "null",
+           let parsed = parseAnyISODate(raw) {
+            row.endDate = cal.startOfDay(for: parsed); changed = true
+        }
+        // notes: empty = keep, "null" = clear (to ""), real value = set.
+        if let raw = input["notes"]?.stringValue {
+            if raw == "null" {
+                row.notes = ""; changed = true
+            } else {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    row.notes = trimmed; changed = true
+                }
+            }
+        }
+
+        guard changed else {
+            throw DraftExecutionError.invalidArgument(field: "trip", reason: "no changes provided")
+        }
+        guard row.endDate >= row.startDate else {
+            throw DraftExecutionError.invalidArgument(field: "end_date", reason: "must be on or after start_date")
+        }
+
+        row.updatedAt = Date()
+        try save()
+        return outcome(type: "trip", action: ActionString.updated, id: row.clientUUID, title: row.name)
+    }
+
+    private func deleteTrip(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let uuid = try requireUUID(input["id"], entity: "trip")
+        let row: LocalTrip = try fetchOne(uuid: uuid, entity: "trip")
+        let name = row.name
+
+        // Cascade: delete every itinerary item that references this trip,
+        // then the trip itself. Single SwiftData save.
+        let tripFK = uuid
+        let children = (try? store.context.fetch(
+            FetchDescriptor<LocalItineraryItem>(
+                predicate: #Predicate { $0.tripUUID == tripFK }
+            )
+        )) ?? []
+        for child in children {
+            store.context.delete(child)
+        }
+        store.context.delete(row)
+        try save()
+
+        return DraftActionOutcome(
+            type: "trip", action: ActionString.deleted,
+            id: uuid.uuidString.lowercased(), title: name, dueDate: nil, addedNames: nil
+        )
+    }
+
+    private func updateItineraryItem(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let uuid = try requireUUID(input["id"], entity: "itinerary_item")
+        let row: LocalItineraryItem = try fetchOne(uuid: uuid, entity: "itinerary_item")
+        let cal = Calendar(identifier: .gregorian)
+
+        var changed = false
+        if let raw = input["day_date"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty, raw != "null",
+           let parsed = parseAnyISODate(raw) {
+            row.dayDate = cal.startOfDay(for: parsed); changed = true
+        }
+        if let raw = input["kind"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !raw.isEmpty, raw != "null",
+           let kind = ItineraryKind(rawValue: raw) {
+            row.kind = kind.rawValue; changed = true
+        }
+        if let title = trimmedString(input["title"]), !title.isEmpty {
+            row.title = title; changed = true
+        }
+        if let raw = input["notes"]?.stringValue {
+            if raw == "null" {
+                row.notes = ""; changed = true
+            } else {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    row.notes = trimmed; changed = true
+                }
+            }
+        }
+
+        guard changed else {
+            throw DraftExecutionError.invalidArgument(field: "itinerary item", reason: "no changes provided")
+        }
+
+        row.updatedAt = Date()
+        // Bump the parent trip's updatedAt so it floats to the top of the
+        // EXISTING TRIPS context next round.
+        let tripFK = row.tripUUID
+        if let trip = try? store.context.fetch(
+            FetchDescriptor<LocalTrip>(predicate: #Predicate { $0.clientUUID == tripFK })
+        ).first {
+            trip.updatedAt = Date()
+        }
+        try save()
+        return outcome(type: "itinerary_item", action: ActionString.updated, id: row.clientUUID, title: row.title)
+    }
+
+    private func deleteItineraryItem(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let uuid = try requireUUID(input["id"], entity: "itinerary_item")
+        let row: LocalItineraryItem = try fetchOne(uuid: uuid, entity: "itinerary_item")
+        let title = row.title
+        let tripFK = row.tripUUID
+        store.context.delete(row)
+        if let trip = try? store.context.fetch(
+            FetchDescriptor<LocalTrip>(predicate: #Predicate { $0.clientUUID == tripFK })
+        ).first {
+            trip.updatedAt = Date()
+        }
+        try save()
+        return DraftActionOutcome(
+            type: "itinerary_item", action: ActionString.deleted,
+            id: uuid.uuidString.lowercased(), title: title, dueDate: nil, addedNames: nil
+        )
+    }
+
     // MARK: - Helpers
 
     private func save() throws {
@@ -451,6 +700,20 @@ struct ExecuteDraftAction {
             }
             return row as! T
         }
+        if T.self == LocalTrip.self {
+            let descriptor = FetchDescriptor<LocalTrip>(predicate: #Predicate { $0.clientUUID == uuid })
+            guard let row = try? store.context.fetch(descriptor).first else {
+                throw DraftExecutionError.notFound(entityType: entity, idString: uuid.uuidString.lowercased())
+            }
+            return row as! T
+        }
+        if T.self == LocalItineraryItem.self {
+            let descriptor = FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.clientUUID == uuid })
+            guard let row = try? store.context.fetch(descriptor).first else {
+                throw DraftExecutionError.notFound(entityType: entity, idString: uuid.uuidString.lowercased())
+            }
+            return row as! T
+        }
         throw DraftExecutionError.notFound(entityType: entity, idString: uuid.uuidString.lowercased())
     }
 
@@ -477,6 +740,18 @@ struct ExecuteDraftAction {
         if let date = Self.iso8601.date(from: raw) {
             return date
         }
+        return nil
+    }
+
+    /// Slightly more lenient ISO parser used by the trip tools. Accepts
+    /// full datetimes (with or without fractional seconds) AND bare
+    /// `yyyy-MM-dd` dates, which the model emits for day-level fields.
+    private func parseAnyISODate(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty, raw != "null" else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let d = Self.iso8601Fractional.date(from: trimmed) { return d }
+        if let d = Self.iso8601.date(from: trimmed) { return d }
+        if let d = Self.dateOnly.date(from: trimmed) { return d }
         return nil
     }
 
@@ -519,6 +794,17 @@ struct ExecuteDraftAction {
     private static let iso8601: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    /// Bare `yyyy-MM-dd` parsed in UTC. Used for date-only fields (trip
+    /// start/end, itinerary item day_date).
+    private static let dateOnly: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
         return f
     }()
 }

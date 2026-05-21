@@ -194,6 +194,8 @@ struct ContentView: View {
             SettingsView(router: router, schemePref: schemePref)
         case .today:
             TodayView(router: router)
+        case .itineraries:
+            ItinerariesView(router: router)
         case .vocabulary:
             PersonalVocabularyView(router: router)
         case .helpCenter:

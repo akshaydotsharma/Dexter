@@ -23,6 +23,7 @@ struct AIStreamingService {
     /// Forwards `ChatStream.run` events into the local enum so callers stay
     /// decoupled from the Anthropic-flavored wire types.
     func parseStream(
+        history: [ChatStream.PriorTurn] = [],
         input: String,
         sessionId: String? = nil,
         timezone: String = TimeZone.current.identifier
@@ -30,7 +31,7 @@ struct AIStreamingService {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 do {
-                    for try await event in chatStream.run(input: input, timezone: timezone) {
+                    for try await event in chatStream.run(history: history, input: input, timezone: timezone) {
                         switch event {
                         case .draft(let d):
                             continuation.yield(.draft(d))

@@ -111,13 +111,14 @@ struct SideDrawer: View {
 
             DrawerDivider()
 
-            // Four rows: Today, Personal vocabulary, Help center, Settings.
-            // Primary surfaces (Notes, Lists, Tasks, Activity) and Chat now
-            // live in the bottom tab bar. Dashboard remains hidden (issue #30).
-            // Vocabulary sits second because it's the user's "teach the
-            // assistant" surface — close to Today as a daily-use destination,
-            // not buried under Settings (issue #100 follow-up).
+            // Five rows: Today, Itineraries, Vocabulary, Help center, Settings.
+            // Primary surfaces (Notes, Lists, Tasks, Activity) and Chat live
+            // in the bottom tab bar. Dashboard remains hidden (issue #30).
+            // Itineraries sits between Today and Vocabulary so the user's
+            // travel planning surface stays close to their daily-use rows
+            // (issue #104).
             DrawerRow(section: .today, router: router)
+            DrawerRow(section: .itineraries, router: router)
             DrawerRow(section: .vocabulary, router: router)
             DrawerRow(section: .helpCenter, router: router)
             DrawerRow(section: .settings, router: router)
