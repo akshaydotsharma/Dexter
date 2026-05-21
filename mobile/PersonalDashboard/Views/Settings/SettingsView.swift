@@ -4,12 +4,17 @@ struct SettingsView: View {
     @Bindable var router: AppRouter
     @Binding var schemePref: ColorSchemePref
 
+    @State private var showingResetData: Bool = false
+
     var body: some View {
         ZStack {
             Tokens.paper.ignoresSafeArea()
             rootContent
         }
         .activeSection(.settings)
+        .sheet(isPresented: $showingResetData) {
+            ResetDataView()
+        }
     }
 
     // MARK: - Root
@@ -24,6 +29,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.xl) {
                     appearanceSection
+                    dataSection
                     aboutSection
                     footer
                 }
@@ -46,6 +52,28 @@ struct SettingsView: View {
                 ThemePicker(value: $schemePref)
             }
             .padding(Space.lg)
+        }
+    }
+
+    private var dataSection: some View {
+        SettingsSection(title: "Data") {
+            Button {
+                showingResetData = true
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                    Text("Reset data…")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.danger)
+                    Spacer(minLength: Space.md)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+                .padding(.horizontal, Space.lg)
+                .padding(.vertical, Space.md)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
