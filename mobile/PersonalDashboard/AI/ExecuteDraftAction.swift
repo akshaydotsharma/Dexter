@@ -495,6 +495,18 @@ struct ExecuteDraftAction {
             // model can omit the field entirely; we don't require it.
             let startTime = parseAnyISODate(dict["start_time"]?.stringValue)
 
+            // Stay-only check-out fields. For non-stay kinds, both are
+            // discarded even if the model accidentally provided them.
+            var endDateValue: Date? = nil
+            var endTimeValue: Date? = nil
+            if kind == .stay {
+                if let endRaw = dict["end_date"]?.stringValue,
+                   let parsedEnd = parseAnyISODate(endRaw) {
+                    endDateValue = cal.startOfDay(for: parsedEnd)
+                }
+                endTimeValue = parseAnyISODate(dict["end_time"]?.stringValue)
+            }
+
             let maxForDay = existing
                 .filter { cal.isDate($0.dayDate, inSameDayAs: dayStart) }
                 .map { $0.sortOrder }
@@ -507,6 +519,8 @@ struct ExecuteDraftAction {
                 title: title,
                 notes: cleanNotes,
                 startTime: startTime,
+                endDate: endDateValue,
+                endTime: endTimeValue,
                 sortOrder: maxForDay + 1,
                 createdAt: now,
                 updatedAt: now
@@ -641,6 +655,30 @@ struct ExecuteDraftAction {
             } else if !trimmed.isEmpty, let parsed = parseAnyISODate(trimmed) {
                 row.startTime = parsed; changed = true
             }
+        }
+        // end_date / end_time: same tri-state. Cleared automatically when
+        // kind switches away from stay (handled below after `changed` check).
+        if let raw = input["end_date"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.endDate = nil; changed = true
+            } else if !trimmed.isEmpty, let parsed = parseAnyISODate(trimmed) {
+                row.endDate = cal.startOfDay(for: parsed); changed = true
+            }
+        }
+        if let raw = input["end_time"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.endTime = nil; changed = true
+            } else if !trimmed.isEmpty, let parsed = parseAnyISODate(trimmed) {
+                row.endTime = parsed; changed = true
+            }
+        }
+        // If the kind isn't stay any more, clear the stay-only fields so the
+        // persisted shape doesn't leak stale data through the timeline.
+        if row.kindEnum != .stay {
+            if row.endDate != nil { row.endDate = nil; changed = true }
+            if row.endTime != nil { row.endTime = nil; changed = true }
         }
 
         guard changed else {

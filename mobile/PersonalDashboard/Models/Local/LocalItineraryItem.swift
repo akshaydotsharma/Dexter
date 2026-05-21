@@ -66,6 +66,17 @@ final class LocalItineraryItem {
     /// an item to a neighbouring day.
     var startTime: Date?
 
+    /// Check-out day for `.stay` items. `nil` for other kinds. Stored as a
+    /// start-of-day Date, same shape as `dayDate`. The timeline still renders
+    /// the stay on its check-in day (`dayDate`); the card just shows a
+    /// "Check-out · Sun May 17" sub-line so the duration is visible at a
+    /// glance.
+    var endDate: Date?
+
+    /// Optional check-out time for `.stay` items (same `Date` shape as
+    /// `startTime`). Only used when `endDate` is set.
+    var endTime: Date?
+
     /// Ordering within a single day. Lower numbers render first; ties are
     /// broken by `createdAt`. Skeleton uses append-on-create (max + 1); a
     /// drag-to-reorder UI is a follow-up.
@@ -82,6 +93,8 @@ final class LocalItineraryItem {
         title: String,
         notes: String = "",
         startTime: Date? = nil,
+        endDate: Date? = nil,
+        endTime: Date? = nil,
         sortOrder: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -93,6 +106,8 @@ final class LocalItineraryItem {
         self.title = title
         self.notes = notes
         self.startTime = startTime
+        self.endDate = endDate
+        self.endTime = endTime
         self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt

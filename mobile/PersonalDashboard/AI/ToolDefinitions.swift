@@ -276,6 +276,14 @@ enum ToolDefinitions {
             "start_time": .object([
                 "type": .string("string"),
                 "description": .string("OPTIONAL start time for this item as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00 or 2026-06-14T11:00:00Z). The DATE portion MUST match day_date. Set this whenever the user mentions a time (e.g., 'dinner at 8', '11am check-in', 'tour at 14:00'); otherwise omit. Items without a start_time render as 'untimed' on the timeline.")
+            ]),
+            "end_date": .object([
+                "type": .string("string"),
+                "description": .string("STAY ONLY: ISO 8601 date for the check-out day (e.g., 2026-06-17). REQUIRED when kind is 'stay' (use day_date + 1 if user didn't specify, since most stays are at least one night). Must be > day_date. Omit for non-stay kinds.")
+            ]),
+            "end_time": .object([
+                "type": .string("string"),
+                "description": .string("STAY ONLY, OPTIONAL: check-out time as a full ISO 8601 datetime with timezone (e.g., 2026-06-17T11:00:00-04:00). The DATE portion MUST match end_date. Set this when the user mentions a check-out time; otherwise omit.")
             ])
         ]),
         "required": .array([.string("day_date"), .string("kind"), .string("title"), .string("notes")])
@@ -333,7 +341,7 @@ enum ToolDefinitions {
 
     private static let editItineraryItem = AnthropicTool(
         name: "edit_itinerary_item",
-        description: "Edit an EXISTING itinerary item's day, kind, title, notes, or start time. Requires the item UUID. IMPORTANT: At least one field must actually change. Use empty string for fields to keep unchanged. Use the literal string \"null\" for notes or start_time to CLEAR them. day_date, kind, and title cannot be cleared.",
+        description: "Edit an EXISTING itinerary item's day, kind, title, notes, start time, or (for stays) check-out date / time. Requires the item UUID. IMPORTANT: At least one field must actually change. Use empty string for fields to keep unchanged. Use the literal string \"null\" for notes, start_time, end_date, or end_time to CLEAR them. day_date, kind, and title cannot be cleared.",
         input_schema: object(
             properties: [
                 "id": string("The UUID of the existing itinerary item to edit (from EXISTING TRIPS context)."),
@@ -341,7 +349,9 @@ enum ToolDefinitions {
                 "kind": string("New kind. Must be one of: stay, activity, place, restaurant. Use empty string to keep unchanged."),
                 "title": string("New title. Use empty string to keep unchanged."),
                 "notes": string("New notes. Use empty string to keep unchanged, or the literal \"null\" to clear."),
-                "start_time": string("New start time as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00). The date portion should match day_date. Use empty string to keep unchanged, or the literal \"null\" to clear (make the item untimed).")
+                "start_time": string("New start time as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00). The date portion should match day_date. Use empty string to keep unchanged, or the literal \"null\" to clear (make the item untimed)."),
+                "end_date": string("STAY ONLY: new check-out date in ISO 8601 (e.g., 2026-06-17). Must be > day_date. Use empty string to keep unchanged, or the literal \"null\" to clear."),
+                "end_time": string("STAY ONLY: new check-out time as a full ISO 8601 datetime with timezone (e.g., 2026-06-17T11:00:00-04:00). The date portion should match end_date. Use empty string to keep unchanged, or the literal \"null\" to clear.")
             ],
             required: ["id", "day_date", "kind", "title", "notes"]
         )

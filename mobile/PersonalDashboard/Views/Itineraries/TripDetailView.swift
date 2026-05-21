@@ -53,7 +53,7 @@ struct TripDetailView: View {
         }
         .sheet(item: $editingItem) { target in
             ItineraryItemEditorSheet(trip: trip, target: target)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -88,12 +88,9 @@ struct TripDetailView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        // Vertically positioned ~45% from top of the area below the trip
-        // header. We approximate that with a flexible top spacer that's
-        // slightly smaller than the bottom one so the block sits above
-        // dead-centre.
+        // True vertical centre of the available area below the trip header.
         VStack(spacing: 0) {
-            Spacer().frame(minHeight: 0).layoutPriority(0.9)
+            Spacer()
             VStack(spacing: 0) {
                 Image(systemName: "airplane.departure")
                     .font(.system(size: 32, weight: .light))
@@ -110,7 +107,7 @@ struct TripDetailView: View {
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: 280)
-            Spacer().frame(minHeight: 0).layoutPriority(1.1)
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, Space.lg)
@@ -423,6 +420,14 @@ private struct TripTimelineRow: View {
                 Spacer(minLength: 0)
             }
 
+            if kind == .stay, let endDate = item.endDate {
+                Text(checkoutSubline(endDate: endDate, endTime: item.endTime))
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
             if !trimmedNotes.isEmpty {
                 Text(trimmedNotes)
                     .font(.edSubheadline)
@@ -436,6 +441,15 @@ private struct TripTimelineRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
+    private func checkoutSubline(endDate: Date, endTime: Date?) -> String {
+        let datePart = endDate.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+        if let endTime {
+            let timePart = endTime.formatted(.dateTime.hour().minute())
+            return "Check-out · \(datePart) · \(timePart)"
+        }
+        return "Check-out · \(datePart)"
     }
 }
 
@@ -484,15 +498,14 @@ struct ItineraryItemEditorSheet: View {
 
     @State private var title: String = ""
     @State private var kind: ItineraryKind = .activity
+    /// For non-stay kinds: the item's day (with time when `hasTime` is on).
+    /// For stay: the check-in date+time.
     @State private var dayDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var hasTime: Bool = false
-    /// Holds the hours/minutes for the time picker while the sheet is
-    /// open. The persisted `startTime` is rebuilt on save by combining
-    /// `dayDate` + the time-of-day extracted from this value.
-    @State private var timeOfDay: Date = {
-        let cal = Calendar.current
-        return cal.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
-    }()
+    /// Stay only: the check-out date+time. Defaulted to `dayDate + 1 day` when
+    /// the kind first switches to stay.
+    @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var hasEndTime: Bool = false
     @State private var notes: String = ""
     @State private var loaded: Bool = false
     @FocusState private var titleFocused: Bool
@@ -509,8 +522,10 @@ struct ItineraryItemEditorSheet: View {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         kindField
                         titleField
-                        dayField
-                        timeField
+                        primaryDateField
+                        if kind == .stay {
+                            endDateField
+                        }
                         notesField
                     }
                     .padding(Space.lg)
@@ -534,6 +549,43 @@ struct ItineraryItemEditorSheet: View {
             }
         }
         .onAppear { loadIfNeeded() }
+        .onChange(of: kind) { _, newKind in
+            // Switching to stay: make sure check-out is at least the day after
+            // check-in. Switching away from stay: reset the end-time flag so
+            // the persisted shape matches what's hidden in the UI.
+            let cal = Calendar.current
+            if newKind == .stay {
+                let inDay = cal.startOfDay(for: dayDate)
+                let outDay = cal.startOfDay(for: endDate)
+                if outDay <= inDay {
+                    endDate = cal.date(byAdding: .day, value: 1, to: inDay) ?? inDay
+                }
+            } else {
+                hasEndTime = false
+            }
+        }
+        .onChange(of: dayDate) { _, newValue in
+            // Keep check-out >= check-in for stay items.
+            guard kind == .stay else { return }
+            let cal = Calendar.current
+            let inDay = cal.startOfDay(for: newValue)
+            let outDay = cal.startOfDay(for: endDate)
+            if outDay < inDay {
+                endDate = cal.date(byAdding: .day, value: 1, to: inDay) ?? inDay
+            }
+        }
+        .onChange(of: hasTime) { _, newValue in
+            // Toggling time on: if the current Date is at midnight, seed a 9 AM
+            // default so the picker doesn't open showing 12:00 AM.
+            guard newValue else { return }
+            dayDate = seededTime(on: dayDate, defaultHour: 9)
+        }
+        .onChange(of: hasEndTime) { _, newValue in
+            guard newValue else { return }
+            // Default check-out time: 11 AM (most hotels). Same midnight
+            // guard as the check-in time toggle.
+            endDate = seededTime(on: endDate, defaultHour: 11)
+        }
     }
 
     // MARK: - Fields
@@ -571,50 +623,88 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
-    private var dayField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            Text("Day").eyebrow()
-            HStack {
-                Text("Date").font(.edBody).foregroundStyle(Tokens.inkSoft)
-                Spacer()
-                DatePicker("", selection: $dayDate, displayedComponents: .date)
-                    .labelsHidden()
-                    .tint(Tokens.accent(for: .itineraries))
-            }
-            .padding(Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
-        }
-    }
-
-    private var timeField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            Text("Time").eyebrow()
+    /// Primary date picker. For non-stay kinds: label "Date". For stay:
+    /// label "Check-in". Picker displays date alone or date + time depending
+    /// on `hasTime`, so the time renders inline with the date (no narrow
+    /// truncated time-only picker).
+    private var primaryDateField: some View {
+        let label = kind == .stay ? "Check-in" : "Date"
+        return VStack(alignment: .leading, spacing: Space.sm) {
+            Text(label).eyebrow()
             VStack(spacing: 0) {
                 HStack {
-                    Text("Add time").font(.edBody).foregroundStyle(Tokens.inkSoft)
+                    DatePicker(
+                        "",
+                        selection: $dayDate,
+                        displayedComponents: hasTime ? [.date, .hourAndMinute] : .date
+                    )
+                    .labelsHidden()
+                    .tint(Tokens.accent(for: .itineraries))
+                    Spacer(minLength: 0)
+                }
+                .padding(Space.md)
+
+                Divider().background(Tokens.divider)
+
+                HStack {
+                    Text("Include time").font(.edBody).foregroundStyle(Tokens.inkSoft)
                     Spacer()
                     Toggle("", isOn: $hasTime)
                         .labelsHidden()
                         .tint(Tokens.accent(for: .itineraries))
                 }
                 .padding(Space.md)
-
-                if hasTime {
-                    Divider().background(Tokens.divider)
-                    HStack {
-                        Text("Start").font(.edBody).foregroundStyle(Tokens.inkSoft)
-                        Spacer()
-                        DatePicker("", selection: $timeOfDay, displayedComponents: .hourAndMinute)
-                            .labelsHidden()
-                            .tint(Tokens.accent(for: .itineraries))
-                    }
-                    .padding(Space.md)
-                }
             }
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
             .paperBorder(Tokens.border, radius: Radius.md)
         }
+    }
+
+    /// Stay-only second picker for the check-out date / time. Constrained to
+    /// `>= dayDate` so the user can't pick a check-out before the check-in.
+    private var endDateField: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Text("Check-out").eyebrow()
+            VStack(spacing: 0) {
+                HStack {
+                    DatePicker(
+                        "",
+                        selection: $endDate,
+                        in: Calendar.current.startOfDay(for: dayDate)...,
+                        displayedComponents: hasEndTime ? [.date, .hourAndMinute] : .date
+                    )
+                    .labelsHidden()
+                    .tint(Tokens.accent(for: .itineraries))
+                    Spacer(minLength: 0)
+                }
+                .padding(Space.md)
+
+                Divider().background(Tokens.divider)
+
+                HStack {
+                    Text("Include time").font(.edBody).foregroundStyle(Tokens.inkSoft)
+                    Spacer()
+                    Toggle("", isOn: $hasEndTime)
+                        .labelsHidden()
+                        .tint(Tokens.accent(for: .itineraries))
+                }
+                .padding(Space.md)
+            }
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
+
+    /// Returns `existing` with the time-of-day replaced by `defaultHour:00` if
+    /// the existing time is midnight; otherwise leaves it as-is. Used when
+    /// the "Include time" toggle flips on so the picker doesn't surface 12:00 AM.
+    private func seededTime(on existing: Date, defaultHour: Int) -> Date {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.hour, .minute], from: existing)
+        if (comps.hour ?? 0) == 0 && (comps.minute ?? 0) == 0 {
+            return cal.date(bySettingHour: defaultHour, minute: 0, second: 0, of: existing) ?? existing
+        }
+        return existing
     }
 
     private var notesField: some View {
@@ -682,14 +772,18 @@ struct ItineraryItemEditorSheet: View {
         guard !loaded else { return }
         loaded = true
 
+        let cal = Calendar.current
+
         switch target {
         case .new(let day):
-            dayDate = Calendar.current.startOfDay(for: day)
+            dayDate = cal.startOfDay(for: day)
             // Default kind heuristic: a first-day item is most often a Stay.
-            if Calendar.current.isDate(day, inSameDayAs: trip.startDate) {
+            if cal.isDate(day, inSameDayAs: trip.startDate) {
                 kind = .stay
+                endDate = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: day)) ?? dayDate
             } else {
                 kind = .activity
+                endDate = cal.startOfDay(for: day)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 titleFocused = true
@@ -705,7 +799,18 @@ struct ItineraryItemEditorSheet: View {
                 notes = existing.notes
                 if let start = existing.startTime {
                     hasTime = true
-                    timeOfDay = start
+                    dayDate = start
+                }
+                if let end = existing.endDate {
+                    endDate = end
+                    if let endT = existing.endTime {
+                        hasEndTime = true
+                        endDate = endT
+                    }
+                } else if existing.kindEnum == .stay {
+                    // Stay with no persisted endDate (legacy item before the
+                    // field existed): seed a sane default of +1 day.
+                    endDate = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: existing.dayDate)) ?? existing.dayDate
                 }
             }
         }
@@ -718,19 +823,14 @@ struct ItineraryItemEditorSheet: View {
         let cal = Calendar.current
         let normalisedDay = cal.startOfDay(for: dayDate)
 
-        // Combine the day (date-only) with the time-of-day picker if the
-        // toggle is on. Falling back to dayDate keeps the call total in
-        // case the time-of-day extraction fails (it shouldn't).
-        let combinedStart: Date? = {
-            guard hasTime else { return nil }
-            let comps = cal.dateComponents([.hour, .minute], from: timeOfDay)
-            return cal.date(
-                bySettingHour: comps.hour ?? 0,
-                minute: comps.minute ?? 0,
-                second: 0,
-                of: normalisedDay
-            )
-        }()
+        // For non-stay or when "Include time" is off: persist only the day.
+        // For non-stay with time on: persist the full date+time as `startTime`,
+        // dayDate stays start-of-day so the grouping bucket is unambiguous.
+        let startTimeValue: Date? = hasTime ? dayDate : nil
+
+        // Stay-only end fields. Other kinds clear both.
+        let endDateValue: Date? = kind == .stay ? cal.startOfDay(for: endDate) : nil
+        let endTimeValue: Date? = (kind == .stay && hasEndTime) ? endDate : nil
 
         switch target {
         case .new:
@@ -741,7 +841,9 @@ struct ItineraryItemEditorSheet: View {
                 kind: kind,
                 title: cleanTitle,
                 notes: cleanNotes,
-                startTime: combinedStart,
+                startTime: startTimeValue,
+                endDate: endDateValue,
+                endTime: endTimeValue,
                 sortOrder: nextSort
             )
             modelContext.insert(item)
@@ -759,7 +861,9 @@ struct ItineraryItemEditorSheet: View {
                 }
                 existing.dayDate = normalisedDay
                 existing.notes = cleanNotes
-                existing.startTime = combinedStart
+                existing.startTime = startTimeValue
+                existing.endDate = endDateValue
+                existing.endTime = endTimeValue
                 existing.updatedAt = Date()
             }
         }
@@ -792,8 +896,12 @@ private struct KindPickerChip: View {
             HStack(spacing: 4) {
                 Image(systemName: kind.icon)
                     .font(.system(size: 12, weight: .regular))
+                    .layoutPriority(1)
                 Text(kind.displayName)
                     .font(.edFootnote)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .truncationMode(.tail)
             }
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 6)
