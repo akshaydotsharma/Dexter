@@ -272,6 +272,10 @@ enum ToolDefinitions {
             "notes": .object([
                 "type": .string("string"),
                 "description": .string("Free-form notes. Use empty string if none.")
+            ]),
+            "start_time": .object([
+                "type": .string("string"),
+                "description": .string("OPTIONAL start time for this item as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00 or 2026-06-14T11:00:00Z). The DATE portion MUST match day_date. Set this whenever the user mentions a time (e.g., 'dinner at 8', '11am check-in', 'tour at 14:00'); otherwise omit. Items without a start_time render as 'untimed' on the timeline.")
             ])
         ]),
         "required": .array([.string("day_date"), .string("kind"), .string("title"), .string("notes")])
@@ -329,14 +333,15 @@ enum ToolDefinitions {
 
     private static let editItineraryItem = AnthropicTool(
         name: "edit_itinerary_item",
-        description: "Edit an EXISTING itinerary item's day, kind, title, or notes. Requires the item UUID. IMPORTANT: At least one field must actually change. Use empty string for fields to keep unchanged. Use the literal string \"null\" ONLY for notes to clear it. day_date, kind, and title cannot be cleared.",
+        description: "Edit an EXISTING itinerary item's day, kind, title, notes, or start time. Requires the item UUID. IMPORTANT: At least one field must actually change. Use empty string for fields to keep unchanged. Use the literal string \"null\" for notes or start_time to CLEAR them. day_date, kind, and title cannot be cleared.",
         input_schema: object(
             properties: [
                 "id": string("The UUID of the existing itinerary item to edit (from EXISTING TRIPS context)."),
                 "day_date": string("New day for this item in ISO 8601. Use empty string to keep unchanged."),
                 "kind": string("New kind. Must be one of: stay, activity, place, restaurant. Use empty string to keep unchanged."),
                 "title": string("New title. Use empty string to keep unchanged."),
-                "notes": string("New notes. Use empty string to keep unchanged, or the literal \"null\" to clear.")
+                "notes": string("New notes. Use empty string to keep unchanged, or the literal \"null\" to clear."),
+                "start_time": string("New start time as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00). The date portion should match day_date. Use empty string to keep unchanged, or the literal \"null\" to clear (make the item untimed).")
             ],
             required: ["id", "day_date", "kind", "title", "notes"]
         )

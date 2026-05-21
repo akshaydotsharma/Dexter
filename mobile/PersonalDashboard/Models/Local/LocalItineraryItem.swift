@@ -57,6 +57,15 @@ final class LocalItineraryItem {
     /// Free-form notes. Empty when none.
     var notes: String
 
+    /// Optional start time for this item. Stored as a full `Date` so the
+    /// hours/minutes always round-trip cleanly with the day they belong to
+    /// (the editor combines `dayDate` + the picked time-of-day before
+    /// persisting). `nil` means the item is "untimed" and renders with a
+    /// hollow marker plus no time label. The day grouping continues to use
+    /// `dayDate` so timezone shifts in `startTime` can't accidentally move
+    /// an item to a neighbouring day.
+    var startTime: Date?
+
     /// Ordering within a single day. Lower numbers render first; ties are
     /// broken by `createdAt`. Skeleton uses append-on-create (max + 1); a
     /// drag-to-reorder UI is a follow-up.
@@ -72,6 +81,7 @@ final class LocalItineraryItem {
         kind: ItineraryKind,
         title: String,
         notes: String = "",
+        startTime: Date? = nil,
         sortOrder: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -82,6 +92,7 @@ final class LocalItineraryItem {
         self.kind = kind.rawValue
         self.title = title
         self.notes = notes
+        self.startTime = startTime
         self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt

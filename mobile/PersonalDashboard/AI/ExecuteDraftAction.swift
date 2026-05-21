@@ -490,6 +490,11 @@ struct ExecuteDraftAction {
             let notes = (dict["notes"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let cleanNotes = notes == "null" ? "" : notes
 
+            // Optional start_time: any unparseable value silently falls back
+            // to nil (untimed) rather than failing the whole batch. The
+            // model can omit the field entirely; we don't require it.
+            let startTime = parseAnyISODate(dict["start_time"]?.stringValue)
+
             let maxForDay = existing
                 .filter { cal.isDate($0.dayDate, inSameDayAs: dayStart) }
                 .map { $0.sortOrder }
@@ -501,6 +506,7 @@ struct ExecuteDraftAction {
                 kind: kind,
                 title: title,
                 notes: cleanNotes,
+                startTime: startTime,
                 sortOrder: maxForDay + 1,
                 createdAt: now,
                 updatedAt: now
@@ -623,6 +629,17 @@ struct ExecuteDraftAction {
                 if !trimmed.isEmpty {
                     row.notes = trimmed; changed = true
                 }
+            }
+        }
+        // start_time follows the same empty/"null"/value tri-state as notes.
+        // Empty string = keep current value, "null" = clear (untimed),
+        // anything else = parse as ISO 8601 and set.
+        if let raw = input["start_time"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.startTime = nil; changed = true
+            } else if !trimmed.isEmpty, let parsed = parseAnyISODate(trimmed) {
+                row.startTime = parsed; changed = true
             }
         }
 

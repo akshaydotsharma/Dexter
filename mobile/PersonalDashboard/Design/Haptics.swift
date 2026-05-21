@@ -14,4 +14,13 @@ enum Haptics {
         generator.prepare()
         generator.notificationOccurred(.warning)
     }
+
+    /// A short, soft impact for affirmative button presses (e.g. the
+    /// itinerary FAB). Re-uses a one-shot `UIImpactFeedbackGenerator` so
+    /// the call site can fire-and-forget.
+    static func light() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred()
+    }
 }
