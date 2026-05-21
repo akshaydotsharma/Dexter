@@ -546,6 +546,7 @@ struct ItineraryItemEditorSheet: View {
     @State private var hasEndTime: Bool = false
     @State private var notes: String = ""
     @State private var loaded: Bool = false
+    @State private var showingDeleteConfirmation: Bool = false
     @FocusState private var titleFocused: Bool
 
     private let titleMaxLength = 96
@@ -565,6 +566,10 @@ struct ItineraryItemEditorSheet: View {
                             endDateField
                         }
                         notesField
+                        if isEditing {
+                            deleteButton
+                                .padding(.top, Space.sm)
+                        }
                     }
                     .padding(Space.lg)
                 }
@@ -584,6 +589,18 @@ struct ItineraryItemEditorSheet: View {
                     .disabled(trimmedTitle.isEmpty)
                     .foregroundStyle(trimmedTitle.isEmpty ? Tokens.muted : Tokens.ink)
                 }
+            }
+            .confirmationDialog(
+                "Delete this item?",
+                isPresented: $showingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    deleteItem()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This can't be undone.")
             }
         }
         .onAppear { loadIfNeeded() }
@@ -782,6 +799,31 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
+    /// Destructive "Delete item" button shown at the bottom of the editor
+    /// scroll content when editing an existing item. Long-press on the tile
+    /// in the timeline is still available (context menu); this gives the user
+    /// a discoverable in-editor path.
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            Haptics.destructive()
+            showingDeleteConfirmation = true
+        } label: {
+            HStack(spacing: Space.sm) {
+                Image(systemName: "trash")
+                    .font(.system(size: 15, weight: .regular))
+                Text("Delete item")
+                    .font(.edBodyMedium)
+            }
+            .foregroundStyle(Color.red)
+            .frame(maxWidth: .infinity)
+            .padding(Space.md)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Delete item")
+    }
+
     private func placeholder(for kind: ItineraryKind) -> String {
         switch kind {
         case .stay:       return "e.g. Hanoi Hilton"
@@ -906,6 +948,22 @@ struct ItineraryItemEditorSheet: View {
             }
         }
         try? modelContext.save()
+    }
+
+    /// Fetch the existing item by UUID and remove it from the model context.
+    /// Triggered by the in-editor "Delete item" button after the confirmation
+    /// dialog. The sheet dismisses on completion; the timeline picks up the
+    /// removal via the `@Query` observer.
+    private func deleteItem() {
+        guard case .existing(let uuid) = target else { return }
+        let descriptor = FetchDescriptor<LocalItineraryItem>(
+            predicate: #Predicate { $0.clientUUID == uuid }
+        )
+        if let existing = try? modelContext.fetch(descriptor).first {
+            modelContext.delete(existing)
+            try? modelContext.save()
+        }
+        dismiss()
     }
 
     /// Append-on-create ordering: max sortOrder for the day + 1. Falls back to
