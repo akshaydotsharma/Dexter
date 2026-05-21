@@ -111,14 +111,14 @@ struct SideDrawer: View {
 
             DrawerDivider()
 
-            // Five rows: Today, Itineraries, Vocabulary, Help center, Settings.
-            // Primary surfaces (Notes, Lists, Tasks, Activity) and Chat live
-            // in the bottom tab bar. Dashboard remains hidden (issue #30).
-            // Itineraries sits between Today and Vocabulary so the user's
-            // travel planning surface stays close to their daily-use rows
-            // (issue #104).
+            // Six rows: Today, Itineraries, Finance, Vocabulary, Help center,
+            // Settings. Primary surfaces (Notes, Lists, Tasks, Activity) and
+            // Chat live in the bottom tab bar. Dashboard remains hidden
+            // (issue #30). Finance sits directly below Itineraries as a
+            // placeholder with a "Coming soon" pill (issue #110).
             DrawerRow(section: .today, router: router)
             DrawerRow(section: .itineraries, router: router)
+            DrawerRow(section: .finance, router: router, badge: "Coming soon")
             DrawerRow(section: .vocabulary, router: router)
             DrawerRow(section: .helpCenter, router: router)
             DrawerRow(section: .settings, router: router)
@@ -181,6 +181,10 @@ private struct DrawerDivider: View {
 private struct DrawerRow: View {
     let section: AppSection
     @Bindable var router: AppRouter
+    /// Optional pill rendered on the trailing edge. Used to flag in-progress
+    /// surfaces (e.g. Finance, issue #110) without spinning up a separate
+    /// row component.
+    var badge: String? = nil
 
     var body: some View {
         let isActive = router.currentSection == section
@@ -206,6 +210,20 @@ private struct DrawerRow: View {
                     .foregroundStyle(isActive ? Tokens.ink : Tokens.muted)
 
                 Spacer()
+
+                if let badge {
+                    Text(badge)
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                        .padding(.horizontal, Space.sm)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(Tokens.paper2)
+                        )
+                        .overlay(
+                            Capsule().stroke(Tokens.border, lineWidth: 0.5)
+                        )
+                }
             }
             .padding(.trailing, Space.lg)
             .frame(height: 44)
