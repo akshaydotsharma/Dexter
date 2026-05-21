@@ -67,7 +67,7 @@ struct TripDetailView: View {
                     TripDayCluster(
                         trip: trip,
                         day: cluster.day,
-                        items: cluster.items,
+                        entries: cluster.entries,
                         topPadding: idx == 0 ? Space.xl : Space.xl,
                         onTap: { item in
                             editingItem = .existing(item.clientUUID)
@@ -142,32 +142,50 @@ struct TripDetailView: View {
 
     // MARK: - Grouping
 
-    /// `(day, items)` clusters in ascending date order. Skips days with no
-    /// items (no eyebrow-only empty days). Within a day, untimed items
-    /// render first (preserving `sortOrder`); then timed items sorted
-    /// ascending by `startTime`, with `sortOrder` as the secondary tiebreak.
-    private var grouped: [(day: Date, items: [LocalItineraryItem])] {
+    /// `(day, entries)` clusters in ascending date order. Stays expand into
+    /// two entries (check-in on dayDate, check-out on endDate) when endDate
+    /// is set and differs from dayDate. Within a day: untimed entries render
+    /// first (in sortOrder), then timed entries sorted ascending by the
+    /// entry's effective time (`startTime` for single/check-in,
+    /// `endTime` for check-out).
+    private var grouped: [(day: Date, entries: [TimelineEntry])] {
         let cal = Calendar.current
-        let buckets = Dictionary(grouping: items) { cal.startOfDay(for: $0.dayDate) }
+        var buckets: [Date: [TimelineEntry]] = [:]
+
+        for item in items {
+            let kind = item.kindEnum
+            let inDay = cal.startOfDay(for: item.dayDate)
+
+            if kind == .stay, let endDate = item.endDate {
+                let outDay = cal.startOfDay(for: endDate)
+                buckets[inDay, default: []].append(.stayCheckIn(item: item))
+                if outDay != inDay {
+                    buckets[outDay, default: []].append(.stayCheckOut(item: item))
+                }
+            } else {
+                buckets[inDay, default: []].append(.single(item: item))
+            }
+        }
+
         return buckets.keys.sorted().map { day in
             let raw = buckets[day] ?? []
             let sorted = raw.sorted { lhs, rhs in
-                switch (lhs.startTime, rhs.startTime) {
+                switch (lhs.effectiveTime, rhs.effectiveTime) {
                 case (nil, nil):
-                    // Both untimed: existing sortOrder, then createdAt.
-                    if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
-                    return lhs.createdAt < rhs.createdAt
+                    if lhs.item.sortOrder != rhs.item.sortOrder {
+                        return lhs.item.sortOrder < rhs.item.sortOrder
+                    }
+                    return lhs.item.createdAt < rhs.item.createdAt
                 case (nil, _):
-                    // Untimed first.
-                    return true
+                    return true   // untimed entries pin to the top of the day
                 case (_, nil):
                     return false
                 case let (l?, r?):
                     if l != r { return l < r }
-                    return lhs.sortOrder < rhs.sortOrder
+                    return lhs.item.sortOrder < rhs.item.sortOrder
                 }
             }
-            return (day: day, items: sorted)
+            return (day: day, entries: sorted)
         }
     }
 
@@ -195,12 +213,14 @@ struct TripDetailView: View {
 /// Locked numbers for the trip-detail timeline. Spec lives on issue #108;
 /// do not change these values without re-locking the spec there.
 enum TimelineLayout {
-    /// Distance from the cluster leading edge to the rail centerline.
-    static let railLeading: CGFloat = 34
-    /// Width reserved at the leading edge for the time label column.
-    static let timeColumnWidth: CGFloat = 56
+    /// Distance from the cluster leading edge to the rail centerline. The
+    /// day eyebrow's dot, every item marker, and the rail itself all share
+    /// this x-position, so they form a clean vertical column.
+    static let railLeading: CGFloat = 16
     /// Distance from cluster leading edge to the item card's leading edge.
-    static let cardLeading: CGFloat = 44
+    /// Equals `railLeading + markerRadius + gutter` (~11pt gutter past the
+    /// marker outer edge).
+    static let cardLeading: CGFloat = 32
     /// Diameter of each item's marker dot.
     static let markerDiameter: CGFloat = 10
     /// Diameter of the day eyebrow's leading dot.
@@ -214,6 +234,61 @@ enum TimelineLayout {
     /// 12pt card vertical padding (`Space.md`) plus the title's first-line
     /// half-height for `.edBodyMedium` (≈10pt).
     static let markerCenterFromRowTop: CGFloat = 22
+}
+
+// MARK: - Timeline entries (one row on the timeline)
+
+/// A single "event" the timeline renders. A non-stay item produces one
+/// `.single` entry on its `dayDate`. A stay with an `endDate` distinct from
+/// `dayDate` produces TWO entries: `.stayCheckIn` on `dayDate` and
+/// `.stayCheckOut` on `endDate`. A stay without an `endDate` (legacy) or a
+/// same-day stay collapses to a single `.stayCheckIn` entry.
+enum TimelineEntry: Identifiable {
+    case single(item: LocalItineraryItem)
+    case stayCheckIn(item: LocalItineraryItem)
+    case stayCheckOut(item: LocalItineraryItem)
+
+    var id: String {
+        switch self {
+        case .single(let item):       return "single-\(item.clientUUID.uuidString)"
+        case .stayCheckIn(let item):  return "in-\(item.clientUUID.uuidString)"
+        case .stayCheckOut(let item): return "out-\(item.clientUUID.uuidString)"
+        }
+    }
+
+    var item: LocalItineraryItem {
+        switch self {
+        case .single(let item), .stayCheckIn(let item), .stayCheckOut(let item):
+            return item
+        }
+    }
+
+    /// The effective time for sort order and marker fill. `startTime` for
+    /// single + check-in events; `endTime` for check-out events.
+    var effectiveTime: Date? {
+        switch self {
+        case .single(let item):       return item.startTime
+        case .stayCheckIn(let item):  return item.startTime
+        case .stayCheckOut(let item): return item.endTime
+        }
+    }
+
+    /// The "Anytime / Check-in / Check-out · HH:mm" line shown inside the
+    /// card below the kind chip.
+    var dateTimeLine: String {
+        let timeFormat: (Date) -> String = { $0.formatted(.dateTime.hour().minute()) }
+        switch self {
+        case .single(let item):
+            if let t = item.startTime { return timeFormat(t) }
+            return "Anytime"
+        case .stayCheckIn(let item):
+            if let t = item.startTime { return "Check-in · \(timeFormat(t))" }
+            return "Check-in"
+        case .stayCheckOut(let item):
+            if let t = item.endTime { return "Check-out · \(timeFormat(t))" }
+            return "Check-out"
+        }
+    }
 }
 
 // MARK: - Editor target
@@ -238,11 +313,13 @@ enum ItineraryItemEditorTarget: Identifiable {
 /// One day's eyebrow + rail + items. The rail is drawn as a background
 /// rectangle behind the items VStack, anchored top/bottom to the first
 /// and last marker centers via vertical padding equal to the
-/// `markerCenterFromRowTop` constant.
+/// `markerCenterFromRowTop` constant. The day eyebrow's dot is indented to
+/// share the marker x-position, so day dot + every marker form a vertical
+/// column.
 private struct TripDayCluster: View {
     let trip: LocalTrip
     let day: Date
-    let items: [LocalItineraryItem]
+    let entries: [TimelineEntry]
     let topPadding: CGFloat
     let onTap: (LocalItineraryItem) -> Void
     let onDelete: (LocalItineraryItem) -> Void
@@ -298,6 +375,9 @@ private struct TripDayCluster: View {
             }
             Spacer(minLength: 0)
         }
+        // Indent so the dot's centerline sits at `railLeading`, lined up
+        // with every item marker below it.
+        .padding(.leading, TimelineLayout.railLeading - TimelineLayout.dayDotDiameter / 2)
         .frame(height: 36)
     }
 
@@ -307,15 +387,14 @@ private struct TripDayCluster: View {
         // The rail lives as a background rect behind the items VStack, with
         // top/bottom padding equal to `markerCenterFromRowTop` so it starts
         // at the first marker center and ends at the last marker center.
-        // ZStack(.topLeading) places it at x = railLeading - railWidth/2.
         VStack(alignment: .leading, spacing: Space.md) {
-            ForEach(items) { item in
-                TripTimelineRow(item: item)
+            ForEach(entries) { entry in
+                TripTimelineRow(entry: entry)
                     .contentShape(Rectangle())
-                    .onTapGesture { onTap(item) }
+                    .onTapGesture { onTap(entry.item) }
                     .contextMenu {
                         Button(role: .destructive) {
-                            onDelete(item)
+                            onDelete(entry.item)
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
@@ -330,9 +409,9 @@ private struct TripDayCluster: View {
         // Single rail. Top/bottom padding clip the rect to marker
         // centerlines (each marker sits `markerCenterFromRowTop` below its
         // row's top edge). `.offset(x:)` slides the 1pt-wide rect so its
-        // horizontal center lands on `railLeading`. Single-item days
+        // horizontal center lands on `railLeading`. Single-entry days
         // suppress the rail entirely — there's nothing to connect.
-        if items.count > 1 {
+        if entries.count > 1 {
             Rectangle()
                 .fill(Tokens.border)
                 .frame(width: TimelineLayout.railWidth)
@@ -346,46 +425,26 @@ private struct TripDayCluster: View {
 
 // MARK: - Timeline row
 
-/// One item row: time | marker | card. Marker centerline aligns with the
-/// card title's first line; time label baseline aligns horizontally with
-/// the marker.
+/// One row on the timeline: marker column | card. Uniform structure:
+/// title (1 line) → kind chip → date/time line. Tiles are the same height
+/// across all kinds so the column feels like a real timeline rather than a
+/// jagged list.
 private struct TripTimelineRow: View {
-    let item: LocalItineraryItem
+    let entry: TimelineEntry
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            timeColumn
             markerColumn
-            Spacer().frame(width: 4)
             card
         }
     }
 
-    private var timeColumn: some View {
-        // Width 28pt: time text right-aligned to its trailing edge, which
-        // sits 6pt before the rail centerline at 34pt. The remaining 28pt
-        // up to the marker column is "negative space" — see spec.
-        Group {
-            if let start = item.startTime {
-                Text(start.formatted(.dateTime.hour().minute()))
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-            } else {
-                Color.clear
-            }
-        }
-        .frame(width: 28, alignment: .trailing)
-        .padding(.top, TimelineLayout.markerCenterFromRowTop - 8)
-    }
-
+    /// Fixed-width column whose center sits on `railLeading`. The marker
+    /// itself is vertically padded so its centerline aligns with the card
+    /// title's first line.
     private var markerColumn: some View {
-        // 12pt-wide column; marker centered horizontally puts the dot at
-        // local x=6, and the column is offset to start at 28pt, so marker
-        // centerline lands at 28+6=34pt from cluster leading. ✓
-        ZStack {
-            if item.startTime != nil {
+        Group {
+            if entry.effectiveTime != nil {
                 Circle()
                     .fill(Tokens.accent(for: .itineraries))
                     .frame(width: TimelineLayout.markerDiameter, height: TimelineLayout.markerDiameter)
@@ -399,57 +458,36 @@ private struct TripTimelineRow: View {
                     )
             }
         }
-        .frame(width: 12, alignment: .center)
+        .frame(width: TimelineLayout.cardLeading, alignment: .center)
         .padding(.top, TimelineLayout.markerCenterFromRowTop - TimelineLayout.markerDiameter / 2)
     }
 
     private var card: some View {
+        let item = entry.item
         let kind = item.kindEnum
-        let trimmedNotes = item.notes.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return VStack(alignment: .leading, spacing: Space.xs) {
             Text(item.title)
                 .font(.edBodyMedium)
                 .foregroundStyle(Tokens.ink)
-                .lineLimit(2)
+                .lineLimit(1)
                 .truncationMode(.tail)
-                .multilineTextAlignment(.leading)
 
             HStack(spacing: Space.sm) {
                 TripKindChip(kind: kind)
                 Spacer(minLength: 0)
             }
 
-            if kind == .stay, let endDate = item.endDate {
-                Text(checkoutSubline(endDate: endDate, endTime: item.endTime))
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if !trimmedNotes.isEmpty {
-                Text(trimmedNotes)
-                    .font(.edSubheadline)
-                    .foregroundStyle(Tokens.muted)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-            }
+            Text(entry.dateTimeLine)
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
         .padding(Space.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.md)
-    }
-
-    private func checkoutSubline(endDate: Date, endTime: Date?) -> String {
-        let datePart = endDate.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-        if let endTime {
-            let timePart = endTime.formatted(.dateTime.hour().minute())
-            return "Check-out · \(datePart) · \(timePart)"
-        }
-        return "Check-out · \(datePart)"
     }
 }
 
