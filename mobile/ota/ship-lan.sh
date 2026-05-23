@@ -172,9 +172,27 @@ PROFILE_EXPIRY="$(security cms -D -i "${ARCHIVE_PATH}/Products/Applications/Pers
     | plutil -extract ExpirationDate raw - 2>/dev/null | cut -d'T' -f1 || echo "unknown")"
 
 # ---- Start local HTTP server (will be reverse-proxied by cloudflared) ----
+#
+# Custom server (NOT `python3 -m http.server`) — Apple's OTA install spec
+# REQUIRES manifest.plist to be served with Content-Type: application/xml.
+# The default SimpleHTTPRequestHandler returns application/octet-stream for
+# .plist, which causes iOS to silently fail the install (200 OK fetch but no
+# plist parse, no IPA download, no upgrade). The "blue dot" appears but the
+# binary on disk never changes.
 echo "-> starting HTTP server on :${PORT}"
 cd "${OTA_DIR}"
-python3 -m http.server "${PORT}" --bind 127.0.0.1 >"${OTA_DIR}/http.log" 2>&1 &
+python3 - "${PORT}" >"${OTA_DIR}/http.log" 2>&1 <<'PYEOF' &
+import http.server, socketserver, sys
+class H(http.server.SimpleHTTPRequestHandler):
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        '.plist': 'application/xml',
+        '.ipa':   'application/octet-stream',
+    }
+port = int(sys.argv[1])
+with socketserver.TCPServer(('127.0.0.1', port), H) as srv:
+    srv.serve_forever()
+PYEOF
 HTTP_PID=$!
 
 # ---- Cloudflare quick tunnel for the install page ----
@@ -206,7 +224,8 @@ IPA_URL="${TUNNEL_URL}/app.ipa"
 MANIFEST_URL="${TUNNEL_URL}/manifest.plist"
 
 sed -e "s|__IPA_URL__|${IPA_URL}|g" \
-    -e "s|__BUNDLE_VERSION__|${SHORT_VERSION}|g" \
+    -e "s|__BUNDLE_VERSION__|${BUNDLE_VERSION}|g" \
+    -e "s|__BUNDLE_SHORT_VERSION__|${SHORT_VERSION}|g" \
     "${SCRIPT_DIR}/manifest.template.plist" > "${OTA_DIR}/manifest.plist"
 
 sed -e "s|__MANIFEST_URL__|${MANIFEST_URL}|g" \

@@ -73,9 +73,102 @@ struct ExecuteDraftAction {
         case .deleteTrip: return try deleteTrip(input)
         case .updateItineraryItem: return try updateItineraryItem(input)
         case .deleteItineraryItem: return try deleteItineraryItem(input)
+        case .addExpense: return try await addExpense(input)
         case .unknown:
             throw DraftExecutionError.invalidArgument(field: "action", reason: "unknown action type")
         }
+    }
+
+    // MARK: - Expenses
+
+    /// `add_expense` tool handler. Converts non-SGD amounts via FXService,
+    /// freezes the rate on the row, and persists. Source defaults to `.text`
+    /// (we'll override to `.voice` from the voice path and `.photo` /
+    /// `.receipt` in Phase B).
+    private func addExpense(_ input: [String: AnthropicJSONValue]) async throws -> DraftActionOutcome {
+        // Amount. Tolerate either JSON number or numeric string from the
+        // model — both shapes have shown up in practice.
+        let originalAmount = input["original_amount"]?.doubleValue
+            ?? Double(input["original_amount"]?.stringValue ?? "")
+            ?? 0
+        guard originalAmount > 0 else {
+            throw DraftExecutionError.invalidArgument(field: "original_amount", reason: "must be > 0")
+        }
+
+        // Category. Fallback to `.other` if the model picks something off-list.
+        let categoryRaw = (input["category"]?.stringValue ?? "").lowercased()
+        let category = ExpenseCategory(rawValue: categoryRaw) ?? .other
+
+        // Currency. Empty string = SGD.
+        let currencyRaw = trimmedString(input["original_currency"]) ?? "SGD"
+        let currency = currencyRaw.isEmpty ? "SGD" : currencyRaw.uppercased()
+
+        // Date. Empty / unparseable = today.
+        let date = parseAnyISODate(input["date"]?.stringValue) ?? Date()
+
+        let merchant = trimmedString(input["merchant"])
+        let descriptionField = trimmedString(input["description"])
+        let paymentMethod = trimmedString(input["payment_method"])
+
+        // Optional UUID override from the tool input. If the model emitted
+        // a valid UUID we use it; otherwise we generate one.
+        let providedID = trimmedString(input["id"])
+        let clientUUID: String = {
+            if let raw = providedID, UUID(uuidString: raw) != nil {
+                return raw.lowercased()
+            }
+            return UUID().uuidString.lowercased()
+        }()
+
+        // FX. SGD passes straight through; other currencies hit FXService
+        // (cached for 1 day). Failures bubble as `invalidArgument` so the
+        // chat surface shows a useful error rather than a silent zero.
+        let fx = FXService(store: store)
+        let conversion: (sgdAmount: Double, rate: Double)
+        do {
+            conversion = try await fx.convert(originalAmount, from: currency)
+        } catch {
+            throw DraftExecutionError.invalidArgument(
+                field: "original_currency",
+                reason: "couldn't fetch FX rate for \(currency): \(error.localizedDescription)"
+            )
+        }
+
+        let service = ExpenseService(store: store)
+        let row: LocalExpense
+        do {
+            row = try service.addExpense(
+                date: date,
+                category: category,
+                merchant: merchant,
+                expenseDescription: descriptionField,
+                originalAmount: originalAmount,
+                originalCurrency: currency,
+                sgdAmount: conversion.sgdAmount,
+                fxRate: conversion.rate,
+                paymentMethod: paymentMethod,
+                source: .text,
+                clientUUID: clientUUID
+            )
+        } catch {
+            throw DraftExecutionError.persistence(error)
+        }
+
+        // Build a human title for the outcome dialog. Prefer merchant,
+        // then description, then a category fallback so the App Intent's
+        // "Saved 'X'" line is never blank.
+        let title = row.merchant
+            ?? row.expenseDescription
+            ?? category.displayName
+
+        return DraftActionOutcome(
+            type: "expense",
+            action: ActionString.created,
+            id: row.clientUUID,
+            title: title,
+            dueDate: nil,
+            addedNames: nil
+        )
     }
 
     // MARK: - CREATE

@@ -114,11 +114,10 @@ struct SideDrawer: View {
             // Six rows: Today, Itineraries, Finance, Vocabulary, Help center,
             // Settings. Primary surfaces (Notes, Lists, Tasks, Activity) and
             // Chat live in the bottom tab bar. Dashboard remains hidden
-            // (issue #30). Finance sits directly below Itineraries as a
-            // placeholder with a "Coming soon" pill (issue #110).
+            // (issue #30).
             DrawerRow(section: .today, router: router)
             DrawerRow(section: .itineraries, router: router)
-            DrawerRow(section: .finance, router: router, badge: "Coming soon")
+            DrawerRow(section: .finance, router: router)
             DrawerRow(section: .vocabulary, router: router)
             DrawerRow(section: .helpCenter, router: router)
             DrawerRow(section: .settings, router: router)

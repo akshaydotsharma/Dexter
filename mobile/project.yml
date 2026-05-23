@@ -57,6 +57,10 @@ targets:
         # Microphone for the audio capture that feeds it.
         NSSpeechRecognitionUsageDescription: "Dexter transcribes your voice into chat messages on-device. Audio never leaves your phone."
         NSMicrophoneUsageDescription: "Dexter listens to your voice so it can transcribe what you say into the chat."
+        # Receipt capture for Finance (issue #114, Phase B). Camera + photo
+        # library access used by AddExpense flow to extract details via Vision.
+        NSCameraUsageDescription: "Used to capture receipts so Dexter can log expenses for you."
+        NSPhotoLibraryUsageDescription: "Used to import a receipt photo when logging an expense."
         UIAppFonts:
           - Calistoga-Regular.ttf
           - Inter-Regular.ttf
@@ -77,3 +81,30 @@ targets:
         # Local Xcode-only builds (Cmd+R) inherit these as-is.
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
+
+  PersonalDashboardUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: PersonalDashboardUITests
+    dependencies:
+      - target: PersonalDashboard
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard.uitests
+        TEST_TARGET_NAME: PersonalDashboard
+        DEVELOPMENT_TEAM: "PJFPUSSNUW"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+
+schemes:
+  PersonalDashboard:
+    build:
+      targets:
+        PersonalDashboard: all
+        PersonalDashboardUITests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - PersonalDashboardUITests

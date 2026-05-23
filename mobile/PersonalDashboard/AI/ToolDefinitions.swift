@@ -366,6 +366,33 @@ enum ToolDefinitions {
         )
     )
 
+    // MARK: - Expenses (Finance v1)
+
+    /// Log a new expense. SGD is the home currency; the conversion happens
+    /// on-device after the tool call lands, so the LLM never needs to know
+    /// FX rates. Category is one of the 12 canonical raw values — the model
+    /// picks based on merchant + description.
+    private static let addExpense = AnthropicTool(
+        name: "add_expense",
+        description: "Log a NEW expense. Use this when the user says they spent money (e.g., \"I spent $20 on lunch at Starbucks\", \"add a 67 SGD grocery run yesterday\"). Pick the best-fitting category from the enum. If currency isn't specified, default to SGD. Date defaults to today if the user doesn't say.",
+        input_schema: object(
+            properties: [
+                "id": string("UUID string for the new expense. Generate a fresh one for every call (any valid lowercase UUID, e.g., 9b3a8e1c-2f6f-4a3b-9d2c-7e0a1b4c5d6e)."),
+                "date": string("ISO 8601 date the spend happened (e.g., 2026-05-22 or 2026-05-22T18:30:00Z). Use today's date if the user did not specify a date."),
+                "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit based on merchant and description."),
+                "merchant": string("Merchant or vendor name (e.g., \"Starbucks\", \"FairPrice\"). Use empty string if unknown."),
+                "description": string("Short description of the expense (e.g., \"lunch with Sarah\", \"weekly groceries\"). Use empty string if none."),
+                "original_amount": .object([
+                    "type": .string("number"),
+                    "description": .string("Amount paid in the original currency. Must be greater than zero.")
+                ]),
+                "original_currency": string("ISO 4217 currency code (e.g., \"SGD\", \"USD\", \"EUR\"). Default to \"SGD\" if the user did not specify a currency."),
+                "payment_method": string("Optional payment method (e.g., \"Cash\", \"Visa **1234\"). Use empty string if unknown.")
+            ],
+            required: ["id", "date", "category", "merchant", "description", "original_amount", "original_currency", "payment_method"]
+        )
+    )
+
     // MARK: - Public surface
 
     static let allTools: [AnthropicTool] = [
@@ -389,7 +416,8 @@ enum ToolDefinitions {
         editTrip,
         deleteTrip,
         editItineraryItem,
-        deleteItineraryItem
+        deleteItineraryItem,
+        addExpense
     ]
 
     /// Subset of `allTools` excluded from the capture (Shortcut) auto-execute
@@ -430,6 +458,7 @@ enum ToolDefinitions {
         "edit_trip": .updateTrip,
         "delete_trip": .deleteTrip,
         "edit_itinerary_item": .updateItineraryItem,
-        "delete_itinerary_item": .deleteItineraryItem
+        "delete_itinerary_item": .deleteItineraryItem,
+        "add_expense": .addExpense
     ]
 }
