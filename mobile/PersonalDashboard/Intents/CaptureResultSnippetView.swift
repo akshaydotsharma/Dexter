@@ -31,18 +31,22 @@ struct CaptureResultSnippetView: View {
     static let maxVisibleCircles: Int = 4
 
     let items: [ExecutedDraft]
-    /// Where the "Go to app" hyperlink points. `nil` hides the entire
-    /// snippet — used for clarification / error / unrecoverable-id cases.
-    let deepLink: URL?
-    /// Label rendered on the hyperlink. Defaults to "Go to app" but
+    /// Intent that fires when the user taps "Go to app". `nil` hides the
+    /// affordance — used for clarification / error / unrecoverable-id
+    /// cases. Using a `Button(intent:)` (rather than a `Link(destination:)`)
+    /// is the iOS-blessed snippet-view pattern: it's treated as a discrete
+    /// affordance instead of the intent's implied primary action, which
+    /// is what was causing the system "Done" button to auto-open the app.
+    let openIntent: OpenDexterIntent?
+    /// Label rendered on the affordance. Defaults to "Go to app" but
     /// kept as a parameter to make future variations easy.
-    let deepLinkLabel: String
+    let actionLabel: String
 
     var body: some View {
-        if let url = deepLink {
+        if let intent = openIntent {
             VStack(spacing: Space.md) {
                 contextRow
-                hyperlink(url: url)
+                actionButton(intent: intent)
             }
             // Centered so the tap target sits in the thumb-reachable
             // middle of the sheet, and so the affordance reads as
@@ -104,25 +108,31 @@ struct CaptureResultSnippetView: View {
 
     // MARK: - CTA
 
-    /// Plain hyperlink — no button chrome, no card. Reads as a soft
-    /// affordance below the dialog so it doesn't compete visually with
-    /// the system Done button at the bottom of the Shortcuts sheet.
+    /// Plain hyperlink-styled `Button(intent:)` — no button chrome,
+    /// no card. Reads as a soft affordance below the dialog so it
+    /// doesn't compete visually with the system Done button at the
+    /// bottom of the Shortcuts sheet.
     ///
-    /// Sized close to the system dialog text so it doesn't disappear
-    /// under it, and rendered in white because the Shortcuts result
-    /// sheet on iOS 26 always uses a dark frosted host (system blue
-    /// reads as too utilitarian against that material).
+    /// Rendered in white because the Shortcuts result sheet on iOS 26
+    /// always uses a dark frosted host; system blue reads as too
+    /// utilitarian against that material. Sized close to the system
+    /// dialog text so it doesn't disappear under it.
+    ///
+    /// `.plain` button style strips the default tinted background so
+    /// only the text + chevron show — the button stays an affordance,
+    /// not a CTA pill.
     @ViewBuilder
-    private func hyperlink(url: URL) -> some View {
-        Link(destination: url) {
+    private func actionButton(intent: OpenDexterIntent) -> some View {
+        Button(intent: intent) {
             HStack(spacing: Space.xs) {
-                Text(deepLinkLabel)
-                    .font(.system(size: 15, weight: .semibold))
+                Text(actionLabel)
+                    .font(.system(size: 16, weight: .semibold))
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
             }
             .foregroundStyle(Color.white)
         }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Derivations
@@ -194,8 +204,8 @@ private enum TypeStyle {
         items: [
             ExecutedDraft(type: "todo", action: "created", id: "x", title: "Buy milk", dueDate: nil, addedNames: nil)
         ],
-        deepLink: URL(string: "dexter://focus/tasks/00000000-0000-0000-0000-000000000000"),
-        deepLinkLabel: "Open in Dexter"
+        openIntent: OpenDexterIntent(section: "tasks", id: "00000000-0000-0000-0000-000000000000"),
+        actionLabel: "Go to app"
     )
     .padding()
     .background(Color.black)
@@ -211,8 +221,8 @@ private enum TypeStyle {
             ExecutedDraft(type: "todo", action: "created", id: "e", title: "Email Sara", dueDate: nil, addedNames: nil),
             ExecutedDraft(type: "note", action: "created", id: "f", title: "Travel ideas", dueDate: nil, addedNames: nil)
         ],
-        deepLink: URL(string: "dexter://activity"),
-        deepLinkLabel: "Open in Dexter"
+        openIntent: OpenDexterIntent(section: "activity", id: nil),
+        actionLabel: "Go to app"
     )
     .padding()
     .background(Color.black)
@@ -223,8 +233,8 @@ private enum TypeStyle {
         items: [
             ExecutedDraft(type: "list", action: "items_added", id: "list-1", title: "Groceries", dueDate: nil, addedNames: "milk, eggs, bread")
         ],
-        deepLink: URL(string: "dexter://focus/lists/00000000-0000-0000-0000-000000000000"),
-        deepLinkLabel: "Open in Dexter"
+        openIntent: OpenDexterIntent(section: "lists", id: "00000000-0000-0000-0000-000000000000"),
+        actionLabel: "Go to app"
     )
     .padding()
     .background(Color.black)

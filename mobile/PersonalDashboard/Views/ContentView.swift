@@ -105,6 +105,23 @@ struct ContentView: View {
         .onOpenURL { url in
             DexterDeepLink.handle(url, router: router)
         }
+        // Internal deep links from `OpenDexterIntent` (Button(intent:)
+        // inside the Shortcut snippet view). The intent runs in the app
+        // process with `openAppWhenRun = true`, parks the destination on
+        // DeepLinkBus, and this observer drains it into the router.
+        .onReceive(DeepLinkBus.shared.$pending.compactMap { $0 }) { pending in
+            DeepLinkBus.shared.pending = nil
+            switch pending {
+            case .focus(let sectionRaw, let id):
+                guard let section = AppSection(rawValue: sectionRaw) else { return }
+                if let id {
+                    router.focus = ActivityFocus(section: section, id: id, isFolder: false)
+                }
+                router.go(to: section)
+            case .activity:
+                router.go(to: .activity)
+            }
+        }
     }
 
     private var edgeOpenGesture: some Gesture {

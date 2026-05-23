@@ -62,13 +62,13 @@ struct CaptureToDashboardIntent: AppIntent {
         case .executed:
             let items = response.executed ?? []
             let summary = Self.executedDialog(for: items)
-            let deepLink = Self.deepLink(for: items)
+            let openIntent = Self.openIntent(for: items)
             return .result(
                 dialog: IntentDialog(stringLiteral: summary),
                 view: CaptureResultSnippetView(
                     items: items,
-                    deepLink: deepLink,
-                    deepLinkLabel: "Go to app"
+                    openIntent: openIntent,
+                    actionLabel: "Go to app"
                 )
             )
         case .needsClarification:
@@ -259,37 +259,43 @@ struct CaptureToDashboardIntent: AppIntent {
         return f
     }()
 
-    // MARK: - Deep-link routing
+    // MARK: - Open-app routing
 
-    /// Decide where the snippet's "Open in Dexter" button points.
+    /// Decide where the snippet's "Go to app" button takes the user.
     ///
     /// Rules:
-    ///  - Single item with a parseable UUID → `dexter://focus/<section>/<uuid>`.
-    ///    `items_added` is a single deep-link too (the `id` IS the parent
-    ///    list/trip UUID per `ExecuteDraftAction`).
-    ///  - Multiple items (regardless of section mix) → `dexter://activity`.
+    ///  - Single item with a parseable UUID → focus that section + row.
+    ///    `items_added` is single too (the `id` IS the parent list/trip
+    ///    UUID per `ExecuteDraftAction`).
+    ///  - Multiple items (regardless of section mix) → Activity feed.
     ///  - Single item with an unparseable id → `nil` (snippet hides the
-    ///    button rather than landing the user on a broken focus).
-    static func deepLink(for items: [ExecutedDraft]) -> URL? {
+    ///    affordance rather than landing the user on a broken focus).
+    ///
+    /// Returns an `OpenDexterIntent` instead of a URL so the snippet
+    /// view can wire it into a `Button(intent:)` — the iOS-blessed
+    /// pattern for snippet-view actions. Using `Link(destination:)`
+    /// with our own URL scheme caused the system "Done" button to
+    /// auto-open the app, because iOS treated the Link as the intent's
+    /// implied primary action.
+    static func openIntent(for items: [ExecutedDraft]) -> OpenDexterIntent? {
         guard !items.isEmpty else { return nil }
         if items.count > 1 {
-            return URL(string: "dexter://activity")
+            return OpenDexterIntent(section: AppSection.activity.rawValue, id: nil)
         }
         let item = items[0]
         guard let section = sectionPathComponent(for: item.type) else {
-            return URL(string: "dexter://activity")
+            return OpenDexterIntent(section: AppSection.activity.rawValue, id: nil)
         }
         guard UUID(uuidString: item.id) != nil else {
-            // Defensive: don't render a button that would crash or land on
+            // Defensive: don't render an affordance that would land on
             // garbage. Snippet view handles `nil` by hiding the button.
             return nil
         }
-        return URL(string: "dexter://focus/\(section)/\(item.id)")
+        return OpenDexterIntent(section: section, id: item.id)
     }
 
-    /// Map the `ExecutedDraft.type` string to the URL path component used in
-    /// `dexter://focus/<section>/...`. Matches `AppSection.rawValue` so the
-    /// receiver can `AppSection(rawValue:)` on the way back in.
+    /// Map the `ExecutedDraft.type` string to the section path component.
+    /// Matches `AppSection.rawValue` so the receiver can rehydrate it.
     private static func sectionPathComponent(for type: String) -> String? {
         switch type {
         case "todo":                       return AppSection.tasks.rawValue
