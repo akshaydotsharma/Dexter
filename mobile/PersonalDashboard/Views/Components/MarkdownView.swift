@@ -141,6 +141,50 @@ struct MarkdownView: View {
     }
 }
 
+// MARK: - Single-line snippet
+//
+// For rows where we want a one-line preview of markdown body text without
+// the raw syntax bleeding through (`**bold**`, `## Heading`, `- item`).
+// Picks the first non-empty line, strips block-level prefixes, then runs
+// the rest through Foundation's inline markdown parser so inline
+// formatting renders as styled text.
+
+func markdownSnippetAttributed(_ source: String) -> AttributedString {
+    let firstLine = source
+        .components(separatedBy: .newlines)
+        .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+        ?? source
+    let stripped = stripMarkdownBlockPrefix(firstLine)
+    if let attr = try? AttributedString(
+        markdown: stripped,
+        options: AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace,
+            failurePolicy: .returnPartiallyParsedIfPossible
+        )
+    ) {
+        return attr
+    }
+    return AttributedString(stripped)
+}
+
+private func stripMarkdownBlockPrefix(_ line: String) -> String {
+    var s = line.trimmingCharacters(in: .whitespaces)
+    while s.hasPrefix("#") { s.removeFirst() }
+    s = s.trimmingCharacters(in: .whitespaces)
+    if s.hasPrefix("> ") { s.removeFirst(2) }
+    else if s == ">" { s = "" }
+    if s.hasPrefix("- ") || s.hasPrefix("* ") || s.hasPrefix("+ ") { s.removeFirst(2) }
+    else if let dot = s.firstIndex(of: "."),
+            s[s.startIndex..<dot].allSatisfy({ $0.isNumber }),
+            s.distance(from: s.startIndex, to: dot) >= 1 {
+        let after = s.index(after: dot)
+        if after < s.endIndex, s[after] == " " {
+            s = String(s[s.index(after: after)...])
+        }
+    }
+    return s
+}
+
 // MARK: - Block model
 
 enum MarkdownBlock: Hashable {
