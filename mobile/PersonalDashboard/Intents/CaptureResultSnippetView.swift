@@ -27,6 +27,10 @@ struct CaptureResultSnippetView: View {
     let deepLinkLabel: String
 
     var body: some View {
+        // Transparent — sits directly on the Shortcuts result chrome so the
+        // snippet blends with the host bubble instead of stacking another card
+        // on top. Uses system primary/secondary colors so text stays legible
+        // on either light or dark host appearance.
         VStack(alignment: .leading, spacing: Space.md) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 ForEach(Array(visibleRows.enumerated()), id: \.offset) { _, row in
@@ -37,7 +41,7 @@ struct CaptureResultSnippetView: View {
                             .frame(width: 20, alignment: .center)
                         Text(row.label)
                             .font(.edBody)
-                            .foregroundStyle(Tokens.ink)
+                            .foregroundStyle(Color.primary)
                             .lineLimit(2)
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -47,7 +51,7 @@ struct CaptureResultSnippetView: View {
                 if overflowCount > 0 {
                     Text("+\(overflowCount) more")
                         .font(.edFootnote)
-                        .foregroundStyle(Tokens.muted)
+                        .foregroundStyle(Color.secondary)
                         .padding(.leading, 20 + Space.sm)
                 }
             }
@@ -60,23 +64,20 @@ struct CaptureResultSnippetView: View {
                         Image(systemName: "arrow.up.right")
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .foregroundStyle(Tokens.accentFg)
+                    // Adapts: white text in light mode, black in dark — the
+                    // inverse of the background, so contrast is preserved
+                    // whichever appearance the Shortcuts host renders in.
+                    .foregroundStyle(Color(.systemBackground))
                     .padding(.horizontal, Space.md)
                     .padding(.vertical, Space.sm)
                     .background(
                         RoundedRectangle(cornerRadius: Radius.pill, style: .continuous)
-                            .fill(Tokens.ink)
+                            .fill(Color.primary)
                     )
                 }
             }
         }
-        .padding(Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Radius.xl, style: .continuous)
-                .fill(Tokens.surface)
-        )
-        .paperBorder()
     }
 
     // MARK: - Row derivation
@@ -111,6 +112,7 @@ struct CaptureResultSnippetView: View {
             case "folder":         return "folder"
             case "trip":           return "suitcase"
             case "itinerary_item": return "airplane"
+            case "expense":        return "creditcard"
             default:               return "sparkles"
             }
         }
@@ -123,7 +125,8 @@ struct CaptureResultSnippetView: View {
             case "folder":         return Tokens.accentNotes
             case "trip",
                  "itinerary_item": return Tokens.accentItineraries
-            default:               return Tokens.ink
+            case "expense":        return Tokens.accentFinance
+            default:               return Color.primary
             }
         }
 
@@ -149,6 +152,7 @@ struct CaptureResultSnippetView: View {
             case "folder":         return "Folder"
             case "trip":           return "Trip"
             case "itinerary_item": return "Itinerary item"
+            case "expense":        return "Expense"
             default:               return "Item"
             }
         }

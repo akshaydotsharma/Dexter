@@ -211,6 +211,8 @@ struct CaptureToDashboardIntent: AppIntent {
             return "Added list\(titleClause)."
         case ("folder", "created"):
             return "Added folder\(titleClause)."
+        case ("expense", "created"):
+            return "Logged expense\(titleClause)."
 
         case ("todo", "completed"):
             return "Marked task\(titleClause) complete."
@@ -245,6 +247,7 @@ struct CaptureToDashboardIntent: AppIntent {
         case "note": return "note"
         case "list": return "list"
         case "folder": return "folder"
+        case "expense": return "expense"
         default: return type
         }
     }
@@ -294,6 +297,7 @@ struct CaptureToDashboardIntent: AppIntent {
         case "list":                       return AppSection.lists.rawValue
         case "trip", "itinerary_item":     return AppSection.itineraries.rawValue
         case "folder":                     return AppSection.notes.rawValue
+        case "expense":                    return AppSection.finance.rawValue
         default:                           return nil
         }
     }
