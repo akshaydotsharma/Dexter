@@ -336,6 +336,12 @@ struct ExecuteDraftAction {
     /// bullet" style edits — `edit_note` (full-body replace) is reserved
     /// for explicit rewrites, since asking the model to reconstruct a body
     /// from a truncated context preview reliably corrupts it.
+    ///
+    /// The merge logic is list-aware: when the existing body ends in a
+    /// numbered list, the appended content is renumbered to continue the
+    /// sequence and joined with a single newline so markdown keeps treating
+    /// it as one list. Same idea for `-` / `*` bullet lists. For plain
+    /// prose the separator is a blank line.
     private func appendToNote(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
         let uuid = try requireUUID(input["id"], entity: "note")
         let row: LocalNote = try fetchOne(uuid: uuid, entity: "note")
@@ -350,6 +356,8 @@ struct ExecuteDraftAction {
         let merged: String
         if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             merged = newContent
+        } else if let continuation = Self.continueList(existing: existing, appended: newContent) {
+            merged = continuation
         } else if existing.hasSuffix("\n\n") {
             merged = existing + newContent
         } else if existing.hasSuffix("\n") {
@@ -369,6 +377,142 @@ struct ExecuteDraftAction {
             dueDate: nil,
             addedNames: nil
         )
+    }
+
+    /// If `existing` ends in a markdown list (numbered or bulleted), returns
+    /// a merged string where the appended content has been reshaped to keep
+    /// that list contiguous: numbered items get renumbered from the next
+    /// integer, bullet items get a leading `- ` prefix if missing, and the
+    /// join uses a single newline so the rendered list does not break.
+    /// Returns nil when the existing body does not end in a list — the
+    /// caller should fall back to plain paragraph spacing.
+    static func continueList(existing: String, appended: String) -> String? {
+        // Strip trailing whitespace once so suffix checks are reliable.
+        let trimmedExisting = existing
+            .reversed()
+            .drop(while: { $0.isWhitespace || $0.isNewline })
+            .reversed()
+        let existingStripped = String(trimmedExisting)
+        guard let lastNewline = existingStripped.lastIndex(of: "\n") else {
+            return continueFromLastLine(prefix: "", lastLine: existingStripped, appended: appended)
+        }
+        let prefix = String(existingStripped[..<lastNewline])
+        let lastLine = String(existingStripped[existingStripped.index(after: lastNewline)...])
+        return continueFromLastLine(prefix: prefix, lastLine: lastLine, appended: appended)
+    }
+
+    private static func continueFromLastLine(prefix: String, lastLine: String, appended: String) -> String? {
+        if let (leading, nextNumber) = numberedListMatch(lastLine) {
+            let reshaped = renumberAppended(appended, startingAt: nextNumber, indent: leading)
+            return joinList(prefix: prefix, lastLine: lastLine, reshaped: reshaped)
+        }
+        if let (leading, marker) = bulletListMatch(lastLine) {
+            let reshaped = rebulletAppended(appended, marker: marker, indent: leading)
+            return joinList(prefix: prefix, lastLine: lastLine, reshaped: reshaped)
+        }
+        return nil
+    }
+
+    private static func joinList(prefix: String, lastLine: String, reshaped: String) -> String {
+        let base = prefix.isEmpty ? lastLine : prefix + "\n" + lastLine
+        return base + "\n" + reshaped
+    }
+
+    /// Returns (indentString, nextNumber) if the line is a numbered-list
+    /// item like `1. foo` or `  12) bar`. The next number is the matched
+    /// number plus one. Indent is preserved so nested lists keep their level.
+    private static func numberedListMatch(_ line: String) -> (String, Int)? {
+        // Indent: leading spaces/tabs.
+        var i = line.startIndex
+        while i < line.endIndex, line[i] == " " || line[i] == "\t" { i = line.index(after: i) }
+        let indent = String(line[line.startIndex..<i])
+        // Number: 1-3 digits.
+        let numberStart = i
+        while i < line.endIndex, line[i].isNumber { i = line.index(after: i) }
+        guard numberStart != i else { return nil }
+        guard let number = Int(line[numberStart..<i]) else { return nil }
+        // Delimiter: `.` or `)`.
+        guard i < line.endIndex, (line[i] == "." || line[i] == ")") else { return nil }
+        i = line.index(after: i)
+        // Required space after the delimiter.
+        guard i < line.endIndex, line[i] == " " else { return nil }
+        return (indent, number + 1)
+    }
+
+    /// Returns (indentString, markerCharacter) if the line is a bullet item
+    /// like `- foo` or `* bar`. Markers `+ ` are also accepted because
+    /// CommonMark allows them.
+    private static func bulletListMatch(_ line: String) -> (String, Character)? {
+        var i = line.startIndex
+        while i < line.endIndex, line[i] == " " || line[i] == "\t" { i = line.index(after: i) }
+        let indent = String(line[line.startIndex..<i])
+        guard i < line.endIndex else { return nil }
+        let marker = line[i]
+        guard marker == "-" || marker == "*" || marker == "+" else { return nil }
+        let afterMarker = line.index(after: i)
+        guard afterMarker < line.endIndex, line[afterMarker] == " " else { return nil }
+        return (indent, marker)
+    }
+
+    /// Splits the appended block into lines, strips any leading number/dot
+    /// the model may have emitted, and rewrites each line as `<n>. <text>`
+    /// starting at `startingAt`. Blank lines and prose lines without a
+    /// recognisable list shape are kept as-is so a free-form paragraph
+    /// inside the appended content doesn't get accidentally numbered.
+    private static func renumberAppended(_ appended: String, startingAt: Int, indent: String) -> String {
+        let lines = appended.components(separatedBy: "\n")
+        var counter = startingAt
+        var out: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                out.append("")
+                continue
+            }
+            // Strip a leading `\d+[.)] ` if present so we can re-number.
+            let stripped = stripLeadingNumber(trimmed)
+            // Treat every non-empty line as a new item — this is the common
+            // case for "add a point". If the model genuinely wanted a
+            // paragraph it should use edit_note instead.
+            out.append("\(indent)\(counter). \(stripped)")
+            counter += 1
+        }
+        return out.joined(separator: "\n")
+    }
+
+    private static func rebulletAppended(_ appended: String, marker: Character, indent: String) -> String {
+        let lines = appended.components(separatedBy: "\n")
+        var out: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                out.append("")
+                continue
+            }
+            let stripped = stripLeadingBullet(trimmed)
+            out.append("\(indent)\(marker) \(stripped)")
+        }
+        return out.joined(separator: "\n")
+    }
+
+    private static func stripLeadingNumber(_ line: String) -> String {
+        var i = line.startIndex
+        while i < line.endIndex, line[i].isNumber { i = line.index(after: i) }
+        guard i != line.startIndex, i < line.endIndex,
+              line[i] == "." || line[i] == ")" else {
+            // Also strip a stray bullet, in case the model is mixing markers.
+            return stripLeadingBullet(line)
+        }
+        let afterDelim = line.index(after: i)
+        guard afterDelim <= line.endIndex else { return line }
+        let rest = afterDelim < line.endIndex ? line[afterDelim...] : Substring("")
+        return String(rest).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func stripLeadingBullet(_ line: String) -> String {
+        guard let first = line.first, first == "-" || first == "*" || first == "+" else { return line }
+        let rest = line.dropFirst()
+        return rest.trimmingCharacters(in: .whitespaces)
     }
 
     private func updateList(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
