@@ -391,10 +391,17 @@ private struct NoteRow: View {
                     .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
-                Text(hasBody ? trimmedBody : "No additional text")
-                    .font(.edSubheadline)
-                    .foregroundStyle(hasBody ? Tokens.muted : Tokens.mutedSoft)
-                    .lineLimit(1)
+                if hasBody {
+                    Text(NoteRow.snippetAttributed(trimmedBody))
+                        .font(.edSubheadline)
+                        .foregroundStyle(Tokens.muted)
+                        .lineLimit(1)
+                } else {
+                    Text("No additional text")
+                        .font(.edSubheadline)
+                        .foregroundStyle(Tokens.mutedSoft)
+                        .lineLimit(1)
+                }
                 Text(note.updatedAt, style: .relative)
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
@@ -407,6 +414,50 @@ private struct NoteRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    // Produce a one-line preview of the note body with inline markdown
+    // applied (so `**bold**` renders bold, links lose the URL, etc.) and
+    // block-level prefixes on the first line stripped (`#`, `-`, `>`,
+    // `1.`) so the snippet doesn't lead with `## ` or `- `.
+    fileprivate static func snippetAttributed(_ source: String) -> AttributedString {
+        let firstLine = source
+            .components(separatedBy: .newlines)
+            .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+            ?? source
+        let stripped = stripBlockPrefix(firstLine)
+        if let attr = try? AttributedString(
+            markdown: stripped,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) {
+            return attr
+        }
+        return AttributedString(stripped)
+    }
+
+    private static func stripBlockPrefix(_ line: String) -> String {
+        var s = line.trimmingCharacters(in: .whitespaces)
+        // Heading hashes (#, ##, ###...)
+        while s.hasPrefix("#") { s.removeFirst() }
+        s = s.trimmingCharacters(in: .whitespaces)
+        // Blockquote
+        if s.hasPrefix("> ") { s.removeFirst(2) }
+        else if s == ">" { s = "" }
+        // Unordered list marker
+        if s.hasPrefix("- ") || s.hasPrefix("* ") || s.hasPrefix("+ ") { s.removeFirst(2) }
+        // Ordered list marker: digits + "." + " "
+        else if let dot = s.firstIndex(of: "."),
+                s[s.startIndex..<dot].allSatisfy({ $0.isNumber }),
+                s.distance(from: s.startIndex, to: dot) >= 1 {
+            let after = s.index(after: dot)
+            if after < s.endIndex, s[after] == " " {
+                s = String(s[s.index(after: after)...])
+            }
+        }
+        return s
     }
 }
 
