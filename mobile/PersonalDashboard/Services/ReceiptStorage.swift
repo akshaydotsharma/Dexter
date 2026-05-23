@@ -103,6 +103,32 @@ final class ReceiptStorage {
         try persist(data: pdfData, ext: "pdf")
     }
 
+    /// Restore a previously-exported receipt at its original relative path.
+    /// Used by the data importer to put receipts back in
+    /// `Documents/receipts/<uuid>.<ext>` without picking a new filename.
+    /// Returns the same `relativePath` it was given so callers can store it
+    /// directly onto `LocalExpense.receiptImagePath`.
+    @discardableResult
+    func write(data: Data, relativePath: String) throws -> String {
+        _ = try ensureDirectory()
+        let url: URL
+        do {
+            url = try absoluteURL(for: relativePath)
+        } catch {
+            throw ReceiptStorageError.fileSystem(error)
+        }
+        do {
+            try fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            throw ReceiptStorageError.fileSystem(error)
+        }
+        return relativePath
+    }
+
     /// Resolve a stored relative path back to an on-disk URL. Returns nil if
     /// the file no longer exists (e.g. user reinstalled the app).
     func load(relativePath: String) -> URL? {
