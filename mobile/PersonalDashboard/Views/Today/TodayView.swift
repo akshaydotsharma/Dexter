@@ -283,7 +283,7 @@ private struct TodayTaskRow: View {
     let onToggle: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: Space.md) {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             Button(action: onToggle) {
                 Image(systemName: todo.completed ? "checkmark.square.fill" : "square")
                     .font(.system(size: 18, weight: .regular))
@@ -292,7 +292,9 @@ private struct TodayTaskRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.top, 2)
+            // Map the glyph's center (with a 4pt body-font offset for x-height) to the
+            // firstTextBaseline so the checkbox visually centers on the title's first line.
+            .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(todo.title)
