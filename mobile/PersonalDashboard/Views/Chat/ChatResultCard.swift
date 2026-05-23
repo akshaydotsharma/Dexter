@@ -122,6 +122,8 @@ struct ChatResultCard: View {
             return "trip"
         case .updateItineraryItem, .deleteItineraryItem:
             return "item"
+        case .addExpense:
+            return "expense"
         case .unknown:
             return "action"
         }

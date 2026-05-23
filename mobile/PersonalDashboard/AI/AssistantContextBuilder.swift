@@ -165,6 +165,72 @@ struct AssistantContextBuilder {
             }.joined(separator: "\n")
         }
 
+        // Expenses (Finance v1): up to 20 most-recent expenses from the
+        // last 30 days plus this-month and per-category SGD totals. Keeps
+        // the prompt budget reasonable while giving the model enough
+        // visibility to answer "what did I spend on groceries last week"
+        // questions and not double-log when the user repeats themselves.
+        let cal = Calendar(identifier: .gregorian)
+        let now = Date()
+        if let last30Cutoff = cal.date(byAdding: .day, value: -30, to: now) {
+            let cutoff = cal.startOfDay(for: last30Cutoff)
+            if let recent = try? context.fetch(
+                FetchDescriptor<LocalExpense>(
+                    predicate: #Predicate { $0.date >= cutoff },
+                    sortBy: [
+                        SortDescriptor(\LocalExpense.date, order: .reverse),
+                        SortDescriptor(\LocalExpense.createdAt, order: .reverse)
+                    ]
+                )
+            ), !recent.isEmpty {
+                // This-month total (calendar month).
+                let monthComps = cal.dateComponents([.year, .month], from: now)
+                let monthStart = cal.date(from: monthComps) ?? now
+                let monthRows = recent.filter { $0.date >= monthStart }
+                let monthTotal = monthRows.reduce(0.0) { $0 + $1.sgdAmount }
+
+                // Category totals this month, biggest first.
+                var byCategory: [String: Double] = [:]
+                for row in monthRows {
+                    byCategory[row.category, default: 0] += row.sgdAmount
+                }
+                let topCategories = byCategory
+                    .sorted { $0.value > $1.value }
+                    .prefix(5)
+
+                out += "\n\nEXPENSES (this month, last 30):\n"
+                out += String(format: "- This month total: SGD %.2f", monthTotal)
+                if !topCategories.isEmpty {
+                    let catLine = topCategories.map { (raw, total) -> String in
+                        let display = ExpenseCategory(rawValue: raw)?.displayName ?? raw
+                        return String(format: "%@: SGD %.2f", display, total)
+                    }.joined(separator: ", ")
+                    out += "\n- Top categories: \(catLine)"
+                }
+
+                let rows = recent.prefix(20)
+                out += "\n- Recent:"
+                for row in rows {
+                    let dayISO = Self.isoDate.string(from: row.date)
+                    let category = ExpenseCategory(rawValue: row.category)?.displayName ?? "Other"
+                    var line = "\n  - \(dayISO) · "
+                    if let merchant = row.merchant, !merchant.isEmpty {
+                        line += merchant
+                    } else if let desc = row.expenseDescription, !desc.isEmpty {
+                        line += desc
+                    } else {
+                        line += category
+                    }
+                    line += String(format: " · SGD %.2f", row.sgdAmount)
+                    if row.originalCurrency.uppercased() != "SGD" {
+                        line += String(format: " (\(row.originalCurrency.uppercased()) %.2f)", row.originalAmount)
+                    }
+                    line += " · \(category)"
+                    out += line
+                }
+            }
+        }
+
         // Personal vocabulary: words the user has explicitly taught the
         // assistant so the model can prefer them over close-sounding
         // mistranscriptions ("envisso" vs. "in visa", "Dexter" vs. "Dexter

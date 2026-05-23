@@ -150,9 +150,45 @@ extension ChatDraft {
         case .deleteItineraryItem:
             return "Delete itinerary item (ID: \(dict["id"]?.stringValue ?? "?"))"
 
+        case .addExpense:
+            return Self.addExpenseSummary(dict: dict)
+
         case .unknown:
             return "Unknown action"
         }
+    }
+
+    /// Preview for `add_expense`. Format aims for the same scannable shape
+    /// the user sees on the Finance list: "Merchant · SGD 67.50 · Category".
+    private static func addExpenseSummary(dict: [String: AnthropicJSONValue]) -> String {
+        let amount = dict["original_amount"]?.doubleValue
+            ?? Double(dict["original_amount"]?.stringValue ?? "")
+            ?? 0
+        let currency = (dict["original_currency"]?.stringValue ?? "SGD")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        let cleanedCurrency = currency.isEmpty ? "SGD" : currency
+
+        let categoryRaw = (dict["category"]?.stringValue ?? "").lowercased()
+        let categoryName = ExpenseCategory(rawValue: categoryRaw)?.displayName ?? "Other"
+
+        let merchant = (dict["merchant"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = (dict["description"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let headline: String
+        if !merchant.isEmpty {
+            headline = merchant
+        } else if !description.isEmpty {
+            headline = description
+        } else {
+            headline = categoryName
+        }
+
+        let amountString = String(format: "%@ %.2f", cleanedCurrency, amount)
+        // If the headline is already the category, don't repeat it.
+        if headline == categoryName {
+            return "\(headline) · \(amountString)"
+        }
+        return "\(headline) · \(amountString) · \(categoryName)"
     }
 
     /// Build the preview for `edit_trip`. Falls back to a generic line if

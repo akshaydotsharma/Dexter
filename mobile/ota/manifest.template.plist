@@ -20,6 +20,8 @@
                 <string>com.akshaysharma.personaldashboard</string>
                 <key>bundle-version</key>
                 <string>__BUNDLE_VERSION__</string>
+                <key>bundle-short-version-string</key>
+                <string>__BUNDLE_SHORT_VERSION__</string>
                 <key>kind</key>
                 <string>software</string>
                 <key>title</key>

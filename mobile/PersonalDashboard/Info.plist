@@ -33,10 +33,14 @@
 	<array>
 		<string>_http._tcp</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Used to capture receipts so Dexter can log expenses for you.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Dexter talks to your Mac dev server over wifi when you're on the same network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dexter listens to your voice so it can transcribe what you say into the chat.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Used to import a receipt photo when logging an expense.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Dexter transcribes your voice into chat messages on-device. Audio never leaves your phone.</string>
 	<key>OTA_API_URL</key>
