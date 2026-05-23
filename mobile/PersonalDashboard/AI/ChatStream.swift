@@ -139,6 +139,7 @@ struct ChatStream {
         - complete_task: Mark a task as completed or incomplete
         - edit_task: Edit an existing task's title, description, due_at, or tag
         - edit_note: Edit an existing note's title, body, or move to different folder
+        - append_to_note: Add new content to the end of an existing note WITHOUT replacing existing content. Use for "add a point / append / also note / add another bullet". Pass only the new text.
         - edit_list: Edit an existing list's title or replace all items
         - add_to_list: Add new items to an existing list (keeps existing items)
         - edit_list_item: Edit a specific item in a list (requires list_id and item_index from context)
@@ -180,7 +181,8 @@ struct ChatStream {
         7. For multi-item requests, you can call multiple tools in a single response.
         8. For edit tools: ONLY call them when you have specific changes to make. You must provide at least one non-empty field value. Use empty string only for fields you want to keep unchanged.
         9. If the user's EDIT request is unclear or doesn't specify what to change, ask for clarification instead of calling an edit tool with empty values.
-        10. Apply VOCABULARY HANDLING (above) to the user's input first, then to the content of every artefact you create. The vocabulary substitution must appear in artefact titles and bodies, not only in your interpretation.
+        10. When the user wants to ADD content to an existing note (e.g. "add a point", "append", "also note", "add another", "add a fourth bullet"), you MUST use append_to_note with only the new text. Do NOT use edit_note to rewrite the body — that path corrupts existing content. Reserve edit_note for explicit rewrites, title changes, or folder moves.
+        11. Apply VOCABULARY HANDLING (above) to the user's input first, then to the content of every artefact you create. The vocabulary substitution must appear in artefact titles and bodies, not only in your interpretation.
 
         FORMATTING (chat replies and note bodies):
         Markdown is rendered. Use it where it adds clarity, otherwise stay plain.

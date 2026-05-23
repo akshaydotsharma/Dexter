@@ -58,6 +58,7 @@ struct ExecuteDraftAction {
         case .completeTodo: return try completeTodo(input)
         case .updateTodo: return try updateTodo(input)
         case .updateNote: return try updateNote(input)
+        case .appendToNote: return try appendToNote(input)
         case .updateList: return try updateList(input)
         case .addToList: return try addToList(input)
         case .updateListItem: return try updateListItem(input)
@@ -327,6 +328,47 @@ struct ExecuteDraftAction {
         row.updatedAt = Date()
         try save()
         return outcome(type: "note", action: ActionString.updated, id: row.clientUUID, title: row.title)
+    }
+
+    /// `append_to_note` tool handler. Appends `content` to the end of the
+    /// existing note body without ever asking the LLM to reconstruct the
+    /// current body. This is the safe path for "add a point" / "append a
+    /// bullet" style edits — `edit_note` (full-body replace) is reserved
+    /// for explicit rewrites, since asking the model to reconstruct a body
+    /// from a truncated context preview reliably corrupts it.
+    private func appendToNote(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let uuid = try requireUUID(input["id"], entity: "note")
+        let row: LocalNote = try fetchOne(uuid: uuid, entity: "note")
+
+        let raw = input["content"]?.stringValue ?? ""
+        let newContent = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newContent.isEmpty else {
+            throw DraftExecutionError.invalidArgument(field: "content", reason: "required")
+        }
+
+        let existing = row.content ?? ""
+        let merged: String
+        if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            merged = newContent
+        } else if existing.hasSuffix("\n\n") {
+            merged = existing + newContent
+        } else if existing.hasSuffix("\n") {
+            merged = existing + "\n" + newContent
+        } else {
+            merged = existing + "\n\n" + newContent
+        }
+
+        row.content = merged
+        row.updatedAt = Date()
+        try save()
+        return DraftActionOutcome(
+            type: "note",
+            action: ActionString.updated,
+            id: row.clientUUID.uuidString.lowercased(),
+            title: row.title,
+            dueDate: nil,
+            addedNames: nil
+        )
     }
 
     private func updateList(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {

@@ -106,7 +106,7 @@ struct ChatResultCard: View {
         switch result.actionType {
         case .createTodo, .updateTodo, .completeTodo, .deleteTodo:
             return "task"
-        case .createNote, .updateNote, .deleteNote:
+        case .createNote, .updateNote, .appendToNote, .deleteNote:
             return "note"
         case .createList, .updateList, .deleteList:
             return "list"

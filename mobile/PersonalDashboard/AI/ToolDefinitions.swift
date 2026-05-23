@@ -174,6 +174,18 @@ enum ToolDefinitions {
         )
     )
 
+    private static let appendToNote = AnthropicTool(
+        name: "append_to_note",
+        description: "Append new content to the end of an EXISTING note without rewriting or replacing existing content. Use whenever the user wants to add a line / point / bullet / paragraph to an existing note (e.g., 'add a fourth point', 'append a note that …', 'also add', 'add another bullet'). The model NEVER provides the existing body — pass only the new text. The device merges it with sensible spacing.",
+        input_schema: object(
+            properties: [
+                "id": string("The UUID of the existing note to append to (from EXISTING NOTES context)"),
+                "content": string("The new text to append to the note. Provide ONLY the new content — do NOT include any of the existing body. The device handles spacing between the existing body and the appended text.")
+            ],
+            required: ["id", "content"]
+        )
+    )
+
     private static let editListItem = AnthropicTool(
         name: "edit_list_item",
         description: "Edit a specific item within an EXISTING list. Use when user wants to change the text or checked status of a specific list item. Requires list UUID and item index. IMPORTANT: You must provide at least one actual change (non-empty text or a checked value). If user does not specify what to change, ask for clarification.",
@@ -404,6 +416,7 @@ enum ToolDefinitions {
         editNote,
         editList,
         addToList,
+        appendToNote,
         editListItem,
         removeListItem,
         editFolder,
@@ -449,6 +462,7 @@ enum ToolDefinitions {
         "remove_list_item": .removeListItem,
         "edit_folder": .updateFolder,
         "add_to_list": .addToList,
+        "append_to_note": .appendToNote,
         "delete_task": .deleteTodo,
         "delete_note": .deleteNote,
         "delete_list": .deleteList,
