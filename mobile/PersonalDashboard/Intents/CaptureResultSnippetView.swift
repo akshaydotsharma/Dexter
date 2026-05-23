@@ -40,11 +40,16 @@ struct CaptureResultSnippetView: View {
 
     var body: some View {
         if let url = deepLink {
-            VStack(alignment: .leading, spacing: Space.sm) {
+            VStack(spacing: Space.md) {
                 contextRow
                 hyperlink(url: url)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Centered so the tap target sits in the thumb-reachable
+            // middle of the sheet, and so the affordance reads as
+            // intentional rather than wedged against the left edge.
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
         } else {
             EmptyView()
         }
@@ -63,7 +68,7 @@ struct CaptureResultSnippetView: View {
                 typeCircle(for: only)
                 Text(itemsAddedLabel(for: only))
                     .font(.edFootnote)
-                    .foregroundStyle(Tokens.muted)
+                    .foregroundStyle(Color.white.opacity(0.7))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -75,10 +80,9 @@ struct CaptureResultSnippetView: View {
                 if overflowCount > 0 {
                     Text("+\(overflowCount)")
                         .font(.edFootnote.weight(.semibold))
-                        .foregroundStyle(Tokens.muted)
+                        .foregroundStyle(Color.white.opacity(0.7))
                         .padding(.leading, Space.xxs)
                 }
-                Spacer(minLength: 0)
             }
         }
     }
@@ -103,18 +107,21 @@ struct CaptureResultSnippetView: View {
     /// Plain hyperlink — no button chrome, no card. Reads as a soft
     /// affordance below the dialog so it doesn't compete visually with
     /// the system Done button at the bottom of the Shortcuts sheet.
-    /// Uses iOS system blue (set explicitly because snippet views don't
-    /// inherit the host's accent color reliably).
+    ///
+    /// Sized close to the system dialog text so it doesn't disappear
+    /// under it, and rendered in white because the Shortcuts result
+    /// sheet on iOS 26 always uses a dark frosted host (system blue
+    /// reads as too utilitarian against that material).
     @ViewBuilder
     private func hyperlink(url: URL) -> some View {
         Link(destination: url) {
             HStack(spacing: Space.xs) {
                 Text(deepLinkLabel)
-                    .font(.edBody.weight(.medium))
+                    .font(.title3.weight(.semibold))
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
             }
-            .foregroundStyle(Color.blue)
+            .foregroundStyle(Color.white)
         }
     }
 
