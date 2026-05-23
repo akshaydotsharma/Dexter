@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Binding var schemePref: ColorSchemePref
 
     @State private var showingResetData: Bool = false
+    @State private var showingDataTransfer: Bool = false
 
     var body: some View {
         ZStack {
@@ -14,6 +15,9 @@ struct SettingsView: View {
         .activeSection(.settings)
         .sheet(isPresented: $showingResetData) {
             ResetDataView()
+        }
+        .sheet(isPresented: $showingDataTransfer) {
+            DataExportImportView()
         }
     }
 
@@ -57,23 +61,48 @@ struct SettingsView: View {
 
     private var dataSection: some View {
         SettingsSection(title: "Data") {
-            Button {
-                showingResetData = true
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-                    Text("Reset data…")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.danger)
-                    Spacer(minLength: Space.md)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Tokens.mutedSoft)
+            VStack(spacing: 0) {
+                Button {
+                    showingDataTransfer = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                        Text("Export & import…")
+                            .font(.edBody)
+                            .foregroundStyle(Tokens.ink)
+                        Spacer(minLength: Space.md)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Tokens.mutedSoft)
+                    }
+                    .padding(.horizontal, Space.lg)
+                    .padding(.vertical, Space.md)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, Space.lg)
-                .padding(.vertical, Space.md)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+                    .padding(.leading, Space.lg)
+
+                Button {
+                    showingResetData = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                        Text("Reset data…")
+                            .font(.edBody)
+                            .foregroundStyle(Tokens.danger)
+                        Spacer(minLength: Space.md)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Tokens.mutedSoft)
+                    }
+                    .padding(.horizontal, Space.lg)
+                    .padding(.vertical, Space.md)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
