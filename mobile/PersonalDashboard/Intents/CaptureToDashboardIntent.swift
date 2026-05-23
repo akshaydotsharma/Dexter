@@ -68,7 +68,7 @@ struct CaptureToDashboardIntent: AppIntent {
                 view: CaptureResultSnippetView(
                     items: items,
                     deepLink: deepLink,
-                    deepLinkLabel: "Open in Dexter"
+                    deepLinkLabel: "Go to app"
                 )
             )
         case .needsClarification:

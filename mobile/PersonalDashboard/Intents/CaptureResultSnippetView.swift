@@ -5,19 +5,24 @@ import SwiftUI
 ///
 /// The dialog above the snippet already names what was added (e.g.
 /// *"Added task 'Buy milk' — due May 24"* or *"Logged expense 'Cab'"*),
-/// so the snippet stops echoing titles. Its job is to elevate the
-/// "Open in Dexter" CTA and, for multi-action captures, give the user a
-/// quick visual sense of what types of things were touched.
+/// so the snippet stops echoing titles. Its job is to offer a quiet
+/// "Go to app" hyperlink and, for multi-action captures, give the user
+/// a quick visual sense of what types of things were touched.
+///
+/// Design rationale: an actual button (filled, bordered, or otherwise)
+/// reads as a competing CTA next to the system "Done" button that
+/// Shortcuts owns at the bottom of the sheet. A plain hyperlink in
+/// system blue is a soft secondary affordance — it sits below the
+/// dialog without fighting the primary dismissal action.
 ///
 /// Snippet runtime constraints (iOS App Intents):
 ///   - The view runs outside the main app process. Arbitrary `Button(action:)`
 ///     closures are ignored — only `Link(destination:)` reliably hands
 ///     control back to the host app.
 ///   - The snippet has no knowledge of the Shortcuts host appearance and
-///     does NOT reliably inherit it. `Color.primary` and `Material` both
-///     resolve unpredictably — they were producing dark text on dark
-///     chrome. We instead use the Dexter paper/ink tokens as fixed RGB so
-///     the card has its own internal contrast regardless of host theme.
+///     does NOT reliably inherit it. We pick colors that read on both
+///     light and dark chrome (system blue for the link, accent tints
+///     for the type circles).
 ///   - Animations, gestures, and `@Environment` values from the main app
 ///     are not in scope.
 struct CaptureResultSnippetView: View {
@@ -26,38 +31,23 @@ struct CaptureResultSnippetView: View {
     static let maxVisibleCircles: Int = 4
 
     let items: [ExecutedDraft]
-    /// Where the "Open in Dexter" button points. `nil` hides the entire
-    /// card — used for clarification / error / unrecoverable-id cases.
+    /// Where the "Go to app" hyperlink points. `nil` hides the entire
+    /// snippet — used for clarification / error / unrecoverable-id cases.
     let deepLink: URL?
-    /// Label rendered on the deep-link button. Defaults to "Open in Dexter"
-    /// but kept as a parameter to make future variations easy.
+    /// Label rendered on the hyperlink. Defaults to "Go to app" but
+    /// kept as a parameter to make future variations easy.
     let deepLinkLabel: String
 
     var body: some View {
         if let url = deepLink {
-            card(url: url)
+            VStack(alignment: .leading, spacing: Space.sm) {
+                contextRow
+                hyperlink(url: url)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             EmptyView()
         }
-    }
-
-    @ViewBuilder
-    private func card(url: URL) -> some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            contextRow
-            ctaButton(url: url)
-        }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Tokens.paper)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Tokens.border, lineWidth: 1)
-        )
     }
 
     // MARK: - Context row
@@ -110,22 +100,21 @@ struct CaptureResultSnippetView: View {
 
     // MARK: - CTA
 
+    /// Plain hyperlink — no button chrome, no card. Reads as a soft
+    /// affordance below the dialog so it doesn't compete visually with
+    /// the system Done button at the bottom of the Shortcuts sheet.
+    /// Uses iOS system blue (set explicitly because snippet views don't
+    /// inherit the host's accent color reliably).
     @ViewBuilder
-    private func ctaButton(url: URL) -> some View {
+    private func hyperlink(url: URL) -> some View {
         Link(destination: url) {
             HStack(spacing: Space.xs) {
                 Text(deepLinkLabel)
-                    .font(.edBody.weight(.semibold))
+                    .font(.edBody.weight(.medium))
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
             }
-            .foregroundStyle(Tokens.accentFg)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(
-                RoundedRectangle(cornerRadius: Radius.pill, style: .continuous)
-                    .fill(Tokens.ink)
-            )
+            .foregroundStyle(Color.blue)
         }
     }
 
