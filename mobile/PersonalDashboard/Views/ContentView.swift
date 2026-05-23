@@ -99,6 +99,40 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(!router.drawerOpen)
         }
+        // Deep links from the Shortcut capture result snippet ("Open in
+        // Dexter") and any future external entry points. Schemes are
+        // registered in mobile/project.yml under CFBundleURLTypes.
+        .onOpenURL { url in
+            DexterDeepLink.handle(url, router: router)
+        }
+        // Internal deep links from `OpenDexterIntent` (Button(intent:)
+        // inside the Shortcut snippet view). The intent runs in the app
+        // process with `openAppWhenRun = true`, parks the destination on
+        // DeepLinkBus, and this observer drains it into the router.
+        //
+        // Dismiss the keyboard first: chat is the root and its input may
+        // be focused when the app foregrounds, which leaves the keyboard
+        // covering the bottom of the destination surface and pushes the
+        // floating "+" FAB up to mid-screen (issue #126 device QA).
+        .onReceive(DeepLinkBus.shared.$pending.compactMap { $0 }) { pending in
+            DeepLinkBus.shared.pending = nil
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil,
+                from: nil,
+                for: nil
+            )
+            switch pending {
+            case .focus(let sectionRaw, let id):
+                guard let section = AppSection(rawValue: sectionRaw) else { return }
+                if let id {
+                    router.focus = ActivityFocus(section: section, id: id, isFolder: false)
+                }
+                router.go(to: section)
+            case .activity:
+                router.go(to: .activity)
+            }
+        }
     }
 
     private var edgeOpenGesture: some Gesture {

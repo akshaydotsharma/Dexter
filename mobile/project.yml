@@ -52,6 +52,15 @@ targets:
         # silently fails and the prompt never appears.
         NSBonjourServices:
           - _http._tcp
+        # Deep-link scheme used by the Shortcut capture result snippet
+        # ("Open in Dexter" button) and any future external entry points.
+        # Routes are parsed in ContentView.onOpenURL:
+        #   dexter://focus/<section>/<uuid>  — open a section and focus a row
+        #   dexter://activity                — open the Activity timeline
+        CFBundleURLTypes:
+          - CFBundleURLName: com.akshaysharma.personaldashboard.deeplink
+            CFBundleURLSchemes:
+              - dexter
         # Voice input in chat (issue #83). On-device only — audio never
         # leaves the phone. Both keys are required: Speech for transcription,
         # Microphone for the audio capture that feeds it.
