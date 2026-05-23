@@ -23,4 +23,14 @@ enum Haptics {
         generator.prepare()
         generator.impactOccurred()
     }
+
+    /// A low-key selection tick used to signal threshold crossings during
+    /// continuous drag gestures (e.g. crossing the full-swipe commit
+    /// boundary). Quieter than `destructive()` so it doesn't compete with
+    /// the warning thump that fires on the actual commit.
+    static func tick() {
+        let generator = UISelectionFeedbackGenerator()
+        generator.prepare()
+        generator.selectionChanged()
+    }
 }

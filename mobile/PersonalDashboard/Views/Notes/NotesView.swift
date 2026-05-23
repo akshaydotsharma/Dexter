@@ -350,30 +350,28 @@ private struct FolderRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: Space.md) {
-                Image(systemName: "folder")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(Tokens.accentNotes)
-                    .frame(width: 22, height: 22)
-                Text(folder.name)
-                    .font(.edBodyMedium)
-                    .foregroundStyle(Tokens.ink)
-                Spacer()
-                Text("\(count)")
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Tokens.mutedSoft)
-            }
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
-            .contentShape(Rectangle())
+        HStack(spacing: Space.md) {
+            Image(systemName: "folder")
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(Tokens.accentNotes)
+                .frame(width: 22, height: 22)
+            Text(folder.name)
+                .font(.edBodyMedium)
+                .foregroundStyle(Tokens.ink)
+            Spacer()
+            Text("\(count)")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Tokens.mutedSoft)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .paperBorder(Tokens.border, radius: 26)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
     }
 }
 
@@ -385,35 +383,33 @@ private struct NoteRow: View {
         let trimmedBody = (note.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let hasBody = !trimmedBody.isEmpty
 
-        return Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text((note.title?.isEmpty == false ? note.title! : "Untitled"))
-                    .font(.edBodyMedium)
-                    .foregroundStyle(Tokens.ink)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text((note.title?.isEmpty == false ? note.title! : "Untitled"))
+                .font(.edBodyMedium)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
+            if hasBody {
+                Text(markdownSnippetAttributed(trimmedBody))
+                    .font(.edSubheadline)
+                    .foregroundStyle(Tokens.muted)
                     .lineLimit(1)
-                if hasBody {
-                    Text(markdownSnippetAttributed(trimmedBody))
-                        .font(.edSubheadline)
-                        .foregroundStyle(Tokens.muted)
-                        .lineLimit(1)
-                } else {
-                    Text("No additional text")
-                        .font(.edSubheadline)
-                        .foregroundStyle(Tokens.mutedSoft)
-                        .lineLimit(1)
-                }
-                Text(note.updatedAt, style: .relative)
-                    .font(.edCaption)
+            } else {
+                Text("No additional text")
+                    .font(.edSubheadline)
                     .foregroundStyle(Tokens.mutedSoft)
+                    .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
-            .contentShape(Rectangle())
+            Text(note.updatedAt, style: .relative)
+                .font(.edCaption)
+                .foregroundStyle(Tokens.mutedSoft)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .paperBorder(Tokens.border, radius: 26)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
     }
 
 }
