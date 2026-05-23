@@ -117,9 +117,9 @@ struct CaptureResultSnippetView: View {
         Link(destination: url) {
             HStack(spacing: Space.xs) {
                 Text(deepLinkLabel)
-                    .font(.title3.weight(.semibold))
+                    .font(.headline)
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
             }
             .foregroundStyle(Color.white)
         }
