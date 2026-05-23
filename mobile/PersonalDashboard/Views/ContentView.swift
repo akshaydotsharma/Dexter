@@ -99,6 +99,12 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(!router.drawerOpen)
         }
+        // Deep links from the Shortcut capture result snippet ("Open in
+        // Dexter") and any future external entry points. Schemes are
+        // registered in mobile/project.yml under CFBundleURLTypes.
+        .onOpenURL { url in
+            DexterDeepLink.handle(url, router: router)
+        }
     }
 
     private var edgeOpenGesture: some Gesture {
