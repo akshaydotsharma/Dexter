@@ -33,17 +33,33 @@ private struct SwipeToDeleteWithTint: ViewModifier {
 
     @State private var offset: CGFloat = 0
     @State private var isOpen: Bool = false
+    @State private var didCrossCommitThreshold: Bool = false
 
     private let buttonSize: CGFloat = 52
     private let revealedWidth: CGFloat = 60
-    private let cardCornerRadius: CGFloat = 14
+    // Generous pill-leaning radius. On short single-line rows (~40pt
+    // tall) SwiftUI clamps this to half the height and the swiped row
+    // renders as a true pill; on multi-line rows it stays a strongly
+    // rounded card. Applies uniformly to every surface using
+    // `.swipeToDeleteTrash` (Tasks, Notes, Lists, Finance, Itineraries,
+    // Vocabulary, side drawer) because every row above the modifier
+    // sets `.listRowBackground(Color.clear)`, leaving this tint card as
+    // the dominant visible fill during the swipe.
+    private let cardCornerRadius: CGFloat = 26
     private let tintColor: Color = Tokens.borderStrong
     private let trashColor: Color = Color(.sRGB, red: 1.0, green: 0.231, blue: 0.188, opacity: 1.0)
+    private let openCloseAnimation: Animation = .snappy(duration: 0.26, extraBounce: 0.04)
+    // Leftward (negative) flick speed above which we treat the gesture
+    // as "the user wants this open even if they didn't drag all the
+    // way". Matches the velocity-aware completion native iOS Mail uses
+    // — a small swipe + flick auto-opens.
+    private let flickVelocityThreshold: CGFloat = 350
 
     func body(content: Content) -> some View {
         let dragDistance = -offset
         let linear = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
         let progress = 0.5 - 0.5 * cos(.pi * linear)
+        let commitThreshold = UIScreen.main.bounds.width * 0.55
 
         // Z-order matters: the trash button is drawn IN FRONT of the
         // pan-capture wrapper so that its 52pt frame at the trailing
@@ -60,16 +76,37 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                 onChanged: { dx in
                     let raw = (isOpen ? -revealedWidth : 0) + dx
                     offset = applyRubberBand(to: raw)
+
+                    let crossing = -offset > commitThreshold
+                    if crossing && !didCrossCommitThreshold {
+                        Haptics.tick()
+                        didCrossCommitThreshold = true
+                    } else if !crossing && didCrossCommitThreshold {
+                        didCrossCommitThreshold = false
+                    }
                 },
-                onEnded: { dx in
+                onEnded: { dx, vx in
                     let endRaw = (isOpen ? -revealedWidth : 0) + dx
-                    if -endRaw > UIScreen.main.bounds.width * 0.7 {
+                    let dragMag = -endRaw
+                    didCrossCommitThreshold = false
+
+                    // Velocity-aware completion gives the "slides itself"
+                    // feel of native iOS Mail. A leftward flick on a
+                    // short drag still commits to open; a rightward flick
+                    // on a partially-open row still closes.
+                    let leftFlick = vx <= -flickVelocityThreshold
+                    let rightFlick = vx >= flickVelocityThreshold
+
+                    if dragMag > commitThreshold {
                         commit()
-                    } else if -endRaw > revealedWidth * 0.55 {
-                        // Tighter snap-open threshold so a casual drift
-                        // doesn't reveal the trash. Was 0.4, but that
-                        // felt over-sensitive once accidental tap-fall-
-                        // through was eliminated. Drag past ~33pt now.
+                    } else if leftFlick && dragMag > revealedWidth * 0.25 {
+                        // Strong leftward flick past a quarter of the
+                        // reveal width: treat as intent to open even if
+                        // the finger didn't make it all the way.
+                        open()
+                    } else if rightFlick {
+                        close()
+                    } else if dragMag > revealedWidth * 0.35 {
                         open()
                     } else {
                         close()
@@ -92,9 +129,10 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     .foregroundStyle(.white)
                     .frame(width: buttonSize, height: buttonSize)
                     .background(Circle().fill(trashColor))
+                    .scaleEffect(0.85 + 0.15 * progress)
             }
             .buttonStyle(.plain)
-            .opacity(min(1.0, dragDistance / 20))
+            .opacity(progress)
             // Only intercept taps once the swipe has clearly revealed
             // the trash. Below that threshold we leave hit testing to
             // the underlying content so partial drags / scroll handoff
@@ -113,23 +151,34 @@ private struct SwipeToDeleteWithTint: ViewModifier {
         }
     }
 
+    // Loose asymptotic rubber-band — `f(x) = x / (1 + 0.005·x)`. f'(0)
+    // = 1 (1:1 with finger at the boundary, no derivative kink), and
+    // the asymptote is much further out (~200pt) than the prior 0.012
+    // coefficient (~85pt). Result: the row keeps tracking the finger
+    // almost freely past the reveal width, matching the "slides itself"
+    // feel of native iOS swipe — most of the perceived "stiffness" of
+    // the earlier curve came from the resistance being too aggressive
+    // in the first 20–40pt of overshoot, exactly where users still feel
+    // the gesture should be free.
     private func applyRubberBand(to raw: CGFloat) -> CGFloat {
         if raw >= 0 { return 0 }
-        if -raw <= revealedWidth { return raw }
-        let overshoot = -raw - revealedWidth
-        return -(revealedWidth + overshoot * 0.4)
+        let mag = -raw
+        if mag <= revealedWidth { return raw }
+        let overshoot = mag - revealedWidth
+        let damped = overshoot / (1.0 + overshoot * 0.005)
+        return -(revealedWidth + damped)
     }
 
     private func open() {
         isOpen = true
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
+        withAnimation(openCloseAnimation) {
             offset = -revealedWidth
         }
     }
 
     private func close() {
         isOpen = false
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
+        withAnimation(openCloseAnimation) {
             offset = 0
         }
     }
@@ -156,12 +205,12 @@ private struct SwipeToDeleteWithTint: ViewModifier {
 /// proceed when the user drags vertically.
 private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
     let onChanged: (CGFloat) -> Void
-    let onEnded: (CGFloat) -> Void
+    let onEnded: (CGFloat, CGFloat) -> Void
     let content: Content
 
     init(
         onChanged: @escaping (CGFloat) -> Void,
-        onEnded: @escaping (CGFloat) -> Void,
+        onEnded: @escaping (CGFloat, CGFloat) -> Void,
         @ViewBuilder content: () -> Content
     ) {
         self.onChanged = onChanged
@@ -223,6 +272,8 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
         context.coordinator.onEnded = onEnded
     }
 
+
+
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         uiView: ContainerView,
@@ -239,11 +290,11 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onChanged: (CGFloat) -> Void
-        var onEnded: (CGFloat) -> Void
+        var onEnded: (CGFloat, CGFloat) -> Void
 
         init(
             onChanged: @escaping (CGFloat) -> Void,
-            onEnded: @escaping (CGFloat) -> Void
+            onEnded: @escaping (CGFloat, CGFloat) -> Void
         ) {
             self.onChanged = onChanged
             self.onEnded = onEnded
@@ -255,7 +306,8 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
             case .changed:
                 onChanged(t)
             case .ended, .cancelled, .failed:
-                onEnded(t)
+                let vx = g.velocity(in: g.view).x
+                onEnded(t, vx)
             default:
                 break
             }
@@ -263,8 +315,20 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
 
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
             guard let pan = g as? UIPanGestureRecognizer else { return true }
+            // Direction filter only — no magnitude gate. The pan
+            // recognizer's own begin threshold ensures shouldBegin only
+            // fires after enough motion to read direction; adding our
+            // own minimum-x requirement risks permanently failing the
+            // pan if shouldBegin is sampled at the wrong instant.
+            // Check both velocity and translation: if EITHER says the
+            // gesture is horizontal-dominant, claim. This tolerates
+            // both fast flicks (high velocity, low translation) and
+            // slow pulls (low velocity, accumulated translation).
             let v = pan.velocity(in: pan.view)
-            return abs(v.x) > abs(v.y) * 1.5
+            let t = pan.translation(in: pan.view)
+            let horizontalByVelocity = abs(v.x) > abs(v.y) * 1.5
+            let horizontalByTranslation = abs(t.x) > abs(t.y) * 1.5
+            return horizontalByVelocity || horizontalByTranslation
         }
 
         func gestureRecognizer(

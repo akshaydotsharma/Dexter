@@ -207,43 +207,41 @@ private struct TripRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: Space.sm) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(trip.name)
-                        .font(.edBodyMedium)
-                        .foregroundStyle(Tokens.ink)
-                        .lineLimit(1)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(Tokens.mutedSoft)
-                }
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(trip.name)
+                    .font(.edBodyMedium)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
 
-                HStack(spacing: Space.sm) {
-                    Text(Self.formatRange(start: trip.startDate, end: trip.endDate))
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.muted)
-                    Spacer()
-                    HStack(spacing: 4) {
-                        Image(systemName: "list.bullet")
-                            .font(.system(size: 10, weight: .regular))
-                        Text("\(itemCount)")
-                    }
+            HStack(spacing: Space.sm) {
+                Text(Self.formatRange(start: trip.startDate, end: trip.endDate))
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
-                    .padding(.horizontal, Space.sm)
-                    .padding(.vertical, 2)
-                    .background(Tokens.paper2, in: Capsule())
+                Spacer()
+                HStack(spacing: 4) {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 10, weight: .regular))
+                    Text("\(itemCount)")
                 }
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+                .padding(.horizontal, Space.sm)
+                .padding(.vertical, 2)
+                .background(Tokens.paper2, in: Capsule())
             }
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .paperBorder(Tokens.border, radius: 26)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
         .accessibilityLabel("\(trip.name), \(Self.formatRange(start: trip.startDate, end: trip.endDate)). Tap to open.")
     }
 

@@ -7,49 +7,47 @@ struct ExpenseRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: Space.md) {
-                Image(systemName: expense.categoryEnum.sfSymbol)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(Tokens.accentFinance)
-                    .frame(width: 36, height: 36)
-                    .background(Tokens.paper2, in: Circle())
+        HStack(spacing: Space.md) {
+            Image(systemName: expense.categoryEnum.sfSymbol)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(Tokens.accentFinance)
+                .frame(width: 36, height: 36)
+                .background(Tokens.paper2, in: Circle())
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(primaryLine)
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.ink)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(primaryLine)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                if let secondary = secondaryLine {
+                    Text(secondary)
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
                         .lineLimit(1)
-                    if let secondary = secondaryLine {
-                        Text(secondary)
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer()
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(FinanceDashboardBand.formatSGD(expense.sgdAmount))
-                        .font(.edBodyMedium)
-                        .monospacedDigit()
-                        .foregroundStyle(Tokens.ink)
-                    if expense.originalCurrency.uppercased() != "SGD" {
-                        Text(originalAmountLabel)
-                            .font(.edCaption)
-                            .monospacedDigit()
-                            .foregroundStyle(Tokens.mutedSoft)
-                    }
                 }
             }
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, Space.sm + 2)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
-            .contentShape(Rectangle())
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(FinanceDashboardBand.formatSGD(expense.sgdAmount))
+                    .font(.edBodyMedium)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.ink)
+                if expense.originalCurrency.uppercased() != "SGD" {
+                    Text(originalAmountLabel)
+                        .font(.edCaption)
+                        .monospacedDigit()
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm + 2)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .paperBorder(Tokens.border, radius: 26)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
         .accessibilityLabel(accessibilityLabel)
     }
 

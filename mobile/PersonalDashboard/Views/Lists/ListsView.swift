@@ -229,54 +229,53 @@ private struct ListSummaryRow: View {
     var body: some View {
         let total = list.items.count
         let completed = list.items.filter(\.checked).count
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: Space.sm) {
-                HStack {
-                    Text(list.title)
-                        .font(.edBodyMedium)
-                        .foregroundStyle(Tokens.ink)
-                    Spacer()
-                    HStack(spacing: 4) {
-                        Image(systemName: "number")
-                            .font(.system(size: 10, weight: .regular))
-                        Text("\(total)")
-                    }
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .padding(.horizontal, Space.sm)
-                    .padding(.vertical, 2)
-                    .background(Tokens.paper2, in: Capsule())
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(Tokens.mutedSoft)
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack {
+                Text(list.title)
+                    .font(.edBodyMedium)
+                    .foregroundStyle(Tokens.ink)
+                Spacer()
+                HStack(spacing: 4) {
+                    Image(systemName: "number")
+                        .font(.system(size: 10, weight: .regular))
+                    Text("\(total)")
                 }
-                if total > 0 {
-                    HStack(spacing: 4) {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(Tokens.paper2).frame(height: 4)
-                                Capsule()
-                                    .fill(Tokens.accentLists)
-                                    .frame(width: geo.size.width * (Double(completed) / Double(max(total, 1))), height: 4)
-                            }
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+                .padding(.horizontal, Space.sm)
+                .padding(.vertical, 2)
+                .background(Tokens.paper2, in: Capsule())
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            if total > 0 {
+                HStack(spacing: 4) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Tokens.paper2).frame(height: 4)
+                            Capsule()
+                                .fill(Tokens.accentLists)
+                                .frame(width: geo.size.width * (Double(completed) / Double(max(total, 1))), height: 4)
                         }
-                        .frame(height: 4)
-                        Text("\(completed)/\(total)")
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
                     }
-                } else {
-                    Text("Empty")
+                    .frame(height: 4)
+                    Text("\(completed)/\(total)")
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
                 }
+            } else {
+                Text("Empty")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
             }
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .paperBorder(Tokens.border, radius: 26)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
     }
 }
 

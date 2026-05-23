@@ -154,30 +154,28 @@ private struct KeywordRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: Space.xs) {
-                Text(keyword.term)
-                    .font(.edBodyMedium)
-                    .foregroundStyle(Tokens.ink)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(keyword.term)
+                .font(.edBodyMedium)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
 
-                let trimmed = keyword.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    Text(trimmed)
-                        .font(.edSubheadline)
-                        .foregroundStyle(Tokens.muted)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                }
+            let trimmed = keyword.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                Text(trimmed)
+                    .font(.edSubheadline)
+                    .foregroundStyle(Tokens.muted)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .paperBorder(Tokens.border, radius: 26)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
         .accessibilityLabel("\(keyword.term). Tap to edit.")
     }
 }
