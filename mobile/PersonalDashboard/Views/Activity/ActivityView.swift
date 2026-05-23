@@ -360,10 +360,21 @@ private struct ActivityRow: View {
                         .foregroundStyle(Tokens.ink)
                         .lineLimit(1)
                     if let snippet = item.snippet, !snippet.isEmpty {
-                        Text(snippet)
-                            .font(.edSubheadline)
-                            .foregroundStyle(Tokens.muted)
-                            .lineLimit(1)
+                        // Note snippets carry raw markdown; render inline
+                        // and strip leading block prefixes so the row
+                        // shows the formatted preview, not `## ` or `**`.
+                        // Other types (todo, list) stay plain.
+                        if item.type == .note {
+                            Text(markdownSnippetAttributed(snippet))
+                                .font(.edSubheadline)
+                                .foregroundStyle(Tokens.muted)
+                                .lineLimit(1)
+                        } else {
+                            Text(snippet)
+                                .font(.edSubheadline)
+                                .foregroundStyle(Tokens.muted)
+                                .lineLimit(1)
+                        }
                     }
                     if item.type == .note, let parent = item.parent, !parent.isEmpty {
                         HStack(spacing: 4) {

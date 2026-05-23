@@ -391,10 +391,17 @@ private struct NoteRow: View {
                     .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
-                Text(hasBody ? trimmedBody : "No additional text")
-                    .font(.edSubheadline)
-                    .foregroundStyle(hasBody ? Tokens.muted : Tokens.mutedSoft)
-                    .lineLimit(1)
+                if hasBody {
+                    Text(markdownSnippetAttributed(trimmedBody))
+                        .font(.edSubheadline)
+                        .foregroundStyle(Tokens.muted)
+                        .lineLimit(1)
+                } else {
+                    Text("No additional text")
+                        .font(.edSubheadline)
+                        .foregroundStyle(Tokens.mutedSoft)
+                        .lineLimit(1)
+                }
                 Text(note.updatedAt, style: .relative)
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
@@ -408,6 +415,7 @@ private struct NoteRow: View {
         }
         .buttonStyle(.plain)
     }
+
 }
 
 private struct NewFolderSheet: View {
@@ -464,7 +472,7 @@ private struct NoteDetailContent: View {
     @State private var content: String = ""
     @State private var folderId: UUID?
     @State private var hasLoaded = false
-    @State private var mode: NoteEditMode = .edit
+    @State private var mode: NoteEditMode = .preview
     @FocusState private var contentFocused: Bool
 
     enum NoteEditMode { case edit, preview }

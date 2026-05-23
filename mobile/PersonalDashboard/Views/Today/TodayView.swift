@@ -347,10 +347,13 @@ private struct TodayNoteRow: View {
         .padding(.vertical, Space.md)
     }
 
-    private var displayTitle: String {
-        if let t = note.title, !t.isEmpty { return t }
-        if let c = note.content, !c.isEmpty { return String(c.prefix(60)) }
-        return "Untitled note"
+    // When the note has no title, fall back to a one-line snippet of the
+    // body with inline markdown rendered and block prefixes stripped so
+    // the row doesn't lead with `## ` or `- `.
+    private var displayTitle: AttributedString {
+        if let t = note.title, !t.isEmpty { return AttributedString(t) }
+        if let c = note.content, !c.isEmpty { return markdownSnippetAttributed(c) }
+        return AttributedString("Untitled note")
     }
 
     private func relativeTime(_ date: Date) -> String {
