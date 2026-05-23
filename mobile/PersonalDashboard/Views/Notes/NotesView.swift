@@ -464,7 +464,7 @@ private struct NoteDetailContent: View {
     @State private var content: String = ""
     @State private var folderId: UUID?
     @State private var hasLoaded = false
-    @State private var mode: NoteEditMode = .edit
+    @State private var mode: NoteEditMode = .preview
     @FocusState private var contentFocused: Bool
 
     enum NoteEditMode { case edit, preview }
