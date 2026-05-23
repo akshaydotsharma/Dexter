@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import SwiftUI
 
 /// Adds a task / note / list to the personal dashboard from a free-text or
 /// dictated phrase, without opening the app.
@@ -10,10 +11,11 @@ import Foundation
 ///
 /// The on-device pipeline applies tool calls directly to SwiftData and
 /// reports outcomes:
-///   - executed actions -> dialog summarises what was applied.
+///   - executed actions -> dialog summarises what was applied, snippet view
+///     lists each item with an icon and a deep-link back into the app.
 ///   - LLM follow-up question -> dialog surfaces the question, nothing
-///     persisted.
-///   - failure -> dialog surfaces a brief error.
+///     persisted, no snippet.
+///   - failure -> dialog surfaces a brief error, no snippet.
 struct CaptureToDashboardIntent: AppIntent {
     static var title: LocalizedStringResource = "Capture to Dexter"
     static var description = IntentDescription(
@@ -22,7 +24,9 @@ struct CaptureToDashboardIntent: AppIntent {
 
     /// Stay backgrounded so the side button feels instant and the user
     /// doesn't lose their current context. Action Button + Shortcut +
-    /// Show Notification is the intended runtime path.
+    /// Show Notification is the intended runtime path. The result snippet
+    /// renders inline in the Shortcuts sheet; the "Open in Dexter" Link
+    /// inside it is the only way the user jumps into the app.
     static var openAppWhenRun: Bool = false
 
     /// The free-text phrase to capture. When invoked from a Shortcut with
@@ -40,7 +44,7 @@ struct CaptureToDashboardIntent: AppIntent {
         Summary("Capture \(\.$input) to Dexter")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .result(dialog: "Nothing to capture.")
@@ -56,8 +60,17 @@ struct CaptureToDashboardIntent: AppIntent {
 
         switch response.status {
         case .executed:
-            let summary = Self.executedDialog(for: response.executed ?? [])
-            return .result(dialog: IntentDialog(stringLiteral: summary))
+            let items = response.executed ?? []
+            let summary = Self.executedDialog(for: items)
+            let deepLink = Self.deepLink(for: items)
+            return .result(
+                dialog: IntentDialog(stringLiteral: summary),
+                view: CaptureResultSnippetView(
+                    items: items,
+                    deepLink: deepLink,
+                    deepLinkLabel: "Open in Dexter"
+                )
+            )
         case .needsClarification:
             let q = response.followUpQuestion ?? "I need a bit more detail."
             return .result(dialog: IntentDialog(stringLiteral: q))
@@ -69,20 +82,111 @@ struct CaptureToDashboardIntent: AppIntent {
 
     // MARK: - Dialog formatting
 
-    /// Build the dialog string from the list of applied actions. Single
-    /// action gets a focused sentence; multiple actions get a tally.
-    private static func executedDialog(for items: [ExecutedDraft]) -> String {
+    /// Build the dialog string from the list of applied actions.
+    ///
+    /// - Single action keeps the focused sentence (e.g. *Added task "Buy milk" — due May 24*).
+    /// - Multi-action lists items by title, grouped by action verb, up to
+    ///   `multiActionVisibleLimit`. Anything beyond that collapses to
+    ///   "and N more" so the dialog stays one or two lines.
+    /// - Empty / malformed inputs fall back to "Done." so the dialog never
+    ///   reads blank.
+    static func executedDialog(for items: [ExecutedDraft]) -> String {
         guard !items.isEmpty else { return "Done." }
         if items.count == 1 {
             return sentence(for: items[0])
         }
-        // Multi-action: short summary by type.
-        let creates = items.filter { $0.action == "created" }.count
-        let updates = items.filter {
-            $0.action == "updated" || $0.action == "completed" || $0.action == "reopened" ||
-            $0.action == "items_added" || $0.action == "item_updated" || $0.action == "item_removed"
-        }.count
-        let deletes = items.filter { $0.action == "deleted" }.count
+        return multiActionSentence(for: items)
+    }
+
+    /// Soft cap on titles named in the multi-action dialog. The snippet view
+    /// renders the full list visually; the dialog stays terse so it reads
+    /// well when Shortcuts speaks it (Siri, AirPods announcement).
+    private static let multiActionVisibleLimit: Int = 3
+
+    private static func multiActionSentence(for items: [ExecutedDraft]) -> String {
+        // Bucket items by the verb we'd use in the dialog. Order matters —
+        // "Added X" reads first, then "Updated Y", then "Deleted Z".
+        var added: [String] = []
+        var updated: [String] = []
+        var deleted: [String] = []
+
+        for item in items {
+            guard let phrase = phrase(for: item) else { continue }
+            switch verbBucket(for: item.action) {
+            case .added:   added.append(phrase)
+            case .updated: updated.append(phrase)
+            case .deleted: deleted.append(phrase)
+            }
+        }
+
+        var clauses: [String] = []
+        if let clause = clause(verb: "Added", titles: added) { clauses.append(clause) }
+        if let clause = clause(verb: "Updated", titles: updated) { clauses.append(clause) }
+        if let clause = clause(verb: "Deleted", titles: deleted) { clauses.append(clause) }
+
+        guard !clauses.isEmpty else {
+            // No phrases survived — fall back to the legacy tally so the
+            // user still gets a count even if titles were all empty.
+            return legacyTally(for: items)
+        }
+        return clauses.joined(separator: ". ") + "."
+    }
+
+    private enum VerbBucket { case added, updated, deleted }
+
+    private static func verbBucket(for action: String) -> VerbBucket {
+        switch action {
+        case "created", "items_added":
+            return .added
+        case "deleted":
+            return .deleted
+        default:
+            // updated, completed, reopened, item_updated, item_removed, ...
+            return .updated
+        }
+    }
+
+    /// Short noun phrase used inside the dialog (e.g. *"Buy milk"*,
+    /// *milk, eggs to "Groceries"*). `nil` if the item has no usable title.
+    private static func phrase(for item: ExecutedDraft) -> String? {
+        if item.action == "items_added", let names = item.addedNames, !names.isEmpty {
+            if let parent = item.title, !parent.isEmpty {
+                return "\(names) to \"\(parent)\""
+            }
+            return names
+        }
+        guard let title = item.title?.trimmingCharacters(in: .whitespaces), !title.isEmpty else {
+            return nil
+        }
+        return "\"\(title)\""
+    }
+
+    private static func clause(verb: String, titles: [String]) -> String? {
+        guard !titles.isEmpty else { return nil }
+        let visible = Array(titles.prefix(multiActionVisibleLimit))
+        let overflow = titles.count - visible.count
+        var joined: String
+        switch visible.count {
+        case 1:
+            joined = visible[0]
+        case 2:
+            joined = "\(visible[0]) and \(visible[1])"
+        default:
+            // Oxford comma joins for 3+ items so it reads cleanly when spoken.
+            let head = visible.dropLast().joined(separator: ", ")
+            joined = "\(head), and \(visible.last!)"
+        }
+        if overflow > 0 {
+            joined += " and \(overflow) more"
+        }
+        return "\(verb) \(joined)"
+    }
+
+    /// Fallback when every item lacked a usable title.
+    private static func legacyTally(for items: [ExecutedDraft]) -> String {
+        let creates = items.filter { verbBucket(for: $0.action) == .added }.count
+        let updates = items.filter { verbBucket(for: $0.action) == .updated }.count
+        let deletes = items.filter { verbBucket(for: $0.action) == .deleted }.count
         var parts: [String] = []
         if creates > 0 { parts.append("\(creates) added") }
         if updates > 0 { parts.append("\(updates) updated") }
@@ -151,4 +255,46 @@ struct CaptureToDashboardIntent: AppIntent {
         f.timeStyle = .short
         return f
     }()
+
+    // MARK: - Deep-link routing
+
+    /// Decide where the snippet's "Open in Dexter" button points.
+    ///
+    /// Rules:
+    ///  - Single item with a parseable UUID → `dexter://focus/<section>/<uuid>`.
+    ///    `items_added` is a single deep-link too (the `id` IS the parent
+    ///    list/trip UUID per `ExecuteDraftAction`).
+    ///  - Multiple items (regardless of section mix) → `dexter://activity`.
+    ///  - Single item with an unparseable id → `nil` (snippet hides the
+    ///    button rather than landing the user on a broken focus).
+    static func deepLink(for items: [ExecutedDraft]) -> URL? {
+        guard !items.isEmpty else { return nil }
+        if items.count > 1 {
+            return URL(string: "dexter://activity")
+        }
+        let item = items[0]
+        guard let section = sectionPathComponent(for: item.type) else {
+            return URL(string: "dexter://activity")
+        }
+        guard UUID(uuidString: item.id) != nil else {
+            // Defensive: don't render a button that would crash or land on
+            // garbage. Snippet view handles `nil` by hiding the button.
+            return nil
+        }
+        return URL(string: "dexter://focus/\(section)/\(item.id)")
+    }
+
+    /// Map the `ExecutedDraft.type` string to the URL path component used in
+    /// `dexter://focus/<section>/...`. Matches `AppSection.rawValue` so the
+    /// receiver can `AppSection(rawValue:)` on the way back in.
+    private static func sectionPathComponent(for type: String) -> String? {
+        switch type {
+        case "todo":                       return AppSection.tasks.rawValue
+        case "note":                       return AppSection.notes.rawValue
+        case "list":                       return AppSection.lists.rawValue
+        case "trip", "itinerary_item":     return AppSection.itineraries.rawValue
+        case "folder":                     return AppSection.notes.rawValue
+        default:                           return nil
+        }
+    }
 }
