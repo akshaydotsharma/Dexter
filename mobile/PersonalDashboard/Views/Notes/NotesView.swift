@@ -38,9 +38,6 @@ struct NotesView: View {
                                     selectedFolder = updated
                                 }
                             }
-                        },
-                        onAddNote: {
-                            Task { await createBlankNote(folderId: folder.id) }
                         }
                     )
                     folderNotesList(folder)
@@ -71,9 +68,9 @@ struct NotesView: View {
                 }
             }
 
-            if selectedNoteId == nil && selectedFolder == nil {
+            if selectedNoteId == nil {
                 Button {
-                    Task { await createBlankNote(folderId: nil) }
+                    Task { await createBlankNote(folderId: selectedFolder?.id) }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -275,7 +272,6 @@ private struct FolderDetailHeader: View {
     let folder: NoteFolder
     let onBack: () -> Void
     let onRename: (String) -> Void
-    let onAddNote: () -> Void
 
     @State private var isEditing = false
     @State private var draft = ""
@@ -320,12 +316,10 @@ private struct FolderDetailHeader: View {
                     .accessibilityLabel("Folder name, tap to rename")
             }
             Spacer()
-            Button(action: onAddNote) {
-                Image(systemName: "plus")
-                    .frame(width: 44, height: 44)
-                    .foregroundStyle(Tokens.ink)
-            }
-            .accessibilityLabel("New note")
+            // Invisible counter-weight so the folder title stays optically
+            // centered now that the inline + has moved to the floating FAB
+            // at the bottom right (consistent with every other surface).
+            Color.clear.frame(width: 44, height: 44)
         }
         .padding(.horizontal, Space.md)
         .frame(height: 56)
