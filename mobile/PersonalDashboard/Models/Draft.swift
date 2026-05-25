@@ -7,6 +7,7 @@ enum DraftActionType: String, Codable, Hashable, Sendable {
     case updateTodo = "UPDATE_TODO"
     case completeTodo = "COMPLETE_TODO"
     case updateNote = "UPDATE_NOTE"
+    case appendToNote = "APPEND_TO_NOTE"
     case updateList = "UPDATE_LIST"
     case addToList = "ADD_TO_LIST"
     case updateListItem = "UPDATE_LIST_ITEM"

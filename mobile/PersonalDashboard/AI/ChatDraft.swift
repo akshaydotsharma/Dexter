@@ -73,6 +73,16 @@ extension ChatDraft {
             }
             return summary
 
+        case .appendToNote:
+            var summary = "Append to note (ID: \(dict["id"]?.stringValue ?? "?"))"
+            if let content = dict["content"]?.stringValue,
+               !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                let snippet = trimmed.count > 60 ? String(trimmed.prefix(57)) + "…" : trimmed
+                summary += ": \"\(snippet)\""
+            }
+            return summary
+
         case .updateList:
             var summary = "Edit list (ID: \(dict["id"]?.stringValue ?? "?"))"
             if let title = dict["title"]?.stringValue, !title.isEmpty, title != "null" {
