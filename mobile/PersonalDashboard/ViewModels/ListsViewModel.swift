@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import SwiftData
+import SwiftUI
 
 @Observable
 @MainActor
@@ -83,7 +84,32 @@ final class ListsViewModel {
               index < lists[listIndex].items.count else { return }
         var snapshot = lists[listIndex]
         snapshot.items[index].checked.toggle()
-        lists[listIndex] = snapshot
+
+        // Auto-reorder: completed items sink to the bottom in the order they were
+        // completed; un-completing pops back to the bottom of the active section.
+        // Manual drag-to-reorder still wins for the next toggle: after a drag,
+        // the next time the user toggles an item, this reasserts the grouping.
+        let nowChecked = snapshot.items[index].checked
+        var item = snapshot.items.remove(at: index)
+        if nowChecked {
+            // Append to the end so it lands below items completed earlier.
+            snapshot.items.append(item)
+        } else {
+            // Drop just before the first checked item, or at the end if none.
+            let insertAt = snapshot.items.firstIndex(where: { $0.checked }) ?? snapshot.items.count
+            // Defensive: ensure the item's flag truly reflects the new state.
+            item.checked = false
+            snapshot.items.insert(item, at: insertAt)
+        }
+
+        // Animate the visible mutation. The setter on `lists` is what SwiftUI
+        // observes; wrapping the assignment in withAnimation makes the
+        // identity-keyed ForEach lift the row to its new slot rather than
+        // cross-fade in place. The async update() that follows is disk + DTO
+        // only — by the time it returns the UI is already animating.
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+            lists[listIndex] = snapshot
+        }
         await update(snapshot)
     }
 
