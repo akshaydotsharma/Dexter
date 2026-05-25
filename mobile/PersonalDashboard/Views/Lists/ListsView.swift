@@ -334,7 +334,12 @@ private struct ListDetailContent: View {
                                 .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                         }
 
-                        ForEach(Array(list.items.enumerated()), id: \.offset) { index, item in
+                        // Keyed by item.id (UUID) — not array offset — so the
+                        // checked-to-bottom reorder animates as a move rather
+                        // than a cross-fade. The per-iteration `index` is still
+                        // the row's current array position, which is what the
+                        // view-model methods take.
+                        ForEach(Array(list.items.enumerated()), id: \.element.id) { index, item in
                             ItemRow(
                                 item: item,
                                 onToggle: {
