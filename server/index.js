@@ -59,20 +59,19 @@ if (process.env.FRONTEND_URL) {
     allowedOrigins.push(process.env.FRONTEND_URL);
 }
 
+// CORS: exact-match allowlist only. Wildcard matches (`*.up.railway.app`,
+// `*.onrender.com`) were removed because they pair unsafely with
+// `credentials: true` (any sibling Railway/Render app could ride the user's
+// cookies). See issue #136.
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (same-origin requests, mobile apps, curl)
+        // Requests with no Origin header (iOS app, curl, same-origin) are
+        // allowed. CORS does not protect these; the auth layer does.
         if (!origin) {
             return callback(null, true);
         }
         if (allowedOrigins.includes(origin)) {
             return callback(null, true);
-        }
-        // In production, also allow the platform domains
-        if (process.env.NODE_ENV === 'production') {
-            if (origin.includes('.up.railway.app') || origin.includes('.onrender.com')) {
-                return callback(null, true);
-            }
         }
         callback(new Error('Not allowed by CORS'));
     },
@@ -2294,8 +2293,14 @@ if (process.env.NODE_ENV === 'production') {
 // the app for in-process HTTP exercise the `app` export and use a random
 // port via http.createServer(app).listen(0).
 if (require.main === module) {
-    app.listen(PORT, async () => {
-        console.log(`Server is running on port ${PORT}`);
+    // Bind to loopback only by default. The server has no authentication on
+    // any route (see issue #135) and the webapp + server are paused. iOS
+    // app's legacy LAN paths (Dashboard stats, Activity timeline) need
+    // HOST=0.0.0.0 explicitly set when running dev against a physical phone.
+    // Do NOT deploy this server publicly until proper auth is added.
+    const HOST = process.env.HOST || '127.0.0.1';
+    app.listen(PORT, HOST, async () => {
+        console.log(`Server is running on ${HOST}:${PORT}`);
         await initDb();
     });
 }
