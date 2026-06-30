@@ -262,6 +262,55 @@ struct AssistantContextBuilder {
         return out
     }
 
+    /// Compact list of EVERY trip for the email-to-itinerary matcher (#143).
+    ///
+    /// The chat/capture `build()` ranks trips by `updatedAt` and only fully
+    /// details the top 3, which buries an upcoming-but-not-recently-edited
+    /// trip and made the email matcher miss it. This method is deliberately
+    /// different: it emits ALL trips (one compact line each: id, name, date
+    /// range, item count), and orders them so the trips most likely to match a
+    /// booking are first — ongoing/upcoming trips by start date, then past
+    /// trips most-recent-first. No day-by-day breakdown is needed for matching
+    /// by date + destination, so the prompt stays cheap even with many trips.
+    ///
+    /// Returns an empty string when there are no trips (caller short-circuits
+    /// to a skip before this is ever called, but keep it total).
+    func tripsForMatching() async -> String {
+        let context = store.context
+        guard let trips = try? context.fetch(
+            FetchDescriptor<LocalTrip>(sortBy: [SortDescriptor(\.startDate, order: .forward)])
+        ), !trips.isEmpty else {
+            return ""
+        }
+
+        // Per-trip item counts in one fetch.
+        let allItems = (try? context.fetch(FetchDescriptor<LocalItineraryItem>())) ?? []
+        var countByTrip: [UUID: Int] = [:]
+        for item in allItems { countByTrip[item.tripUUID, default: 0] += 1 }
+
+        let today = Calendar(identifier: .gregorian).startOfDay(for: Date())
+
+        // Upcoming/ongoing first (endDate >= today), by start date; then past
+        // trips, most recent end first. Bookings almost always target a future
+        // trip, so this puts the likely match at the top.
+        let upcoming = trips.filter { $0.endDate >= today }
+            .sorted { $0.startDate < $1.startDate }
+        let past = trips.filter { $0.endDate < today }
+            .sorted { $0.endDate > $1.endDate }
+        let ordered = upcoming + past
+
+        var out = "\n\nEXISTING TRIPS (match the email to ONE of these by date range AND destination):\n"
+        out += ordered.map { trip -> String in
+            let id = Self.uuidString(trip.clientUUID)
+            let startISO = Self.isoDate.string(from: trip.startDate)
+            let endISO = Self.isoDate.string(from: trip.endDate)
+            let count = countByTrip[trip.clientUUID] ?? 0
+            let tag = trip.endDate >= today ? "upcoming/ongoing" : "past"
+            return "- \(id) | \(Self.safe(trip.name, maxLen: 150)) | \(startISO) → \(endISO) | \(count) item\(count == 1 ? "" : "s") | \(tag)"
+        }.joined(separator: "\n")
+        return out
+    }
+
     /// Lower-cased UUID string. Matches Postgres' default uuid render so any
     /// future cross-checking against server logs lines up.
     private static func uuidString(_ uuid: UUID) -> String {

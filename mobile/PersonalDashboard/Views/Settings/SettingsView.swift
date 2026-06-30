@@ -6,6 +6,7 @@ struct SettingsView: View {
 
     @State private var showingResetData: Bool = false
     @State private var showingDataTransfer: Bool = false
+    @State private var showingEmailInbox: Bool = false
 
     var body: some View {
         ZStack {
@@ -18,6 +19,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingDataTransfer) {
             DataExportImportView()
+        }
+        .sheet(isPresented: $showingEmailInbox) {
+            EmailInboxView()
         }
     }
 
@@ -33,6 +37,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.xl) {
                     appearanceSection
+                    automationSection
                     dataSection
                     aboutSection
                     footer
@@ -56,6 +61,33 @@ struct SettingsView: View {
                 ThemePicker(value: $schemePref)
             }
             .padding(Space.lg)
+        }
+    }
+
+    private var automationSection: some View {
+        SettingsSection(title: "Automation") {
+            Button {
+                showingEmailInbox = true
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Receipts inbox")
+                            .font(.edBody)
+                            .foregroundStyle(Tokens.ink)
+                        Text("Auto-add itinerary items from forwarded booking emails")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                    }
+                    Spacer(minLength: Space.md)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+                .padding(.horizontal, Space.lg)
+                .padding(.vertical, Space.md)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
