@@ -82,6 +82,19 @@ final class LocalItineraryItem {
     /// drag-to-reorder UI is a follow-up.
     var sortOrder: Int
 
+    /// Item-level dedup signature for the email-ingest path (#143). A stable
+    /// fingerprint of this item within its trip so forwarding the same booking
+    /// twice (or re-scanning it) never creates a duplicate row. Empty for
+    /// items created by chat/capture (they don't dedup), so this is purely
+    /// additive: existing rows keep "". Set via `EmailItemDedupe`.
+    var dedupeKey: String = ""
+
+    /// Confirmation / reservation code from the source booking (e.g.
+    /// "HM84R8EPNF") when one was found. Strongest dedup signal — two
+    /// different emails of the same reservation share it. Empty when none was
+    /// found or for non-email items. Additive: existing rows keep "".
+    var sourceConfirmation: String = ""
+
     var createdAt: Date
     var updatedAt: Date
 

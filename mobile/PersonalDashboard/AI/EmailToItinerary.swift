@@ -118,10 +118,17 @@ struct EmailToItinerary {
             AnthropicMessage(role: "user", content: userContent)
         ]
 
+        // Confirmation/reservation code from the booking text — the strongest
+        // dedup signal. Computed once over body + attachment text.
+        let confirmation = EmailItemDedupe.extractConfirmation(from: fullText)
+
         var addedItemUUIDs: [UUID] = []
         var matchedTripUUID: UUID?
         var matchedTripName: String?
         var assistantText: String?
+        // Count items that already existed on the trip (dedup hits), so a
+        // re-forward / re-scan resolves to "already added", not a duplicate.
+        var skippedDuplicates = 0
 
         for _ in 0..<Self.maxIterations {
             let response = try await anthropic.send(
@@ -154,17 +161,66 @@ struct EmailToItinerary {
                     continue
                 }
 
-                // Snapshot existing item UUIDs for this trip so we can diff
-                // and learn exactly which rows the add inserted (for undo).
+                // ITEM-LEVEL DEDUP (#143). Before inserting, drop any proposed
+                // item that already exists on this trip — by confirmation code
+                // (strongest) or by structural signature. This is what makes a
+                // re-scan or a second forward of the SAME booking resolve to
+                // "already added" instead of a duplicate row.
+                let rawItems = call.input["items"]?.arrayValue ?? []
+                var survivingItems: [AnthropicJSONValue] = []
+                var survivingSignatures: [String] = []
+                for entry in rawItems {
+                    guard let dict = entry.objectValue else { continue }
+                    let proposed = Self.proposedItem(from: dict, confirmation: confirmation)
+                    let sig = EmailItemDedupe.signature(tripUUID: tripUUID, proposed: proposed)
+                    if EmailItemDedupe.exists(signature: sig, proposed: proposed, tripUUID: tripUUID, context: store.context) {
+                        skippedDuplicates += 1
+                        continue
+                    }
+                    // Guard against duplicates WITHIN this same batch too.
+                    if survivingSignatures.contains(sig) {
+                        skippedDuplicates += 1
+                        continue
+                    }
+                    survivingItems.append(entry)
+                    survivingSignatures.append(sig)
+                }
+
+                guard !survivingItems.isEmpty else {
+                    // Everything the model proposed already exists. Treat the
+                    // trip as matched so the outcome is "already added", and
+                    // tell the model the dupes were skipped.
+                    matchedTripUUID = tripUUID
+                    if matchedTripName == nil {
+                        matchedTripName = Self.tripName(tripUUID, store: store)
+                    }
+                    toolResultBlocks.append(.toolResult(toolUseId: call.id, content: "OK: already_present (no new items)", isError: false))
+                    continue
+                }
+
+                // Rebuild the tool input with only the new items.
+                var filteredInput = call.input
+                filteredInput["items"] = .array(survivingItems)
+
+                // Snapshot existing item UUIDs so we can diff and learn exactly
+                // which rows the add inserted (for undo + signature stamping).
                 let before = Self.itemUUIDs(forTrip: tripUUID, store: store)
                 do {
                     let outcome = try await executor.run(
                         actionType: .addItineraryItems,
-                        input: call.input
+                        input: filteredInput
                     )
                     let after = Self.itemUUIDs(forTrip: tripUUID, store: store)
                     let inserted = after.subtracting(before)
-                    addedItemUUIDs.append(contentsOf: inserted)
+                    addedItemUUIDs.append(contentsOf: Array(inserted))
+                    // Stamp the dedup signature + confirmation on the new rows
+                    // so a later forward/re-scan dedups against them cheaply.
+                    Self.stampDedupe(insertedUUIDs: inserted,
+                                     items: survivingItems,
+                                     signatures: survivingSignatures,
+                                     confirmation: confirmation,
+                                     tripUUID: tripUUID,
+                                     store: store)
                     matchedTripUUID = tripUUID
                     matchedTripName = outcome.title
                     toolResultBlocks.append(.toolResult(
@@ -192,15 +248,34 @@ struct EmailToItinerary {
 
         if !addedItemUUIDs.isEmpty, let tripUUID = matchedTripUUID {
             let name = matchedTripName ?? "your trip"
-            let summary = addedItemUUIDs.count == 1
+            var summary = addedItemUUIDs.count == 1
                 ? "Added 1 item to \(name)."
                 : "Added \(addedItemUUIDs.count) items to \(name)."
+            if skippedDuplicates > 0 {
+                summary += " (\(skippedDuplicates) already present, skipped.)"
+            }
             return EmailIngestResult(
                 outcome: .added,
                 tripUUID: tripUUID,
                 tripName: name,
                 addedItemUUIDs: addedItemUUIDs,
                 summary: summary,
+                debugBody: debugBody,
+                debugTripContext: contextBlock
+            )
+        }
+
+        // Matched a trip, but every proposed item already existed: this is the
+        // re-forward / re-scan case. Record it as a distinct "already added"
+        // skip — NOT a duplicate insert, NOT a no-match.
+        if skippedDuplicates > 0, let tripUUID = matchedTripUUID {
+            let name = matchedTripName ?? "your trip"
+            return EmailIngestResult(
+                outcome: .skipped,
+                tripUUID: tripUUID,
+                tripName: name,
+                addedItemUUIDs: [],
+                summary: "Already added to \(name) — this booking is already on the itinerary, so nothing was added again.",
                 debugBody: debugBody,
                 debugTripContext: contextBlock
             )
@@ -230,6 +305,97 @@ struct EmailToItinerary {
         )) ?? []
         return Set(rows.map { $0.clientUUID })
     }
+
+    /// Build a dedup descriptor from a proposed `items` element, parsing dates
+    /// the same way `ExecuteDraftAction.addItineraryItems` does so the
+    /// signature matches what actually gets stored.
+    private static func proposedItem(from dict: [String: AnthropicJSONValue], confirmation: String) -> EmailItemDedupe.Proposed {
+        let cal = Calendar(identifier: .gregorian)
+        let title = (dict["title"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let kindRaw = (dict["kind"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let kind = (ItineraryKind(rawValue: kindRaw) ?? .activity).rawValue
+        let day = parseAnyISODate(dict["day_date"]?.stringValue).map { cal.startOfDay(for: $0) } ?? Date.distantPast
+        var endDate: Date? = nil
+        if kind == "stay", let raw = dict["end_date"]?.stringValue, let parsed = parseAnyISODate(raw) {
+            endDate = cal.startOfDay(for: parsed)
+        }
+        return EmailItemDedupe.Proposed(
+            kind: kind,
+            dayDate: day,
+            endDate: endDate,
+            title: title,
+            confirmation: confirmation
+        )
+    }
+
+    /// Stamp the dedup signature + confirmation onto the rows just inserted, so
+    /// a later forward/re-scan can dedup against them. The inserted set isn't
+    /// ordered, so we match each row back to its signature by recomputing the
+    /// signature from the stored row fields.
+    private static func stampDedupe(
+        insertedUUIDs: Set<UUID>,
+        items: [AnthropicJSONValue],
+        signatures: [String],
+        confirmation: String,
+        tripUUID: UUID,
+        store: SwiftDataStore
+    ) {
+        guard !insertedUUIDs.isEmpty else { return }
+        let conf = EmailItemDedupe.normalizeConfirmation(confirmation)
+        for uuid in insertedUUIDs {
+            let fk = uuid
+            guard let row = try? store.context.fetch(
+                FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.clientUUID == fk })
+            ).first else { continue }
+            let proposed = EmailItemDedupe.Proposed(
+                kind: row.kind.lowercased(),
+                dayDate: row.dayDate,
+                endDate: row.endDate,
+                title: row.title,
+                confirmation: confirmation
+            )
+            row.dedupeKey = EmailItemDedupe.signature(tripUUID: tripUUID, proposed: proposed)
+            row.sourceConfirmation = conf
+        }
+        try? store.context.save()
+    }
+
+    private static func tripName(_ tripUUID: UUID, store: SwiftDataStore) -> String? {
+        let fk = tripUUID
+        return (try? store.context.fetch(
+            FetchDescriptor<LocalTrip>(predicate: #Predicate { $0.clientUUID == fk })
+        ).first)?.name
+    }
+
+    /// Lenient ISO parser matching ExecuteDraftAction's: full datetime (with or
+    /// without fractional seconds) or bare yyyy-MM-dd.
+    private static func parseAnyISODate(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty, raw != "null" else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let d = isoFractional.date(from: trimmed) { return d }
+        if let d = isoPlain.date(from: trimmed) { return d }
+        if let d = dateOnly.date(from: trimmed) { return d }
+        return nil
+    }
+
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoPlain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    private static let dateOnly: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     static func formatEmailForModel(_ message: EmailMessage, fullText: String) -> String {
         let attachmentNote = message.attachments.isEmpty
