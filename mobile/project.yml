@@ -70,6 +70,15 @@ targets:
         # library access used by AddExpense flow to extract details via Vision.
         NSCameraUsageDescription: "Used to capture receipts so Dexter can log expenses for you."
         NSPhotoLibraryUsageDescription: "Used to import a receipt photo when logging an expense."
+        # Email-to-itinerary ingestion (#143). `fetch` lets the
+        # BGAppRefreshTask wake the app to poll the receipts inbox over IMAP;
+        # `processing` covers the longer on-device AI matching pass. The
+        # scheduler identifier must match EmailIngestCoordinator.refreshTaskId.
+        UIBackgroundModes:
+          - fetch
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.akshaysharma.personaldashboard.emailIngestRefresh
         UIAppFonts:
           - Calistoga-Regular.ttf
           - Inter-Regular.ttf

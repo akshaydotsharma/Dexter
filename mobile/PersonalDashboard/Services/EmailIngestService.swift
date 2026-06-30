@@ -1,0 +1,231 @@
+import Foundation
+import SwiftData
+
+/// Coordinates one full email-to-itinerary fetch cycle (#143):
+///  1. Read credentials (Keychain + UserDefaults).
+///  2. Connect to IMAP, SELECT INBOX, SEARCH all UIDs.
+///  3. For each UID not already in the idempotency ledger: FETCH, parse,
+///     run the on-device matcher, record the outcome, post a notification,
+///     mark the message \Seen, and write the processed-message ledger row.
+///  4. Trim the ingest log to a bounded recent window.
+///
+/// Idempotency is enforced BEFORE any mutation: the processed-message ledger
+/// is keyed by Message-Id (or uidvalidity:uid), and we skip any message whose
+/// key already exists. We only write the ledger row AFTER a successful
+/// outcome, inside the same flow, so a crash mid-process re-processes the
+/// message next time rather than silently dropping it.
+@MainActor
+struct EmailIngestService {
+
+    let store: SwiftDataStore
+
+    init(store: SwiftDataStore = .shared) {
+        self.store = store
+    }
+
+    /// Run a fetch cycle. Returns the number of messages added / skipped /
+    /// failed in this run (for the caller's logging / background-task result).
+    @discardableResult
+    func runFetchCycle() async -> (added: Int, skipped: Int, failed: Int) {
+        guard EmailInboxConfig.isReady else {
+            return (0, 0, 0)
+        }
+        guard let password = EmailInboxConfig.readPassword(), !password.isEmpty else {
+            return (0, 0, 0)
+        }
+
+        let settings = EmailInboxConfig.settings
+        let client = IMAPClient(config: .init(
+            host: settings.host,
+            port: settings.port,
+            email: settings.email,
+            appPassword: password
+        ))
+
+        var counts = (added: 0, skipped: 0, failed: 0)
+
+        do {
+            try await client.connectAndLogin()
+            try await client.selectInbox()
+            let uidValidity = await client.uidValidity
+            let uids = try await client.searchAllUIDs()
+
+            // Newest first so the freshest bookings are handled first under any
+            // background-time budget. Bound the per-cycle work.
+            let ordered = uids.sorted(by: >).prefix(25)
+
+            for uid in ordered {
+                // Cheap pre-check on the uidvalidity:uid composite key. The
+                // real Message-Id check happens after fetch (we can't know it
+                // until we read headers), but this avoids re-fetching bodies
+                // for messages we already handled.
+                let compositeKey = "uidvalidity:\(uidValidity):\(uid)"
+                if isProcessed(key: compositeKey) { continue }
+
+                do {
+                    let raw = try await client.fetchMessage(uid: uid)
+                    let message = EmailMessage.parse(raw.rawSource)
+                    let stableKey = message.stableKey ?? compositeKey
+
+                    // Definitive idempotency check on the stable key.
+                    if isProcessed(key: stableKey) {
+                        // Already done under its Message-Id; record the
+                        // composite key too so we don't re-fetch next time.
+                        recordProcessed(key: compositeKey, uid: uid, uidValidity: uidValidity)
+                        continue
+                    }
+
+                    let result = try await EmailToItinerary.default().run(
+                        message: message,
+                        timezone: TimeZone.current.identifier
+                    )
+
+                    writeLog(message: message, result: result)
+
+                    switch result.outcome {
+                    case .added:
+                        counts.added += 1
+                    case .skipped:
+                        counts.skipped += 1
+                    case .failed:
+                        counts.failed += 1
+                    }
+
+                    // Mark processed under BOTH keys so neither a Message-Id
+                    // re-index nor a UID reuse re-runs it.
+                    recordProcessed(key: stableKey, uid: uid, uidValidity: uidValidity)
+                    if stableKey != compositeKey {
+                        recordProcessed(key: compositeKey, uid: uid, uidValidity: uidValidity)
+                    }
+
+                    // Best-effort: drop it out of the unread list.
+                    try? await client.markSeen(uid: uid)
+                } catch {
+                    // A single message failing (fetch error, LLM error) should
+                    // not abort the cycle or mark the message processed — it
+                    // gets retried next time. Log a failure entry for
+                    // visibility but keep going.
+                    NSLog("EmailIngestService: message uid %d failed: %@", uid, error.localizedDescription)
+                    counts.failed += 1
+                }
+            }
+
+            await client.logoutAndClose()
+        } catch {
+            // Connection / login / select failure: nothing processed.
+            NSLog("EmailIngestService: cycle failed: %@", error.localizedDescription)
+            await client.logoutAndClose()
+            return counts
+        }
+
+        trimLog()
+        return counts
+    }
+
+    // MARK: - Undo
+
+    /// Undo a previous "added" ingest: delete the exact items recorded in the
+    /// log entry, then mark the entry as undone. Returns the trip name for the
+    /// confirmation notification, or nil if nothing to undo.
+    @discardableResult
+    func undo(logUUID: UUID) -> String? {
+        let key = logUUID
+        guard let entry = try? store.context.fetch(
+            FetchDescriptor<LocalEmailIngestLog>(predicate: #Predicate { $0.clientUUID == key })
+        ).first else {
+            return nil
+        }
+        guard entry.outcomeEnum == .added else { return nil }
+
+        let itemUUIDs = entry.addedItemUUIDList
+        guard !itemUUIDs.isEmpty else { return nil }
+
+        var tripName = entry.summary
+        for itemUUID in itemUUIDs {
+            let fk = itemUUID
+            if let row = try? store.context.fetch(
+                FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.clientUUID == fk })
+            ).first {
+                store.context.delete(row)
+            }
+        }
+
+        // Bump the parent trip's updatedAt and grab its name for the message.
+        if let tripUUID = entry.tripUUID {
+            let tfk = tripUUID
+            if let trip = try? store.context.fetch(
+                FetchDescriptor<LocalTrip>(predicate: #Predicate { $0.clientUUID == tfk })
+            ).first {
+                trip.updatedAt = Date()
+                tripName = trip.name
+            }
+        }
+
+        // Rewrite the log entry to reflect the undo.
+        entry.outcome = EmailIngestOutcome.skipped.rawValue
+        entry.summary = "Undone: removed \(itemUUIDs.count) item(s)."
+        entry.addedItemUUIDs = ""
+
+        try? store.context.save()
+        return tripName
+    }
+
+    // MARK: - Ledger
+
+    private func isProcessed(key: String) -> Bool {
+        let k = key
+        let count = (try? store.context.fetchCount(
+            FetchDescriptor<LocalProcessedEmail>(predicate: #Predicate { $0.messageKey == k })
+        )) ?? 0
+        return count > 0
+    }
+
+    private func recordProcessed(key: String, uid: Int, uidValidity: Int) {
+        // Guard against a unique-constraint crash if it slipped in between.
+        guard !isProcessed(key: key) else { return }
+        let row = LocalProcessedEmail(messageKey: key, uid: uid, uidValidity: uidValidity)
+        store.context.insert(row)
+        try? store.context.save()
+    }
+
+    // MARK: - Ingest log
+
+    private func writeLog(message: EmailMessage, result: EmailIngestResult) {
+        let entry = LocalEmailIngestLog(
+            subject: message.subject,
+            sender: message.from,
+            outcome: result.outcome,
+            summary: result.summary,
+            tripUUID: result.tripUUID,
+            addedItemUUIDs: result.addedItemUUIDs
+        )
+        store.context.insert(entry)
+        try? store.context.save()
+
+        // Fire the notification after the log row exists so undo has a target.
+        let logUUID = entry.clientUUID
+        switch result.outcome {
+        case .added:
+            let name = result.tripName ?? "your trip"
+            let count = result.addedItemUUIDs.count
+            Task { await EmailIngestNotifications.postAdded(tripName: name, itemCount: count, logUUID: logUUID) }
+        case .skipped:
+            Task { await EmailIngestNotifications.postSkipped(subject: message.subject) }
+        case .failed:
+            break
+        }
+    }
+
+    /// Keep the ingest log to the most recent 100 entries.
+    private func trimLog() {
+        var descriptor = FetchDescriptor<LocalEmailIngestLog>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1000
+        guard let all = try? store.context.fetch(descriptor), all.count > 100 else { return }
+        for stale in all[100...] {
+            store.context.delete(stale)
+        }
+        try? store.context.save()
+    }
+}
