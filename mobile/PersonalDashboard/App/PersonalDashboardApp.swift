@@ -28,9 +28,24 @@ struct PersonalDashboardApp: App {
         }
         .modelContainer(SwiftDataStore.shared.container)
         .onChange(of: scenePhase) { _, newPhase in
-            // Re-fetch when the app returns to the foreground (#143).
+            // Re-fetch email when the app returns to the foreground (#143).
             if newPhase == .active {
                 Task { await EmailIngestCoordinator.shared.runForegroundFetch() }
+            }
+            // Opt-in automatic backup (#141). Fires on becoming active (covers
+            // cold launch and foregrounding) and on entering background (catches
+            // edits made during the session). Cheap and non-blocking: the
+            // service no-ops fast when backup is off, no folder is set, or the
+            // interval hasn't elapsed. Background time is limited, so the active
+            // hook is the primary path.
+            switch newPhase {
+            case .active, .background:
+                Task { @MainActor in
+                    try? BackupService(modelContext: SwiftDataStore.shared.context)
+                        .runBackupIfDue(force: false)
+                }
+            default:
+                break
             }
         }
     }
