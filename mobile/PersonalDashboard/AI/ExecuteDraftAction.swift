@@ -786,6 +786,13 @@ struct ExecuteDraftAction {
                 endTimeValue = parseAnyISODate(dict["end_time"]?.stringValue)
             }
 
+            // Optional Google Maps link. A bare/empty value or the "null"
+            // sentinel both store as empty (the UI still offers a search
+            // fallback). We don't validate the URL here.
+            let mapsRaw = (dict["google_maps_link"]?.stringValue ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let mapsLink = mapsRaw == "null" ? "" : mapsRaw
+
             let maxForDay = existing
                 .filter { cal.isDate($0.dayDate, inSameDayAs: dayStart) }
                 .map { $0.sortOrder }
@@ -801,6 +808,7 @@ struct ExecuteDraftAction {
                 endDate: endDateValue,
                 endTime: endTimeValue,
                 sortOrder: maxForDay + 1,
+                googleMapsLink: mapsLink,
                 createdAt: now,
                 updatedAt: now
             )
@@ -951,6 +959,16 @@ struct ExecuteDraftAction {
                 row.endTime = nil; changed = true
             } else if !trimmed.isEmpty, let parsed = parseAnyISODate(trimmed) {
                 row.endTime = parsed; changed = true
+            }
+        }
+        // google_maps_link: same empty/"null"/value tri-state as notes.
+        // Empty = keep, "null" = clear, anything else = set verbatim.
+        if let raw = input["google_maps_link"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.googleMapsLink = ""; changed = true
+            } else if !trimmed.isEmpty {
+                row.googleMapsLink = trimmed; changed = true
             }
         }
         // If the kind isn't stay any more, clear the stay-only fields so the
