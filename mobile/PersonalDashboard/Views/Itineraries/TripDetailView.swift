@@ -81,8 +81,47 @@ struct TripDetailView: View {
                 Color.clear.frame(height: TimelineLayout.bottomBumper)
             }
             .padding(.horizontal, Space.lg)
+            // ONE continuous rail behind the entire timeline content. Each
+            // day dot and every item marker publishes its centre via
+            // `RailAnchorKey`; the rail spans from the first published anchor
+            // (the top day dot) down to the last (the bottom marker), so the
+            // line never breaks across single-entry days or day boundaries.
+            // Drawn as a background so all dots/markers paint over it.
+            .backgroundPreferenceValue(RailAnchorKey.self) { anchors in
+                GeometryReader { proxy in
+                    if let span = railSpan(from: anchors, in: proxy) {
+                        Rectangle()
+                            .fill(Tokens.border)
+                            .frame(width: TimelineLayout.railWidth, height: span.height)
+                            // `railLeading` is measured from the cluster's
+                            // leading edge, which sits `Space.lg` inside the
+                            // padded content's leading edge. Centre the 1pt
+                            // rect on that x.
+                            .position(
+                                x: Space.lg + TimelineLayout.railLeading,
+                                y: span.midY
+                            )
+                    }
+                }
+            }
         }
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// Resolve the published rail anchors into a single top-to-bottom span in
+    /// the scroll-content coordinate space. Returns the rail's pixel height
+    /// and vertical midpoint, or `nil` when there are fewer than two anchors
+    /// (a single dot needs no connecting line).
+    private func railSpan(
+        from anchors: [Anchor<CGPoint>],
+        in proxy: GeometryProxy
+    ) -> (height: CGFloat, midY: CGFloat)? {
+        guard anchors.count > 1 else { return nil }
+        let ys = anchors.map { proxy[$0].y }
+        guard let top = ys.min(), let bottom = ys.max(), bottom > top else {
+            return nil
+        }
+        return (height: bottom - top, midY: (top + bottom) / 2)
     }
 
     // MARK: - Empty state
@@ -236,6 +275,27 @@ enum TimelineLayout {
     static let markerCenterFromRowTop: CGFloat = 22
 }
 
+// MARK: - Rail anchor preference
+
+/// Collects the centre point of every rail node (each day dot and each item
+/// marker) so a single continuous rail can be drawn from the topmost node to
+/// the bottommost node. Each node contributes one `Anchor<CGPoint>`; the
+/// background reader takes the min/max Y to span the whole timeline.
+private struct RailAnchorKey: PreferenceKey {
+    static var defaultValue: [Anchor<CGPoint>] { [] }
+    static func reduce(value: inout [Anchor<CGPoint>], nextValue: () -> [Anchor<CGPoint>]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+extension View {
+    /// Publishes this view's centre as a rail node for the timeline's
+    /// continuous-rail background.
+    func railNode() -> some View {
+        anchorPreference(key: RailAnchorKey.self, value: .center) { [$0] }
+    }
+}
+
 // MARK: - Timeline entries (one row on the timeline)
 
 /// A single "event" the timeline renders. A non-stay item produces one
@@ -310,12 +370,12 @@ enum ItineraryItemEditorTarget: Identifiable {
 
 // MARK: - Day cluster
 
-/// One day's eyebrow + rail + items. The rail is drawn as a background
-/// rectangle behind the items VStack, anchored top/bottom to the first
-/// and last marker centers via vertical padding equal to the
-/// `markerCenterFromRowTop` constant. The day eyebrow's dot is indented to
-/// share the marker x-position, so day dot + every marker form a vertical
-/// column.
+/// One day's eyebrow + items. The connecting rail is NOT drawn here: it's a
+/// single continuous background rail on the whole timeline (see
+/// `TripDetailView.timelineScroll`), threaded through every day dot and item
+/// marker via the `RailAnchorKey` preference. The day eyebrow's dot is
+/// indented to share the marker x-position, so day dot + every marker form a
+/// vertical column the rail runs straight down.
 private struct TripDayCluster: View {
     let trip: LocalTrip
     let day: Date
@@ -350,6 +410,7 @@ private struct TripDayCluster: View {
             Circle()
                 .fill(Tokens.accent(for: .itineraries))
                 .frame(width: TimelineLayout.dayDotDiameter, height: TimelineLayout.dayDotDiameter)
+                .railNode()
             HStack(spacing: 0) {
                 if withinTrip {
                     Text("DAY \(dayNumber)")
@@ -384,9 +445,9 @@ private struct TripDayCluster: View {
     // MARK: Items + rail
 
     private var itemsStack: some View {
-        // The rail lives as a background rect behind the items VStack, with
-        // top/bottom padding equal to `markerCenterFromRowTop` so it starts
-        // at the first marker center and ends at the last marker center.
+        // Rows only. The connecting rail is no longer drawn per-day; it's a
+        // single continuous background rail on the whole timeline (see
+        // `timelineScroll`), anchored to each marker via `railNode()`.
         VStack(alignment: .leading, spacing: Space.md) {
             ForEach(entries) { entry in
                 TripTimelineRow(entry: entry)
@@ -400,25 +461,6 @@ private struct TripDayCluster: View {
                         }
                     }
             }
-        }
-        .background(railOverlay, alignment: .topLeading)
-    }
-
-    @ViewBuilder
-    private var railOverlay: some View {
-        // Single rail. Top/bottom padding clip the rect to marker
-        // centerlines (each marker sits `markerCenterFromRowTop` below its
-        // row's top edge). `.offset(x:)` slides the 1pt-wide rect so its
-        // horizontal center lands on `railLeading`. Single-entry days
-        // suppress the rail entirely — there's nothing to connect.
-        if entries.count > 1 {
-            Rectangle()
-                .fill(Tokens.border)
-                .frame(width: TimelineLayout.railWidth)
-                .padding(.top, TimelineLayout.markerCenterFromRowTop)
-                .padding(.bottom, TimelineLayout.markerCenterFromRowTop)
-                .offset(x: TimelineLayout.railLeading - TimelineLayout.railWidth / 2)
-                .frame(maxHeight: .infinity)
         }
     }
 }
@@ -458,6 +500,9 @@ private struct TripTimelineRow: View {
                     )
             }
         }
+        // Publish this marker's centre as a rail node so the continuous
+        // background rail threads through it.
+        .railNode()
         .frame(width: TimelineLayout.cardLeading, alignment: .center)
         .padding(.top, TimelineLayout.markerCenterFromRowTop - TimelineLayout.markerDiameter / 2)
     }
