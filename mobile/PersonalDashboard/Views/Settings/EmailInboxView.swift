@@ -22,6 +22,7 @@ struct EmailInboxView: View {
     @State private var isFetching = false
     @State private var fetchSummary: String?
     @State private var saveConfirmation = false
+    @State private var selectedEntry: LocalEmailIngestLog?
 
     // Recent log, newest first.
     @Query(sort: \LocalEmailIngestLog.createdAt, order: .reverse)
@@ -53,6 +54,9 @@ struct EmailInboxView: View {
                     Button("Save") { save() }
                         .fontWeight(.semibold)
                 }
+            }
+            .sheet(item: $selectedEntry) { entry in
+                EmailIngestDetailView(entry: entry)
             }
         }
         .onAppear(perform: load)
@@ -152,6 +156,31 @@ struct EmailInboxView: View {
                 .buttonStyle(.plain)
                 .disabled(isFetching || !canFetch)
 
+                divider
+
+                Button {
+                    fetchNow(ignoreProcessed: true)
+                } label: {
+                    HStack(spacing: Space.md) {
+                        Image(systemName: "arrow.clockwise.circle")
+                            .font(.system(size: 15))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Re-scan (ignore processed)")
+                                .font(.edBody)
+                            Text("Re-run already-fetched emails through the latest parsing and matching")
+                                .font(.edCaption)
+                                .foregroundStyle(Tokens.muted)
+                        }
+                        Spacer()
+                    }
+                    .foregroundStyle(EmailInboxConfig.isReady ? Tokens.ink : Tokens.mutedSoft)
+                    .padding(.horizontal, Space.lg)
+                    .padding(.vertical, Space.md)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isFetching || !canFetch)
+
                 if let summary = fetchSummary {
                     divider
                     Text(summary)
@@ -186,28 +215,38 @@ struct EmailInboxView: View {
     }
 
     private func logRow(_ entry: LocalEmailIngestLog) -> some View {
-        HStack(alignment: .top, spacing: Space.md) {
-            Image(systemName: entry.outcomeEnum.icon)
-                .font(.system(size: 15))
-                .foregroundStyle(color(for: entry.outcomeEnum))
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.subject.isEmpty ? "(no subject)" : entry.subject)
-                    .font(.edBodyMedium)
-                    .foregroundStyle(Tokens.ink)
-                    .lineLimit(1)
-                Text(entry.summary)
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .lineLimit(2)
-                Text(entry.createdAt, format: .dateTime.month().day().hour().minute())
-                    .font(.edCaption)
+        Button {
+            selectedEntry = entry
+        } label: {
+            HStack(alignment: .top, spacing: Space.md) {
+                Image(systemName: entry.outcomeEnum.icon)
+                    .font(.system(size: 15))
+                    .foregroundStyle(color(for: entry.outcomeEnum))
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.subject.isEmpty ? "(no subject)" : entry.subject)
+                        .font(.edBodyMedium)
+                        .foregroundStyle(Tokens.ink)
+                        .lineLimit(1)
+                    Text(entry.summary)
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                        .lineLimit(2)
+                    Text(entry.createdAt, format: .dateTime.month().day().hour().minute())
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+                Spacer(minLength: Space.sm)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(Tokens.mutedSoft)
+                    .padding(.top, 2)
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, Space.lg)
-        .padding(.vertical, Space.md)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Building blocks
@@ -279,17 +318,18 @@ struct EmailInboxView: View {
         dismiss()
     }
 
-    private func fetchNow() {
+    private func fetchNow(ignoreProcessed: Bool = false) {
         // Persist current edits first so the fetch uses them.
         save0()
         isFetching = true
         fetchSummary = nil
         Task {
             await EmailIngestNotifications.requestAuthorizationIfNeeded()
-            let result = await EmailIngestService().runFetchCycle()
+            let result = await EmailIngestService().runFetchCycle(ignoreProcessed: ignoreProcessed)
             await MainActor.run {
                 isFetching = false
-                fetchSummary = "Added \(result.added), skipped \(result.skipped), failed \(result.failed)."
+                let prefix = ignoreProcessed ? "Re-scanned. " : ""
+                fetchSummary = "\(prefix)Added \(result.added), skipped \(result.skipped), failed \(result.failed)."
             }
         }
     }
@@ -325,6 +365,66 @@ private struct Section<Content: View>: View {
             content
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
                 .paperBorder()
+        }
+    }
+}
+
+/// Diagnostics detail for a single ingest-log entry (#143): the outcome, the
+/// parsed body text the model actually received, and the trip-matching context
+/// it was given. This is what lets us tell a parser miss ("just a signature")
+/// apart from a real no-match, without needing the device console.
+private struct EmailIngestDetailView: View {
+    let entry: LocalEmailIngestLog
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.lg) {
+                        field("Outcome", entry.outcomeEnum.displayName)
+                        field("Subject", entry.subject.isEmpty ? "(none)" : entry.subject)
+                        if !entry.sender.isEmpty { field("From", entry.sender) }
+                        field("Summary", entry.summary)
+                        monospaceBlock("Parsed body the model received",
+                                       entry.debugBody.isEmpty ? "(not recorded)" : entry.debugBody)
+                        monospaceBlock("Trips the model could match against",
+                                       entry.debugTripContext.isEmpty ? "(not recorded)" : entry.debugTripContext)
+                    }
+                    .padding(Space.lg)
+                }
+            }
+            .navigationTitle("Email detail")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func field(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(label).eyebrow()
+            Text(value)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func monospaceBlock(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(label).eyebrow()
+            Text(value)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Tokens.inkSoft)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Space.md)
+                .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                .textSelection(.enabled)
         }
     }
 }

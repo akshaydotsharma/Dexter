@@ -33,6 +33,16 @@ final class LocalEmailIngestLog {
     /// so undo can delete exactly those rows. Empty when nothing was added.
     var addedItemUUIDs: String
 
+    /// Diagnostics (#143): first ~1000 chars of the parsed body the model
+    /// actually received, so a parser miss ("just a signature") is
+    /// distinguishable from a real no-match. Additive field with a default,
+    /// so the SwiftData migration on existing installs stays lightweight.
+    var debugBody: String = ""
+
+    /// Diagnostics (#143): the compact trip-context string the model was given
+    /// for matching. Confirms whether the right trip was even visible.
+    var debugTripContext: String = ""
+
     var createdAt: Date
 
     init(
@@ -43,6 +53,8 @@ final class LocalEmailIngestLog {
         summary: String,
         tripUUID: UUID? = nil,
         addedItemUUIDs: [UUID] = [],
+        debugBody: String = "",
+        debugTripContext: String = "",
         createdAt: Date = Date()
     ) {
         self.clientUUID = clientUUID
@@ -52,6 +64,8 @@ final class LocalEmailIngestLog {
         self.summary = summary
         self.tripUUID = tripUUID
         self.addedItemUUIDs = addedItemUUIDs.map { $0.uuidString.lowercased() }.joined(separator: ",")
+        self.debugBody = debugBody
+        self.debugTripContext = debugTripContext
         self.createdAt = createdAt
     }
 

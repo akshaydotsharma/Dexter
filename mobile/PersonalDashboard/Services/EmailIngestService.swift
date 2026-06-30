@@ -25,8 +25,14 @@ struct EmailIngestService {
 
     /// Run a fetch cycle. Returns the number of messages added / skipped /
     /// failed in this run (for the caller's logging / background-task result).
+    ///
+    /// When `ignoreProcessed` is true, the idempotency ledger is bypassed for
+    /// THIS run so already-fetched messages re-run through parsing + matching
+    /// (the "Re-scan (ignore processed)" action, #143). The ledger rows for
+    /// the re-run messages are also cleared so a subsequent normal cycle won't
+    /// see stale entries. Idempotency for normal cycles is unaffected.
     @discardableResult
-    func runFetchCycle() async -> (added: Int, skipped: Int, failed: Int) {
+    func runFetchCycle(ignoreProcessed: Bool = false) async -> (added: Int, skipped: Int, failed: Int) {
         guard EmailInboxConfig.isReady else {
             return (0, 0, 0)
         }
@@ -60,15 +66,20 @@ struct EmailIngestService {
                 // until we read headers), but this avoids re-fetching bodies
                 // for messages we already handled.
                 let compositeKey = "uidvalidity:\(uidValidity):\(uid)"
-                if isProcessed(key: compositeKey) { continue }
+                if !ignoreProcessed, isProcessed(key: compositeKey) { continue }
 
                 do {
                     let raw = try await client.fetchMessage(uid: uid)
                     let message = EmailMessage.parse(raw.rawSource)
                     let stableKey = message.stableKey ?? compositeKey
 
-                    // Definitive idempotency check on the stable key.
-                    if isProcessed(key: stableKey) {
+                    if ignoreProcessed {
+                        // Re-scan: clear any prior ledger rows for this message
+                        // so the re-run is clean and a later normal cycle won't
+                        // trip over a stale entry.
+                        clearProcessed(key: compositeKey)
+                        clearProcessed(key: stableKey)
+                    } else if isProcessed(key: stableKey) {
                         // Already done under its Message-Id; record the
                         // composite key too so we don't re-fetch next time.
                         recordProcessed(key: compositeKey, uid: uid, uidValidity: uidValidity)
@@ -103,9 +114,10 @@ struct EmailIngestService {
                 } catch {
                     // A single message failing (fetch error, LLM error) should
                     // not abort the cycle or mark the message processed — it
-                    // gets retried next time. Log a failure entry for
-                    // visibility but keep going.
+                    // gets retried next time. Write a visible failure row so a
+                    // fetch/parse exception isn't invisible, then keep going.
                     NSLog("EmailIngestService: message uid %d failed: %@", uid, error.localizedDescription)
+                    writeFailureLog(uid: uid, error: error)
                     counts.failed += 1
                 }
             }
@@ -188,6 +200,16 @@ struct EmailIngestService {
         try? store.context.save()
     }
 
+    /// Remove any ledger rows for a key (used by the re-scan path).
+    private func clearProcessed(key: String) {
+        let k = key
+        let rows = (try? store.context.fetch(
+            FetchDescriptor<LocalProcessedEmail>(predicate: #Predicate { $0.messageKey == k })
+        )) ?? []
+        for row in rows { store.context.delete(row) }
+        if !rows.isEmpty { try? store.context.save() }
+    }
+
     // MARK: - Ingest log
 
     private func writeLog(message: EmailMessage, result: EmailIngestResult) {
@@ -197,7 +219,9 @@ struct EmailIngestService {
             outcome: result.outcome,
             summary: result.summary,
             tripUUID: result.tripUUID,
-            addedItemUUIDs: result.addedItemUUIDs
+            addedItemUUIDs: result.addedItemUUIDs,
+            debugBody: result.debugBody,
+            debugTripContext: result.debugTripContext
         )
         store.context.insert(entry)
         try? store.context.save()
@@ -214,6 +238,22 @@ struct EmailIngestService {
         case .failed:
             break
         }
+    }
+
+    /// Record a fetch/parse/transport exception as a visible log row so the
+    /// failure isn't invisible (#143). We don't have a parsed message here, so
+    /// the row carries the UID and the error text.
+    private func writeFailureLog(uid: Int, error: Error) {
+        let entry = LocalEmailIngestLog(
+            subject: "(email uid \(uid))",
+            sender: "",
+            outcome: .failed,
+            summary: "Couldn't process this email: \(error.localizedDescription)",
+            debugBody: "",
+            debugTripContext: ""
+        )
+        store.context.insert(entry)
+        try? store.context.save()
     }
 
     /// Keep the ingest log to the most recent 100 entries.

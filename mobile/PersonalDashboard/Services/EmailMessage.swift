@@ -2,12 +2,14 @@ import Foundation
 
 /// Parsed view of a raw RFC 822 email: the headers we care about plus a
 /// best-effort plain-text body. Booking-confirmation emails are almost always
-/// multipart/alternative (text + HTML); we prefer the text part, fall back to
-/// stripping tags from the HTML part, and decode quoted-printable / base64.
+/// multipart/alternative (text + HTML); forwarded copies wrap the real
+/// content in a "Forwarded message" block or attach the original as a nested
+/// message/rfc822 part. This parser digs the actual booking content out of all
+/// of those shapes, decodes quoted-printable / base64, and strips HTML.
 ///
-/// This is intentionally a pragmatic parser, not a full MIME implementation —
-/// it just needs to hand the on-device LLM enough readable text to identify
-/// dates, a destination, and booking details.
+/// Pragmatic, not a full MIME implementation — it just needs to hand the
+/// on-device LLM enough readable text to identify dates, a destination, and
+/// booking details.
 struct EmailMessage: Sendable {
     let messageId: String?
     let subject: String
@@ -27,18 +29,37 @@ struct EmailMessage: Sendable {
         let headers = parseHeaders(headerText)
 
         let messageId = headers["message-id"].map { cleanAngleBrackets($0) }
-        let subject = decodeMIMEEncodedWord(headers["subject"] ?? "")
-        let from = decodeMIMEEncodedWord(headers["from"] ?? "")
+        var subject = decodeMIMEEncodedWord(headers["subject"] ?? "")
+        var from = decodeMIMEEncodedWord(headers["from"] ?? "")
         let date = headers["date"] ?? ""
 
         let contentType = headers["content-type"] ?? "text/plain"
         let transferEncoding = (headers["content-transfer-encoding"] ?? "").lowercased()
 
-        let body = extractBestBody(
+        var body = extractBestBody(
             bodyText: bodyText,
             contentType: contentType,
             transferEncoding: transferEncoding
         )
+
+        // FORWARDED-MAIL HANDLING. When the user forwards a booking, the real
+        // content is the quoted original, not the (often empty) top section.
+        // If the body contains a "Forwarded message" block, pull the original
+        // headers (Subject / From / Date) and the original body out of it.
+        if let fwd = extractForwardedOriginal(from: body) {
+            if !fwd.body.isEmpty { body = fwd.body }
+            if let s = fwd.subject, !s.isEmpty,
+               (subject.isEmpty || isForwardedSubject(subject)) {
+                subject = s
+            }
+            if let f = fwd.from, !f.isEmpty {
+                from = f  // surface the real sender (airline/hotel) for matching
+            }
+        }
+
+        // Normalise a "Fwd:/Fw:" prefix away so it doesn't read as part of the
+        // destination, but only if we couldn't recover the original subject.
+        subject = stripForwardPrefix(subject)
 
         // Cap to keep the LLM prompt bounded. Booking emails rarely need more
         // than a few KB of meaningful text.
@@ -108,29 +129,46 @@ struct EmailMessage: Sendable {
                 return decodeBody(bodyText, encoding: transferEncoding)
             }
             let parts = splitMultipart(bodyText, boundary: boundary)
-            // Prefer text/plain, then fall back to text/html (tag-stripped).
-            var htmlFallback: String?
+
+            // Collect candidate texts from every leaf/nested part, then pick
+            // the richest one. A forwarded booking often leaves text/plain
+            // nearly empty (just the forwarder's intro + signature) while the
+            // real content sits in the HTML or the nested message/rfc822 part,
+            // so "prefer text/plain unconditionally" is wrong — score instead.
+            var candidates: [String] = []
+
             for part in parts {
                 let (partHeaders, partBody) = splitHeadersAndBody(part)
                 let h = parseHeaders(partHeaders)
                 let ct = (h["content-type"] ?? "text/plain").lowercased()
                 let enc = (h["content-transfer-encoding"] ?? "").lowercased()
 
-                if ct.contains("text/plain") {
-                    return decodeBody(partBody, encoding: enc)
-                }
-                if ct.contains("text/html"), htmlFallback == nil {
-                    htmlFallback = stripHTML(decodeBody(partBody, encoding: enc))
-                }
-                // Nested multipart (e.g. multipart/alternative inside
-                // multipart/mixed): recurse one level.
                 if ct.contains("multipart/") {
                     let nested = extractBestBody(bodyText: partBody, contentType: ct, transferEncoding: enc)
-                    if !nested.isEmpty { return nested }
+                    if !nested.isEmpty { candidates.append(nested) }
+                } else if ct.contains("message/rfc822") {
+                    // The whole original email is attached here — re-parse it
+                    // and take its (already best-extracted) body.
+                    let inner = EmailMessage.parse(decodeBody(partBody, encoding: enc))
+                    var innerText = inner.body
+                    if !inner.subject.isEmpty {
+                        innerText = "Subject: \(inner.subject)\n\(innerText)"
+                    }
+                    if !innerText.isEmpty { candidates.append(innerText) }
+                } else if ct.contains("text/plain") {
+                    let t = decodeBody(partBody, encoding: enc)
+                    if !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        candidates.append(t)
+                    }
+                } else if ct.contains("text/html") {
+                    let t = stripHTML(decodeBody(partBody, encoding: enc))
+                    if !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        candidates.append(t)
+                    }
                 }
             }
-            if let html = htmlFallback { return html }
-            return ""
+
+            return pickRichest(candidates)
         }
 
         let decoded = decodeBody(bodyText, encoding: transferEncoding)
@@ -138,6 +176,40 @@ struct EmailMessage: Sendable {
             return stripHTML(decoded)
         }
         return decoded
+    }
+
+    /// Pick the most information-dense candidate. We score by the count of
+    /// "booking-ish" signals (digits, dates, times, currency, keywords) rather
+    /// than raw length, so a long HTML footer/signature doesn't beat a compact
+    /// confirmation. Falls back to the longest non-empty candidate.
+    static func pickRichest(_ candidates: [String]) -> String {
+        let cleaned = candidates
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return "" }
+        if cleaned.count == 1 { return cleaned[0] }
+
+        func score(_ s: String) -> Int {
+            var n = 0
+            let lower = s.lowercased()
+            // Booking keywords.
+            for kw in ["confirmation", "booking", "reservation", "check-in", "check in",
+                       "checkout", "check-out", "departure", "arrival", "flight",
+                       "hotel", "itinerary", "depart", "arrive", "gate", "terminal",
+                       "pnr", "boarding", "nights", "room", "guest"] {
+                if lower.contains(kw) { n += 3 }
+            }
+            // Digits (dates, times, prices, confirmation codes).
+            n += s.filter { $0.isNumber }.count / 4
+            // Time/date punctuation density.
+            n += s.components(separatedBy: ":").count / 2
+            // Don't let a giant signature win on length alone — cap the
+            // length contribution.
+            n += min(s.count, 2000) / 200
+            return n
+        }
+
+        return cleaned.max(by: { score($0) < score($1) }) ?? cleaned[0]
     }
 
     static func boundary(from contentType: String) -> String? {
@@ -169,6 +241,145 @@ struct EmailMessage: Sendable {
             parts.append(chunk.hasPrefix("\n") ? String(chunk.dropFirst()) : chunk)
         }
         return parts
+    }
+
+    // MARK: - Forwarded-message handling
+
+    struct ForwardedOriginal {
+        var subject: String?
+        var from: String?
+        var body: String
+    }
+
+    private static let forwardedMarkers = [
+        "---------- Forwarded message ---------",
+        "---------- Forwarded message ----------",
+        "Begin forwarded message:",
+        "-------- Original Message --------",
+        "-------- Forwarded Message --------",
+    ]
+
+    /// If `text` contains a forwarded-message block, return the original's
+    /// recovered Subject/From plus the body that follows the block's header
+    /// lines. Apple Mail and Gmail both emit a small header table
+    /// (From:/Date:/Subject:/To:) right after the marker; we lift those and
+    /// treat everything after the blank line as the real content. Returns nil
+    /// when no forwarded block is present.
+    static func extractForwardedOriginal(from text: String) -> ForwardedOriginal? {
+        guard let markerRange = firstForwardedMarkerRange(in: text) else { return nil }
+
+        // Everything after the marker. The marker match may stop mid-line
+        // (e.g. our pattern has 9 trailing dashes but the email has 10), so
+        // advance to the END of the marker's line before parsing the header
+        // table — otherwise the leftover dashes look like a body line.
+        var afterMarker = String(text[markerRange.upperBound...])
+        if let nl = afterMarker.firstIndex(of: "\n") {
+            afterMarker = String(afterMarker[afterMarker.index(after: nl)...])
+        }
+        // De-quote ">"-prefixed lines (some clients quote the forwarded body).
+        let dequoted = dequoteForwarded(afterMarker)
+
+        var subject: String?
+        var from: String?
+        var bodyLines: [String] = []
+        var inHeaderTable = true
+        var sawHeader = false
+
+        let lines = dequoted.components(separatedBy: "\n")
+        for (i, rawLine) in lines.enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if inHeaderTable {
+                if line.isEmpty {
+                    // Blank line ends the header table — but only once we've
+                    // actually seen at least one header, else keep scanning.
+                    if sawHeader || i > 8 {
+                        inHeaderTable = false
+                    }
+                    continue
+                }
+                let lower = line.lowercased()
+                if lower.hasPrefix("subject:") {
+                    subject = decodeMIMEEncodedWord(String(line.dropFirst("subject:".count)).trimmingCharacters(in: .whitespaces))
+                    sawHeader = true
+                    continue
+                }
+                if lower.hasPrefix("from:") {
+                    from = decodeMIMEEncodedWord(String(line.dropFirst("from:".count)).trimmingCharacters(in: .whitespaces))
+                    sawHeader = true
+                    continue
+                }
+                if lower.hasPrefix("date:") || lower.hasPrefix("to:") || lower.hasPrefix("sent:") || lower.hasPrefix("cc:") || lower.hasPrefix("reply-to:") {
+                    sawHeader = true
+                    continue
+                }
+                // Skip pure-noise leftovers (dashes/punctuation) that some
+                // clients leave around the marker, without ending the table.
+                if !sawHeader, line.allSatisfy({ "-–—=*_> \t".contains($0) }) {
+                    continue
+                }
+                // A substantive non-header line: the header table is over.
+                inHeaderTable = false
+                bodyLines.append(rawLine)
+            } else {
+                bodyLines.append(rawLine)
+            }
+        }
+
+        let body = bodyLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Only treat this as a useful forwarded original if we recovered
+        // something — otherwise let the caller keep the original parse.
+        if body.isEmpty && subject == nil { return nil }
+        return ForwardedOriginal(subject: subject, from: from, body: body)
+    }
+
+    private static func firstForwardedMarkerRange(in text: String) -> Range<String.Index>? {
+        var best: Range<String.Index>?
+        for marker in forwardedMarkers {
+            if let r = text.range(of: marker) {
+                if best == nil || r.lowerBound < best!.lowerBound {
+                    best = r
+                }
+            }
+        }
+        // Also catch a Gmail-style "On <date>, <name> wrote:" lead-in when no
+        // explicit marker exists.
+        if best == nil,
+           let r = text.range(of: "wrote:\n", options: .regularExpression) {
+            best = r
+        }
+        return best
+    }
+
+    private static func dequoteForwarded(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n").map { line -> String in
+            var l = line
+            // Strip a single leading "> " or ">" quote marker (one level).
+            if l.hasPrefix("> ") { l.removeFirst(2) }
+            else if l.hasPrefix(">") { l.removeFirst() }
+            return l
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func isForwardedSubject(_ subject: String) -> Bool {
+        let lower = subject.lowercased()
+        return lower.hasPrefix("fwd:") || lower.hasPrefix("fw:") || lower.hasPrefix("fwd ") || lower.hasPrefix("[fwd")
+    }
+
+    static func stripForwardPrefix(_ subject: String) -> String {
+        var s = subject.trimmingCharacters(in: .whitespaces)
+        // Strip repeated Fwd:/Fw:/Re: prefixes.
+        var changed = true
+        while changed {
+            changed = false
+            for prefix in ["fwd:", "fw:", "re:"] {
+                if s.lowercased().hasPrefix(prefix) {
+                    s = String(s.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                    changed = true
+                }
+            }
+        }
+        return s.isEmpty ? subject.trimmingCharacters(in: .whitespaces) : s
     }
 
     // MARK: - Decoding
@@ -257,33 +468,55 @@ struct EmailMessage: Sendable {
 
     static func stripHTML(_ html: String) -> String {
         var text = html
-        // Drop script/style blocks wholesale.
+        // Drop script/style/head blocks wholesale.
         text = text.replacingOccurrences(
-            of: "<(script|style)[^>]*>[\\s\\S]*?</\\1>",
+            of: "<(script|style|head)[^>]*>[\\s\\S]*?</\\1>",
             with: " ",
             options: .regularExpression
         )
+        // HTML comments (Outlook conditionals etc.).
+        text = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ", options: .regularExpression)
         // Turn block-level closers into newlines so structure survives.
         text = text.replacingOccurrences(
-            of: "</(p|div|tr|li|h[1-6]|table|br)\\s*/?>",
+            of: "</(p|div|tr|li|h[1-6]|table|td)\\s*>",
             with: "\n",
-            options: .regularExpression
+            options: [.regularExpression, .caseInsensitive]
         )
-        text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: [.regularExpression, .caseInsensitive])
         // Strip all remaining tags.
         text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
         // Decode the handful of entities that actually matter.
         let entities: [String: String] = [
             "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">",
-            "&quot;": "\"", "&#39;": "'", "&apos;": "'",
+            "&quot;": "\"", "&#39;": "'", "&apos;": "'", "&mdash;": "—",
+            "&ndash;": "–", "&rarr;": "→", "&#8594;": "→",
         ]
         for (k, v) in entities {
             text = text.replacingOccurrences(of: k, with: v)
         }
+        // Decode numeric entities (&#1234;) best-effort.
+        text = decodeNumericEntities(text)
         // Collapse runs of whitespace / blank lines.
         text = text.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func decodeNumericEntities(_ text: String) -> String {
+        guard text.contains("&#") else { return text }
+        var output = text
+        let pattern = "&#([0-9]{1,7});"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let ns = output as NSString
+        let matches = regex.matches(in: output, range: NSRange(location: 0, length: ns.length)).reversed()
+        for m in matches {
+            let numStr = ns.substring(with: m.range(at: 1))
+            if let code = UInt32(numStr), let scalar = Unicode.Scalar(code) {
+                let replacement = String(Character(scalar))
+                output = (output as NSString).replacingCharacters(in: m.range, with: replacement)
+            }
+        }
+        return output
     }
 
     static func cleanAngleBrackets(_ value: String) -> String {
