@@ -376,6 +376,12 @@ enum AnthropicContentBlock: Codable {
     case text(String)
     case toolUse(id: String, name: String, input: [String: AnthropicJSONValue])
     case toolResult(toolUseId: String, content: String, isError: Bool)
+    /// Native document block (base64). `mediaType` is "application/pdf".
+    /// Used by the email path to send a PDF Claude can read when the on-device
+    /// text layer is too sparse to extract (#143).
+    case document(base64: String, mediaType: String)
+    /// Native image block (base64). `mediaType` is e.g. "image/png".
+    case image(base64: String, mediaType: String)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -387,6 +393,14 @@ enum AnthropicContentBlock: Codable {
         case tool_use_id
         case content
         case is_error
+        // document / image fields
+        case source
+    }
+
+    private enum SourceKeys: String, CodingKey {
+        case type
+        case media_type
+        case data
     }
 
     func encode(to encoder: Encoder) throws {
@@ -405,6 +419,18 @@ enum AnthropicContentBlock: Codable {
             try c.encode(toolUseId, forKey: .tool_use_id)
             try c.encode(content, forKey: .content)
             try c.encode(isError, forKey: .is_error)
+        case .document(let base64, let mediaType):
+            try c.encode("document", forKey: .type)
+            var src = c.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)
+            try src.encode("base64", forKey: .type)
+            try src.encode(mediaType, forKey: .media_type)
+            try src.encode(base64, forKey: .data)
+        case .image(let base64, let mediaType):
+            try c.encode("image", forKey: .type)
+            var src = c.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)
+            try src.encode("base64", forKey: .type)
+            try src.encode(mediaType, forKey: .media_type)
+            try src.encode(base64, forKey: .data)
         }
     }
 

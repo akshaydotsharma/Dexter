@@ -17,6 +17,22 @@ struct EmailMessage: Sendable {
     let date: String
     /// Best-effort plain-text body, decoded and tag-stripped, length-capped.
     let body: String
+    /// Decoded attachments (PDF / image / calendar / etc.) found in the MIME
+    /// tree (#143). Bookings frequently arrive as a PDF with a near-empty body.
+    let attachments: [Attachment]
+
+    /// One decoded attachment from the MIME tree.
+    struct Attachment: Sendable {
+        let filename: String
+        /// Lowercased MIME type, e.g. "application/pdf", "image/png",
+        /// "text/calendar".
+        let contentType: String
+        let data: Data
+
+        var isPDF: Bool { contentType.contains("application/pdf") || filename.lowercased().hasSuffix(".pdf") }
+        var isImage: Bool { contentType.hasPrefix("image/") }
+        var isCalendar: Bool { contentType.contains("text/calendar") || filename.lowercased().hasSuffix(".ics") }
+    }
 
     /// Stable identity for the idempotency ledger: the Message-Id header when
     /// present, else nil (caller falls back to uidvalidity:uid).
@@ -61,6 +77,10 @@ struct EmailMessage: Sendable {
         // destination, but only if we couldn't recover the original subject.
         subject = stripForwardPrefix(subject)
 
+        // ATTACHMENTS. Walk the MIME tree collecting decoded attachment bytes
+        // (PDF / image / calendar). Bounded: at most 5, each <= 10MB.
+        let attachments = collectAttachments(bodyText: bodyText, contentType: contentType)
+
         // Cap to keep the LLM prompt bounded. Booking emails rarely need more
         // than a few KB of meaningful text.
         let capped = String(body.prefix(8000))
@@ -70,8 +90,120 @@ struct EmailMessage: Sendable {
             subject: subject,
             from: from,
             date: date,
-            body: capped
+            body: capped,
+            attachments: attachments
         )
+    }
+
+    // MARK: - Attachment collection
+
+    static let maxAttachments = 5
+    static let maxAttachmentBytes = 10 * 1024 * 1024  // 10 MB
+
+    /// Recursively walk the MIME tree and decode attachment parts. A part is
+    /// an attachment when it has `Content-Disposition: attachment`, OR a
+    /// non-text content-type with a filename (inline PDFs/images often lack an
+    /// explicit disposition). Bounded by `maxAttachments` / `maxAttachmentBytes`;
+    /// anything dropped is logged, never silent.
+    static func collectAttachments(bodyText: String, contentType: String) -> [Attachment] {
+        var out: [Attachment] = []
+        walkForAttachments(bodyText: bodyText, contentType: contentType, transferEncoding: "", disposition: "", filename: nil, into: &out)
+        if out.count > maxAttachments {
+            NSLog("EmailMessage: capping attachments %d -> %d", out.count, maxAttachments)
+            out = Array(out.prefix(maxAttachments))
+        }
+        return out
+    }
+
+    private static func walkForAttachments(
+        bodyText: String,
+        contentType: String,
+        transferEncoding: String,
+        disposition: String,
+        filename: String?,
+        into out: inout [Attachment]
+    ) {
+        let lowerType = contentType.lowercased()
+
+        if lowerType.contains("multipart/") {
+            guard let boundary = boundary(from: contentType) else { return }
+            for part in splitMultipart(bodyText, boundary: boundary) {
+                let (partHeaders, partBody) = splitHeadersAndBody(part)
+                let h = parseHeaders(partHeaders)
+                let ct = h["content-type"] ?? "text/plain"
+                let enc = (h["content-transfer-encoding"] ?? "").lowercased()
+                let disp = (h["content-disposition"] ?? "").lowercased()
+                let name = filenameFromHeaders(h)
+                walkForAttachments(bodyText: partBody, contentType: ct, transferEncoding: enc, disposition: disp, filename: name, into: &out)
+            }
+            return
+        }
+
+        guard out.count < maxAttachments else { return }
+
+        let isAttachmentDisposition = disposition.contains("attachment")
+        let isNonTextWithName = !lowerType.hasPrefix("text/")
+            && !lowerType.contains("multipart/")
+            && !lowerType.contains("message/rfc822")
+            && filename != nil
+        // Calendar invites are text/* but we want them as structured input.
+        let isCalendar = lowerType.contains("text/calendar")
+
+        guard isAttachmentDisposition || isNonTextWithName || isCalendar else { return }
+
+        // Decode bytes. base64 is the common case for binary; quoted-printable
+        // and 7bit/8bit fall back to raw UTF-8 bytes.
+        let data: Data?
+        switch transferEncoding {
+        case "base64":
+            let cleaned = bodyText.unicodeScalars.filter {
+                !CharacterSet.whitespacesAndNewlines.contains($0)
+            }
+            data = Data(base64Encoded: String(String.UnicodeScalarView(cleaned)), options: .ignoreUnknownCharacters)
+        case "quoted-printable":
+            data = decodeQuotedPrintable(bodyText).data(using: .utf8)
+        default:
+            data = bodyText.data(using: .utf8)
+        }
+
+        guard let bytes = data, !bytes.isEmpty else {
+            NSLog("EmailMessage: dropped attachment (decode failed): %@", filename ?? lowerType)
+            return
+        }
+        guard bytes.count <= maxAttachmentBytes else {
+            NSLog("EmailMessage: dropped oversize attachment %@ (%d bytes)", filename ?? lowerType, bytes.count)
+            return
+        }
+
+        let name = filename ?? defaultName(for: lowerType)
+        out.append(Attachment(filename: name, contentType: lowerType.components(separatedBy: ";").first?.trimmingCharacters(in: .whitespaces) ?? lowerType, data: bytes))
+    }
+
+    /// Pull a filename from Content-Disposition or Content-Type name= param.
+    static func filenameFromHeaders(_ h: [String: String]) -> String? {
+        for key in ["content-disposition", "content-type"] {
+            guard let value = h[key] else { continue }
+            if let r = value.range(of: "filename=", options: .caseInsensitive) ?? value.range(of: "name=", options: .caseInsensitive) {
+                var v = String(value[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if v.hasPrefix("\"") {
+                    v.removeFirst()
+                    if let end = v.firstIndex(of: "\"") { v = String(v[..<end]) }
+                } else if let end = v.firstIndex(where: { $0 == ";" || $0 == " " }) {
+                    v = String(v[..<end])
+                }
+                let decoded = decodeMIMEEncodedWord(v)
+                if !decoded.isEmpty { return decoded }
+            }
+        }
+        return nil
+    }
+
+    private static func defaultName(for contentType: String) -> String {
+        if contentType.contains("pdf") { return "attachment.pdf" }
+        if contentType.contains("png") { return "image.png" }
+        if contentType.contains("jpeg") || contentType.contains("jpg") { return "image.jpg" }
+        if contentType.contains("calendar") { return "invite.ics" }
+        return "attachment"
     }
 
     // MARK: - Header / body split
