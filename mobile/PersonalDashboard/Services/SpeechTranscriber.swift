@@ -36,7 +36,22 @@ final class SpeechTranscriber {
     /// the audio engine fails. Cleared on the next successful `toggle()`.
     var errorMessage: String?
 
+    /// Normalized microphone amplitude (0.0–1.0), computed as RMS of each
+    /// audio buffer in the input tap, mapped from a -40dBFS floor, and
+    /// low-pass filtered (rolling average over the last 4 frames) so it
+    /// doesn't strobe. Drives the voice-capture InkOrb animation (issue #150).
+    /// Resets to 0 on stop. No extra permission needed — it reads the same
+    /// buffer the recognizer already taps.
+    private(set) var audioLevel: Float = 0
+
     // MARK: Private state
+
+    /// Rolling window of the last few normalized RMS readings for the
+    /// low-pass filter. Mutated on the audio tap's background queue, read +
+    /// averaged there too; the averaged value is hopped to the main actor for
+    /// publishing.
+    private var levelWindow: [Float] = []
+    private let levelWindowSize = 4
 
     private let recognizer: SFSpeechRecognizer? = {
         // Force en-US — `.dictation` taskHint plus on-device model is best
@@ -48,6 +63,16 @@ final class SpeechTranscriber {
     private let audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+
+    /// Synchronous re-entry guard for the async start window. `isRecording`
+    /// alone is insufficient: `start()` only flips it to true at the very end,
+    /// AFTER awaiting permission, so two near-simultaneous `start()` calls can
+    /// both pass an `isRecording` check while it's still false and both reach
+    /// `installTap`, which trips an AVAudioEngine assertion (issue #150 crash:
+    /// "required condition is false: nullptr == Tap()"). This flag is set
+    /// synchronously at the top of `start()` before any `await`, so the second
+    /// caller bails immediately.
+    private var isStarting = false
 
     init() {}
 
@@ -66,8 +91,14 @@ final class SpeechTranscriber {
     /// Synchronous tear-down. Used by `ChatView.send()` to flush a final
     /// transcript before the message ships, and by `toggle()` itself.
     func stop() {
+        // Belt-and-suspenders: clear the start-in-progress flag too, so a
+        // stop that races a start can never leave `isStarting` stuck true
+        // (issue #150). `start()`'s own `defer` normally handles this.
+        isStarting = false
         guard isRecording else { return }
         isRecording = false
+        audioLevel = 0
+        levelWindow.removeAll()
 
         // End-of-audio first, then tear down the engine. `endAudio()` lets
         // SFSpeech finalize a "best result" partial; cancelling the task
@@ -92,6 +123,14 @@ final class SpeechTranscriber {
     // MARK: Private
 
     private func start() async {
+        // Re-entry guard: bail if we're already recording OR mid-start. This
+        // runs synchronously before any `await`, so a second concurrent
+        // `start()` can't slip through the async permission window and install
+        // a duplicate tap (issue #150). Cleared on every exit via `defer`.
+        guard !isRecording && !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
+
         errorMessage = nil
         transcript = ""
 
@@ -140,10 +179,21 @@ final class SpeechTranscriber {
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+        // Defensive: remove any stale tap before installing a fresh one. A
+        // node can hold at most one tap per bus; installing over an existing
+        // tap trips "required condition is false: nullptr == Tap()" and
+        // crashes (issue #150). `removeTap` on a bus with no tap is a no-op.
+        inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             // The tap fires on a background queue, but the request's
             // append is thread-safe per Apple's docs.
             self?.request?.append(buffer)
+            // Compute a normalized, smoothed amplitude for the InkOrb. Done on
+            // this background queue (cheap RMS over the buffer), then the
+            // smoothed scalar is hopped to the main actor for publishing.
+            guard let self else { return }
+            let level = Self.normalizedRMS(buffer)
+            Task { @MainActor in self.publishLevel(level) }
         }
 
         audioEngine.prepare()
@@ -187,6 +237,38 @@ final class SpeechTranscriber {
                 }
             }
         }
+    }
+
+    // MARK: Audio level metering
+
+    /// RMS of the buffer's first channel, mapped from a -40dBFS floor to 0–1.
+    /// Pure function, safe to call on the audio tap's background queue.
+    private nonisolated static func normalizedRMS(_ buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData else { return 0 }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return 0 }
+        let samples = channelData[0]
+        var sumSquares: Float = 0
+        for i in 0..<frameCount {
+            let s = samples[i]
+            sumSquares += s * s
+        }
+        let rms = sqrt(sumSquares / Float(frameCount))
+        // Convert to dBFS, clamp to a -40dB floor, then linear-map to 0–1.
+        let db = 20 * log10(max(rms, 1e-7))
+        let floorDB: Float = -40
+        let clamped = max(floorDB, min(0, db))
+        return (clamped - floorDB) / -floorDB
+    }
+
+    /// Append a new reading to the rolling window and publish the average.
+    private func publishLevel(_ level: Float) {
+        levelWindow.append(level)
+        if levelWindow.count > levelWindowSize {
+            levelWindow.removeFirst(levelWindow.count - levelWindowSize)
+        }
+        let avg = levelWindow.reduce(0, +) / Float(levelWindow.count)
+        audioLevel = avg
     }
 
     private static func requestSpeechAuthorization() async -> Bool {
