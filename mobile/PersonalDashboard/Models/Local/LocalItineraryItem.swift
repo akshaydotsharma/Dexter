@@ -95,6 +95,14 @@ final class LocalItineraryItem {
     /// found or for non-email items. Additive: existing rows keep "".
     var sourceConfirmation: String = ""
 
+    /// Optional street / postal address for this item's location. Populated
+    /// when a forwarded booking email contains one, or typed manually in the
+    /// editor. Empty when none. Stored with a default so adding it to an
+    /// existing install is a safe lightweight migration (no data loss). Shown
+    /// as a plain text line on the timeline card; the tappable map affordance
+    /// lives on `googleMapsLink`.
+    var address: String = ""
+
     /// Optional Google Maps URL for this item's location (#144). Populated when
     /// a forwarded booking email contains a maps link, or pasted manually in
     /// the editor. Empty when none. Stored with a default so adding it to an
@@ -117,6 +125,7 @@ final class LocalItineraryItem {
         endDate: Date? = nil,
         endTime: Date? = nil,
         sortOrder: Int = 0,
+        address: String = "",
         googleMapsLink: String = "",
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -131,6 +140,7 @@ final class LocalItineraryItem {
         self.endDate = endDate
         self.endTime = endTime
         self.sortOrder = sortOrder
+        self.address = address
         self.googleMapsLink = googleMapsLink
         self.createdAt = createdAt
         self.updatedAt = updatedAt
