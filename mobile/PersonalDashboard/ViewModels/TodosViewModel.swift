@@ -41,9 +41,9 @@ final class TodosViewModel {
         await load()
     }
 
-    func create(title: String, description: String? = nil, dueDate: Date? = nil, tag: String? = nil) async {
+    func create(title: String, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String = "", googleMapsLink: String = "") async {
         do {
-            let request = TodoCreateRequest(title: title, description: description, dueDate: dueDate, tag: tag)
+            let request = TodoCreateRequest(title: title, description: description, dueDate: dueDate, tag: tag, address: address, googleMapsLink: googleMapsLink)
             let new = try await service.create(request)
             todos.insert(new, at: 0)
         } catch {
@@ -65,14 +65,16 @@ final class TodosViewModel {
         }
     }
 
-    func update(_ todo: Todo, title: String? = nil, description: String? = nil, dueDate: Date? = nil, tag: String? = nil) async {
+    func update(_ todo: Todo, title: String? = nil, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String? = nil, googleMapsLink: String? = nil) async {
         do {
             let request = TodoUpdateRequest(
                 title: title,
                 description: description,
                 completed: nil,
                 dueDate: dueDate,
-                tag: tag
+                tag: tag,
+                address: address,
+                googleMapsLink: googleMapsLink
             )
             let updated = try await service.update(todo, request)
             if let index = todos.firstIndex(where: { $0.id == todo.id }) {

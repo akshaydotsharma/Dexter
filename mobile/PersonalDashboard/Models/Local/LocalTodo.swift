@@ -15,6 +15,17 @@ final class LocalTodo {
     var tag: String?
     var position: Int?
 
+    /// Optional street / postal address for this task's location. Empty when
+    /// none. Stored with a default so adding it to an existing install is a
+    /// safe lightweight migration (no data loss). Shown as a plain text line
+    /// on the task row; the tappable map affordance lives on `googleMapsLink`.
+    var address: String = ""
+
+    /// Optional Google Maps URL for this task's location. Empty when none.
+    /// Stored with a default for safe migration. Read via the DTO's `mapsURL`;
+    /// the row shows a tappable "MAP" chip only when it resolves to a URL.
+    var googleMapsLink: String = ""
+
     var version: Int64
 
     var createdAt: Date
@@ -31,6 +42,8 @@ final class LocalTodo {
         dueDate: Date? = nil,
         tag: String? = nil,
         position: Int? = nil,
+        address: String = "",
+        googleMapsLink: String = "",
         version: Int64 = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -44,6 +57,8 @@ final class LocalTodo {
         self.dueDate = dueDate
         self.tag = tag
         self.position = position
+        self.address = address
+        self.googleMapsLink = googleMapsLink
         self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -66,7 +81,9 @@ final class LocalTodo {
             version: version,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            deletedAt: deletedAt
+            deletedAt: deletedAt,
+            address: address,
+            googleMapsLink: googleMapsLink
         )
     }
 }

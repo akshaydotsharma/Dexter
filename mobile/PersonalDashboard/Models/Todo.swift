@@ -20,10 +20,20 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     let updatedAt: Date
     let deletedAt: Date?
 
+    /// Optional street / postal address. Local-only (the server schema has no
+    /// column for it), so it is omitted from `CodingKeys` and carries a default
+    /// — Codable synthesis skips it on encode/decode and uses "" instead.
+    var address: String = ""
+
+    /// Optional Google Maps URL. Local-only, same handling as `address`.
+    var googleMapsLink: String = ""
+
     /// Server JSON has both `id` (int) and `client_uuid`; we map our `id`
     /// to `client_uuid` and ignore the server's int. The decoder's
     /// `.convertFromSnakeCase` strategy turns `client_uuid` into
     /// `clientUuid`, which is what the explicit raw value below matches.
+    /// `address` / `googleMapsLink` are intentionally absent: they are local
+    /// fields the server doesn't know about.
     private enum CodingKeys: String, CodingKey {
         case id = "clientUuid"
         case title
@@ -37,6 +47,16 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
         case updatedAt
         case deletedAt
     }
+
+    /// The stored Google Maps URL, coercing a bare host (e.g.
+    /// "maps.app.goo.gl/…") into an https URL. `nil` when no link is saved or
+    /// the stored string can't form a URL — the row hides the MAP chip then.
+    var mapsURL: URL? {
+        let stored = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        if let url = URL(string: stored), url.scheme != nil { return url }
+        return URL(string: "https://\(stored)")
+    }
 }
 
 struct TodoCreateRequest: Encodable {
@@ -44,6 +64,8 @@ struct TodoCreateRequest: Encodable {
     let description: String?
     let dueDate: Date?
     let tag: String?
+    var address: String = ""
+    var googleMapsLink: String = ""
 }
 
 struct TodoUpdateRequest: Encodable {
@@ -52,4 +74,7 @@ struct TodoUpdateRequest: Encodable {
     let completed: Bool?
     let dueDate: Date?
     let tag: String?
+    /// `nil` leaves the stored value untouched; a value (incl. "") overwrites.
+    var address: String? = nil
+    var googleMapsLink: String? = nil
 }

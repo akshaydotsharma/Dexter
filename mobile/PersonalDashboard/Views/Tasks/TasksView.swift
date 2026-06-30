@@ -454,6 +454,7 @@ private struct TaskRow: View {
     @State private var isEditing: Bool = false
     @State private var editText: String = ""
     @FocusState private var titleFocused: Bool
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -503,7 +504,19 @@ private struct TaskRow: View {
                         .lineLimit(2)
                 }
 
-                if todo.dueDate != nil || (todo.tag != nil && !(todo.tag?.isEmpty ?? true)) {
+                if !todo.address.isEmpty {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.system(size: 10))
+                        Text(todo.address)
+                            .lineLimit(2)
+                    }
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+                }
+
+                let hasTag = todo.tag != nil && !(todo.tag?.isEmpty ?? true)
+                if todo.dueDate != nil || hasTag || todo.mapsURL != nil {
                     HStack(spacing: Space.sm) {
                         if let due = todo.dueDate {
                             HStack(spacing: 4) {
@@ -522,6 +535,27 @@ private struct TaskRow: View {
                                 .padding(.vertical, 2)
                                 .background(Tokens.paper2, in: Capsule())
                                 .overlay(Capsule().stroke(Tokens.border, lineWidth: 0.5))
+                        }
+                        if let url = todo.mapsURL {
+                            Button {
+                                openURL(url)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "map.fill")
+                                        .font(.system(size: 10, weight: .regular))
+                                    Text("MAP")
+                                        .font(.edEyebrow)
+                                        .textCase(.uppercase)
+                                        .tracking(1.4)
+                                }
+                                .foregroundStyle(Tokens.accentTasks)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Tokens.accentTasks.opacity(0.12), in: Capsule(style: .continuous))
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Open in Google Maps")
                         }
                     }
                 }
@@ -596,8 +630,23 @@ private struct TaskEditorSheet: View {
     @State private var hasDueDate: Bool = false
     @State private var dueDate: Date = Date().addingTimeInterval(3600)
     @State private var tag: String = ""
+    @State private var address: String = ""
+    @State private var googleMapsLink: String = ""
+    @State private var isResolvingAddress = false
+    @State private var addressResolveTask: Task<Void, Never>?
+
+    @Environment(\.openURL) private var openURL
 
     private var isEditing: Bool { todo != nil }
+
+    /// The current editor's maps link as a URL, coercing a bare host to https.
+    /// `nil` when the field is empty (so the Open button stays hidden).
+    private var editorMapsURL: URL? {
+        let stored = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        if let url = URL(string: stored), url.scheme != nil { return url }
+        return URL(string: "https://\(stored)")
+    }
 
     var body: some View {
         NavigationStack {
@@ -640,6 +689,54 @@ private struct TaskEditorSheet: View {
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
                         }
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            HStack(spacing: Space.sm) {
+                                Text("Address").eyebrow()
+                                if isResolvingAddress {
+                                    ProgressView().scaleEffect(0.7)
+                                    Text("Resolving from link…")
+                                        .font(.edCaption)
+                                        .foregroundStyle(Tokens.muted)
+                                }
+                            }
+                            TextField("Street address or area", text: $address, axis: .vertical)
+                                .lineLimit(1...3)
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.ink)
+                                .padding(Space.md)
+                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                .paperBorder(Tokens.border, radius: Radius.md)
+                        }
+                        labeled("Google Maps link") {
+                            HStack(spacing: Space.sm) {
+                                TextField("Paste a Google Maps link", text: $googleMapsLink)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled(true)
+                                    .keyboardType(.URL)
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.ink)
+                                    .padding(Space.md)
+                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                    .paperBorder(Tokens.border, radius: Radius.md)
+                                    .onChange(of: googleMapsLink) { _, newValue in
+                                        scheduleAddressResolve(from: newValue)
+                                    }
+                                if let url = editorMapsURL {
+                                    Button {
+                                        openURL(url)
+                                    } label: {
+                                        Image(systemName: "map")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundStyle(Tokens.accentTasks)
+                                            .frame(width: 48, height: 48)
+                                            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                            .paperBorder(Tokens.border, radius: Radius.md)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Open saved Google Maps link")
+                                }
+                            }
+                        }
                     }
                     .padding(Space.lg)
                 }
@@ -674,6 +771,31 @@ private struct TaskEditorSheet: View {
         descriptionText = todo.description ?? ""
         if let due = todo.dueDate { hasDueDate = true; dueDate = due }
         tag = todo.tag ?? ""
+        address = todo.address
+        googleMapsLink = todo.googleMapsLink
+    }
+
+    /// Auto-fill the Address field from a pasted Google Maps link (debounced).
+    /// Only fills when Address is currently empty, so it never clobbers an
+    /// address the user typed by hand.
+    private func scheduleAddressResolve(from link: String) {
+        addressResolveTask?.cancel()
+        guard address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              MapsLinkResolver.looksLikeMapsLink(link) else {
+            isResolvingAddress = false
+            return
+        }
+        addressResolveTask = Task {
+            try? await Task.sleep(nanoseconds: 600_000_000) // debounce keystrokes
+            if Task.isCancelled { return }
+            isResolvingAddress = true
+            let resolved = await MapsLinkResolver().resolveAddress(from: link)
+            if Task.isCancelled { return }
+            if let resolved, address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                address = resolved
+            }
+            isResolvingAddress = false
+        }
     }
 
     private func save() async {
@@ -682,10 +804,12 @@ private struct TaskEditorSheet: View {
         let finalDescription = descriptionText.isEmpty ? nil : descriptionText
         let finalTag = tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag
         let finalDue = hasDueDate ? dueDate : nil
+        let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
         if let existing = todo {
-            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag)
+            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink)
         } else {
-            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag)
+            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink)
         }
         dismiss()
     }
