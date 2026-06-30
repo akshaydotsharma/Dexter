@@ -3,6 +3,11 @@ import UIKit
 
 struct ContentView: View {
     @State private var router = AppRouter()
+    /// App-level owner of the single `SpeechTranscriber`, the silence timer,
+    /// and the AI send path for voice capture (issue #150). Injected into the
+    /// environment so the global overlay AND `ChatView`'s inline mic share one
+    /// transcriber instance.
+    @State private var voiceVM = VoiceCaptureViewModel()
     @AppStorage("colorSchemePref") private var schemePrefRaw: String = ColorSchemePref.system.rawValue
 
     /// Tracks whether we've already resigned first responder for the active
@@ -80,6 +85,19 @@ struct ContentView: View {
                 .zIndex(4)
         }
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
+        // Share the single voice-capture view model (and thus the single
+        // transcriber) with every surface, including ChatView's inline mic.
+        .environment(voiceVM)
+        // Global voice-capture overlay (issue #150, full-screen auto-execute) —
+        // attached ONCE here so press-and-hold presents it over whatever tab
+        // the user is on. A `.fullScreenCover` pushes NO navigation entry, so
+        // dismissing returns to the exact tab and scroll position. `onDismiss`
+        // is the single teardown path: it stops the mic and cancels every
+        // timer/AI task regardless of how the cover closed (Cancel, swipe in a
+        // terminal state, or auto-dismiss).
+        .fullScreenCover(isPresented: $router.showVoiceOverlay, onDismiss: { voiceVM.teardown() }) {
+            VoiceCaptureOverlay(vm: voiceVM, isPresented: $router.showVoiceOverlay)
+        }
         .activeSection(router.currentSection)
         .coordinateSpace(name: edgeCoordinateSpace)
         // Edge-swipe-to-open is scoped to a 20pt-wide leading strip overlay,

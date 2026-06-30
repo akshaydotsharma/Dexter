@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum ButtonKind {
     case primary
@@ -128,5 +129,45 @@ struct EdSendButtonStyle: ButtonStyle {
             .background(bg, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .opacity(configuration.isPressed ? 0.8 : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Glass capsule button (voice-capture overlay — issue #150)
+
+/// Frosted-glass capsule control for the full-screen voice overlay. The InkOrb
+/// is the visual hero, so these controls sit back: `.ultraThinMaterial` blur,
+/// a 50% surface tint for legibility over an animated ground, a hairline white
+/// stroke, and a barely-there ink shadow. Ink-colored label, press scale 0.96
+/// + a light haptic. No solid fills (concept doc Section 5).
+struct GlassButtonStyle: ButtonStyle {
+    /// `.edBodyMedium` for primary action labels, `.edCaption` for secondary.
+    var font: Font = .edBodyMedium
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(font)
+            .foregroundStyle(Tokens.ink)
+            .padding(.vertical, Space.sm)
+            .padding(.horizontal, Space.lg)
+            .frame(minWidth: 44, minHeight: 44)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .fill(Tokens.surface.opacity(0.5))
+                    )
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.5)
+                    )
+                    .shadow(color: Tokens.ink.opacity(0.08), radius: 8, x: 0, y: 2)
+            }
+            .contentShape(Capsule(style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+            }
     }
 }

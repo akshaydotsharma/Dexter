@@ -52,6 +52,14 @@ final class AppRouter {
     /// back to nil so it doesn't fire again on the next appearance.
     var focus: ActivityFocus?
 
+    /// Drives the global voice-capture bottom sheet (issue #150). Set to true
+    /// when the user press-and-holds the centre chat button; the overlay is
+    /// attached once at the root `ZStack` in `ContentView` via
+    /// `.sheet(isPresented:)` bound to this flag, so it can present over ANY
+    /// tab without navigating. The sheet's `onDismiss` stops the shared
+    /// transcriber as the single teardown path.
+    var showVoiceOverlay: Bool = false
+
     /// When non-nil, an edge-swipe-from-leading on the active surface routes
     /// through this handler instead of opening the side drawer. Notes and
     /// Lists set this when the user is inside a sub-screen (folder, note,

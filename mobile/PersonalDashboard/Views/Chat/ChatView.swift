@@ -3,7 +3,13 @@ import UIKit
 
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
-    @State private var transcriber = SpeechTranscriber()
+    /// The speech transcriber is owned by the app-level `VoiceCaptureViewModel`
+    /// and shared via the environment (issue #150). The inline mic button here
+    /// and the global press-and-hold overlay therefore drive the SAME single
+    /// transcriber instance, which is what keeps the re-entry guard meaningful
+    /// (two instances could each install a tap and crash the audio engine).
+    @Environment(VoiceCaptureViewModel.self) private var voiceVM
+    private var transcriber: SpeechTranscriber { voiceVM.transcriber }
     @State private var pendingViewMore: Bool = false
     @State private var keyboardVisible: Bool = false
     /// Whatever the user had typed at the moment they tapped the mic.
@@ -11,6 +17,16 @@ struct ChatView: View {
     /// so partials feel live; tapping mic-stop with an empty transcript
     /// restores the baseline so we don't clobber typed text on a misfire.
     @State private var preMicBaseline: String = ""
+
+    /// Silence-finalize timer (issue #150). Each transcript update from the
+    /// transcriber resets this; when it fires after `silenceFinalizeDelay` of
+    /// no new partials, we stop the mic and leave the transcript in the input
+    /// field as editable text (we do NOT auto-submit). Invalidated on stop.
+    @State private var silenceTimer: Timer?
+    /// How long the user has to stop speaking before we finalize. ~1.8s sits
+    /// in the requested 1.5–2s window: long enough to ride out a natural
+    /// mid-sentence pause, short enough to feel responsive.
+    private let silenceFinalizeDelay: TimeInterval = 1.8
 
     /// Owned here so we can auto-focus the input bar when the user lands on
     /// chat (issue #48 — tapping the chat icon should pop the keyboard
@@ -72,6 +88,13 @@ struct ChatView: View {
                     }
                 )
 
+                if transcriber.isRecording {
+                    ListeningIndicator(onStop: stopListening)
+                        .padding(.horizontal, Space.lg)
+                        .padding(.bottom, Space.xs)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+
                 if let micError = transcriber.errorMessage {
                     // Restrained inline note above the input bar — matches
                     // the design vocabulary (Tokens.surface bg, muted text).
@@ -116,6 +139,9 @@ struct ChatView: View {
                 // sits visually close to the floating pill.
                 .padding(.bottom, keyboardVisible ? Space.md : BottomTabBarMetrics.height)
             }
+            // Animate the listening banner and inline mic-error in/out so they
+            // don't pop (their transitions are declared at each call site).
+            .animation(.easeOut(duration: 0.2), value: transcriber.isRecording)
         }
         .background(Tokens.paper)
         .onAppear {
@@ -142,7 +168,12 @@ struct ChatView: View {
             // sees the transcription appear in real time. Append to the
             // baseline (whatever was typed before mic-tap) instead of
             // replacing — keeps already-typed context intact.
-            guard transcriber.isRecording else { return }
+            //
+            // Suppressed while the global voice overlay is presented: the
+            // overlay's `VoiceCaptureViewModel` owns the transcript and its
+            // own silence timer in that mode, so the inline chat mirroring
+            // must stand down to avoid two owners writing the same transcriber.
+            guard transcriber.isRecording, !router.showVoiceOverlay else { return }
             if newTranscript.isEmpty {
                 viewModel.draftInput = preMicBaseline
             } else if preMicBaseline.isEmpty {
@@ -150,7 +181,18 @@ struct ChatView: View {
             } else {
                 viewModel.draftInput = preMicBaseline + " " + newTranscript
             }
+            // Each new partial is a sign of speech: reset the silence
+            // countdown. Once partials stop arriving for `silenceFinalizeDelay`
+            // the timer fires and finalizes (issue #150).
+            scheduleSilenceFinalize()
         }
+        .onChange(of: transcriber.isRecording) { _, recording in
+            // If recording ends for any reason (user tapped stop, an error,
+            // or our own finalize), tear the silence timer down so it can't
+            // fire against a dead session.
+            if !recording { cancelSilenceTimer() }
+        }
+        .onDisappear { cancelSilenceTimer() }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = true }
         }
@@ -258,20 +300,69 @@ struct ChatView: View {
         // Flush any in-flight transcription first so the final partial
         // lands in `draftInput` before the message ships.
         if transcriber.isRecording {
-            transcriber.stop()
+            stopListening()
         }
         Task { await viewModel.send() }
     }
 
     private func toggleMic() async {
         if transcriber.isRecording {
-            transcriber.stop()
+            stopListening()
         } else {
-            // Snapshot what's already in the field so live partials append
-            // to it rather than overwriting typed context.
-            preMicBaseline = viewModel.draftInput
-            await transcriber.toggle()
+            await startListening()
         }
+    }
+
+    /// Begin a voice-capture session: drop the keyboard (so the listening UI
+    /// owns the surface), snapshot any typed baseline, and start the
+    /// transcriber. Shared by the mic button and the press-and-hold entry
+    /// point (issue #150). If permission is denied, the transcriber surfaces
+    /// the failure through `errorMessage` and the inline error path renders it.
+    private func startListening() async {
+        guard !transcriber.isRecording else { return }
+        // Drop the keyboard so the listening UI owns the surface and the
+        // input field shows the live transcript instead of a caret.
+        inputFocused = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        // Snapshot what's already in the field so live partials append to it
+        // rather than overwriting typed context.
+        preMicBaseline = viewModel.draftInput
+        await transcriber.toggle()
+    }
+
+    /// Stop the transcriber and leave the transcript in the input field as
+    /// editable text. Deliberately does NOT submit — the user reads/edits and
+    /// taps send, or speaks again to append (issue #150).
+    private func stopListening() {
+        transcriber.stop()
+        cancelSilenceTimer()
+    }
+
+    /// (Re)arm the silence-finalize countdown. Called on every transcript
+    /// partial; the most recent call wins, so the timer only fires once the
+    /// user has been quiet for `silenceFinalizeDelay`. On fire we stop the
+    /// mic but keep the transcript editable (no auto-send).
+    private func scheduleSilenceFinalize() {
+        silenceTimer?.invalidate()
+        silenceTimer = Timer.scheduledTimer(
+            withTimeInterval: silenceFinalizeDelay,
+            repeats: false
+        ) { _ in
+            Task { @MainActor in
+                guard transcriber.isRecording else { return }
+                stopListening()
+            }
+        }
+    }
+
+    private func cancelSilenceTimer() {
+        silenceTimer?.invalidate()
+        silenceTimer = nil
     }
 
     private var hasLiveAssistantTurn: Bool {
@@ -293,6 +384,63 @@ struct ChatView: View {
     }
 }
 
+/// "Listening…" banner shown above the input bar while the transcriber is
+/// active (issue #150). A pulsing dot + animated waveform bars read as a live
+/// mic state, and tapping anywhere on the row stops listening (mirrors the
+/// input-bar stop button so the user has an obvious cancel target right where
+/// their eyes are). Uses the restrained design vocabulary: surface fill,
+/// paper border, danger-tinted dot to echo the input-bar stop affordance.
+private struct ListeningIndicator: View {
+    let onStop: () -> Void
+
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: Space.sm) {
+            // Pulsing mic dot — the recording "heartbeat".
+            Circle()
+                .fill(Tokens.danger)
+                .frame(width: 8, height: 8)
+                .scaleEffect(pulse ? 1.0 : 0.55)
+                .opacity(pulse ? 1.0 : 0.5)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+                        pulse = true
+                    }
+                }
+
+            Text("Listening…")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.ink)
+
+            WaveformBars()
+
+            Spacer(minLength: 0)
+
+            Text("Tap to stop")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Tokens.surface,
+            in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+        )
+        .paperBorder(Tokens.border, radius: Radius.md)
+        .contentShape(Rectangle())
+        .onTapGesture { onStop() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Listening. Tap to stop voice input.")
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// Three short bars that bob continuously to suggest live audio. Decorative
+/// only — height is time-driven, not bound to actual mic levels (the
+/// transcriber doesn't expose levels), so it reads as "active" without
+/// implying a meter.
 /// Three pill-capped bars + accent dot mirroring the Deks logo (top 55%,
 /// middle 85%, bottom 70%, dot just past the end of the top bar). The
 /// bars are anchored at the leading edge; each bar's *length* oscillates

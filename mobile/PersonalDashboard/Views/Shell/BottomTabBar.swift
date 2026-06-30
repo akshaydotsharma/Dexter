@@ -37,6 +37,9 @@ struct BottomTabBar: View {
     @Bindable var router: AppRouter
 
     @State private var keyboardVisible = false
+    /// True while the chat circle is being pressed (drives the press-down
+    /// scale). Set/cleared by the long-press gesture's `onPressingChanged`.
+    @State private var isPressingChat = false
     @Namespace private var activePillNamespace
 
     /// Flat tabs (4 positions inside the pill — chat is the floating circle
@@ -209,27 +212,53 @@ struct BottomTabBar: View {
     private var chatButton: some View {
         let isActive = router.currentSection == .chat
 
-        return Button {
-            router.popToChat()
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(Tokens.ink)
-                    .frame(width: chatDiameter, height: chatDiameter)
+        // NOT a Button. A Button + `.simultaneousGesture(LongPressGesture)`
+        // lets BOTH recognizers fire: the hold presents the overlay AND the
+        // Button's tap action still runs on touch-up, navigating to chat
+        // (issue #150 device QA). Pairing `.onTapGesture` with
+        // `.onLongPressGesture` instead makes them mutually exclusive —
+        // SwiftUI cancels the pending tap once the long-press succeeds, so a
+        // completed hold never triggers `popToChat()`. Tap and hold are now
+        // distinct outcomes:
+        //   • quick TAP  → router.popToChat()        (open chat to type)
+        //   • HOLD ≥0.6s → haptic + show overlay      (stay on current page)
+        return ZStack {
+            Circle()
+                .fill(Tokens.ink)
+                .frame(width: chatDiameter, height: chatDiameter)
 
-                Image(systemName: "sparkles")
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(Tokens.paper)
-            }
-            // Shadow alone lifts the circle off the pill in both themes —
-            // a paper/surface rim was producing a white halo in light mode
-            // (the dark circle already has plenty of natural contrast
-            // against a light pill, so the rim was over-engineering).
-            .shadow(color: .black.opacity(0.22), radius: 16, x: 0, y: 7)
-            .scaleEffect(isActive ? 1.0 : 1.0)
+            Image(systemName: "sparkles")
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(Tokens.paper)
         }
-        .buttonStyle(.plain)
+        // Shadow alone lifts the circle off the pill in both themes — a
+        // paper/surface rim was producing a white halo in light mode (the
+        // dark circle already has plenty of natural contrast against a light
+        // pill, so the rim was over-engineering).
+        .shadow(color: .black.opacity(0.22), radius: 16, x: 0, y: 7)
+        // Subtle press-down feedback: scale to 0.92 while the finger is held,
+        // spring back on release / cancel (concept doc Section 3).
+        .scaleEffect(isPressingChat ? 0.92 : 1.0)
+        .animation(.easeOut(duration: 0.1), value: isPressingChat)
+        .contentShape(Circle())
+        // Long-press FIRST so its `pressing` callback drives the scale and a
+        // successful hold cancels the tap below.
+        .onLongPressGesture(
+            minimumDuration: 0.6,
+            perform: {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                router.showVoiceOverlay = true
+            },
+            onPressingChanged: { pressing in
+                isPressingChat = pressing
+            }
+        )
+        .onTapGesture {
+            router.popToChat()
+        }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Chat")
-        .accessibilityAddTraits(isActive ? [.isSelected] : [])
+        .accessibilityHint("Double tap to open chat. Touch and hold to start voice input.")
+        .accessibilityAddTraits(isActive ? [.isSelected, .isButton] : [.isButton])
     }
 }
