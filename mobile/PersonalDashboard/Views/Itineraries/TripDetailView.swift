@@ -473,6 +473,7 @@ private struct TripDayCluster: View {
 /// jagged list.
 private struct TripTimelineRow: View {
     let entry: TimelineEntry
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -520,6 +521,7 @@ private struct TripTimelineRow: View {
 
             HStack(spacing: Space.sm) {
                 TripKindChip(kind: kind)
+                mapsChip(for: item)
                 Spacer(minLength: 0)
             }
 
@@ -533,6 +535,35 @@ private struct TripTimelineRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
+    /// Maps affordance on the card: a labeled "MAP" pill sitting right after
+    /// the kind chip. Renders ONLY when the item has a saved Google Maps link.
+    /// The text label makes the action obvious (vs a lone pin glyph), and its
+    /// own tap target stops the card's edit tap from firing.
+    @ViewBuilder
+    private func mapsChip(for item: LocalItineraryItem) -> some View {
+        if let url = item.mapsURL {
+            Button {
+                openURL(url)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "map.fill")
+                        .font(.system(size: 10, weight: .regular))
+                    Text("MAP")
+                        .font(.edEyebrow)
+                        .textCase(.uppercase)
+                        .tracking(1.4)
+                }
+                .foregroundStyle(Tokens.accent(for: .itineraries))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Tokens.accent(for: .itineraries).opacity(0.12), in: Capsule(style: .continuous))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open in Google Maps")
+        }
     }
 }
 
@@ -590,9 +621,11 @@ struct ItineraryItemEditorSheet: View {
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var hasEndTime: Bool = false
     @State private var notes: String = ""
+    @State private var googleMapsLink: String = ""
     @State private var loaded: Bool = false
     @State private var showingDeleteConfirmation: Bool = false
     @FocusState private var titleFocused: Bool
+    @Environment(\.openURL) private var openURL
 
     private let titleMaxLength = 96
     private let notesMaxLength = 1000
@@ -611,6 +644,7 @@ struct ItineraryItemEditorSheet: View {
                             endDateField
                         }
                         notesField
+                        googleMapsLinkField
                         if isEditing {
                             deleteButton
                                 .padding(.top, Space.sm)
@@ -844,6 +878,59 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
+    /// Optional Google Maps link. A booking email can prefill this; the user
+    /// can paste / edit / clear it here. The trailing "Open" button appears
+    /// only when a link is present and opens it directly — there is no
+    /// search fallback when the field is empty.
+    private var googleMapsLinkField: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack {
+                Text("Google Maps link").eyebrow()
+                Spacer()
+                Text("Optional")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            HStack(spacing: Space.sm) {
+                TextField("Paste a Google Maps link", text: $googleMapsLink)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .keyboardType(.URL)
+                    .submitLabel(.done)
+                    .padding(Space.md)
+                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                    .paperBorder(Tokens.border, radius: Radius.md)
+                    .accessibilityLabel("Google Maps link")
+
+                if let url = editorMapsURL {
+                    Button {
+                        openURL(url)
+                    } label: {
+                        Image(systemName: "map")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Tokens.accent(for: .itineraries))
+                            .frame(width: 48, height: 48)
+                            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                            .paperBorder(Tokens.border, radius: Radius.md)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open saved Google Maps link")
+                }
+            }
+        }
+    }
+
+    /// The current editor's maps link as a URL, coercing a bare host to https.
+    /// `nil` when the field is empty (so the Open button is hidden).
+    private var editorMapsURL: URL? {
+        let stored = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        if let url = URL(string: stored), url.scheme != nil { return url }
+        return URL(string: "https://\(stored)")
+    }
+
     /// Destructive "Delete item" button shown at the bottom of the editor
     /// scroll content when editing an existing item. Long-press on the tile
     /// in the timeline is still available (context menu); this gives the user
@@ -922,6 +1009,7 @@ struct ItineraryItemEditorSheet: View {
                 kind = existing.kindEnum
                 dayDate = existing.dayDate
                 notes = existing.notes
+                googleMapsLink = existing.googleMapsLink
                 if let start = existing.startTime {
                     hasTime = true
                     dayDate = start
@@ -945,6 +1033,7 @@ struct ItineraryItemEditorSheet: View {
         let cleanTitle = trimmedTitle
         guard !cleanTitle.isEmpty else { return }
         let cleanNotes = trimmedNotes
+        let cleanMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
         let cal = Calendar.current
         let normalisedDay = cal.startOfDay(for: dayDate)
 
@@ -969,7 +1058,8 @@ struct ItineraryItemEditorSheet: View {
                 startTime: startTimeValue,
                 endDate: endDateValue,
                 endTime: endTimeValue,
-                sortOrder: nextSort
+                sortOrder: nextSort,
+                googleMapsLink: cleanMapsLink
             )
             modelContext.insert(item)
         case .existing(let uuid):
@@ -986,6 +1076,7 @@ struct ItineraryItemEditorSheet: View {
                 }
                 existing.dayDate = normalisedDay
                 existing.notes = cleanNotes
+                existing.googleMapsLink = cleanMapsLink
                 existing.startTime = startTimeValue
                 existing.endDate = endDateValue
                 existing.endTime = endTimeValue

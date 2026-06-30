@@ -120,6 +120,9 @@ enum DataArchive {
         let endDate: Date?
         let endTime: Date?
         let sortOrder: Int
+        /// Optional in the archive so exports written before this field existed
+        /// still decode (missing key -> nil -> "" on import).
+        let googleMapsLink: String?
         let createdAt: Date
         let updatedAt: Date
     }

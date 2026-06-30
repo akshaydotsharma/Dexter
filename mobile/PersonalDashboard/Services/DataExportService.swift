@@ -197,6 +197,7 @@ final class DataExportService {
             endDate: item.endDate,
             endTime: item.endTime,
             sortOrder: item.sortOrder,
+            googleMapsLink: item.googleMapsLink,
             createdAt: item.createdAt,
             updatedAt: item.updatedAt
         )

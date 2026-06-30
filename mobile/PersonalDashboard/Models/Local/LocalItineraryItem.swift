@@ -95,6 +95,14 @@ final class LocalItineraryItem {
     /// found or for non-email items. Additive: existing rows keep "".
     var sourceConfirmation: String = ""
 
+    /// Optional Google Maps URL for this item's location (#144). Populated when
+    /// a forwarded booking email contains a maps link, or pasted manually in
+    /// the editor. Empty when none. Stored with a default so adding it to an
+    /// existing install is a safe lightweight migration (no data loss). Read
+    /// via `mapsURL`; the timeline shows a tappable "MAP" chip only when this
+    /// resolves to a non-nil URL.
+    var googleMapsLink: String = ""
+
     var createdAt: Date
     var updatedAt: Date
 
@@ -109,6 +117,7 @@ final class LocalItineraryItem {
         endDate: Date? = nil,
         endTime: Date? = nil,
         sortOrder: Int = 0,
+        googleMapsLink: String = "",
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -122,6 +131,7 @@ final class LocalItineraryItem {
         self.endDate = endDate
         self.endTime = endTime
         self.sortOrder = sortOrder
+        self.googleMapsLink = googleMapsLink
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -132,5 +142,24 @@ final class LocalItineraryItem {
     var kindEnum: ItineraryKind {
         get { ItineraryKind(rawValue: kind) ?? .activity }
         set { kind = newValue.rawValue }
+    }
+
+    /// `true` when a real maps link has been stored. The maps pin only renders
+    /// for items where this is true: no link means no pin (and no fallback
+    /// search).
+    var hasExplicitMapsLink: Bool {
+        mapsURL != nil
+    }
+
+    /// The stored Google Maps URL, coercing a bare host (e.g.
+    /// "maps.app.goo.gl/…") into an https URL. `nil` when no link is saved or
+    /// the stored string can't form a URL.
+    var mapsURL: URL? {
+        let stored = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        if let url = URL(string: stored), url.scheme != nil {
+            return url
+        }
+        return URL(string: "https://\(stored)")
     }
 }

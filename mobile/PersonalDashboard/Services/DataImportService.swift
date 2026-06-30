@@ -313,6 +313,7 @@ final class DataImportService {
                     endDate: dto.endDate,
                     endTime: dto.endTime,
                     sortOrder: dto.sortOrder,
+                    googleMapsLink: dto.googleMapsLink ?? "",
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt
                 ))

@@ -449,6 +449,7 @@ struct EmailToItinerary {
         - notes: confirmation number, address, times, and any other useful detail from the email. Keep it factual.
         - start_time: full ISO 8601 datetime with timezone when the email gives a clear time; otherwise omit.
         - For stays only: end_date (check-out) is required; end_time optional.
+        - google_maps_link: if the email or attachment contains an explicit Google Maps URL for the location (maps.app.goo.gl, goo.gl/maps, google.com/maps, maps.google.com), copy it verbatim into this field. Do NOT invent, guess, or construct a link from an address; omit the field when no real link is present.
 
         Be conservative. A wrong auto-add is worse than a miss — when the destination or dates are ambiguous, add nothing and explain in one sentence.
         \(contextBlock)
