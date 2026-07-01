@@ -54,15 +54,11 @@ struct FinanceView: View {
     /// PDF flows don't share presentation state.
     @State private var showingStatementPicker: Bool = false
 
-    /// On-screen overlay while Vision runs. The receipt file is already
-    /// saved before this flips on, so cancelling here just opens the
-    /// AddExpenseSheet with the receipt attached and no prefilled fields.
-    @State private var extractionInProgress: Bool = false
-
-    /// On-screen overlay while a statement is parsed + imported (#184).
-    /// Distinct from `extractionInProgress` so the two overlays can show
-    /// their own copy ("Reading receipt…" vs "Importing statement…").
-    @State private var statementImportInProgress: Bool = false
+    /// In-flight capture / import jobs, rendered as non-blocking "Processing…"
+    /// rows pinned above the expense list (#186). Modelled as an array (not a
+    /// bool) so two uploads in a row show two rows and the list stays fully
+    /// interactive while extraction / import runs in the background.
+    @State private var processingJobs: [ProcessingJob] = []
 
     /// Summary shown after a statement import completes (#184), e.g.
     /// "Imported 42 · Skipped 8 duplicates · Ignored 5 payments/refunds".
@@ -88,14 +84,6 @@ struct FinanceView: View {
             }
 
             captureMenuButton
-
-            if extractionInProgress {
-                extractionOverlay
-            }
-
-            if statementImportInProgress {
-                statementImportOverlay
-            }
         }
         .activeSection(.finance)
         .sheet(item: $editingTarget) { target in
@@ -202,55 +190,6 @@ struct FinanceView: View {
         .accessibilityLabel("Add expense")
     }
 
-    private var extractionOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.25).ignoresSafeArea()
-            VStack(spacing: Space.md) {
-                ProgressView()
-                    .tint(Tokens.ink)
-                Text("Reading receipt…")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-            }
-            .padding(.horizontal, Space.xl)
-            .padding(.vertical, Space.lg)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
-        }
-        .transition(.opacity)
-        .allowsHitTesting(true)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Reading receipt")
-    }
-
-    /// Overlay shown while a statement is parsed + imported (#184). Same shape
-    /// as `extractionOverlay` but with copy that reflects the batch operation,
-    /// which can take a while for a full statement.
-    private var statementImportOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.25).ignoresSafeArea()
-            VStack(spacing: Space.md) {
-                ProgressView()
-                    .tint(Tokens.ink)
-                Text("Importing statement…")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-                Text("Reading transactions and skipping duplicates")
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.muted)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(.horizontal, Space.xl)
-            .padding(.vertical, Space.lg)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
-        }
-        .transition(.opacity)
-        .allowsHitTesting(true)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Importing statement")
-    }
-
     // MARK: - Capture lifecycle
 
     private func startScan(_ source: FinanceCaptureSource) {
@@ -268,10 +207,14 @@ struct FinanceView: View {
         Task { await processCapturedAsset(data: data, captureSource: source) }
     }
 
-    /// Save the asset to disk, kick off Vision, then open AddExpenseSheet
-    /// with either prefilled fields (success) or just the receipt attached
-    /// (failure). Receipt save errors bubble up to the alert; Vision errors
-    /// don't — those are non-fatal because the user can fill in the form.
+    /// Save the asset to disk, show a non-blocking "Processing…" row, then run
+    /// Vision in the background (#186). On success we AUTO-ADD the expense right
+    /// away (mirroring what `AddExpenseSheet.save()` did for the `.prefilled`
+    /// case) and open the sheet on that now-real row so the user confirms /
+    /// tweaks an existing expense — never a second insert. On failure we fall
+    /// back to the old behaviour: open the form with the receipt attached and
+    /// an error banner. Receipt save errors bubble up to the alert; Vision
+    /// errors don't — those are non-fatal because the user can fill in the form.
     private func processCapturedAsset(data: Data, captureSource: FinanceCaptureSource) async {
         let storage = ReceiptStorage.shared
         let client = AnthropicClient()
@@ -305,13 +248,15 @@ struct FinanceView: View {
             return
         }
 
-        // 2. Show progress, run Vision.
+        // 2. Show a non-blocking processing row; remove it whichever way we
+        //    exit. The list stays scrollable / tappable while Vision runs.
+        let job = ProcessingJob(kind: .receipt)
         withAnimation(.easeInOut(duration: 0.15)) {
-            extractionInProgress = true
+            processingJobs.append(job)
         }
         defer {
             withAnimation(.easeInOut(duration: 0.15)) {
-                extractionInProgress = false
+                processingJobs.removeAll { $0.id == job.id }
             }
         }
 
@@ -331,9 +276,10 @@ struct FinanceView: View {
                 receiptImagePath: relativePath,
                 source: expenseSource
             )
-            editingTarget = .prefilled(prefill)
+            await autoAddThenEdit(prefill: prefill)
         } catch {
-            // Save the receipt regardless; open the form with a banner.
+            // Save the receipt regardless; open the form with a banner. No row
+            // was created, so `.prefilled` inserting on save is correct here.
             let message: String = {
                 if let typed = error as? ReceiptExtractionError {
                     return typed.localizedDescription
@@ -345,6 +291,55 @@ struct FinanceView: View {
                 source: expenseSource,
                 message: message
             )
+            editingTarget = .prefilled(prefill)
+        }
+    }
+
+    /// Persist the extracted expense immediately, then open the edit sheet on
+    /// the saved row (#186). This is the "auto-add then confirm" path: the row
+    /// appears in the list the instant extraction succeeds, and the sheet edits
+    /// that existing `LocalExpense` rather than inserting a second one.
+    ///
+    /// Insert logic mirrors `AddExpenseSheet.save()` for `.prefilled` (FX
+    /// convert → `service.addExpense` → attach receipt path). If we can't build
+    /// a valid row (no usable amount, or FX conversion fails), we fall back to
+    /// the review sheet with the fields prefilled so `AddExpenseSheet` handles
+    /// the insert on save — again, no double-insert.
+    private func autoAddThenEdit(prefill: PrefilledExpense) async {
+        guard let amount = prefill.amount, amount > 0 else {
+            // Nothing solid to persist yet — let the user complete the form.
+            editingTarget = .prefilled(prefill)
+            return
+        }
+
+        let store = SwiftDataStore.shared
+        let fx = FXService(store: store)
+        let service = ExpenseService(store: store)
+        let currency = (prefill.currency?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+            $0.isEmpty ? nil : $0.uppercased()
+        } ?? "SGD"
+
+        do {
+            let conversion = try await fx.convert(amount, from: currency)
+            let row = try service.addExpense(
+                date: prefill.date ?? Date(),
+                category: prefill.category ?? .other,
+                merchant: prefill.merchant,
+                expenseDescription: prefill.descriptionText,
+                originalAmount: amount,
+                originalCurrency: currency,
+                sgdAmount: conversion.sgdAmount,
+                fxRate: conversion.rate,
+                paymentMethod: nil,
+                source: prefill.source
+            )
+            row.receiptImagePath = prefill.receiptImagePath
+            try modelContext.save()
+            // Open the sheet on the now-real row so confirm/adjust edits it.
+            editingTarget = .existing(row.clientUUID)
+        } catch {
+            // FX or persistence failed — hand off to the review sheet, which
+            // retries the conversion on save. The row wasn't created.
             editingTarget = .prefilled(prefill)
         }
     }
@@ -370,12 +365,15 @@ struct FinanceView: View {
     /// failures show the "couldn't process" alert; a successful parse with zero
     /// transactions still shows a (benign) summary explaining nothing matched.
     private func importStatement(pdfData: Data) async {
+        // Non-blocking processing row while the batch import runs (#186); the
+        // list stays interactive and multiple imports can queue up.
+        let job = ProcessingJob(kind: .statement)
         withAnimation(.easeInOut(duration: 0.15)) {
-            statementImportInProgress = true
+            processingJobs.append(job)
         }
         defer {
             withAnimation(.easeInOut(duration: 0.15)) {
-                statementImportInProgress = false
+                processingJobs.removeAll { $0.id == job.id }
             }
         }
 
@@ -423,6 +421,18 @@ struct FinanceView: View {
                     .padding(.horizontal, Space.lg)
 
                 FinanceFilterBar(state: $filterState)
+
+                // In-flight capture / import jobs (#186). Pinned above the
+                // day-grouped list so a "Processing…" row is the first thing
+                // the user sees after a pick, while the list stays scrollable.
+                if !processingJobs.isEmpty {
+                    VStack(spacing: Space.xs) {
+                        ForEach(processingJobs) { job in
+                            FinanceProcessingRow(job: job)
+                        }
+                    }
+                    .padding(.horizontal, Space.lg)
+                }
 
                 if filtered.isEmpty {
                     noResultsState
