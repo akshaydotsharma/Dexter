@@ -40,6 +40,9 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         OTA_API_URL: $(OTA_API_URL)
         ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+        # OpenAI key for cloud voice transcription (#151). Injected at
+        # archive time by ship-lan.sh; empty for plain Xcode builds.
+        OPENAI_API_KEY: $(OPENAI_API_KEY)
         # Allow plain-HTTP calls to the Mac dev server on the local network.
         # Personal-use dev build only — App Store distribution is not a goal.
         NSAppTransportSecurity:
@@ -61,11 +64,12 @@ targets:
           - CFBundleURLName: com.akshaysharma.personaldashboard.deeplink
             CFBundleURLSchemes:
               - dexter
-        # Voice input in chat (issue #83). On-device only — audio never
-        # leaves the phone. Both keys are required: Speech for transcription,
-        # Microphone for the audio capture that feeds it.
-        NSSpeechRecognitionUsageDescription: "Dexter transcribes your voice into chat messages on-device. Audio never leaves your phone."
-        NSMicrophoneUsageDescription: "Dexter listens to your voice so it can transcribe what you say into the chat."
+        # Voice input in chat (issues #83, #151). Primary path uploads a
+        # short recording to OpenAI for transcription (auto-detects Hindi /
+        # English / Hinglish). Speech key is still required for the on-device
+        # English fallback used when no OpenAI key is configured.
+        NSSpeechRecognitionUsageDescription: "Dexter transcribes your voice into chat messages. With no transcription key set it falls back to on-device English recognition."
+        NSMicrophoneUsageDescription: "Dexter records your voice so it can transcribe what you say into the chat."
         # Receipt capture for Finance (issue #114, Phase B). Camera + photo
         # library access used by AddExpense flow to extract details via Vision.
         NSCameraUsageDescription: "Used to capture receipts so Dexter can log expenses for you."
