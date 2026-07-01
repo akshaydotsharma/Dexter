@@ -8,7 +8,7 @@ enum ToolDefinitions {
 
     // MARK: - Reusable schema fragments
 
-    /// Single list-item shape: `{ text: string, checked: bool }`.
+    /// Single list-item shape: `{ text: string, checked: bool, url?: string }`.
     private static let listItemSchema: AnthropicJSONValue = .object([
         "type": .string("object"),
         "properties": .object([
@@ -19,6 +19,10 @@ enum ToolDefinitions {
             "checked": .object([
                 "type": .string("boolean"),
                 "description": .string("Whether the item is checked/completed")
+            ]),
+            "url": .object([
+                "type": .string("string"),
+                "description": .string("Optional link (URL) associated with the item. Omit if there is no link.")
             ])
         ]),
         "required": .array([.string("text"), .string("checked")])
@@ -194,7 +198,8 @@ enum ToolDefinitions {
                 "list_id": string("The UUID of the list containing the item (from EXISTING LISTS context)"),
                 "item_index": int("The index of the item to edit (0-based, from EXISTING LISTS context)"),
                 "text": string("New text for the item. Provide the actual new text value. Use empty string only if changing checked status."),
-                "checked": bool("New checked status for the item. Set true/false to change, or match current value if only changing text.")
+                "checked": bool("New checked status for the item. Set true/false to change, or match current value if only changing text."),
+                "url": string("New link (URL) for the item. Provide to set or change the item's link; omit to leave it unchanged.")
             ],
             required: ["list_id", "item_index", "text", "checked"]
         )

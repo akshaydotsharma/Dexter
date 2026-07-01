@@ -742,7 +742,7 @@ struct ItineraryItemEditorSheet: View {
     // MARK: - Fields
 
     private var kindField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Kind").eyebrow()
             HStack(spacing: Space.sm) {
                 ForEach(ItineraryKind.allCases) { option in
@@ -755,7 +755,7 @@ struct ItineraryItemEditorSheet: View {
     }
 
     private var titleField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Title").eyebrow()
             TextField(placeholder(for: kind), text: $title)
                 .font(.edBody)
@@ -780,7 +780,7 @@ struct ItineraryItemEditorSheet: View {
     /// truncated time-only picker).
     private var primaryDateField: some View {
         let label = kind == .stay ? "Check-in" : "Date"
-        return VStack(alignment: .leading, spacing: Space.sm) {
+        return VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text(label).eyebrow()
             VStack(spacing: 0) {
                 HStack {
@@ -814,7 +814,7 @@ struct ItineraryItemEditorSheet: View {
     /// Stay-only second picker for the check-out date / time. Constrained to
     /// `>= dayDate` so the user can't pick a check-out before the check-in.
     private var endDateField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Check-out").eyebrow()
             VStack(spacing: 0) {
                 HStack {
@@ -859,7 +859,7 @@ struct ItineraryItemEditorSheet: View {
     }
 
     private var notesField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("Notes").eyebrow()
                 Spacer()
@@ -899,7 +899,7 @@ struct ItineraryItemEditorSheet: View {
     /// user can type / edit / clear it here. Plain text only — the tappable map
     /// affordance lives on the Google Maps link field below.
     private var addressField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("Address").eyebrow()
                 if isResolvingAddress {
@@ -935,7 +935,7 @@ struct ItineraryItemEditorSheet: View {
     /// only when a link is present and opens it directly — there is no
     /// search fallback when the field is empty.
     private var googleMapsLinkField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("Google Maps link").eyebrow()
                 Spacer()
@@ -1014,24 +1014,11 @@ struct ItineraryItemEditorSheet: View {
     /// in the timeline is still available (context menu); this gives the user
     /// a discoverable in-editor path.
     private var deleteButton: some View {
-        Button(role: .destructive) {
-            Haptics.destructive()
+        // Canonical delete treatment lives in DeleteRowButton; this surface adds
+        // the confirmation dialog (wired on the toolbar/scroll parent).
+        DeleteRowButton(title: "Delete item") {
             showingDeleteConfirmation = true
-        } label: {
-            HStack(spacing: Space.sm) {
-                Image(systemName: "trash")
-                    .font(.system(size: 15, weight: .regular))
-                Text("Delete item")
-                    .font(.edBodyMedium)
-            }
-            .foregroundStyle(Color.red)
-            .frame(maxWidth: .infinity)
-            .padding(Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Delete item")
     }
 
     private func placeholder(for kind: ItineraryKind) -> String {

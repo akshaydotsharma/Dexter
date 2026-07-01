@@ -291,6 +291,9 @@ private struct ListDetailContent: View {
     @State private var draftActive: Bool = false
     @State private var draftText: String = ""
     @FocusState private var draftFocused: Bool
+    // Item Details sheet: holds the item currently being edited (with its array
+    // index, needed to route the save through the view-model's index-based API).
+    @State private var editingItem: EditingItem?
 
     var body: some View {
         if let list = viewModel.lists.first(where: { $0.id == listId }) {
@@ -352,6 +355,9 @@ private struct ListDetailContent: View {
                                     Haptics.destructive()
                                     Task { await viewModel.removeItem(from: list, at: index) }
                                 },
+                                onOpenDetails: {
+                                    editingItem = EditingItem(index: index, item: item)
+                                },
                                 isDraftActive: draftActive,
                                 onTapWhileDraftActive: { draftFocused = false }
                             )
@@ -409,6 +415,21 @@ private struct ListDetailContent: View {
                     // simultaneousGesture fires alongside the inner TextField tap so the
                     // bar's own text field can still receive focus normally.
                     .simultaneousGesture(TapGesture().onEnded { if draftActive { draftFocused = false } })
+            }
+            .sheet(item: $editingItem) { editing in
+                // Guard against a stale index if the list mutated while the sheet
+                // was queued — clamp to the current name for the header.
+                ItemDetailsSheet(
+                    itemName: editing.item.text,
+                    initialURL: editing.item.url,
+                    onSave: { newURL in
+                        Task { await viewModel.setItemURL(in: list, at: editing.index, to: newURL) }
+                    },
+                    onDelete: {
+                        Haptics.destructive()
+                        Task { await viewModel.removeItem(from: list, at: editing.index) }
+                    }
+                )
             }
         } else {
             Spacer()
@@ -538,6 +559,8 @@ private struct ItemRow: View {
     let onToggle: () -> Void
     let onRename: (String) -> Void
     let onDelete: () -> Void
+    /// Opens the Item Details sheet (ⓘ button on every row).
+    let onOpenDetails: () -> Void
     /// When a tap-below draft is active in the parent, suppress beginEditing so the
     /// tap only dismisses the draft keyboard — nothing re-steals first responder.
     var isDraftActive: Bool = false
@@ -548,6 +571,7 @@ private struct ItemRow: View {
     @State private var isEditing = false
     @State private var draft = ""
     @FocusState private var focused: Bool
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         HStack(spacing: Space.md) {
@@ -585,7 +609,46 @@ private struct ItemRow: View {
                     .strikethrough(item.checked)
                     .foregroundStyle(item.checked ? Tokens.mutedSoft : Tokens.ink)
             }
-            Spacer()
+            Spacer(minLength: Space.sm)
+
+            // Link chip — only when the item has a resolvable URL. Its own tap
+            // target (buttonStyle .plain) opens the link and does NOT fall
+            // through to the row's rename tap. Mirrors the TasksView MAP chip.
+            if !isEditing, let url = item.linkURL {
+                Button {
+                    openURL(url)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "link")
+                            .font(.system(size: 10, weight: .regular))
+                        Text("LINK")
+                            .font(.edEyebrow)
+                            .textCase(.uppercase)
+                            .tracking(1.4)
+                    }
+                    .foregroundStyle(Tokens.accentLists)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Tokens.accentLists.opacity(0.12), in: Capsule(style: .continuous))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open link")
+            }
+
+            // Info button — on every row, low-contrast. Opens Item Details.
+            // Its own tap target so it never triggers the row's inline rename.
+            if !isEditing {
+                Button(action: onOpenDetails) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(Tokens.mutedSoft)
+                        .frame(width: 30, height: 30, alignment: .trailing)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Item details")
+            }
         }
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
@@ -620,6 +683,128 @@ private struct ItemRow: View {
         }
         isEditing = false
         focused = false
+    }
+}
+
+/// Identifies the list item currently open in the details sheet. The index is
+/// the item's position in the list at the moment the sheet was opened — the save
+/// routes through the view-model's index-based `setItemURL`.
+private struct EditingItem: Identifiable {
+    let index: Int
+    let item: ChecklistItem
+    var id: UUID { item.id }
+}
+
+/// Item Details sheet. Framed around item properties (currently just the link)
+/// so more fields can be added later without renaming the surface. Structurally
+/// modelled on TaskEditorSheet.
+private struct ItemDetailsSheet: View {
+    let itemName: String
+    let initialURL: String
+    let onSave: (String) -> Void
+    let onDelete: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @State private var urlText: String = ""
+    @State private var showingDeleteConfirmation = false
+
+    /// The current field value coerced into a URL (bare host → https). `nil`
+    /// when empty, so the Open button stays hidden. Mirrors TaskEditorSheet.
+    private var editorURL: URL? {
+        let stored = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        if let u = URL(string: stored), u.scheme != nil { return u }
+        return URL(string: "https://\(stored)")
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.lg) {
+                        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                            Text("Item").eyebrow()
+                            Text(itemName)
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.ink)
+                                .padding(Space.md)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                .paperBorder(Tokens.border, radius: Radius.md)
+                        }
+                        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                            Text("Link (URL)").eyebrow()
+                            HStack(spacing: Space.sm) {
+                                TextField("Paste a link", text: $urlText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled(true)
+                                    .keyboardType(.URL)
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.ink)
+                                    .padding(Space.md)
+                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                    .paperBorder(Tokens.border, radius: Radius.md)
+                                if let url = editorURL {
+                                    Button {
+                                        openURL(url)
+                                    } label: {
+                                        Image(systemName: "arrow.up.right.square")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundStyle(Tokens.accentLists)
+                                            .frame(width: 48, height: 48)
+                                            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                            .paperBorder(Tokens.border, radius: Radius.md)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Open link")
+                                }
+                            }
+                        }
+
+                        // Canonical destructive action, matching the itinerary
+                        // item editor. Confirmation dialog before the delete;
+                        // routes through the same removeItem path the row swipe /
+                        // context menu uses.
+                        DeleteRowButton(title: "Delete item") {
+                            showingDeleteConfirmation = true
+                        }
+                        .padding(.top, Space.sm)
+                    }
+                    .padding(Space.lg)
+                }
+                .scrollDismissesKeyboard(.interactively)
+            }
+            .navigationTitle("Item details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(urlText.trimmingCharacters(in: .whitespacesAndNewlines))
+                        dismiss()
+                    }
+                    .foregroundStyle(Tokens.ink)
+                }
+            }
+            .confirmationDialog(
+                "Delete this item?",
+                isPresented: $showingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This can't be undone.")
+            }
+            .onAppear { urlText = initialURL }
+        }
     }
 }
 

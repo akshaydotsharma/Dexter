@@ -223,7 +223,7 @@ struct AddExpenseSheet: View {
     // MARK: - Fields
 
     private var amountField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Amount").eyebrow()
             HStack(spacing: Space.sm) {
                 TextField("0.00", text: $amountText)
@@ -260,7 +260,7 @@ struct AddExpenseSheet: View {
     }
 
     private var categoryField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Category").eyebrow()
             Menu {
                 ForEach(ExpenseCategory.allCases) { cat in
@@ -293,7 +293,7 @@ struct AddExpenseSheet: View {
     }
 
     private var dateField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Date").eyebrow()
             HStack {
                 Text("When did this happen?")
@@ -311,7 +311,7 @@ struct AddExpenseSheet: View {
     }
 
     private var merchantField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("Merchant").eyebrow()
                 Spacer()
@@ -329,7 +329,7 @@ struct AddExpenseSheet: View {
     }
 
     private var descriptionFieldView: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("Description").eyebrow()
                 Spacer()
@@ -347,7 +347,7 @@ struct AddExpenseSheet: View {
     }
 
     private var paymentField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("Payment method").eyebrow()
                 Spacer()
