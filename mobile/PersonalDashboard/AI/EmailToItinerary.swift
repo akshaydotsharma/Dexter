@@ -8,6 +8,11 @@ struct EmailIngestResult: Sendable {
     let tripName: String?
     /// UUIDs of itinerary items that were actually inserted (for undo).
     let addedItemUUIDs: [UUID]
+    /// UUIDs of existing items that were reconcile-updated in place (#165).
+    /// Only the explicit Re-scan path can populate this; v1 does NOT undo
+    /// these, so undo still only targets `addedItemUUIDs`. Additive default so
+    /// existing call sites don't have to pass it.
+    var updatedItemUUIDs: [UUID] = []
     /// Human summary for the ingest log + notification.
     let summary: String
     /// Diagnostics (#143): the parsed body the model received (capped) and the
@@ -67,7 +72,12 @@ struct EmailToItinerary {
         ToolDefinitions.allTools.filter { $0.name == "add_itinerary_item" }
     }
 
-    func run(message: EmailMessage, timezone: String) async throws -> EmailIngestResult {
+    /// - Parameter reconcile: when true (the explicit "Re-scan (ignore
+    ///   processed)" action, #165), a proposed item that matches an existing
+    ///   row by CONFIRMATION CODE updates that row's detail fields in place
+    ///   instead of being skipped. Never set on the automatic background
+    ///   cycle, so background fetches keep today's add-missing-only behaviour.
+    func run(message: EmailMessage, timezone: String, reconcile: Bool = false) async throws -> EmailIngestResult {
         // Process attachments (PDF text via PDFKit, .ics parse, image/PDF
         // native blocks). Bookings often live entirely in a PDF attachment
         // with a near-empty body, so this is the primary content source.
@@ -123,6 +133,10 @@ struct EmailToItinerary {
         let confirmation = EmailItemDedupe.extractConfirmation(from: fullText)
 
         var addedItemUUIDs: [UUID] = []
+        // Existing rows reconcile-updated in place on the explicit Re-scan
+        // (#165). Deduped so the same row updated by two proposed items in one
+        // run is counted once.
+        var updatedItemUUIDs: [UUID] = []
         var matchedTripUUID: UUID?
         var matchedTripName: String?
         var assistantText: String?
@@ -174,7 +188,27 @@ struct EmailToItinerary {
                     let proposed = Self.proposedItem(from: dict, confirmation: confirmation)
                     let sig = EmailItemDedupe.signature(tripUUID: tripUUID, proposed: proposed)
                     if EmailItemDedupe.exists(signature: sig, proposed: proposed, tripUUID: tripUUID, context: store.context) {
-                        skippedDuplicates += 1
+                        // A matching row already exists. On the explicit
+                        // Re-scan (#165) ONLY, try to reconcile-update it from
+                        // the email's parsed detail fields. Everything short of
+                        // a confirmation-code match still resolves to a skip.
+                        if reconcile,
+                           let updatedUUID = try await reconcileUpdate(
+                               dict: dict,
+                               signature: sig,
+                               proposed: proposed,
+                               tripUUID: tripUUID
+                           ) {
+                            matchedTripUUID = tripUUID
+                            if matchedTripName == nil {
+                                matchedTripName = Self.tripName(tripUUID, store: store)
+                            }
+                            if !updatedItemUUIDs.contains(updatedUUID) {
+                                updatedItemUUIDs.append(updatedUUID)
+                            }
+                        } else {
+                            skippedDuplicates += 1
+                        }
                         continue
                     }
                     // Guard against duplicates WITHIN this same batch too.
@@ -246,19 +280,23 @@ struct EmailToItinerary {
             }
         }
 
-        if !addedItemUUIDs.isEmpty, let tripUUID = matchedTripUUID {
+        // A change was made if we added items and/or reconcile-updated any.
+        // Both surface as the `.added` outcome so the log/notification treat
+        // it as a change, not a bare skip.
+        if (!addedItemUUIDs.isEmpty || !updatedItemUUIDs.isEmpty), let tripUUID = matchedTripUUID {
             let name = matchedTripName ?? "your trip"
-            var summary = addedItemUUIDs.count == 1
-                ? "Added 1 item to \(name)."
-                : "Added \(addedItemUUIDs.count) items to \(name)."
-            if skippedDuplicates > 0 {
-                summary += " (\(skippedDuplicates) already present, skipped.)"
-            }
+            let summary = Self.changeSummary(
+                added: addedItemUUIDs.count,
+                updated: updatedItemUUIDs.count,
+                skipped: skippedDuplicates,
+                tripName: name
+            )
             return EmailIngestResult(
                 outcome: .added,
                 tripUUID: tripUUID,
                 tripName: name,
                 addedItemUUIDs: addedItemUUIDs,
+                updatedItemUUIDs: updatedItemUUIDs,
                 summary: summary,
                 debugBody: debugBody,
                 debugTripContext: contextBlock
@@ -294,6 +332,116 @@ struct EmailToItinerary {
             debugBody: debugBody,
             debugTripContext: contextBlock
         )
+    }
+
+    // MARK: - Reconcile-update (#165)
+
+    /// Reconcile-update an existing itinerary row from a proposed email item.
+    ///
+    /// Safeguards (all enforced here):
+    ///  - Only updates on a CONFIRMATION-code match (`byConfirmation == true`).
+    ///    A dedupeKey or structural match returns nil → caller skips.
+    ///  - Only updates a row whose `sourceConfirmation` is non-empty (an
+    ///    email-sourced row); a purely manual row is never touched.
+    ///  - Only the detail fields the email provides are sent
+    ///    (start_time / end_time / end_date / notes / google_maps_link),
+    ///    routed through `ExecuteDraftAction.updateItineraryItem` so date/time
+    ///    parsing is identical to the add path (post-#163). Never title, kind,
+    ///    or day_date.
+    ///  - Returns the row UUID ONLY when a field actually changed (snapshot
+    ///    compare); a no-op edit returns nil so the caller counts it as a skip.
+    private func reconcileUpdate(
+        dict: [String: AnthropicJSONValue],
+        signature: String,
+        proposed: EmailItemDedupe.Proposed,
+        tripUUID: UUID
+    ) async throws -> UUID? {
+        guard let (row, byConfirmation) = EmailItemDedupe.match(
+            signature: signature,
+            proposed: proposed,
+            tripUUID: tripUUID,
+            context: store.context
+        ) else {
+            return nil
+        }
+        // Safeguards 2 & 3: confirmation match against an email-sourced row.
+        guard byConfirmation, !row.sourceConfirmation.isEmpty else { return nil }
+
+        // Build the edit input from ONLY the detail fields the email provides.
+        // Keys must match what `updateItineraryItem` reads. Empty string = keep
+        // (its tri-state), so a field the email omits is left untouched. We
+        // never send title / kind / day_date (safeguard 4). `address` is
+        // intentionally not sent: `updateItineraryItem` doesn't read it and the
+        // email add-path doesn't populate it, so there's nothing to reconcile.
+        let itemUUID = row.clientUUID
+        var editInput: [String: AnthropicJSONValue] = [
+            "id": .string(itemUUID.uuidString.lowercased())
+        ]
+        // Only include a detail key when the email actually supplied a value,
+        // so we rely on "keep" semantics rather than emitting empty strings.
+        for key in ["start_time", "end_time", "end_date", "notes", "google_maps_link"] {
+            if let raw = dict[key]?.stringValue {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                editInput[key] = .string(trimmed)
+            }
+        }
+        // Nothing to potentially change beyond the id → skip.
+        guard editInput.count > 1 else { return nil }
+
+        // Snapshot the fields the edit could touch, so we can tell a real
+        // change from a write that set a field to its current value
+        // (safeguard 6 — updateItineraryItem's own `changed` flag is coarser).
+        let before = (
+            row.startTime,
+            row.endTime,
+            row.endDate,
+            row.notes,
+            row.googleMapsLink
+        )
+
+        do {
+            _ = try await executor.run(actionType: .updateItineraryItem, input: editInput)
+        } catch let err as DraftExecutionError {
+            // "no changes provided" is a benign no-op → treat as skip.
+            NSLog("EmailToItinerary: reconcile edit skipped: %@", err.errorDescription ?? "unknown")
+            return nil
+        }
+
+        // Re-read the row and compare. If nothing actually moved, it's a skip.
+        guard let after = try? store.context.fetch(
+            FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.clientUUID == itemUUID })
+        ).first else {
+            return nil
+        }
+        let changed = after.startTime != before.0
+            || after.endTime != before.1
+            || after.endDate != before.2
+            || after.notes != before.3
+            || after.googleMapsLink != before.4
+        return changed ? itemUUID : nil
+    }
+
+    /// Build the user-facing change summary. Mentions only non-zero counts;
+    /// only-updates still reads as a change (not a bare skip).
+    static func changeSummary(added: Int, updated: Int, skipped: Int, tripName: String) -> String {
+        var parts: [String] = []
+        if added > 0 {
+            parts.append(added == 1 ? "added 1 item" : "added \(added) items")
+        }
+        if updated > 0 {
+            parts.append(updated == 1 ? "updated 1 item" : "updated \(updated) items")
+        }
+        // Capitalise the first verb for a clean sentence start.
+        var body = parts.joined(separator: ", ")
+        if let first = body.first {
+            body = first.uppercased() + body.dropFirst()
+        }
+        var summary = "\(body) in \(tripName)."
+        if skipped > 0 {
+            summary += " (\(skipped) already present, skipped.)"
+        }
+        return summary
     }
 
     // MARK: - Helpers

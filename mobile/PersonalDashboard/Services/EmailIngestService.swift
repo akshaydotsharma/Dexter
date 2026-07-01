@@ -32,12 +32,12 @@ struct EmailIngestService {
     /// the re-run messages are also cleared so a subsequent normal cycle won't
     /// see stale entries. Idempotency for normal cycles is unaffected.
     @discardableResult
-    func runFetchCycle(ignoreProcessed: Bool = false) async -> (added: Int, skipped: Int, failed: Int) {
+    func runFetchCycle(ignoreProcessed: Bool = false) async -> (added: Int, updated: Int, skipped: Int, failed: Int) {
         guard EmailInboxConfig.isReady else {
-            return (0, 0, 0)
+            return (0, 0, 0, 0)
         }
         guard let password = EmailInboxConfig.readPassword(), !password.isEmpty else {
-            return (0, 0, 0)
+            return (0, 0, 0, 0)
         }
 
         let settings = EmailInboxConfig.settings
@@ -48,7 +48,7 @@ struct EmailIngestService {
             appPassword: password
         ))
 
-        var counts = (added: 0, skipped: 0, failed: 0)
+        var counts = (added: 0, updated: 0, skipped: 0, failed: 0)
 
         do {
             try await client.connectAndLogin()
@@ -88,14 +88,29 @@ struct EmailIngestService {
 
                     let result = try await EmailToItinerary.default().run(
                         message: message,
-                        timezone: TimeZone.current.identifier
+                        timezone: TimeZone.current.identifier,
+                        // Reconcile-update existing items ONLY on the explicit
+                        // Re-scan; the automatic cycle keeps add-missing-only.
+                        reconcile: ignoreProcessed
                     )
 
                     writeLog(message: message, result: result)
 
                     switch result.outcome {
                     case .added:
-                        counts.added += 1
+                        // `.added` covers adds and/or reconcile-updates (#165).
+                        // Split the counters so the summary can report both.
+                        if !result.addedItemUUIDs.isEmpty {
+                            counts.added += 1
+                        }
+                        if !result.updatedItemUUIDs.isEmpty {
+                            counts.updated += 1
+                        }
+                        // A change with neither list populated shouldn't happen,
+                        // but guard so the run is never silently uncounted.
+                        if result.addedItemUUIDs.isEmpty && result.updatedItemUUIDs.isEmpty {
+                            counts.added += 1
+                        }
                     case .skipped:
                         counts.skipped += 1
                     case .failed:
@@ -232,7 +247,8 @@ struct EmailIngestService {
         case .added:
             let name = result.tripName ?? "your trip"
             let count = result.addedItemUUIDs.count
-            Task { await EmailIngestNotifications.postAdded(tripName: name, itemCount: count, logUUID: logUUID) }
+            let updated = result.updatedItemUUIDs.count
+            Task { await EmailIngestNotifications.postAdded(tripName: name, itemCount: count, updatedCount: updated, logUUID: logUUID) }
         case .skipped:
             Task { await EmailIngestNotifications.postSkipped(subject: message.subject) }
         case .failed:

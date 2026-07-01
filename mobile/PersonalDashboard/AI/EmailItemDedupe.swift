@@ -110,6 +110,68 @@ enum EmailItemDedupe {
         return false
     }
 
+    /// Find the existing row a proposed item is equivalent to, and report
+    /// whether the match was made on the confirmation code (the strong signal)
+    /// or only structurally. Mirrors `exists`'s matching order, but returns the
+    /// row instead of a bool so the reconcile-update path (#165) can update it.
+    ///
+    /// `byConfirmation` is true ONLY when the proposed item carries a
+    /// confirmation code AND that normalized code equals the row's stored
+    /// `sourceConfirmation`. A `dedupeKey` fast-path hit or a structural
+    /// fallback match both return `byConfirmation == false`, so the caller can
+    /// keep today's SKIP behaviour for anything short of a confirmation match.
+    @MainActor
+    static func match(signature: String, proposed: Proposed, tripUUID: UUID, context: ModelContext) -> (row: LocalItineraryItem, byConfirmation: Bool)? {
+        // Confirmation match first (the only path allowed to trigger an update).
+        // A row that stored the same normalized code is the same reservation
+        // regardless of how its title/dates render across two emails.
+        if !proposed.confirmation.isEmpty {
+            let conf = normalizeConfirmation(proposed.confirmation)
+            if !conf.isEmpty,
+               let row = try? context.fetch(
+                FetchDescriptor<LocalItineraryItem>(
+                    predicate: #Predicate { $0.tripUUID == tripUUID && $0.sourceConfirmation == conf }
+                )
+               ).first {
+                return (row, true)
+            }
+        }
+
+        // Fast path: a previously-ingested item carrying the same dedupeKey.
+        // This is a structural identity, not a confirmation identity.
+        let sig = signature
+        if let row = try? context.fetch(
+            FetchDescriptor<LocalItineraryItem>(
+                predicate: #Predicate { $0.dedupeKey == sig }
+            )
+        ).first {
+            return (row, false)
+        }
+
+        // Structural fallback: compare against all items on the trip (covers
+        // chat-created or pre-field rows that have no dedupeKey). In memory
+        // because normalized-title equality isn't expressible in a #Predicate.
+        let fk = tripUUID
+        let rows = (try? context.fetch(
+            FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.tripUUID == fk })
+        )) ?? []
+        let targetKind = proposed.kind
+        let targetDay = dayKey(proposed.dayDate)
+        let targetTitle = normalizeTitle(proposed.title)
+        let targetEnd = proposed.endDate.map(dayKey)
+        for row in rows {
+            guard row.kind.lowercased() == targetKind else { continue }
+            guard dayKey(row.dayDate) == targetDay else { continue }
+            guard normalizeTitle(row.title) == targetTitle else { continue }
+            if targetKind == "stay" {
+                let rowEnd = row.endDate.map(dayKey)
+                guard rowEnd == targetEnd else { continue }
+            }
+            return (row, false)
+        }
+        return nil
+    }
+
     // MARK: - Normalisation
 
     static func normalizeTitle(_ title: String) -> String {
