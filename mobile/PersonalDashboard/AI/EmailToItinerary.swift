@@ -558,14 +558,52 @@ struct EmailToItinerary {
         if kind == "stay", let raw = dict["end_date"]?.stringValue, let parsed = parseAnyISODate(raw) {
             endDate = cal.startOfDay(for: parsed)
         }
+        // Parse start_time the SAME way the executor stores it
+        // (`ExecuteDraftAction.parseWallClockTime`): strip any trailing tz
+        // designator and parse the wall clock anchored in UTC. This makes the
+        // segment's `HH:mm` line up with the stored row's `startTime`, which is
+        // what keeps two legs of one PNR distinct.
+        let startTime = parseWallClockTime(dict["start_time"]?.stringValue)
         return EmailItemDedupe.Proposed(
             kind: kind,
             dayDate: day,
             endDate: endDate,
             title: title,
-            confirmation: confirmation
+            confirmation: confirmation,
+            startTime: startTime
         )
     }
+
+    /// Wall-clock time parser mirroring `ExecuteDraftAction.parseWallClockTime`:
+    /// strips a trailing timezone designator ("Z", "+02:00", "-0500", "+02")
+    /// and parses the remaining `yyyy-MM-dd'T'HH:mm:ss[.SSS]` anchored in UTC.
+    /// Used ONLY for the dedup segment time, so it must match how the row's
+    /// `startTime` is actually stored (offset-preserving `parseAnyISODate`
+    /// would yield a different absolute instant and break the `HH:mm` match).
+    private static func parseWallClockTime(_ raw: String?) -> Date? {
+        guard let raw, raw != "null" else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let noOffset = trimmed.replacingOccurrences(
+            of: "(Z|[+-]\\d{2}(:?\\d{2})?)$",
+            with: "",
+            options: .regularExpression)
+        for fmt in wallClockFormatters {
+            if let d = fmt.date(from: noOffset) { return d }
+        }
+        return nil
+    }
+
+    private static let wallClockFormatters: [DateFormatter] = {
+        ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS"].map { pattern in
+            let f = DateFormatter()
+            f.calendar = Calendar(identifier: .gregorian)
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = TimeZone(identifier: "UTC")
+            f.dateFormat = pattern
+            return f
+        }
+    }()
 
     /// Stamp the dedup signature + confirmation onto the rows just inserted, so
     /// a later forward/re-scan can dedup against them. The inserted set isn't
@@ -591,7 +629,8 @@ struct EmailToItinerary {
                 dayDate: row.dayDate,
                 endDate: row.endDate,
                 title: row.title,
-                confirmation: confirmation
+                confirmation: confirmation,
+                startTime: row.startTime
             )
             row.dedupeKey = EmailItemDedupe.signature(tripUUID: tripUUID, proposed: proposed)
             row.sourceConfirmation = conf
@@ -677,7 +716,7 @@ struct EmailToItinerary {
 
         MAPPING RULES:
         - Hotel / accommodation / Airbnb confirmation -> kind "stay". Set day_date to the check-in date and end_date to the check-out date (stays require end_date). Include the hotel name in the title.
-        - Flight, train, bus, ferry, car transfer -> kind "activity" (there is no transport kind). Title like "Flight BA123 LHR->FCO" or "Train to Kyoto". Put the departure datetime in start_time when known.
+        - Flight, train, bus, ferry, car transfer -> kind "activity" (there is no transport kind). Title like "Flight BA123 LHR->FCO" or "Train to Kyoto". Put the departure datetime in start_time when known. For a multi-leg flight or multi-segment journey (connections, layovers, return legs), create a SEPARATE activity item for EACH leg — each with its own departure date in day_date, its departure datetime in start_time, and the route/flight number in the title (e.g. "Flight SQ424 SIN->DXB", "Flight SQ494 DXB->LHR"). Never merge multiple legs into one item, even when they share one confirmation code.
         - Tour, attraction ticket, event, show -> kind "activity".
         - Restaurant reservation -> kind "restaurant", with the reservation time in start_time.
         - Sightseeing place with no booking -> kind "place".

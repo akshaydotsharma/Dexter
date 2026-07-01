@@ -26,36 +26,63 @@ enum EmailItemDedupe {
         let endDate: Date?        // startOfDay, stays only
         let title: String         // raw title (for storage)
         let confirmation: String  // extracted code, or "" if none
+        let startTime: Date?      // UTC wall-clock departure time, or nil
+    }
+
+    /// Segment discriminator for a proposed item: the key that keeps distinct
+    /// legs of one PNR apart while a re-forward of the SAME leg collides.
+    ///
+    /// Shape: `"\(kind):\(dayKey(dayDate)):\(disc)"`, where `disc` is the
+    /// departure time as `HH:mm` when `startTime != nil` (two legs on the same
+    /// day depart at different times), else the normalized title. For stays the
+    /// checkout date is appended (matching the old structural key) so two
+    /// stays sharing a check-in day stay distinct; stays carry no start_time,
+    /// so they fall back to the title discriminator plus the checkout date.
+    ///
+    /// The `HH:mm` is read with a UTC calendar. Post-#168 all itinerary times
+    /// are stored as UTC wall-clock (via `ExecuteDraftAction.parseWallClockTime`,
+    /// which strips the tz designator and parses in UTC), so reading back in
+    /// UTC yields the stated departure time and matches how the row's
+    /// `startTime` is actually stored.
+    static func segmentKey(_ proposed: Proposed) -> String {
+        let day = dayKey(proposed.dayDate)
+        if proposed.kind == "stay", let end = proposed.endDate {
+            let disc = discriminator(startTime: proposed.startTime, title: proposed.title)
+            return "stay:\(day)-\(dayKey(end)):\(disc)"
+        }
+        let disc = discriminator(startTime: proposed.startTime, title: proposed.title)
+        return "\(proposed.kind):\(day):\(disc)"
+    }
+
+    /// The per-segment discriminator: `HH:mm` (UTC) when a start time is known,
+    /// otherwise the normalized title.
+    private static func discriminator(startTime: Date?, title: String) -> String {
+        if let start = startTime {
+            return timeKey(start)
+        }
+        return normalizeTitle(title)
     }
 
     /// Compute the equivalence signature for a proposed item on a given trip.
     ///
     /// Strongest signal first: when a confirmation/reservation code is present,
-    /// equivalence is (tripUUID + confirmationCode) — two different emails of
-    /// the same reservation collide here regardless of how their titles/dates
-    /// render. Otherwise fall back to (tripUUID + kind + dayDate + normalized
-    /// title), plus the checkout date for stays so two different stays on the
-    /// same check-in day stay distinct.
+    /// equivalence is (tripUUID + confirmationCode + segment) — two different
+    /// emails of the same LEG collide here regardless of how their titles/dates
+    /// render, while distinct legs of one PNR stay apart on the segment.
+    /// Otherwise fall back to (tripUUID + segment). The segment already carries
+    /// kind + dayDate + (time or title), plus the checkout date for stays.
     static func signature(tripUUID: UUID, proposed: Proposed) -> String {
         let trip = tripUUID.uuidString.lowercased()
-        let day = dayKey(proposed.dayDate)
-        let title = normalizeTitle(proposed.title)
-        let structural: String = {
-            if proposed.kind == "stay", let end = proposed.endDate {
-                return "stay:\(day)-\(dayKey(end)):\(title)"
-            }
-            return "\(proposed.kind):\(day):\(title)"
-        }()
+        let segment = segmentKey(proposed)
         if !proposed.confirmation.isEmpty {
-            // Combine the code with the structural key so a single PNR covering
+            // Combine the code with the segment key so a single PNR covering
             // several distinct legs keeps them distinct, while a re-forward of
-            // the SAME leg collides. (The structural key alone would already
-            // collide on a re-forward; the code makes title/date rewordings
-            // across two emails of the same item still match via `exists`'s
-            // confirmation check below.)
-            return "conf:\(trip):\(normalizeConfirmation(proposed.confirmation)):\(structural)"
+            // the SAME leg collides. The code still lets title/date rewordings
+            // across two emails of the same leg match via `exists`'s
+            // confirmation check below (now also segment-scoped).
+            return "conf:\(trip):\(normalizeConfirmation(proposed.confirmation)):\(segment)"
         }
-        return "k:\(trip):\(structural)"
+        return "k:\(trip):\(segment)"
     }
 
     /// True when an equivalent item already exists on the trip. Checks both the
@@ -65,6 +92,8 @@ enum EmailItemDedupe {
     @MainActor
     static func exists(signature: String, proposed: Proposed, tripUUID: UUID, context: ModelContext) -> Bool {
         // Fast path: a previously-ingested item carrying the same dedupeKey.
+        // The dedupeKey is segment-precise (it embeds the segment via
+        // `signature`), so this only hits a row that is the SAME segment.
         let sig = signature
         let byKey = (try? context.fetchCount(
             FetchDescriptor<LocalItineraryItem>(
@@ -73,38 +102,36 @@ enum EmailItemDedupe {
         )) ?? 0
         if byKey > 0 { return true }
 
-        // Confirmation match against rows that stored a code (any title/date
-        // rendering of the same reservation).
+        let targetSegment = segmentKey(proposed)
+
+        // Confirmation + segment match: a row that stored the same code AND
+        // whose segment equals the proposed segment. Same code alone is NOT
+        // enough — distinct legs of one PNR share the code but differ on the
+        // segment, so leg 2 must NOT be treated as existing just because leg 1
+        // carries the PNR. Fetch code candidates, then match segment in memory.
         if !proposed.confirmation.isEmpty {
             let conf = normalizeConfirmation(proposed.confirmation)
-            let byConf = (try? context.fetchCount(
+            let candidates = (try? context.fetch(
                 FetchDescriptor<LocalItineraryItem>(
                     predicate: #Predicate { $0.tripUUID == tripUUID && $0.sourceConfirmation == conf }
                 )
-            )) ?? 0
-            if byConf > 0 { return true }
+            )) ?? []
+            for row in candidates where rowSegment(row) == targetSegment {
+                return true
+            }
+            // No candidate shares the segment: fall through to the structural
+            // pass (which is itself segment-based) rather than declaring a hit.
         }
 
         // Structural fallback: compare against all items on the trip (covers
         // chat-created or pre-field rows that have no dedupeKey). Done in
-        // memory because normalized-title equality isn't expressible in a
-        // #Predicate.
+        // memory because the segment (normalized title / HH:mm) isn't
+        // expressible in a #Predicate. A match is an equal segment.
         let fk = tripUUID
         let rows = (try? context.fetch(
             FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.tripUUID == fk })
         )) ?? []
-        let targetKind = proposed.kind
-        let targetDay = dayKey(proposed.dayDate)
-        let targetTitle = normalizeTitle(proposed.title)
-        let targetEnd = proposed.endDate.map(dayKey)
-        for row in rows {
-            guard row.kind.lowercased() == targetKind else { continue }
-            guard dayKey(row.dayDate) == targetDay else { continue }
-            guard normalizeTitle(row.title) == targetTitle else { continue }
-            if targetKind == "stay" {
-                let rowEnd = row.endDate.map(dayKey)
-                guard rowEnd == targetEnd else { continue }
-            }
+        for row in rows where rowSegment(row) == targetSegment {
             return true
         }
         return false
@@ -122,23 +149,30 @@ enum EmailItemDedupe {
     /// keep today's SKIP behaviour for anything short of a confirmation match.
     @MainActor
     static func match(signature: String, proposed: Proposed, tripUUID: UUID, context: ModelContext) -> (row: LocalItineraryItem, byConfirmation: Bool)? {
-        // Confirmation match first (the only path allowed to trigger an update).
-        // A row that stored the same normalized code is the same reservation
-        // regardless of how its title/dates render across two emails.
+        let targetSegment = segmentKey(proposed)
+
+        // Confirmation + segment match first (the only path allowed to trigger
+        // an update). A row that stored the same normalized code AND shares the
+        // proposed segment is the SAME leg — reconcile updates it. If the PNR
+        // matches but no row shares the segment (a new leg of the same ticket),
+        // fall through so the leg is ADDED, not merged into a sibling leg.
         if !proposed.confirmation.isEmpty {
             let conf = normalizeConfirmation(proposed.confirmation)
-            if !conf.isEmpty,
-               let row = try? context.fetch(
-                FetchDescriptor<LocalItineraryItem>(
-                    predicate: #Predicate { $0.tripUUID == tripUUID && $0.sourceConfirmation == conf }
-                )
-               ).first {
-                return (row, true)
+            if !conf.isEmpty {
+                let candidates = (try? context.fetch(
+                    FetchDescriptor<LocalItineraryItem>(
+                        predicate: #Predicate { $0.tripUUID == tripUUID && $0.sourceConfirmation == conf }
+                    )
+                )) ?? []
+                if let row = candidates.first(where: { rowSegment($0) == targetSegment }) {
+                    return (row, true)
+                }
             }
         }
 
         // Fast path: a previously-ingested item carrying the same dedupeKey.
-        // This is a structural identity, not a confirmation identity.
+        // This is a structural identity, not a confirmation identity. The
+        // dedupeKey is segment-precise, so this is already a same-segment hit.
         let sig = signature
         if let row = try? context.fetch(
             FetchDescriptor<LocalItineraryItem>(
@@ -150,26 +184,32 @@ enum EmailItemDedupe {
 
         // Structural fallback: compare against all items on the trip (covers
         // chat-created or pre-field rows that have no dedupeKey). In memory
-        // because normalized-title equality isn't expressible in a #Predicate.
+        // because the segment (normalized title / HH:mm) isn't expressible in a
+        // #Predicate. Matches an equal segment.
         let fk = tripUUID
         let rows = (try? context.fetch(
             FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.tripUUID == fk })
         )) ?? []
-        let targetKind = proposed.kind
-        let targetDay = dayKey(proposed.dayDate)
-        let targetTitle = normalizeTitle(proposed.title)
-        let targetEnd = proposed.endDate.map(dayKey)
-        for row in rows {
-            guard row.kind.lowercased() == targetKind else { continue }
-            guard dayKey(row.dayDate) == targetDay else { continue }
-            guard normalizeTitle(row.title) == targetTitle else { continue }
-            if targetKind == "stay" {
-                let rowEnd = row.endDate.map(dayKey)
-                guard rowEnd == targetEnd else { continue }
-            }
+        if let row = rows.first(where: { rowSegment($0) == targetSegment }) {
             return (row, false)
         }
         return nil
+    }
+
+    /// The segment key for an existing stored row, computed the SAME way as
+    /// `segmentKey(_:)` for a proposed item, so `exists`/`match` compare like
+    /// for like. Threads the row's `startTime` through the same UTC `HH:mm`
+    /// discriminator.
+    private static func rowSegment(_ row: LocalItineraryItem) -> String {
+        let proposed = Proposed(
+            kind: row.kind.lowercased(),
+            dayDate: row.dayDate,
+            endDate: row.endDate,
+            title: row.title,
+            confirmation: "",
+            startTime: row.startTime
+        )
+        return segmentKey(proposed)
     }
 
     // MARK: - Normalisation
@@ -190,6 +230,17 @@ enum EmailItemDedupe {
         let cal = Calendar(identifier: .gregorian)
         let c = cal.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
+    /// `HH:mm` read in UTC. Post-#168 itinerary times are stored as UTC
+    /// wall-clock, so reading the hour/minute in UTC returns the stated
+    /// departure time — the same anchor `ExecuteDraftAction.parseWallClockTime`
+    /// uses when it stores the row.
+    private static func timeKey(_ date: Date) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? cal.timeZone
+        let c = cal.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
     }
 
     // MARK: - Confirmation-code extraction
