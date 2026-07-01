@@ -84,6 +84,16 @@ final class SpeechTranscriber {
     /// field and to swap the mic icon for a recording indicator.
     private(set) var isRecording: Bool = false
 
+    /// Fired once per finalized-and-normalized utterance (issue #156). server_vad
+    /// segments each pause into its own `…completed`; the continuous voice
+    /// overlay consumes these as DISCRETE captures so it can execute them one at
+    /// a time. The payload is the same Devanagari-normalized text that gets
+    /// folded into `committedTranscript`, so callers of this stream never see raw
+    /// Urdu. Set by `VoiceCaptureViewModel` for the duration of a session; nil
+    /// for the inline chat bar (which only reads the accumulated `transcript`).
+    /// Invoked on the @MainActor.
+    var onUtteranceFinalized: ((String) -> Void)?
+
     /// Surfaced inline above the input bar when permission is denied or
     /// the audio engine fails. Cleared on the next successful `toggle()`.
     var errorMessage: String?
@@ -122,6 +132,21 @@ final class SpeechTranscriber {
     private let audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+
+    /// End-of-utterance debounce for the on-device engine (issue #156). SFSpeech
+    /// has NO VAD segmentation — it runs one continuous `recognitionTask` and only
+    /// hands back a final on `endAudio()`. To make the on-device path fire
+    /// `onUtteranceFinalized` per pause like the OpenAI server_vad path does, we
+    /// synthesize the segmentation: when the recognized text stops changing for
+    /// this long, we treat the pause as an utterance boundary. Slightly longer
+    /// than OpenAI's 700ms server-VAD window because the on-device partials update
+    /// less smoothly, so a shorter window would clip mid-phrase.
+    private let onDeviceSilenceDebounce: TimeInterval = 0.9
+
+    /// The armed silence timer for the on-device engine. Re-armed on every partial
+    /// that carries new text; fires `finalizeOnDeviceUtterance()` when it elapses.
+    /// Cancelled on every new partial and on `stop()`.
+    private var onDeviceSilenceTimer: Task<Void, Never>?
 
     // -- OpenAI Realtime state --
     private let openAI = OpenAIRealtimeTranscriber()
@@ -195,6 +220,12 @@ final class SpeechTranscriber {
             let socket = openAI
             Task { await socket.finish() }
         case .onDevice:
+            // Cancel the synthesized silence-segmentation timer so no pending
+            // finalize fires after teardown (issue #156). Any in-progress partial
+            // is intentionally discarded here — a mid-word utterance interrupted
+            // by Done shouldn't fire a stray `onUtteranceFinalized`.
+            onDeviceSilenceTimer?.cancel()
+            onDeviceSilenceTimer = nil
             // End-of-audio first, then tear down. `endAudio()` lets SFSpeech
             // finalize a "best result" partial; cancelling would discard it.
             request?.endAudio()
@@ -351,6 +382,12 @@ final class SpeechTranscriber {
                             : self.committedTranscript + " " + normalized
                         self.transcript = self.committedTranscript
                         self.didFinalizeTranscript &+= 1
+                        // Surface THIS utterance as a discrete event (issue #156).
+                        // The continuous voice overlay consumes these one at a
+                        // time; the inline chat bar leaves the hook nil and reads
+                        // only the accumulated `transcript` above. Fired after
+                        // normalization so the payload is never raw Urdu.
+                        self.onUtteranceFinalized?(normalized)
                         Self.log.info("transcript updated from completed (len=\(self.transcript.count, privacy: .public)); didFinalizeTranscript bumped to \(self.didFinalizeTranscript, privacy: .public)")
                         // idevicesyslog-visible. Length only, never the text.
                         NSLog("[voice] transcript set len=%d", self.transcript.count)
@@ -532,16 +569,35 @@ final class SpeechTranscriber {
 
         isRecording = true
 
+        startOnDeviceTask(with: request)
+    }
+
+    /// Attach a `recognitionTask` to `request` and wire the partial-result
+    /// callback. Factored out of `startOnDevice()` so it can be called again to
+    /// rotate the recognition after each finalized utterance (issue #156) WITHOUT
+    /// touching the audio engine or the mic tap.
+    private func startOnDeviceTask(with request: SFSpeechAudioBufferRecognitionRequest) {
+        guard let recognizer else { return }
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
             // `recognitionTask` callback isn't main-actor isolated, so hop.
             Task { @MainActor in
+                // Ignore callbacks from a task we've already rotated away from
+                // (a late partial from the previous utterance's task): only the
+                // request currently wired to the tap is authoritative.
+                guard self.request === request else { return }
                 if let result {
                     self.transcript = result.bestTranscription.formattedString
-                    if result.isFinal {
-                        // Final result lands when `endAudio()` is called
-                        // from `stop()`. Nothing to do here — `stop()`
-                        // already set `isRecording = false`.
+                    // Synthesized VAD (issue #156): each non-empty partial arms /
+                    // re-arms a silence timer. When the text stops changing for
+                    // `onDeviceSilenceDebounce`, we treat the pause as an utterance
+                    // boundary, fire `onUtteranceFinalized`, and rotate to a fresh
+                    // request+task so the next utterance starts clean. `isFinal`
+                    // only ever lands when `stop()` calls `endAudio()`, so we do
+                    // NOT depend on it for per-utterance segmentation.
+                    let trimmed = self.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        self.armOnDeviceSilenceTimer()
                     }
                 }
                 if let error {
@@ -561,6 +617,67 @@ final class SpeechTranscriber {
                 }
             }
         }
+    }
+
+    /// (Re)arm the on-device silence timer. Cancels any pending timer and starts a
+    /// fresh `onDeviceSilenceDebounce`-long sleep; if no new partial re-arms it in
+    /// that window, `finalizeOnDeviceUtterance()` fires. Task-based to match the
+    /// file's structured-concurrency style; cancellation makes the re-arm cheap.
+    private func armOnDeviceSilenceTimer() {
+        onDeviceSilenceTimer?.cancel()
+        let delay = onDeviceSilenceDebounce
+        onDeviceSilenceTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.finalizeOnDeviceUtterance()
+        }
+    }
+
+    /// Finalize the current on-device utterance: fire `onUtteranceFinalized` with
+    /// the accumulated text (if non-empty) and rotate the recognition so the NEXT
+    /// utterance is recognized fresh rather than accumulated on top (issue #156).
+    ///
+    /// The rotation ends the current `request`/`task` and starts a new pair, but
+    /// KEEPS `audioEngine` + the input tap running. The tap appends to whatever
+    /// `self.request` currently is, so re-pointing it is all that's needed to
+    /// route audio into the new segment — we never stop/restart the engine or
+    /// reinstall the tap (which risks the `nullptr == Tap()` crash, issue #150).
+    private func finalizeOnDeviceUtterance() {
+        onDeviceSilenceTimer = nil
+        guard isRecording, engine == .onDevice else { return }
+
+        let finalized = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // End the current recognition segment.
+        request?.endAudio()
+        task?.cancel()
+        task = nil
+        request = nil
+
+        // Empty/whitespace-only utterance: don't fire, but still rotate so a long
+        // silence doesn't wedge us on a stale request.
+        if !finalized.isEmpty {
+            didFinalizeTranscript &+= 1
+            // Mirror the OpenAI `onCompleted` contract: fire the discrete event on
+            // the main actor with the finalized text (issue #156).
+            onUtteranceFinalized?(finalized)
+            Self.log.info("on-device utterance finalized (len=\(finalized.count, privacy: .public)); didFinalizeTranscript bumped to \(self.didFinalizeTranscript, privacy: .public)")
+            NSLog("[voice] on-device finalize len=%d", finalized.count)
+        }
+
+        // Reset the running transcript and spin up a fresh request+task. The tap
+        // is untouched and will start appending buffers to the new request as soon
+        // as it's assigned below.
+        transcript = ""
+        let fresh = SFSpeechAudioBufferRecognitionRequest()
+        fresh.shouldReportPartialResults = true
+        fresh.requiresOnDeviceRecognition = true
+        if #available(iOS 16.0, *) {
+            fresh.addsPunctuation = true
+        }
+        fresh.taskHint = .dictation
+        self.request = fresh
+        startOnDeviceTask(with: fresh)
     }
 
     // MARK: Audio level metering
