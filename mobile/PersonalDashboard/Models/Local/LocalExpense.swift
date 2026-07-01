@@ -73,6 +73,24 @@ final class LocalExpense {
     var sourceReference: String = ""
     var tripUUID: UUID? = nil
 
+    // MARK: - Person / Event tags (#183)
+    //
+    // Two optional groupings any expense can carry: a Person ("who was this
+    // for / with") and an Event ("what occasion / trip"). Both are additive
+    // with nil defaults so the SwiftData migration on existing installs stays
+    // lightweight (add-with-default, never remove) and every existing call
+    // site compiles unchanged.
+    //
+    // FK + denormalised name for each, mirroring the trip-linkage pattern
+    // above: the UUID joins back to `LocalPerson` / `LocalEvent`, and the name
+    // is duplicated onto the row so it stays self-describing if the person /
+    // event is later deleted (and so filters / badges don't need a second
+    // fetch to render a label).
+    var personUUID: UUID? = nil
+    var personName: String? = nil
+    var eventUUID: UUID? = nil
+    var eventName: String? = nil
+
     // MARK: - Dead-field parity with other LocalModels
     //
     // These are intentionally unused on Phase A. Kept so that the SwiftData
@@ -98,6 +116,10 @@ final class LocalExpense {
         dedupeKey: String = "",
         sourceReference: String = "",
         tripUUID: UUID? = nil,
+        personUUID: UUID? = nil,
+        personName: String? = nil,
+        eventUUID: UUID? = nil,
+        eventName: String? = nil,
         needsSync: Bool = false,
         version: Int = 0
     ) {
@@ -117,6 +139,10 @@ final class LocalExpense {
         self.dedupeKey = dedupeKey
         self.sourceReference = sourceReference
         self.tripUUID = tripUUID
+        self.personUUID = personUUID
+        self.personName = personName
+        self.eventUUID = eventUUID
+        self.eventName = eventName
         self.needsSync = needsSync
         self.version = version
     }
