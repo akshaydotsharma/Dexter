@@ -111,6 +111,18 @@ struct ExecuteDraftAction {
         let descriptionField = trimmedString(input["description"])
         let paymentMethod = trimmedString(input["payment_method"])
 
+        // Source. Optional; defaults to `.text` so existing chat/voice/capture
+        // callers (which don't pass `source`) behave exactly as before. The
+        // email-to-expense path (#177) passes "receipt".
+        let sourceRaw = (trimmedString(input["source"]) ?? "").lowercased()
+        let source = ExpenseSource(rawValue: sourceRaw) ?? .text
+
+        // Optional trip linkage (#177). A travel fare parsed from a forwarded
+        // booking email carries the matched trip's UUID so the expense links to
+        // the trip. Any other caller omits it (empty / absent) and the expense
+        // is standalone. Only a valid UUID is honoured.
+        let tripUUID: UUID? = trimmedString(input["trip_id"]).flatMap { UUID(uuidString: $0) }
+
         // Optional UUID override from the tool input. If the model emitted
         // a valid UUID we use it; otherwise we generate one.
         let providedID = trimmedString(input["id"])
@@ -148,11 +160,21 @@ struct ExecuteDraftAction {
                 sgdAmount: conversion.sgdAmount,
                 fxRate: conversion.rate,
                 paymentMethod: paymentMethod,
-                source: .text,
+                source: source,
                 clientUUID: clientUUID
             )
         } catch {
             throw DraftExecutionError.persistence(error)
+        }
+
+        // Link the expense to a trip when the caller supplied a valid trip_id
+        // (#177). ExpenseService doesn't take tripUUID, so set it on the row
+        // after creation and re-save. dedupeKey / sourceReference stay empty
+        // here — the email path stamps those on the returned clientUUID after
+        // dedup, mirroring how itinerary items are stamped post-add.
+        if let tripUUID {
+            row.tripUUID = tripUUID
+            try? save()
         }
 
         // Build a human title for the outcome dialog. Prefer merchant,

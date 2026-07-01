@@ -55,31 +55,50 @@ enum EmailIngestNotifications {
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
     }
 
-    /// Post the "items added / updated" notification with an Undo action.
+    /// Post the "items added / updated / expense logged" notification with an
+    /// Undo action.
     ///
     /// `updatedCount` (#165) covers rows the explicit Re-scan reconciled in
-    /// place. The automatic cycle never updates, so it always passes 0 and the
-    /// body reads exactly as before. Undo still only removes the ADDED items;
-    /// updated items are left in place.
-    static func postAdded(tripName: String, itemCount: Int, updatedCount: Int = 0, logUUID: UUID) async {
+    /// place. `expenseCount` (#177) covers expenses logged from the email.
+    /// `tripName` is nil for an expense-only add (a receipt with no matched
+    /// trip). Undo removes the added items AND the logged expenses; updated
+    /// items are left in place.
+    static func postAdded(tripName: String?, itemCount: Int, updatedCount: Int = 0, expenseCount: Int = 0, logUUID: UUID) async {
         let content = UNMutableNotificationContent()
-        content.title = itemCount > 0 ? "Added to \(tripName)" : "Updated \(tripName)"
-        content.body = Self.addedBody(added: itemCount, updated: updatedCount)
+        content.title = Self.addedTitle(tripName: tripName, itemCount: itemCount, updatedCount: updatedCount, expenseCount: expenseCount)
+        content.body = Self.addedBody(added: itemCount, updated: updatedCount, expenses: expenseCount)
         content.sound = .default
         content.categoryIdentifier = addedCategoryId
         content.userInfo = [logUUIDKey: logUUID.uuidString.lowercased()]
         await post(content)
     }
 
-    /// Build the notification body for an added/updated outcome. Mentions only
-    /// non-zero counts so an updates-only Re-scan never reads "0 items added".
-    private static func addedBody(added: Int, updated: Int) -> String {
+    /// Build a concise title. Prefers the trip context when there is one;
+    /// falls back to an expense-only title otherwise.
+    private static func addedTitle(tripName: String?, itemCount: Int, updatedCount: Int, expenseCount: Int) -> String {
+        if let name = tripName {
+            if itemCount > 0 { return "Added to \(name)" }
+            if updatedCount > 0 { return "Updated \(name)" }
+        }
+        if expenseCount > 0 {
+            return expenseCount == 1 ? "Expense logged" : "Expenses logged"
+        }
+        return "Forwarded email processed"
+    }
+
+    /// Build the notification body for an added/updated/expense outcome.
+    /// Mentions only non-zero counts so an updates-only Re-scan never reads
+    /// "0 items added" and an expense-only add never reads "0 items".
+    private static func addedBody(added: Int, updated: Int, expenses: Int) -> String {
         var parts: [String] = []
         if added > 0 {
             parts.append(added == 1 ? "1 item added" : "\(added) items added")
         }
         if updated > 0 {
             parts.append(updated == 1 ? "1 item updated" : "\(updated) items updated")
+        }
+        if expenses > 0 {
+            parts.append(expenses == 1 ? "1 expense logged" : "\(expenses) expenses logged")
         }
         if parts.isEmpty { parts.append("nothing changed") }
         return parts.joined(separator: ", ") + " from a forwarded email."
@@ -98,11 +117,15 @@ enum EmailIngestNotifications {
         await post(content)
     }
 
-    /// Confirm an undo completed.
+    /// Confirm an undo completed. `tripName` is a real trip name for an
+    /// itinerary undo, or the generic "your finances" fallback for an
+    /// expense-only undo (#177) — the body reads sensibly either way.
     static func postUndone(tripName: String) async {
         let content = UNMutableNotificationContent()
         content.title = "Undone"
-        content.body = "Removed the items that were added to \(tripName)."
+        content.body = tripName == "your finances"
+            ? "Removed the expense that was logged from a forwarded email."
+            : "Removed the items that were added to \(tripName)."
         content.sound = nil
         await post(content)
     }

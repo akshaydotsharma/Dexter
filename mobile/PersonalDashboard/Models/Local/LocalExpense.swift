@@ -55,6 +55,24 @@ final class LocalExpense {
 
     var createdAt: Date
 
+    // MARK: - Email-ingest dedup + trip linkage (#177)
+    //
+    // Populated ONLY by the email-to-expense path (`EmailToItinerary`), so a
+    // re-forward / re-scan of the same receipt dedups against an existing row
+    // instead of logging a second expense. All three are additive with defaults
+    // so every existing call site (chat / voice / capture / manual) compiles
+    // and behaves unchanged, and the SwiftData migration on existing installs
+    // stays lightweight (add-with-default, never remove).
+    //
+    // - `dedupeKey`: the `ExpenseDedupe.signature(...)` stamped after insert.
+    // - `sourceReference`: the normalised order / booking reference the
+    //   signature preferred, kept so a later email can match it cheaply.
+    // - `tripUUID`: `LocalTrip.clientUUID` when the expense is a travel fare
+    //   linked to a matched trip; nil for a standalone purchase.
+    var dedupeKey: String = ""
+    var sourceReference: String = ""
+    var tripUUID: UUID? = nil
+
     // MARK: - Dead-field parity with other LocalModels
     //
     // These are intentionally unused on Phase A. Kept so that the SwiftData
@@ -77,6 +95,9 @@ final class LocalExpense {
         receiptImagePath: String? = nil,
         source: String,
         createdAt: Date = Date(),
+        dedupeKey: String = "",
+        sourceReference: String = "",
+        tripUUID: UUID? = nil,
         needsSync: Bool = false,
         version: Int = 0
     ) {
@@ -93,6 +114,9 @@ final class LocalExpense {
         self.receiptImagePath = receiptImagePath
         self.source = source
         self.createdAt = createdAt
+        self.dedupeKey = dedupeKey
+        self.sourceReference = sourceReference
+        self.tripUUID = tripUUID
         self.needsSync = needsSync
         self.version = version
     }

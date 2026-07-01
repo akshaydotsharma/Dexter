@@ -106,8 +106,9 @@ struct EmailIngestService {
                         if !result.updatedItemUUIDs.isEmpty {
                             counts.updated += 1
                         }
-                        // A change with neither list populated shouldn't happen,
-                        // but guard so the run is never silently uncounted.
+                        // An expense-only add (#177) has neither item list
+                        // populated; count it as an add so the run is never
+                        // silently uncounted.
                         if result.addedItemUUIDs.isEmpty && result.updatedItemUUIDs.isEmpty {
                             counts.added += 1
                         }
@@ -164,10 +165,13 @@ struct EmailIngestService {
         }
         guard entry.outcomeEnum == .added else { return nil }
 
+        // #177: an ingest can add itinerary items AND/OR log expenses. Undo
+        // deletes both. There must be at least one of either to undo.
         let itemUUIDs = entry.addedItemUUIDList
-        guard !itemUUIDs.isEmpty else { return nil }
+        let expenseUUIDs = entry.addedExpenseUUIDList
+        guard !itemUUIDs.isEmpty || !expenseUUIDs.isEmpty else { return nil }
 
-        var tripName = entry.summary
+        // Delete the exact itinerary items recorded on the log entry.
         for itemUUID in itemUUIDs {
             let fk = itemUUID
             if let row = try? store.context.fetch(
@@ -177,7 +181,20 @@ struct EmailIngestService {
             }
         }
 
+        // Delete the exact expenses recorded on the log entry. `clientUUID` on
+        // LocalExpense is a String, so match on the lowercased UUID string.
+        for expenseUUID in expenseUUIDs {
+            let key = expenseUUID.uuidString.lowercased()
+            if let row = try? store.context.fetch(
+                FetchDescriptor<LocalExpense>(predicate: #Predicate { $0.clientUUID == key })
+            ).first {
+                store.context.delete(row)
+            }
+        }
+
         // Bump the parent trip's updatedAt and grab its name for the message.
+        // Optional: an expense-only ingest has no trip.
+        var tripName: String? = nil
         if let tripUUID = entry.tripUUID {
             let tfk = tripUUID
             if let trip = try? store.context.fetch(
@@ -190,11 +207,28 @@ struct EmailIngestService {
 
         // Rewrite the log entry to reflect the undo.
         entry.outcome = EmailIngestOutcome.skipped.rawValue
-        entry.summary = "Undone: removed \(itemUUIDs.count) item(s)."
+        entry.summary = Self.undoSummary(items: itemUUIDs.count, expenses: expenseUUIDs.count)
         entry.addedItemUUIDs = ""
+        entry.addedExpenseUUIDs = ""
 
         try? store.context.save()
-        return tripName
+        // Fall back to a generic label when there's no trip (expense-only undo)
+        // so the confirmation notification still reads sensibly.
+        return tripName ?? "your finances"
+    }
+
+    /// Build the log summary shown after an undo, mentioning only non-zero
+    /// counts.
+    private static func undoSummary(items: Int, expenses: Int) -> String {
+        var parts: [String] = []
+        if items > 0 {
+            parts.append(items == 1 ? "1 item" : "\(items) items")
+        }
+        if expenses > 0 {
+            parts.append(expenses == 1 ? "1 expense" : "\(expenses) expenses")
+        }
+        let what = parts.isEmpty ? "nothing" : parts.joined(separator: " and ")
+        return "Undone: removed \(what)."
     }
 
     // MARK: - Ledger
@@ -235,6 +269,7 @@ struct EmailIngestService {
             summary: result.summary,
             tripUUID: result.tripUUID,
             addedItemUUIDs: result.addedItemUUIDs,
+            addedExpenseUUIDs: result.addedExpenseUUIDs,
             debugBody: result.debugBody,
             debugTripContext: result.debugTripContext
         )
@@ -245,10 +280,21 @@ struct EmailIngestService {
         let logUUID = entry.clientUUID
         switch result.outcome {
         case .added:
-            let name = result.tripName ?? "your trip"
+            // tripName is nil for an expense-only add (a receipt with no
+            // matched trip). Pass it through so the notification body can adapt
+            // (#177).
             let count = result.addedItemUUIDs.count
             let updated = result.updatedItemUUIDs.count
-            Task { await EmailIngestNotifications.postAdded(tripName: name, itemCount: count, updatedCount: updated, logUUID: logUUID) }
+            let expenses = result.addedExpenseUUIDs.count
+            Task {
+                await EmailIngestNotifications.postAdded(
+                    tripName: result.tripName,
+                    itemCount: count,
+                    updatedCount: updated,
+                    expenseCount: expenses,
+                    logUUID: logUUID
+                )
+            }
         case .skipped:
             Task { await EmailIngestNotifications.postSkipped(subject: message.subject) }
         case .failed:
