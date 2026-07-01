@@ -129,6 +129,14 @@ struct ChatStream {
 
         If the <personal_vocabulary> block is absent or empty, skip this step.
 
+        LANGUAGE HANDLING (apply AFTER vocabulary handling, BEFORE you write any artefact):
+        Accept input in ANY language. Hindi may arrive as Devanagari script (मुझे कल कॉल करना है) or romanized/Hinglish (mujhe kal call karna hai). Run vocabulary correction on the user's ORIGINAL-LANGUAGE words first; only then translate.
+        Write ALL artefact free-text in ENGLISH. Translate non-English content before you put it in a tool call — this applies to: task title and description; note title and body; list title and items; trip name and notes; itinerary item title and notes; expense merchant and notes. A Hindi or Hinglish input must produce a clean English artefact.
+        Preserve proper nouns, people's names, place names, brands, and <personal_vocabulary> terms VERBATIM — never translate or transliterate a name, and keep each vocabulary term's exact spelling (this reinforces VOCABULARY HANDLING and rule 11). Example: "रिया को कल कॉल करो" → task title "Call Riya tomorrow", not "Call River".
+        Keep enum fields in their defined English values regardless of input language: `tag` (Work, Personal, Shopping, Health, etc.), itinerary `kind` (stay|activity|place|restaurant), and any other fixed-choice field. Translate the user's intent into the existing English enum value; never emit an enum value in another language.
+        Parse relative dates in ANY language to ISO 8601 (extends rule 5): e.g. कल / kal = tomorrow, परसों / parson = day after tomorrow, अगले हफ्ते / agle hafte = next week, पिछले हफ्ते = last week.
+        Write your conversational reply / confirmation in the SAME language as the user's MOST RECENT message: Hindi in → reply in Hindi; Hinglish in → reply in Hinglish; English in → reply in English. Only the chat reply mirrors the user's language — the saved artefact stays English.
+
         AVAILABLE TOOLS:
 
         CREATE (for new items):

@@ -63,6 +63,14 @@ struct VoiceCaptureOverlay: View {
         .onChange(of: vm.transcript) { _, _ in
             vm.scheduleSilenceFinalize()
         }
+        .onChange(of: vm.transcriber.errorMessage) { _, message in
+            // A connection failure (or other transcriber error) arriving async
+            // while we're listening must route the overlay to State G with the
+            // friendly message instead of hanging in "Listening" (issue #151).
+            if let message, !message.isEmpty {
+                vm.handleTranscriberError(message)
+            }
+        }
         .onChange(of: vm.state) { _, newState in
             announce(for: newState)
             if newState != .listening, !vm.transcript.isEmpty, !hasSeenVoiceHint {
@@ -393,6 +401,11 @@ private struct AutoDismissProgressLine: View {
     let reduceMotion: Bool
     let onComplete: () -> Void
     @State private var progress: CGFloat = 0
+    /// The pending dismissal, held so it can be cancelled if this line is
+    /// removed from the tree before it fires (e.g. a stale success state mounts
+    /// it for one frame on re-open). Without cancellation the dismiss fired
+    /// anyway and closed a freshly-opened overlay (issue #151).
+    @State private var pendingDismiss: DispatchWorkItem?
 
     var body: some View {
         GeometryReader { geo in
@@ -404,7 +417,13 @@ private struct AutoDismissProgressLine: View {
         .frame(height: 1)
         .onAppear {
             withAnimation(.linear(duration: 2.0)) { progress = 1 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { onComplete() }
+            let work = DispatchWorkItem { onComplete() }
+            pendingDismiss = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
+        }
+        .onDisappear {
+            pendingDismiss?.cancel()
+            pendingDismiss = nil
         }
     }
 }

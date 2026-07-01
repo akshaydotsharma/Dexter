@@ -50,4 +50,25 @@ enum AppConfig {
         }
         return nil
     }()
+
+    /// OpenAI API key, used for cloud voice transcription (issue #151).
+    /// Source order mirrors `anthropicAPIKey` exactly:
+    ///   1. `OPENAI_API_KEY` env var (Xcode scheme for local sim runs).
+    ///   2. `OPENAI_API_KEY` Info.plist key, baked at archive time by
+    ///      `mobile/ota/ship-lan.sh` so OTA-installed builds carry their own
+    ///      key without any per-device setup.
+    /// Returns nil if neither is set, in which case `VoiceDictation` falls
+    /// back to the on-device English recognizer rather than failing.
+    static let openAIAPIKey: String? = {
+        if let env = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
+           !env.isEmpty {
+            return env
+        }
+        if let plist = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String,
+           !plist.isEmpty,
+           !plist.hasPrefix("$(") {
+            return plist
+        }
+        return nil
+    }()
 }

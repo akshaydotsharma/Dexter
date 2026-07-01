@@ -18,6 +18,22 @@ struct ChatView: View {
     /// restores the baseline so we don't clobber typed text on a misfire.
     @State private var preMicBaseline: String = ""
 
+    /// Tracks an in-progress inline-mic session (issue #151). With the OpenAI
+    /// streaming engine the transcript arrives ASYNC, AFTER `stop()` has flipped
+    /// `transcriber.isRecording` false (server_vad finalizes ~0.5s after a pause;
+    /// a manual stop commits, then the `…completed` lands ~1-2s later). So we
+    /// can't gate transcript-mirroring on `isRecording` — that drops the inline
+    /// transcript every time. Instead we open this flag when the inline mic
+    /// starts and keep it true through the async tail until the final transcript
+    /// has landed (observed via `didFinalizeTranscript`) or the session is
+    /// superseded by a send / a new mic start. Mirrors the await-the-final
+    /// pattern already used in `VoiceCaptureViewModel`.
+    @State private var inlineMicActive = false
+    /// Baseline value of `transcriber.didFinalizeTranscript` captured when the
+    /// inline session starts, so we can tell when a NEW non-empty final lands
+    /// during THIS session (vs. a stale bump from a prior one).
+    @State private var inlineMicFinalizeBaseline = 0
+
     /// Silence-finalize timer (issue #150). Each transcript update from the
     /// transcriber resets this; when it fires after `silenceFinalizeDelay` of
     /// no new partials, we stop the mic and leave the transcript in the input
@@ -169,30 +185,59 @@ struct ChatView: View {
             // baseline (whatever was typed before mic-tap) instead of
             // replacing — keeps already-typed context intact.
             //
+            // Gated on `inlineMicActive` (NOT `transcriber.isRecording`): with
+            // the OpenAI engine the transcript lands AFTER `isRecording` has
+            // gone false, so gating on `isRecording` drops the final text every
+            // time (issue #151). The inline session stays open through that
+            // async tail, so this mirroring still fires when the post-stop
+            // transcript arrives.
+            //
             // Suppressed while the global voice overlay is presented: the
             // overlay's `VoiceCaptureViewModel` owns the transcript and its
             // own silence timer in that mode, so the inline chat mirroring
             // must stand down to avoid two owners writing the same transcriber.
-            guard transcriber.isRecording, !router.showVoiceOverlay else { return }
-            if newTranscript.isEmpty {
-                viewModel.draftInput = preMicBaseline
-            } else if preMicBaseline.isEmpty {
-                viewModel.draftInput = newTranscript
-            } else {
-                viewModel.draftInput = preMicBaseline + " " + newTranscript
-            }
+            guard inlineMicActive, !router.showVoiceOverlay else { return }
+            mirrorTranscript(newTranscript)
             // Each new partial is a sign of speech: reset the silence
             // countdown. Once partials stop arriving for `silenceFinalizeDelay`
-            // the timer fires and finalizes (issue #150).
-            scheduleSilenceFinalize()
+            // the timer fires and finalizes (issue #150). Only meaningful while
+            // the mic is genuinely still recording — the post-stop async tail
+            // shouldn't re-arm a finalize timer.
+            if transcriber.isRecording { scheduleSilenceFinalize() }
+        }
+        .onChange(of: transcriber.didFinalizeTranscript) { _, _ in
+            // A non-empty authoritative transcript landed. If it belongs to the
+            // current inline session (counter advanced past our baseline), make
+            // sure it's in the input field, then close the inline session so a
+            // later session can't bleed this text in. The overlay path ignores
+            // this — it owns the transcriber when presented (issue #151).
+            guard inlineMicActive, !router.showVoiceOverlay else { return }
+            guard transcriber.didFinalizeTranscript > inlineMicFinalizeBaseline else { return }
+            mirrorTranscript(transcriber.transcript)
+            // Only close the session once the mic has actually stopped. While
+            // it's still recording, server_vad finalizes each pause as its own
+            // `…completed`, so closing here would drop every utterance after the
+            // first (the mid-session "disappearing" bug). The transcriber
+            // accumulates across utterances, so mirroring the running transcript
+            // keeps the full text in the field until the user stops (issue #151).
+            if !transcriber.isRecording { endInlineMicSession() }
         }
         .onChange(of: transcriber.isRecording) { _, recording in
             // If recording ends for any reason (user tapped stop, an error,
             // or our own finalize), tear the silence timer down so it can't
-            // fire against a dead session.
+            // fire against a dead session. We deliberately do NOT end the inline
+            // mic session here: the OpenAI final transcript arrives AFTER
+            // `isRecording` goes false, and the session must stay open to catch
+            // it (issue #151). The session is closed on `didFinalizeTranscript`,
+            // on send, or when a new mic session starts.
             if !recording { cancelSilenceTimer() }
         }
-        .onDisappear { cancelSilenceTimer() }
+        .onDisappear {
+            cancelSilenceTimer()
+            // Leaving chat ends any inline session so a late async transcript
+            // can't write into the field after the user has navigated away.
+            endInlineMicSession()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = true }
         }
@@ -302,6 +347,11 @@ struct ChatView: View {
         if transcriber.isRecording {
             stopListening()
         }
+        // The user committed to sending whatever's in the field now. End the
+        // inline mic session so a still-in-flight async transcript from this
+        // session can't land in `draftInput` after the message has shipped
+        // (issue #151).
+        endInlineMicSession()
         Task { await viewModel.send() }
     }
 
@@ -332,15 +382,46 @@ struct ChatView: View {
         // Snapshot what's already in the field so live partials append to it
         // rather than overwriting typed context.
         preMicBaseline = viewModel.draftInput
+        // Open the inline mic session BEFORE starting the transcriber. Each
+        // `transcriber.start()` resets `transcript` to "" and we re-capture the
+        // baseline here, so a fresh session is clean and can't inherit a prior
+        // session's text. Baseline the finalize counter so we only react to a
+        // NEW non-empty final from this session (issue #151).
+        inlineMicActive = true
+        inlineMicFinalizeBaseline = transcriber.didFinalizeTranscript
         await transcriber.toggle()
     }
 
     /// Stop the transcriber and leave the transcript in the input field as
     /// editable text. Deliberately does NOT submit — the user reads/edits and
     /// taps send, or speaks again to append (issue #150).
+    ///
+    /// Does NOT end the inline mic session: with the OpenAI engine the final
+    /// transcript arrives AFTER this returns, so the session must stay open to
+    /// catch it (issue #151). It closes on `didFinalizeTranscript`, on send, or
+    /// when a new session starts.
     private func stopListening() {
         transcriber.stop()
         cancelSilenceTimer()
+    }
+
+    /// Write the live/final transcript into the input field, appended to the
+    /// pre-mic baseline so typed context survives. Shared by the partial-
+    /// mirroring and the final-landing paths so they stay consistent.
+    private func mirrorTranscript(_ text: String) {
+        if text.isEmpty {
+            viewModel.draftInput = preMicBaseline
+        } else if preMicBaseline.isEmpty {
+            viewModel.draftInput = text
+        } else {
+            viewModel.draftInput = preMicBaseline + " " + text
+        }
+    }
+
+    /// Close the inline mic session so a later session can't inherit this one's
+    /// async transcript. Safe to call repeatedly (issue #151).
+    private func endInlineMicSession() {
+        inlineMicActive = false
     }
 
     /// (Re)arm the silence-finalize countdown. Called on every transcript

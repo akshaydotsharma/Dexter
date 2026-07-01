@@ -69,6 +69,22 @@ fi
 [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "ANTHROPIC_API_KEY not set (env or server/.env). Aborting — AI features won't work without it."; exit 1; }
 echo "-> ANTHROPIC_API_KEY resolved (length=${#ANTHROPIC_API_KEY})"
 
+# ---- Resolve OpenAI API key (voice transcription, #151) ----
+# Same source order as Anthropic. Unlike Anthropic this is OPTIONAL: with no
+# key the app falls back to on-device English dictation, so we warn but do
+# NOT abort the build.
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+    if [ -f "${MOBILE_DIR}/../server/.env" ]; then
+        OPENAI_API_KEY="$(grep -E '^OPENAI_API_KEY=' "${MOBILE_DIR}/../server/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+    fi
+fi
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+    echo "-> OPENAI_API_KEY resolved (length=${#OPENAI_API_KEY})"
+else
+    OPENAI_API_KEY=""
+    echo "-> WARNING: OPENAI_API_KEY not set (env or server/.env). Cloud voice transcription (Hindi/Hinglish) will be DISABLED; the app falls back to on-device English dictation."
+fi
+
 # ---- Regenerate project ----
 echo "-> regenerating Xcode project"
 xcodegen generate >/dev/null
@@ -147,6 +163,7 @@ xcodebuild \
     MARKETING_VERSION="${SHORT_VERSION}" \
     OTA_API_URL="${API_URL}" \
     ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+    OPENAI_API_KEY="${OPENAI_API_KEY}" \
     -allowProvisioningUpdates \
     archive \
     2>&1 | grep -E "(error:|warning: .*\.swift:|\*\* )" || true

@@ -53,11 +53,13 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Dexter talks to your Mac dev server over wifi when you're on the same network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Dexter listens to your voice so it can transcribe what you say into the chat.</string>
+	<string>Dexter records your voice so it can transcribe what you say into the chat.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Used to import a receipt photo when logging an expense.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Dexter transcribes your voice into chat messages on-device. Audio never leaves your phone.</string>
+	<string>Dexter transcribes your voice into chat messages. With no transcription key set it falls back to on-device English recognition.</string>
+	<key>OPENAI_API_KEY</key>
+	<string>$(OPENAI_API_KEY)</string>
 	<key>OTA_API_URL</key>
 	<string>$(OTA_API_URL)</string>
 	<key>UIAppFonts</key>
