@@ -49,10 +49,24 @@ struct FinanceView: View {
     @State private var showingPhotoLibrary: Bool = false
     @State private var showingPDFPicker: Bool = false
 
+    /// Separate file-picker flag for the batch statement import (#184). Kept
+    /// distinct from `showingPDFPicker` (the single-receipt path) so the two
+    /// PDF flows don't share presentation state.
+    @State private var showingStatementPicker: Bool = false
+
     /// On-screen overlay while Vision runs. The receipt file is already
     /// saved before this flips on, so cancelling here just opens the
     /// AddExpenseSheet with the receipt attached and no prefilled fields.
     @State private var extractionInProgress: Bool = false
+
+    /// On-screen overlay while a statement is parsed + imported (#184).
+    /// Distinct from `extractionInProgress` so the two overlays can show
+    /// their own copy ("Reading receipt…" vs "Importing statement…").
+    @State private var statementImportInProgress: Bool = false
+
+    /// Summary shown after a statement import completes (#184), e.g.
+    /// "Imported 42 · Skipped 8 duplicates · Ignored 5 payments/refunds".
+    @State private var statementImportSummary: String?
 
     /// Surfaced to the user when extraction fails with no usable receipt
     /// to attach (e.g. file save failed). Successful saves with failed
@@ -78,6 +92,10 @@ struct FinanceView: View {
             if extractionInProgress {
                 extractionOverlay
             }
+
+            if statementImportInProgress {
+                statementImportOverlay
+            }
         }
         .activeSection(.finance)
         .sheet(item: $editingTarget) { target in
@@ -97,6 +115,18 @@ struct FinanceView: View {
         }
         .pdfPicker(isPresented: $showingPDFPicker) { data in
             handleCaptureData(data, source: .pdf)
+        }
+        .pdfPicker(isPresented: $showingStatementPicker) { data in
+            handleStatementData(data)
+        }
+        .alert(
+            "Statement import",
+            isPresented: statementSummaryBinding,
+            presenting: statementImportSummary
+        ) { _ in
+            Button("OK", role: .cancel) { statementImportSummary = nil }
+        } message: { summary in
+            Text(summary)
         }
         .alert(
             "Couldn't process receipt",
@@ -151,6 +181,11 @@ struct FinanceView: View {
             } label: {
                 Label("PDF from Files", systemImage: "doc.text")
             }
+            Button {
+                showingStatementPicker = true
+            } label: {
+                Label("Import statement", systemImage: "doc.text.magnifyingglass")
+            }
             Divider()
             Button {
                 editingTarget = .new
@@ -186,6 +221,34 @@ struct FinanceView: View {
         .allowsHitTesting(true)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reading receipt")
+    }
+
+    /// Overlay shown while a statement is parsed + imported (#184). Same shape
+    /// as `extractionOverlay` but with copy that reflects the batch operation,
+    /// which can take a while for a full statement.
+    private var statementImportOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.25).ignoresSafeArea()
+            VStack(spacing: Space.md) {
+                ProgressView()
+                    .tint(Tokens.ink)
+                Text("Importing statement…")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                Text("Reading transactions and skipping duplicates")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, Space.xl)
+            .padding(.vertical, Space.lg)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+        .transition(.opacity)
+        .allowsHitTesting(true)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Importing statement")
     }
 
     // MARK: - Capture lifecycle
@@ -290,6 +353,50 @@ struct FinanceView: View {
         Binding(
             get: { captureErrorMessage != nil },
             set: { newValue in if !newValue { captureErrorMessage = nil } }
+        )
+    }
+
+    // MARK: - Statement import (#184)
+
+    /// Entry point for the statement file picker. `data == nil` is a cancel.
+    private func handleStatementData(_ data: Data?) {
+        guard let data else { return }
+        Task { await importStatement(pdfData: data) }
+    }
+
+    /// Parse the statement PDF and batch-import every purchase/fee/interest
+    /// line, deduping against existing expenses. No per-row review — survivors
+    /// are inserted directly and the outcome is surfaced as a summary. Parse
+    /// failures show the "couldn't process" alert; a successful parse with zero
+    /// transactions still shows a (benign) summary explaining nothing matched.
+    private func importStatement(pdfData: Data) async {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            statementImportInProgress = true
+        }
+        defer {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                statementImportInProgress = false
+            }
+        }
+
+        do {
+            let result = try await StatementImporter.default().importStatement(pdfData: pdfData)
+            statementImportSummary = result.summaryLine
+        } catch {
+            let message: String = {
+                if let typed = error as? StatementExtractionError {
+                    return typed.localizedDescription
+                }
+                return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
+            }()
+            captureErrorMessage = message
+        }
+    }
+
+    private var statementSummaryBinding: Binding<Bool> {
+        Binding(
+            get: { statementImportSummary != nil },
+            set: { newValue in if !newValue { statementImportSummary = nil } }
         )
     }
 
