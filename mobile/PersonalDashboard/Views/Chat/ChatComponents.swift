@@ -47,25 +47,54 @@ struct AIProse: View {
 
 struct TypingIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var phase: Double = 0
+
+    // A single, fixed reference date. Each frame's offset is derived from the
+    // elapsed time since this date, not from an animatable @State property.
+    // This sidesteps the SwiftUI endpoint-interpolation trap: an implicit/
+    // explicit animation on a plain State value only interpolates between its
+    // start and end values, so a full sin() cycle (which starts and ends at
+    // ~0) collapses to a visually static offset even while "running". Driving
+    // the curve from TimelineView's sampled date instead means there are no
+    // endpoints to interpolate between — every tick recomputes sin() fresh
+    // from continuous elapsed time, so the dots actually move on-device.
+    private let start = Date()
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(0..<3) { i in
-                Circle()
-                    .fill(Tokens.muted)
-                    .frame(width: 6, height: 6)
-                    .offset(y: reduceMotion ? 0 : sin((phase + Double(i) * 0.33) * .pi * 2) * 3)
+        Group {
+            if reduceMotion {
+                HStack(spacing: 6) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Circle()
+                            .fill(Tokens.muted)
+                            .frame(width: 6, height: 6)
+                    }
+                }
+            } else {
+                TimelineView(.animation) { timeline in
+                    let elapsed = timeline.date.timeIntervalSince(start)
+                    HStack(spacing: 6) {
+                        ForEach(0..<3, id: \.self) { i in
+                            Circle()
+                                .fill(Tokens.muted)
+                                .frame(width: 6, height: 6)
+                                .offset(y: dotOffset(elapsed: elapsed, index: i))
+                        }
+                    }
+                }
             }
         }
         .frame(height: 16)
         .accessibilityLabel("Assistant is typing")
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: false)) {
-                phase = 1
-            }
-        }
+    }
+
+    /// Staggered bob: each dot lags the previous by a fixed phase so the
+    /// motion reads as a wave sweeping left to right, the classic
+    /// typing-indicator look.
+    private func dotOffset(elapsed: TimeInterval, index: Int) -> Double {
+        let period = 0.9
+        let stagger = 0.15
+        let t = (elapsed - Double(index) * stagger) / period * (.pi * 2)
+        return sin(t) * 3
     }
 }
 
