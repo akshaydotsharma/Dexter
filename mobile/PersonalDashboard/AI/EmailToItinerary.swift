@@ -143,6 +143,14 @@ struct EmailToItinerary {
         // and stamped with dedupeKey/sourceReference/tripUUID after execution.
         var addedExpenseUUIDs: [UUID] = []
         var skippedExpenseDuplicates = 0
+        // Receipt attachment linkage (#180). We attach the best available
+        // asset (image preferred, else first PDF) to the FIRST expense actually
+        // created this run. Saved lazily inside `handleExpenseCall` right before
+        // stamping, so a run that creates NO new expense (all deduped / nothing
+        // to log) never writes an orphan file. Once set, later expenses in the
+        // same run don't get a second copy — one receipt, one link.
+        let receiptAsset = Self.bestReceiptAsset(from: message.attachments)
+        var receiptAttached = false
         // Existing rows reconcile-updated in place on the explicit Re-scan
         // (#165). Deduped so the same row updated by two proposed items in one
         // run is counted once.
@@ -184,6 +192,8 @@ struct EmailToItinerary {
                     let block = await handleExpenseCall(
                         call: call,
                         confirmation: confirmation,
+                        receiptAsset: receiptAsset,
+                        receiptAttached: &receiptAttached,
                         addedExpenseUUIDs: &addedExpenseUUIDs,
                         skippedExpenseDuplicates: &skippedExpenseDuplicates
                     )
@@ -392,6 +402,8 @@ struct EmailToItinerary {
     private func handleExpenseCall(
         call: (id: String, name: String, input: [String: AnthropicJSONValue]),
         confirmation: String,
+        receiptAsset: ReceiptAsset?,
+        receiptAttached: inout Bool,
         addedExpenseUUIDs: inout [UUID],
         skippedExpenseDuplicates: inout Int
     ) async -> AnthropicContentBlock {
@@ -423,6 +435,18 @@ struct EmailToItinerary {
                     reference: proposed.sourceReference,
                     store: store
                 )
+                // #180: attach the forwarded receipt to the FIRST newly-created
+                // expense only. Saved lazily here (not before the loop) so a
+                // run that creates no new expense writes no orphan file. If the
+                // save succeeds but the stamp can't find the row, the file is
+                // deleted so we never leak an unreferenced receipt.
+                if !receiptAttached, let asset = receiptAsset {
+                    receiptAttached = Self.attachReceipt(
+                        asset: asset,
+                        toExpense: expenseUUID,
+                        store: store
+                    )
+                }
             }
             return .toolResult(
                 toolUseId: call.id,
@@ -467,6 +491,76 @@ struct EmailToItinerary {
             originalCurrency: currency,
             sourceReference: reference
         )
+    }
+
+    // MARK: - Receipt attachment (#180)
+
+    /// The receipt asset chosen from an email's attachments: the raw bytes plus
+    /// whether they're a PDF (so `attachReceipt` picks the right save path).
+    struct ReceiptAsset {
+        let data: Data
+        let isPDF: Bool
+    }
+
+    /// Pick the best receipt asset from an email's attachments. Prefer an image
+    /// (image/*) since it renders inline and compresses cleanly for the viewer;
+    /// otherwise fall back to the first PDF. Calendar (.ics) and everything else
+    /// are ignored. Returns nil when there's nothing attachable.
+    private static func bestReceiptAsset(from attachments: [EmailMessage.Attachment]) -> ReceiptAsset? {
+        if let image = attachments.first(where: { $0.isImage }) {
+            return ReceiptAsset(data: image.data, isPDF: false)
+        }
+        if let pdf = attachments.first(where: { $0.isPDF }) {
+            return ReceiptAsset(data: pdf.data, isPDF: true)
+        }
+        return nil
+    }
+
+    /// Save the receipt asset to `ReceiptStorage` and stamp its relative path
+    /// onto the given expense's `receiptImagePath`. Returns true only when both
+    /// the save AND the stamp succeeded (so the caller flips `receiptAttached`
+    /// and no later expense in the run gets a second copy).
+    ///
+    /// Orphan safety: if the file is written but the expense row can't be found
+    /// to stamp it, the file is deleted so we never leak an unreferenced
+    /// receipt. A save failure returns false and writes nothing.
+    private static func attachReceipt(
+        asset: ReceiptAsset,
+        toExpense expenseUUID: UUID,
+        store: SwiftDataStore
+    ) -> Bool {
+        let receiptStore = ReceiptStorage.shared
+        let relativePath: String
+        do {
+            relativePath = asset.isPDF
+                ? try receiptStore.save(pdfData: asset.data)
+                // Images are normalised to a compressed JPEG (same pipeline as
+                // camera captures) so the viewer + any future Vision use stay
+                // within Anthropic's size limits.
+                : try receiptStore.saveCompressedJpeg(receiptStore.compress(imageData: asset.data))
+        } catch {
+            NSLog("EmailToItinerary: receipt save failed: %@", error.localizedDescription)
+            return false
+        }
+
+        let key = expenseUUID.uuidString.lowercased()
+        guard let row = try? store.context.fetch(
+            FetchDescriptor<LocalExpense>(predicate: #Predicate { $0.clientUUID == key })
+        ).first else {
+            // Couldn't find the row we just created — clean up the orphan file.
+            NSLog("EmailToItinerary: expense row not found for receipt stamp; deleting orphan")
+            try? receiptStore.delete(relativePath: relativePath)
+            return false
+        }
+        row.receiptImagePath = relativePath
+        do {
+            try store.context.save()
+        } catch {
+            NSLog("EmailToItinerary: receipt stamp save failed: %@", error.localizedDescription)
+            try? receiptStore.delete(relativePath: relativePath)
+            return false
+        }
+        return true
     }
 
     /// Stamp the dedupe signature + normalised reference onto a just-created
