@@ -329,7 +329,10 @@ struct EmailInboxView: View {
             await MainActor.run {
                 isFetching = false
                 let prefix = ignoreProcessed ? "Re-scanned. " : ""
-                fetchSummary = "\(prefix)Added \(result.added), skipped \(result.skipped), failed \(result.failed)."
+                // Re-scan can update existing items in place (#165); the
+                // automatic cycle never does, so `updated` is 0 there.
+                let updatedPart = result.updated > 0 ? "updated \(result.updated), " : ""
+                fetchSummary = "\(prefix)Added \(result.added), \(updatedPart)skipped \(result.skipped), failed \(result.failed)."
             }
         }
     }

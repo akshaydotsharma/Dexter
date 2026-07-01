@@ -55,17 +55,34 @@ enum EmailIngestNotifications {
         _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
     }
 
-    /// Post the "items added" notification with an Undo action.
-    static func postAdded(tripName: String, itemCount: Int, logUUID: UUID) async {
+    /// Post the "items added / updated" notification with an Undo action.
+    ///
+    /// `updatedCount` (#165) covers rows the explicit Re-scan reconciled in
+    /// place. The automatic cycle never updates, so it always passes 0 and the
+    /// body reads exactly as before. Undo still only removes the ADDED items;
+    /// updated items are left in place.
+    static func postAdded(tripName: String, itemCount: Int, updatedCount: Int = 0, logUUID: UUID) async {
         let content = UNMutableNotificationContent()
-        content.title = "Added to \(tripName)"
-        content.body = itemCount == 1
-            ? "1 item added from a forwarded email."
-            : "\(itemCount) items added from a forwarded email."
+        content.title = itemCount > 0 ? "Added to \(tripName)" : "Updated \(tripName)"
+        content.body = Self.addedBody(added: itemCount, updated: updatedCount)
         content.sound = .default
         content.categoryIdentifier = addedCategoryId
         content.userInfo = [logUUIDKey: logUUID.uuidString.lowercased()]
         await post(content)
+    }
+
+    /// Build the notification body for an added/updated outcome. Mentions only
+    /// non-zero counts so an updates-only Re-scan never reads "0 items added".
+    private static func addedBody(added: Int, updated: Int) -> String {
+        var parts: [String] = []
+        if added > 0 {
+            parts.append(added == 1 ? "1 item added" : "\(added) items added")
+        }
+        if updated > 0 {
+            parts.append(updated == 1 ? "1 item updated" : "\(updated) items updated")
+        }
+        if parts.isEmpty { parts.append("nothing changed") }
+        return parts.joined(separator: ", ") + " from a forwarded email."
     }
 
     /// Post the "skipped, no matching trip" notification.
