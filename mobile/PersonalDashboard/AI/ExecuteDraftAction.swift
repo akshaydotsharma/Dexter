@@ -792,12 +792,22 @@ struct ExecuteDraftAction {
                 endTimeValue = parseWallClockTime(dict["end_time"]?.stringValue)
             }
 
-            // Optional Google Maps link. A bare/empty value or the "null"
-            // sentinel both store as empty (the UI still offers a search
-            // fallback). We don't validate the URL here.
+            // Optional postal address. A bare/empty value or the "null"
+            // sentinel both store as empty.
+            let addressRaw = (dict["address"]?.stringValue ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let address = addressRaw == "null" ? "" : addressRaw
+
+            // Google Maps link. An explicit link from the email always wins.
+            // When the email carried none, build and STORE a search link from
+            // the venue name + address so the item's map field is populated
+            // (not just derived at render time). We don't validate the URL.
             let mapsRaw = (dict["google_maps_link"]?.stringValue ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let mapsLink = mapsRaw == "null" ? "" : mapsRaw
+            let explicitMapsLink = mapsRaw == "null" ? "" : mapsRaw
+            let mapsLink = explicitMapsLink.isEmpty
+                ? (LocalItineraryItem.googleMapsSearchURL(name: title, address: address)?.absoluteString ?? "")
+                : explicitMapsLink
 
             let maxForDay = existing
                 .filter { cal.isDate($0.dayDate, inSameDayAs: dayStart) }
@@ -814,6 +824,7 @@ struct ExecuteDraftAction {
                 endDate: endDateValue,
                 endTime: endTimeValue,
                 sortOrder: maxForDay + 1,
+                address: address,
                 googleMapsLink: mapsLink,
                 createdAt: now,
                 updatedAt: now
@@ -965,6 +976,17 @@ struct ExecuteDraftAction {
                 row.endTime = nil; changed = true
             } else if !trimmed.isEmpty, let parsed = parseWallClockTime(trimmed) {
                 row.endTime = parsed; changed = true
+            }
+        }
+        // address: same empty/"null"/value tri-state as notes. Empty = keep,
+        // "null" = clear, anything else = set. The map link is derived from
+        // this at render time (LocalItineraryItem.mapsURL).
+        if let raw = input["address"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.address = ""; changed = true
+            } else if !trimmed.isEmpty {
+                row.address = trimmed; changed = true
             }
         }
         // google_maps_link: same empty/"null"/value tri-state as notes.

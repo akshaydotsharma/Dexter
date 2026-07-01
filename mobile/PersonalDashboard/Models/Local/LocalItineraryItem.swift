@@ -154,22 +154,55 @@ final class LocalItineraryItem {
         set { kind = newValue.rawValue }
     }
 
-    /// `true` when a real maps link has been stored. The maps pin only renders
-    /// for items where this is true: no link means no pin (and no fallback
-    /// search).
+    /// `true` when an explicit maps link has been stored. Distinct from
+    /// `mapsURL != nil`, which is also true when the URL is derived from
+    /// `address` (see below): this stays `false` for address-only items.
     var hasExplicitMapsLink: Bool {
-        mapsURL != nil
+        explicitMapsURL != nil
     }
 
     /// The stored Google Maps URL, coercing a bare host (e.g.
     /// "maps.app.goo.gl/…") into an https URL. `nil` when no link is saved or
-    /// the stored string can't form a URL.
-    var mapsURL: URL? {
+    /// the stored string can't form a URL. This is the explicit link only; it
+    /// does NOT fall back to `address` (that's `mapsURL`).
+    private var explicitMapsURL: URL? {
         let stored = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stored.isEmpty else { return nil }
         if let url = URL(string: stored), url.scheme != nil {
             return url
         }
         return URL(string: "https://\(stored)")
+    }
+
+    /// A tappable maps URL for this item, used to render the "MAP" chip.
+    /// Prefers the explicit `googleMapsLink` when present; otherwise DERIVES a
+    /// Google Maps search URL from the title + `address`. This keeps a working
+    /// map pin for any item that has an address but no stored link (e.g. items
+    /// created before the link was persisted). `nil` only when there is no
+    /// explicit link and no address.
+    var mapsURL: URL? {
+        if let explicit = explicitMapsURL { return explicit }
+        return Self.googleMapsSearchURL(name: title, address: address)
+    }
+
+    /// Builds a Google Maps *search* URL that resolves to a specific place,
+    /// combining the place name with the address so Google lands on the named
+    /// venue (e.g. "207 Inn, Via Nazionale, Rome") rather than just the street.
+    /// Returns `nil` when there is NO address: a bare title (e.g. "Lunch",
+    /// "Free day") is not a reliable map target, so an item with no real
+    /// location gets no link — and therefore no MAP chip. Dependency-free: no
+    /// geocoding, no API call, no location permission.
+    static func googleMapsSearchURL(name: String, address: String) -> URL? {
+        let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAddress.isEmpty else { return nil }
+        let query = [name.trimmingCharacters(in: .whitespacesAndNewlines), trimmedAddress]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        var components = URLComponents(string: "https://www.google.com/maps/search/")
+        components?.queryItems = [
+            URLQueryItem(name: "api", value: "1"),
+            URLQueryItem(name: "query", value: query)
+        ]
+        return components?.url
     }
 }
