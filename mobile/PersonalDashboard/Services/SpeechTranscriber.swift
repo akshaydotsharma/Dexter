@@ -25,9 +25,12 @@ import Speech
 ///   - `audioLevel` is always computed from the local mic tap (`normalizedRMS`
 ///     + `publishLevel`), independent of which engine transcribes — reused
 ///     verbatim from #150.
-///   - `transcript` updates incrementally while the user speaks (OpenAI: we
-///     append each delta; SFSpeech: the system hands back the full running
-///     string). Either way it holds the full text by the time
+///   - `transcript` behaves per engine. SFSpeech updates it incrementally
+///     (the system hands back the full running string each partial). The
+///     OpenAI engine reveals it only ONCE per utterance, on the normalized
+///     `…completed` — raw deltas are not surfaced, because pre-normalization
+///     they can be in Urdu script and caused a visible Urdu→Devanagari flash
+///     (issue #151). Either way it holds the full text by the time
 ///     `VoiceCaptureViewModel` snapshots it on silence.
 ///   - The OpenAI engine uses server VAD: each pause is finalized as its own
 ///     `…completed`, and utterances are accumulated (so multi-phrase dictation
@@ -128,10 +131,6 @@ final class SpeechTranscriber {
     /// a later utterance never clobbers an earlier one — the fix for the inline
     /// transcript "disappearing" mid-session (issue #151).
     private var committedTranscript: String = ""
-    /// Raw deltas for the utterance currently being spoken (before its
-    /// `…completed` lands). Appended to `committedTranscript` for the live view,
-    /// then folded in (normalized) and cleared when the utterance completes.
-    private var pendingDeltas: String = ""
     /// Converts the mic tap's native format into the PCM16 mono @ 24kHz that
     /// the Realtime API expects. Built lazily per session because the input
     /// node's hardware format isn't known until the engine is configured.
@@ -226,7 +225,6 @@ final class SpeechTranscriber {
         errorMessage = nil
         transcript = ""
         committedTranscript = ""
-        pendingDeltas = ""
         loggedFirstChunk = false
         loggedFirstDelta = false
 
@@ -307,19 +305,20 @@ final class SpeechTranscriber {
                     // flipped `isRecording` false. Dropping them on that guard
                     // is exactly the discarded-transcript bug (issue #151). The
                     // engine guard alone is enough to ignore a stale session.
+                    _ = delta
                     Task { @MainActor in
                         guard let self, self.engine == .openAI else { return }
-                        // Live view = finalized utterances so far + this
-                        // utterance's raw deltas. The raw (possibly Urdu) deltas
-                        // are replaced by the normalized text when the utterance
-                        // completes below.
-                        self.pendingDeltas += delta
-                        self.transcript = self.committedTranscript.isEmpty
-                            ? self.pendingDeltas
-                            : self.committedTranscript + " " + self.pendingDeltas
+                        // Deliberately do NOT surface raw deltas. With server VAD
+                        // they arrive only AFTER the user pauses, and before
+                        // normalization they can be in Urdu (Perso-Arabic) script
+                        // — showing them produced a visible Urdu→Devanagari flash.
+                        // We wait for the normalized `…completed` (below) and
+                        // reveal the transcript once, already in Hindi/English
+                        // (issue #151). This model doesn't stream mid-speech, so
+                        // no live feedback is lost.
                         if !self.loggedFirstDelta {
                             self.loggedFirstDelta = true
-                            Self.log.info("transcript updating from deltas (first delta received)")
+                            Self.log.info("delta received (not surfaced; awaiting normalized final)")
                         }
                     }
                 },
@@ -350,7 +349,6 @@ final class SpeechTranscriber {
                         self.committedTranscript = self.committedTranscript.isEmpty
                             ? normalized
                             : self.committedTranscript + " " + normalized
-                        self.pendingDeltas = ""
                         self.transcript = self.committedTranscript
                         self.didFinalizeTranscript &+= 1
                         Self.log.info("transcript updated from completed (len=\(self.transcript.count, privacy: .public)); didFinalizeTranscript bumped to \(self.didFinalizeTranscript, privacy: .public)")
