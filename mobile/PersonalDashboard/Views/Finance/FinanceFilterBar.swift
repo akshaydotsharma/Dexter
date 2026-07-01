@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// Preset windows offered in the date-range chip row. "Custom" pops a
 /// date-range picker; everything else maps to a calendar-derived range.
@@ -30,6 +31,9 @@ struct FinanceFilterState: Equatable {
     var customEnd: Date = Date()
     var categories: Set<ExpenseCategory> = []
     var sources: Set<ExpenseSource> = []
+    /// Person / Event tag filters (#183). Empty = no constraint.
+    var people: Set<UUID> = []
+    var events: Set<UUID> = []
 
     /// Materialise the filter into a concrete `ExpenseFilter` honoured by
     /// the service layer. `searchText` is appended separately by the view
@@ -39,6 +43,8 @@ struct FinanceFilterState: Equatable {
         filter.dateRange = resolvedDateRange()
         if !categories.isEmpty { filter.categories = categories }
         if !sources.isEmpty { filter.sources = sources }
+        if !people.isEmpty { filter.people = people }
+        if !events.isEmpty { filter.events = events }
         filter.searchText = searchText
         return filter
     }
@@ -74,9 +80,17 @@ struct FinanceFilterState: Equatable {
 struct FinanceFilterBar: View {
     @Binding var state: FinanceFilterState
 
+    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    private var people: [LocalPerson]
+
+    @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
+    private var events: [LocalEvent]
+
     @State private var customDateSheetVisible: Bool = false
     @State private var categorySheetVisible: Bool = false
     @State private var sourceSheetVisible: Bool = false
+    @State private var personSheetVisible: Bool = false
+    @State private var eventSheetVisible: Bool = false
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -115,7 +129,27 @@ struct FinanceFilterBar: View {
                     action: { sourceSheetVisible = true }
                 )
 
-                if !state.categories.isEmpty || !state.sources.isEmpty {
+                // Person filter chip — only when there are people to filter by.
+                if !people.isEmpty {
+                    chip(
+                        label: personSummary,
+                        icon: "person",
+                        selected: !state.people.isEmpty,
+                        action: { personSheetVisible = true }
+                    )
+                }
+
+                // Event filter chip — only when there are events to filter by.
+                if !events.isEmpty {
+                    chip(
+                        label: eventSummary,
+                        icon: "calendar",
+                        selected: !state.events.isEmpty,
+                        action: { eventSheetVisible = true }
+                    )
+                }
+
+                if hasActiveFilters {
                     chip(
                         label: "Clear",
                         icon: "xmark",
@@ -123,6 +157,8 @@ struct FinanceFilterBar: View {
                         action: {
                             state.categories.removeAll()
                             state.sources.removeAll()
+                            state.people.removeAll()
+                            state.events.removeAll()
                         }
                     )
                 }
@@ -146,6 +182,21 @@ struct FinanceFilterBar: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $personSheetVisible) {
+            PersonMultiSelectSheet(selection: $state.people)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $eventSheetVisible) {
+            EventMultiSelectSheet(selection: $state.events)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var hasActiveFilters: Bool {
+        !state.categories.isEmpty || !state.sources.isEmpty
+            || !state.people.isEmpty || !state.events.isEmpty
     }
 
     private var customLabel: String {
@@ -170,6 +221,32 @@ struct FinanceFilterBar: View {
         case 0: return "Sources"
         case 1: return state.sources.first?.displayName ?? "Sources"
         default: return "\(state.sources.count) sources"
+        }
+    }
+
+    private var personSummary: String {
+        switch state.people.count {
+        case 0: return "People"
+        case 1:
+            if let uuid = state.people.first,
+               let person = people.first(where: { $0.clientUUID == uuid }) {
+                return person.name
+            }
+            return "1 person"
+        default: return "\(state.people.count) people"
+        }
+    }
+
+    private var eventSummary: String {
+        switch state.events.count {
+        case 0: return "Events"
+        case 1:
+            if let uuid = state.events.first,
+               let event = events.first(where: { $0.clientUUID == uuid }) {
+                return event.name
+            }
+            return "1 event"
+        default: return "\(state.events.count) events"
         }
     }
 
@@ -340,6 +417,124 @@ private struct SourceMultiSelectSheet: View {
                 .background(Tokens.paper)
             }
             .navigationTitle("Sources")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Clear") { selection.removeAll() }
+                        .foregroundStyle(Tokens.muted)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Tokens.ink)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Person multi-select sheet (#183)
+
+private struct PersonMultiSelectSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: Set<UUID>
+
+    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    private var people: [LocalPerson]
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                List {
+                    ForEach(people, id: \.clientUUID) { person in
+                        Button {
+                            if selection.contains(person.clientUUID) {
+                                selection.remove(person.clientUUID)
+                            } else {
+                                selection.insert(person.clientUUID)
+                            }
+                        } label: {
+                            HStack(spacing: Space.sm) {
+                                Circle()
+                                    .fill(Color(personHex: person.colorHex))
+                                    .frame(width: 12, height: 12)
+                                Text(person.name)
+                                    .foregroundStyle(Tokens.ink)
+                                Spacer()
+                                if selection.contains(person.clientUUID) {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Tokens.accentFinance)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Tokens.surface)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Tokens.paper)
+            }
+            .navigationTitle("People")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Clear") { selection.removeAll() }
+                        .foregroundStyle(Tokens.muted)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Tokens.ink)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Event multi-select sheet (#183)
+
+private struct EventMultiSelectSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: Set<UUID>
+
+    @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
+    private var events: [LocalEvent]
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                List {
+                    ForEach(events, id: \.clientUUID) { event in
+                        Button {
+                            if selection.contains(event.clientUUID) {
+                                selection.remove(event.clientUUID)
+                            } else {
+                                selection.insert(event.clientUUID)
+                            }
+                        } label: {
+                            HStack(spacing: Space.sm) {
+                                Image(systemName: "calendar")
+                                    .foregroundStyle(Tokens.accentFinance)
+                                    .frame(width: 24)
+                                Text(event.name)
+                                    .foregroundStyle(Tokens.ink)
+                                Spacer()
+                                if selection.contains(event.clientUUID) {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Tokens.accentFinance)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Tokens.surface)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Tokens.paper)
+            }
+            .navigationTitle("Events")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

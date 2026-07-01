@@ -40,6 +40,14 @@ struct AddExpenseSheet: View {
     @State private var descriptionField: String = ""
     @State private var paymentMethod: String = ""
 
+    /// Person / Event tags (#183). Nil = untagged. Held as resolved
+    /// (uuid, name) pairs so save can stamp both the FK and the denormalised
+    /// name. On edit these seed from the row's stored uuid/name.
+    @State private var selectedPerson: ExpenseTag?
+    @State private var selectedEvent: ExpenseTag?
+    @State private var showingPersonPicker: Bool = false
+    @State private var showingEventPicker: Bool = false
+
     /// Where this expense will be tagged as having come from. Defaults to
     /// `.manual` for `.new`; carried over from the existing row on edit;
     /// set by `PrefilledExpense.source` on prefill.
@@ -99,6 +107,8 @@ struct AddExpenseSheet: View {
                         merchantField
                         descriptionFieldView
                         paymentField
+                        personField
+                        eventField
 
                         if let errorMessage {
                             Text(errorMessage)
@@ -130,6 +140,16 @@ struct AddExpenseSheet: View {
             if let path = receiptImagePath {
                 ReceiptFullViewer(relativePath: path)
             }
+        }
+        .sheet(isPresented: $showingPersonPicker) {
+            PersonPickerSheet(selection: $selectedPerson)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingEventPicker) {
+            EventPickerSheet(selection: $selectedEvent)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .onAppear { loadIfNeeded() }
     }
@@ -366,6 +386,89 @@ struct AddExpenseSheet: View {
         }
     }
 
+    // MARK: - Person / Event tags (#183)
+
+    private var personField: some View {
+        tagSelectorRow(
+            label: "Person",
+            icon: "person",
+            placeholder: "Who was this for?",
+            value: selectedPerson?.name,
+            onTap: { showingPersonPicker = true },
+            onClear: { selectedPerson = nil }
+        )
+    }
+
+    private var eventField: some View {
+        tagSelectorRow(
+            label: "Event",
+            icon: "calendar",
+            placeholder: "Which occasion or trip?",
+            value: selectedEvent?.name,
+            onTap: { showingEventPicker = true },
+            onClear: { selectedEvent = nil }
+        )
+    }
+
+    /// Shared "tappable field that opens a picker" row for Person / Event.
+    /// Shows the selected name (or a placeholder), a chevron, and a clear
+    /// button when a value is set.
+    private func tagSelectorRow(
+        label: String,
+        icon: String,
+        placeholder: String,
+        value: String?,
+        onTap: @escaping () -> Void,
+        onClear: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            HStack {
+                Text(label).eyebrow()
+                Spacer()
+                Text("Optional")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            HStack(spacing: Space.sm) {
+                Button(action: onTap) {
+                    HStack(spacing: Space.sm) {
+                        Image(systemName: icon)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Tokens.accentFinance)
+                            .frame(width: 24)
+                        Text(value ?? placeholder)
+                            .font(.edBody)
+                            .foregroundStyle(value == nil ? Tokens.inkSoft : Tokens.ink)
+                            .lineLimit(1)
+                        Spacer()
+                        if value == nil {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Tokens.muted)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if value != nil {
+                    Button(action: onClear) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundStyle(Tokens.mutedSoft)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear \(label.lowercased())")
+                }
+            }
+            .padding(Space.md)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value ?? "none")")
+    }
+
     // MARK: - Persistence
 
     private func loadIfNeeded() {
@@ -396,6 +499,12 @@ struct AddExpenseSheet: View {
                 paymentMethod = existing.paymentMethod ?? ""
                 receiptImagePath = existing.receiptImagePath
                 source = existing.sourceEnum
+                if let uuid = existing.personUUID, let name = existing.personName?.trimmedNonEmpty {
+                    selectedPerson = ExpenseTag(uuid: uuid, name: name)
+                }
+                if let uuid = existing.eventUUID, let name = existing.eventName?.trimmedNonEmpty {
+                    selectedEvent = ExpenseTag(uuid: uuid, name: name)
+                }
             }
 
         case .prefilled(let prefill):
@@ -467,7 +576,11 @@ struct AddExpenseSheet: View {
                     sgdAmount: conversion.sgdAmount,
                     fxRate: conversion.rate,
                     paymentMethod: paymentMethod,
-                    source: source
+                    source: source,
+                    personUUID: selectedPerson?.uuid,
+                    personName: selectedPerson?.name,
+                    eventUUID: selectedEvent?.uuid,
+                    eventName: selectedEvent?.name
                 )
                 // ExpenseService.addExpense doesn't take receiptImagePath
                 // (Phase A signature). Set it directly and save again — the
@@ -492,7 +605,9 @@ struct AddExpenseSheet: View {
                         originalCurrency: currency,
                         sgdAmount: conversion.sgdAmount,
                         fxRate: conversion.rate,
-                        paymentMethod: paymentMethod
+                        paymentMethod: paymentMethod,
+                        person: .some(selectedPerson),
+                        event: .some(selectedEvent)
                     )
                     // Persist receipt-path / source changes (e.g. user
                     // removed the image, or scan path → manual edit).
@@ -516,6 +631,322 @@ struct AddExpenseSheet: View {
         formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = false
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+}
+
+private extension String {
+    var trimmedNonEmpty: String? {
+        let t = trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+}
+
+// MARK: - Person picker (#183)
+
+/// Pick an existing person or create a new one inline. Selecting a person
+/// dismisses; "New person" reveals an inline name field that find-or-creates
+/// on Add. Case-insensitive reuse is handled by `PersonService.findOrCreate`.
+struct PersonPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var selection: ExpenseTag?
+
+    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    private var people: [LocalPerson]
+
+    @State private var addingNew: Bool = false
+    @State private var newName: String = ""
+    @State private var errorMessage: String?
+
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                List {
+                    if addingNew {
+                        newPersonRow
+                    } else {
+                        Button {
+                            addingNew = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { nameFocused = true }
+                        } label: {
+                            Label("New person", systemImage: "plus.circle")
+                                .foregroundStyle(Tokens.accentFinance)
+                        }
+                        .listRowBackground(Tokens.surface)
+                    }
+
+                    ForEach(people, id: \.clientUUID) { person in
+                        Button {
+                            selection = ExpenseTag(uuid: person.clientUUID, name: person.name)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: Space.sm) {
+                                Circle()
+                                    .fill(Color(personHex: person.colorHex))
+                                    .frame(width: 12, height: 12)
+                                Text(person.name)
+                                    .foregroundStyle(Tokens.ink)
+                                Spacer()
+                                if selection?.uuid == person.clientUUID {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Tokens.accentFinance)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Tokens.surface)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Tokens.paper)
+            }
+            .navigationTitle("Person")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundStyle(Tokens.muted)
+                }
+            }
+        }
+    }
+
+    private var newPersonRow: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            TextField("Name", text: $newName)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .onSubmit { commitNew() }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.danger)
+            }
+            HStack {
+                Button("Cancel") { addingNew = false; newName = ""; errorMessage = nil }
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                    .buttonStyle(.borderless)
+                Spacer()
+                Button("Add") { commitNew() }
+                    .font(.edFootnote)
+                    .foregroundStyle(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Tokens.muted : Tokens.accentFinance)
+                    .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(.borderless)
+            }
+        }
+        .listRowBackground(Tokens.surface)
+    }
+
+    private func commitNew() {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            let person = try PersonService.default().findOrCreate(name: trimmed)
+            selection = ExpenseTag(uuid: person.clientUUID, name: person.name)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Event picker (#183)
+
+/// Pick an existing event or create one inline (name + optional date range +
+/// optional Trip link). Reuse is case-insensitive via
+/// `EventService.findOrCreate`.
+struct EventPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var selection: ExpenseTag?
+
+    @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
+    private var events: [LocalEvent]
+
+    @Query(sort: [SortDescriptor(\LocalTrip.startDate, order: .reverse)])
+    private var trips: [LocalTrip]
+
+    @State private var addingNew: Bool = false
+    @State private var newName: String = ""
+    @State private var useDates: Bool = false
+    @State private var startDate: Date = Date()
+    @State private var endDate: Date = Date()
+    @State private var linkedTrip: LocalTrip?
+    @State private var errorMessage: String?
+
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                List {
+                    if addingNew {
+                        newEventSection
+                    } else {
+                        Button {
+                            addingNew = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { nameFocused = true }
+                        } label: {
+                            Label("New event", systemImage: "plus.circle")
+                                .foregroundStyle(Tokens.accentFinance)
+                        }
+                        .listRowBackground(Tokens.surface)
+                    }
+
+                    ForEach(events, id: \.clientUUID) { event in
+                        Button {
+                            selection = ExpenseTag(uuid: event.clientUUID, name: event.name)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: Space.sm) {
+                                Image(systemName: "calendar")
+                                    .foregroundStyle(Tokens.accentFinance)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(event.name)
+                                        .foregroundStyle(Tokens.ink)
+                                    if let subtitle = dateSubtitle(event) {
+                                        Text(subtitle)
+                                            .font(.edCaption)
+                                            .foregroundStyle(Tokens.muted)
+                                    }
+                                }
+                                Spacer()
+                                if selection?.uuid == event.clientUUID {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Tokens.accentFinance)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Tokens.surface)
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Tokens.paper)
+            }
+            .navigationTitle("Event")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundStyle(Tokens.muted)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var newEventSection: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            TextField("Event name", text: $newName)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .onSubmit { commitNew() }
+
+            Toggle("Set dates", isOn: $useDates.animation())
+                .font(.edFootnote)
+                .tint(Tokens.accentFinance)
+
+            if useDates {
+                DatePicker("From", selection: $startDate, displayedComponents: .date)
+                    .font(.edFootnote)
+                    .tint(Tokens.accentFinance)
+                DatePicker("To", selection: $endDate, in: startDate..., displayedComponents: .date)
+                    .font(.edFootnote)
+                    .tint(Tokens.accentFinance)
+            }
+
+            if !trips.isEmpty {
+                Menu {
+                    Button("None") { linkedTrip = nil }
+                    ForEach(trips, id: \.clientUUID) { trip in
+                        Button(trip.name) { linkedTrip = trip }
+                    }
+                } label: {
+                    HStack {
+                        Text("Link to trip")
+                            .font(.edFootnote)
+                            .foregroundStyle(Tokens.inkSoft)
+                        Spacer()
+                        Text(linkedTrip?.name ?? "None")
+                            .font(.edFootnote)
+                            .foregroundStyle(Tokens.ink)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Tokens.muted)
+                    }
+                }
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.danger)
+            }
+
+            HStack {
+                Button("Cancel") { resetNew() }
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                    .buttonStyle(.borderless)
+                Spacer()
+                Button("Add") { commitNew() }
+                    .font(.edFootnote)
+                    .foregroundStyle(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Tokens.muted : Tokens.accentFinance)
+                    .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(.borderless)
+            }
+        }
+        .listRowBackground(Tokens.surface)
+    }
+
+    private func dateSubtitle(_ event: LocalEvent) -> String? {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "d MMM yyyy"
+        if let start = event.startDate, let end = event.endDate {
+            return "\(fmt.string(from: start)) – \(fmt.string(from: end))"
+        }
+        if let start = event.startDate {
+            return fmt.string(from: start)
+        }
+        return nil
+    }
+
+    private func resetNew() {
+        addingNew = false
+        newName = ""
+        useDates = false
+        linkedTrip = nil
+        errorMessage = nil
+    }
+
+    private func commitNew() {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            let event = try EventService.default().findOrCreate(
+                name: trimmed,
+                startDate: useDates ? startDate : nil,
+                endDate: useDates ? endDate : nil,
+                tripUUID: linkedTrip?.clientUUID
+            )
+            selection = ExpenseTag(uuid: event.clientUUID, name: event.name)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

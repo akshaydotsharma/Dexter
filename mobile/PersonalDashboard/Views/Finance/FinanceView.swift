@@ -458,6 +458,8 @@ struct FinanceView: View {
             Button("Reset filters") {
                 filterState.categories.removeAll()
                 filterState.sources.removeAll()
+                filterState.people.removeAll()
+                filterState.events.removeAll()
                 filterState.datePreset = .thisMonth
                 searchText = ""
             }
@@ -488,6 +490,12 @@ struct FinanceView: View {
         }
         if let sources = filter.sources, !sources.isEmpty {
             if !sources.contains(expense.sourceEnum) { return false }
+        }
+        if let people = filter.people, !people.isEmpty {
+            guard let personUUID = expense.personUUID, people.contains(personUUID) else { return false }
+        }
+        if let events = filter.events, !events.isEmpty {
+            guard let eventUUID = expense.eventUUID, events.contains(eventUUID) else { return false }
         }
         if let search = filter.searchText?.lowercased(), !search.isEmpty {
             let merchant = expense.merchant?.lowercased() ?? ""
