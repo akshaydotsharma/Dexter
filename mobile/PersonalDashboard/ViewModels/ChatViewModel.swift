@@ -74,6 +74,20 @@ final class ChatViewModel {
         }
     }
 
+    /// Wipe conversation state so the next `send()` replays NO prior history.
+    /// Used by the voice-capture overlay, where each spoken utterance must be a
+    /// fully independent, stateless capture (issue #156): without this, `send()`
+    /// snapshots the accumulated `turns` into its history array and replays the
+    /// whole session to Claude, which then re-issues earlier tool calls and
+    /// duplicates items. The regular chat surface never calls this — it keeps
+    /// its multi-turn history.
+    func reset() {
+        turns = []
+        isSending = false
+        errorMessage = nil
+        draftInput = ""
+    }
+
     func send() async {
         let input = draftInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }

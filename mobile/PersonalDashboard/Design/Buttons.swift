@@ -142,26 +142,41 @@ struct EdSendButtonStyle: ButtonStyle {
 struct GlassButtonStyle: ButtonStyle {
     /// `.edBodyMedium` for primary action labels, `.edCaption` for secondary.
     var font: Font = .edBodyMedium
+    /// When true, renders as a filled ink capsule with paper text so it reads as
+    /// the primary action in a group (voice overlay "Stop Recording", #156). Keeps
+    /// the same capsule shape, press-scale, and haptic as the frosted variant so
+    /// the two sit in one family.
+    var prominent: Bool = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(font)
-            .foregroundStyle(Tokens.ink)
+            .foregroundStyle(prominent ? Tokens.paper : Tokens.ink)
             .padding(.vertical, Space.sm)
-            .padding(.horizontal, Space.lg)
+            .padding(.horizontal, prominent ? Space.xl : Space.lg)
             .frame(minWidth: 44, minHeight: 44)
             .background {
-                Capsule(style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .fill(Tokens.surface.opacity(0.5))
-                    )
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.5)
-                    )
-                    .shadow(color: Tokens.ink.opacity(0.08), radius: 8, x: 0, y: 2)
+                if prominent {
+                    Capsule(style: .continuous)
+                        .fill(Tokens.ink)
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                        )
+                        .shadow(color: Tokens.ink.opacity(0.22), radius: 12, x: 0, y: 4)
+                } else {
+                    Capsule(style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .fill(Tokens.surface.opacity(0.5))
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.5)
+                        )
+                        .shadow(color: Tokens.ink.opacity(0.08), radius: 8, x: 0, y: 2)
+                }
             }
             .contentShape(Capsule(style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)

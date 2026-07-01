@@ -75,7 +75,10 @@ echo "-> ANTHROPIC_API_KEY resolved (length=${#ANTHROPIC_API_KEY})"
 # NOT abort the build.
 if [ -z "${OPENAI_API_KEY:-}" ]; then
     if [ -f "${MOBILE_DIR}/../server/.env" ]; then
-        OPENAI_API_KEY="$(grep -E '^OPENAI_API_KEY=' "${MOBILE_DIR}/../server/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+        # `|| true`: under `set -euo pipefail` a grep no-match returns 1 and the
+        # pipeline would abort the script. OpenAI is optional (we warn below), so
+        # swallow the miss and let the empty-key fallback handle it.
+        OPENAI_API_KEY="$(grep -E '^OPENAI_API_KEY=' "${MOBILE_DIR}/../server/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)"
     fi
 fi
 if [ -n "${OPENAI_API_KEY:-}" ]; then
