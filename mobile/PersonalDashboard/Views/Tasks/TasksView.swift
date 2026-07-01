@@ -689,7 +689,7 @@ private struct TaskEditorSheet: View {
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
                         }
-                        VStack(alignment: .leading, spacing: Space.xs) {
+                        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             HStack(spacing: Space.sm) {
                                 Text("Address").eyebrow()
                                 if isResolvingAddress {
@@ -759,7 +759,7 @@ private struct TaskEditorSheet: View {
     }
 
     private func labeled<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text(label).eyebrow()
             content()
         }

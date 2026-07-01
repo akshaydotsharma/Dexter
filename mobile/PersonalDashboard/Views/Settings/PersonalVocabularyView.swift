@@ -238,7 +238,7 @@ private struct KeywordEditorSheet: View {
     // MARK: - Fields
 
     private var termField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Term").eyebrow()
 
             TextField("e.g. Envisso", text: $term)
@@ -259,7 +259,7 @@ private struct KeywordEditorSheet: View {
     }
 
     private var notesField: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("Notes").eyebrow()
                 Spacer()

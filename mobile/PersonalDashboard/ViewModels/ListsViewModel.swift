@@ -79,6 +79,17 @@ final class ListsViewModel {
         await update(snapshot)
     }
 
+    func setItemURL(in list: Checklist, at index: Int, to url: String) async {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let listIndex = lists.firstIndex(where: { $0.id == list.id }),
+              index < lists[listIndex].items.count,
+              lists[listIndex].items[index].url != trimmed else { return }
+        var snapshot = lists[listIndex]
+        snapshot.items[index].url = trimmed
+        lists[listIndex] = snapshot
+        await update(snapshot)
+    }
+
     func toggleItem(in list: Checklist, at index: Int) async {
         guard let listIndex = lists.firstIndex(where: { $0.id == list.id }),
               index < lists[listIndex].items.count else { return }

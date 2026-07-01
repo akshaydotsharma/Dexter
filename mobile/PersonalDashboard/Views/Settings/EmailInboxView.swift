@@ -100,7 +100,7 @@ struct EmailInboxView: View {
     }
 
     private var passwordField: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
                 Text("App password")
                     .font(.edFootnote)
@@ -252,7 +252,7 @@ struct EmailInboxView: View {
     // MARK: - Building blocks
 
     private func field(label: String, text: Binding<String>, placeholder: String, keyboard: UIKeyboardType) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text(label)
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.muted)

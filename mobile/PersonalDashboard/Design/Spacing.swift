@@ -11,6 +11,14 @@ enum Space {
     static let xl:   CGFloat = 24
     static let xxl:  CGFloat = 32
     static let xxxl: CGFloat = 48
+
+    // MARK: - Semantic spacing
+
+    /// Vertical gap between a form field's label (eyebrow) and its input
+    /// control. Standardized across every editor / detail / settings sheet so
+    /// the label-over-field rhythm reads the same everywhere. Sits between
+    /// `xs` (too tight) and `md`.
+    static let fieldLabelGap: CGFloat = 8
 }
 
 // MARK: - Corner radius

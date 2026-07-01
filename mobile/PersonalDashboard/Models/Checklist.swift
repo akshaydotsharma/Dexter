@@ -8,11 +8,16 @@ struct ChecklistItem: Codable, Hashable, Sendable, Identifiable {
     var id: UUID
     var text: String
     var checked: Bool
+    /// Optional per-item link. Defaults to "" and is decoded with
+    /// `decodeIfPresent ?? ""` so JSON persisted before this field existed
+    /// still loads. Same forward-compatible shape as `id`.
+    var url: String
 
-    init(id: UUID = UUID(), text: String, checked: Bool = false) {
+    init(id: UUID = UUID(), text: String, checked: Bool = false, url: String = "") {
         self.id = id
         self.text = text
         self.checked = checked
+        self.url = url
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -20,6 +25,7 @@ struct ChecklistItem: Codable, Hashable, Sendable, Identifiable {
         case text
         case checked
         case completed
+        case url
     }
 
     init(from decoder: Decoder) throws {
@@ -37,6 +43,8 @@ struct ChecklistItem: Codable, Hashable, Sendable, Identifiable {
         } else {
             self.checked = false
         }
+        // Missing on all existing rows — default to "" so decode never throws.
+        self.url = (try? c.decodeIfPresent(String.self, forKey: .url)) ?? ""
     }
 
     func encode(to encoder: Encoder) throws {
@@ -44,6 +52,18 @@ struct ChecklistItem: Codable, Hashable, Sendable, Identifiable {
         try c.encode(id, forKey: .id)
         try c.encode(text, forKey: .text)
         try c.encode(checked, forKey: .checked)
+        try c.encode(url, forKey: .url)
+    }
+
+    /// The stored link coerced into a URL: trims whitespace, returns nil when
+    /// empty, uses the string as-is if it already carries a scheme, otherwise
+    /// prefixes `https://`. Mirrors `Todo.mapsURL`. The row hides the link chip
+    /// when this is nil.
+    var linkURL: URL? {
+        let stored = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        if let u = URL(string: stored), u.scheme != nil { return u }
+        return URL(string: "https://\(stored)")
     }
 }
 

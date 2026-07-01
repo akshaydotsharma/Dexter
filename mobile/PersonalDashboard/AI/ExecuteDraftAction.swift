@@ -585,6 +585,12 @@ struct ExecuteDraftAction {
         if let checked = input["checked"]?.boolValue, checked != item.checked {
             item.checked = checked; changed = true
         }
+        // `url` is optional in the schema: only touch it when the key is
+        // present. An empty string is a valid change (clears the link).
+        if let urlRaw = input["url"]?.stringValue {
+            let trimmed = urlRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed != item.url { item.url = trimmed; changed = true }
+        }
         guard changed else {
             throw DraftExecutionError.invalidArgument(field: "list item", reason: "no changes provided")
         }
@@ -1145,7 +1151,8 @@ struct ExecuteDraftAction {
             let text = (dict["text"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
             let checked = dict["checked"]?.boolValue ?? false
-            out.append(ChecklistItem(text: text, checked: checked))
+            let url = (dict["url"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            out.append(ChecklistItem(text: text, checked: checked, url: url))
         }
         return out
     }
