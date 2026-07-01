@@ -411,11 +411,15 @@ struct FinanceView: View {
 
     private var populatedContent: some View {
         let filtered = filteredExpenses
-        let stats = computeStats()
+        let stats = computeStats(range: dashboardRange, preset: filterState.datePreset)
         return ScrollView {
             VStack(spacing: Space.lg) {
-                FinanceDashboardBand(stats: stats)
-                    .padding(.horizontal, Space.lg)
+                FinanceDashboardBand(
+                    stats: stats,
+                    headerLabel: dashboardHeaderLabel,
+                    deltaComparisonLabel: filterState.datePreset.deltaComparisonLabel
+                )
+                .padding(.horizontal, Space.lg)
 
                 searchField
                     .padding(.horizontal, Space.lg)
@@ -616,24 +620,56 @@ struct FinanceView: View {
         return true
     }
 
-    /// Stats for the dashboard band. Always uses the FULL expense set
-    /// (not the filtered list) so the band always reflects "your real
-    /// finances" — filters only narrow the list below.
-    private func computeStats() -> FinanceDashboardStats {
+    /// Concrete window the dashboard totals + charts over (#187). Driven by the
+    /// selected date-range preset so the band tracks the same period as the
+    /// list's date filter. Category / source filters and search still only
+    /// narrow the list below — the band reflects total spend in the window.
+    private var dashboardRange: ClosedRange<Date> {
+        filterState.dashboardDateRange()
+    }
+
+    /// Header label for the band, reflecting the selected preset (#187).
+    /// `.custom` folds in the concrete date span; the rest are fixed words.
+    private var dashboardHeaderLabel: String {
+        if filterState.datePreset == .custom {
+            return filterState.customDashboardLabel()
+        }
+        return filterState.datePreset.dashboardLabel
+    }
+
+    /// Stats for the dashboard band, computed over the selected range (#187).
+    /// Always uses the FULL expense set (not category/source/search-filtered)
+    /// so the band reflects total spend in the window; only the date range
+    /// narrows it. The delta compares the range against the immediately
+    /// preceding window of EQUAL LENGTH.
+    private func computeStats(range: ClosedRange<Date>, preset: FinanceDateRangePreset) -> FinanceDashboardStats {
         let cal = Calendar.current
-        let now = Date()
-        let (monthStart, monthEnd) = ExpenseDateRanges.monthBounds(for: now)
-        let prev = cal.date(byAdding: .month, value: -1, to: now) ?? now
-        let (prevStart, prevEnd) = ExpenseDateRanges.monthBounds(for: prev)
 
-        let monthRows = allExpenses.filter { $0.date >= monthStart && $0.date <= monthEnd }
-        let prevRows = allExpenses.filter { $0.date >= prevStart && $0.date <= prevEnd }
+        let rangeRows = allExpenses.filter { range.contains($0.date) }
+        let rangeTotal = rangeRows.reduce(0) { $0 + $1.sgdAmount }
 
-        let monthTotal = monthRows.reduce(0) { $0 + $1.sgdAmount }
+        // Preceding comparison window. Calendar-month presets compare against
+        // the previous CALENDAR month (so month-length differences don't skew
+        // the delta and "This month" keeps its exact prior behaviour); rolling
+        // and custom windows compare against the prior span of EQUAL LENGTH,
+        // ending just before the range start.
+        let prevRange: ClosedRange<Date>
+        switch preset {
+        case .thisMonth, .lastMonth:
+            let prevMonthRef = cal.date(byAdding: .month, value: -1, to: range.lowerBound) ?? range.lowerBound
+            let bounds = ExpenseDateRanges.monthBounds(for: prevMonthRef)
+            prevRange = bounds.0...bounds.1
+        case .last30, .last90, .custom:
+            let span = range.upperBound.timeIntervalSince(range.lowerBound)
+            let prevEnd = range.lowerBound.addingTimeInterval(-1)
+            let prevStart = prevEnd.addingTimeInterval(-span)
+            prevRange = prevStart...prevEnd
+        }
+        let prevRows = allExpenses.filter { prevRange.contains($0.date) }
         let prevTotal = prevRows.reduce(0) { $0 + $1.sgdAmount }
 
         var byCategory: [ExpenseCategory: Double] = [:]
-        for row in monthRows {
+        for row in rangeRows {
             byCategory[row.categoryEnum, default: 0] += row.sgdAmount
         }
         let topCategories = byCategory
@@ -641,25 +677,25 @@ struct FinanceView: View {
             .prefix(3)
             .map { (category: $0.key, total: $0.value) }
 
-        // Daily totals for last 30 days inclusive.
-        let endOfToday = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))?
-            .addingTimeInterval(-1) ?? now
-        let startSpark = cal.date(byAdding: .day, value: -29, to: cal.startOfDay(for: now)) ?? now
-        let recent30 = allExpenses.filter { $0.date >= startSpark && $0.date <= endOfToday }
+        // Sparkline: one bucket per calendar day across the selected range,
+        // inclusive of both ends. Days with no spend draw a flat segment.
+        let sparkStart = cal.startOfDay(for: range.lowerBound)
+        let sparkEndDay = cal.startOfDay(for: range.upperBound)
+        let dayCount = (cal.dateComponents([.day], from: sparkStart, to: sparkEndDay).day ?? 0) + 1
         var dailyDict: [Date: Double] = [:]
-        for row in recent30 {
+        for row in rangeRows {
             let day = cal.startOfDay(for: row.date)
             dailyDict[day, default: 0] += row.sgdAmount
         }
         var dailyTotals: [(date: Date, total: Double)] = []
-        for offset in 0..<30 {
-            if let day = cal.date(byAdding: .day, value: offset, to: startSpark) {
+        for offset in 0..<max(dayCount, 1) {
+            if let day = cal.date(byAdding: .day, value: offset, to: sparkStart) {
                 dailyTotals.append((day, dailyDict[day] ?? 0))
             }
         }
 
         return FinanceDashboardStats(
-            monthTotal: monthTotal,
+            monthTotal: rangeTotal,
             previousMonthTotal: prevTotal,
             topCategories: topCategories,
             dailyTotals: dailyTotals

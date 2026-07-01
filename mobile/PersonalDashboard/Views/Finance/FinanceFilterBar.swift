@@ -20,6 +20,30 @@ enum FinanceDateRangePreset: String, CaseIterable, Identifiable, Hashable {
         case .custom:    return "Custom"
         }
     }
+
+    /// Header label for the dashboard band (#187). Spelled-out variants of
+    /// the (space-constrained) chip labels; `.custom` is filled in by the
+    /// caller with the concrete date span since it needs the picked dates.
+    var dashboardLabel: String {
+        switch self {
+        case .thisMonth: return "This month"
+        case .lastMonth: return "Last month"
+        case .last30:    return "Last 30 days"
+        case .last90:    return "Last 90 days"
+        case .custom:    return "Custom range"
+        }
+    }
+
+    /// Wording for the dashboard delta chip (#187). The two calendar-month
+    /// presets read naturally as "vs last/prior month"; the rolling-window and
+    /// custom presets compare against the preceding span of equal length.
+    var deltaComparisonLabel: String {
+        switch self {
+        case .thisMonth: return "vs last month"
+        case .lastMonth: return "vs prior month"
+        case .last30, .last90, .custom: return "vs previous period"
+        }
+    }
 }
 
 /// Aggregated filter state owned by `FinanceView`. Bound into the filter
@@ -41,6 +65,27 @@ struct FinanceFilterState: Equatable {
         if !sources.isEmpty { filter.sources = sources }
         filter.searchText = searchText
         return filter
+    }
+
+    /// Concrete date window for the dashboard band (#187). Unlike
+    /// `resolvedFilter().dateRange` (which is optional to model "no date
+    /// constraint"), this always returns a range so the dashboard has a
+    /// definite window to total, chart, and compute a delta over. Falls back
+    /// to the current calendar month if a component add ever fails.
+    func dashboardDateRange() -> ClosedRange<Date> {
+        if let range = resolvedDateRange() { return range }
+        let bounds = ExpenseDateRanges.monthBounds(for: Date())
+        return bounds.0...bounds.1
+    }
+
+    /// Compact date span shown in the dashboard header for a `.custom` range,
+    /// e.g. "3 Jun – 18 Jun". Same format as the filter chip's custom label.
+    func customDashboardLabel() -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "d MMM"
+        let lo = min(customStart, customEnd)
+        let hi = max(customStart, customEnd)
+        return "\(fmt.string(from: lo)) – \(fmt.string(from: hi))"
     }
 
     private func resolvedDateRange() -> ClosedRange<Date>? {

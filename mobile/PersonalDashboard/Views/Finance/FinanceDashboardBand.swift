@@ -21,10 +21,19 @@ struct FinanceDashboardStats {
 struct FinanceDashboardBand: View {
     let stats: FinanceDashboardStats
 
+    /// Header eyebrow reflecting the selected date-range preset (#187),
+    /// e.g. "This month", "Last 30 days", or a custom span like "3 – 18 Jun".
+    let headerLabel: String
+
+    /// Wording appended to the delta chip's accessibility label (#187),
+    /// e.g. "vs last month" / "vs previous period". Purely for VoiceOver;
+    /// the on-screen chip stays a compact percentage.
+    let deltaComparisonLabel: String
+
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             HStack(alignment: .firstTextBaseline) {
-                Text("This month").eyebrow()
+                Text(headerLabel).eyebrow()
                 Spacer()
                 deltaChip
             }
@@ -41,7 +50,7 @@ struct FinanceDashboardBand: View {
             sparkline
                 .frame(height: 36)
                 .padding(.top, Space.xs)
-                .accessibilityLabel("Spending over the last 30 days")
+                .accessibilityLabel("Spending over \(headerLabel.lowercased())")
         }
         .padding(Space.lg)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
@@ -67,6 +76,8 @@ struct FinanceDashboardBand: View {
             .padding(.horizontal, Space.sm)
             .padding(.vertical, 4)
             .background(chipBg, in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(isUp ? "Up" : "Down") \(formatDelta(delta)) \(deltaComparisonLabel)")
         } else if stats.previousMonthTotal == 0 && stats.monthTotal > 0 {
             Text("First month")
                 .font(.edFootnote)
