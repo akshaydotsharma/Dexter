@@ -414,7 +414,9 @@ enum ToolDefinitions {
                     "description": .string("Amount paid in the original currency. Must be greater than zero.")
                 ]),
                 "original_currency": string("ISO 4217 currency code (e.g., \"SGD\", \"USD\", \"EUR\"). Default to \"SGD\" if the user did not specify a currency."),
-                "payment_method": string("Optional payment method (e.g., \"Cash\", \"Visa **1234\"). Use empty string if unknown.")
+                "payment_method": string("Optional payment method (e.g., \"Cash\", \"Visa **1234\"). Use empty string if unknown."),
+                "source": string("How this expense was captured. Use \"receipt\" ONLY when logging from a forwarded purchase/receipt email; leave empty otherwise. Allowed values: manual, text, voice, photo, receipt, pdf, recurring."),
+                "trip_id": string("UUID of the EXISTING trip this expense belongs to, when (and only when) it is a travel fare for a trip in the EXISTING TRIPS context (e.g., a flight or hotel charge). Use empty string for any non-travel purchase.")
             ],
             required: ["id", "date", "category", "merchant", "description", "original_amount", "original_currency", "payment_method"]
         )

@@ -33,6 +33,12 @@ final class LocalEmailIngestLog {
     /// so undo can delete exactly those rows. Empty when nothing was added.
     var addedItemUUIDs: String
 
+    /// Comma-joined `LocalExpense.clientUUID` strings that were logged from this
+    /// email (#177), so undo can delete exactly those rows too. Additive field
+    /// with a default, so the SwiftData migration on existing installs stays
+    /// lightweight. Empty when no expense was logged.
+    var addedExpenseUUIDs: String = ""
+
     /// Diagnostics (#143): first ~1000 chars of the parsed body the model
     /// actually received, so a parser miss ("just a signature") is
     /// distinguishable from a real no-match. Additive field with a default,
@@ -53,6 +59,7 @@ final class LocalEmailIngestLog {
         summary: String,
         tripUUID: UUID? = nil,
         addedItemUUIDs: [UUID] = [],
+        addedExpenseUUIDs: [UUID] = [],
         debugBody: String = "",
         debugTripContext: String = "",
         createdAt: Date = Date()
@@ -64,6 +71,7 @@ final class LocalEmailIngestLog {
         self.summary = summary
         self.tripUUID = tripUUID
         self.addedItemUUIDs = addedItemUUIDs.map { $0.uuidString.lowercased() }.joined(separator: ",")
+        self.addedExpenseUUIDs = addedExpenseUUIDs.map { $0.uuidString.lowercased() }.joined(separator: ",")
         self.debugBody = debugBody
         self.debugTripContext = debugTripContext
         self.createdAt = createdAt
@@ -76,6 +84,13 @@ final class LocalEmailIngestLog {
     /// Parsed list of added item UUIDs (for undo).
     var addedItemUUIDList: [UUID] {
         addedItemUUIDs
+            .split(separator: ",")
+            .compactMap { UUID(uuidString: String($0)) }
+    }
+
+    /// Parsed list of logged expense UUIDs (for undo, #177).
+    var addedExpenseUUIDList: [UUID] {
+        addedExpenseUUIDs
             .split(separator: ",")
             .compactMap { UUID(uuidString: String($0)) }
     }
