@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import PDFKit
+import UIKit
 
 /// Editor target for the AddExpense / EditExpense sheet.
 ///
@@ -565,12 +567,20 @@ struct ReceiptThumbnailImage: View {
 }
 
 /// Full-screen receipt viewer. Sheet presented from AddExpenseSheet when
-/// the user taps the thumbnail. For PDFs we point Quick Look-style at the
-/// file URL via `PDFKit` would be ideal, but the simpler `Link`-to-URL
-/// flow isn't available inside a sheet; we render a placeholder with the
-/// filename instead and link the user out to Files for a real preview
-/// when needed. Images render full-size with pinch-to-zoom via the
-/// built-in `ScrollView` + `magnification`.
+/// the user taps the thumbnail.
+///
+/// Both branches are UIKit-backed for a native, smooth zoom that doesn't
+/// fight the sheet's own gestures:
+///  - Images: a `UIScrollView` + `UIImageView` with `viewForZooming`, so
+///    pinch-to-zoom, drag-to-pan-while-zoomed, and double-tap-to-toggle
+///    (fit ↔ 2.5×) all come from the platform. Fixed hand-rolled gesture
+///    math would jank and clip; the scroll view gets it right for free.
+///  - PDFs: a `PDFView` with `autoScales = true`, which gives native
+///    pinch-zoom and page scrolling.
+///
+/// Branch is chosen by the receipt's file extension (.pdf ⇒ PDF viewer).
+/// State resets on every present because the viewer is rebuilt each time
+/// the sheet opens (the `UIViewRepresentable`s make fresh views).
 struct ReceiptFullViewer: View {
     let relativePath: String
 
@@ -580,16 +590,7 @@ struct ReceiptFullViewer: View {
         NavigationStack {
             ZStack {
                 Tokens.paper.ignoresSafeArea()
-                if relativePath.lowercased().hasSuffix(".pdf") {
-                    pdfNote
-                } else if let url = ReceiptStorage.shared.load(relativePath: relativePath),
-                          let image = UIImage(contentsOfFile: url.path) {
-                    imageViewer(image)
-                } else {
-                    Text("Receipt is no longer available.")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.muted)
-                }
+                content
             }
             .navigationTitle("Receipt")
             .navigationBarTitleDisplayMode(.inline)
@@ -602,28 +603,177 @@ struct ReceiptFullViewer: View {
         }
     }
 
-    private func imageViewer(_ image: UIImage) -> some View {
-        ScrollView([.horizontal, .vertical], showsIndicators: false) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .padding()
+    @ViewBuilder
+    private var content: some View {
+        if let url = ReceiptStorage.shared.load(relativePath: relativePath) {
+            if relativePath.lowercased().hasSuffix(".pdf") {
+                PDFKitView(url: url)
+                    .ignoresSafeArea(edges: .bottom)
+            } else if let image = UIImage(contentsOfFile: url.path) {
+                ZoomableImageView(image: image)
+                    .ignoresSafeArea(edges: .bottom)
+            } else {
+                unavailable
+            }
+        } else {
+            unavailable
         }
     }
 
-    private var pdfNote: some View {
-        VStack(spacing: Space.md) {
-            Image(systemName: "doc.text.fill")
-                .font(.system(size: 44, weight: .regular))
-                .foregroundStyle(Tokens.accentFinance)
-            Text("PDF attached")
-                .font(.edHeading)
-                .foregroundStyle(Tokens.ink)
-            Text("Open the expense's source app to view this PDF in full.")
-                .font(.edSubheadline)
-                .foregroundStyle(Tokens.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, Space.xl)
+    private var unavailable: some View {
+        Text("Receipt is no longer available.")
+            .font(.edBody)
+            .foregroundStyle(Tokens.muted)
+    }
+}
+
+// MARK: - Zoomable image (UIScrollView-backed)
+
+/// A `UIScrollView` wrapping a `UIImageView`, exposing native pinch-to-zoom,
+/// pan-while-zoomed, and double-tap-to-toggle. `viewForZooming` is what makes
+/// the scroll view drive the zoom; the image is centred in `layoutSubviews`
+/// so it stays anchored while fit and while zoomed out.
+private struct ZoomableImageView: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> CenteringScrollView {
+        let scrollView = CenteringScrollView()
+        scrollView.delegate = context.coordinator
+        scrollView.backgroundColor = .clear
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.bouncesZoom = true
+        // Minimum is set to fit in `updateZoomScales`; start at 1.0.
+        scrollView.minimumZoomScale = 1.0
+        scrollView.maximumZoomScale = 5.0
+
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        scrollView.imageView = imageView
+        scrollView.addSubview(imageView)
+
+        // Double-tap toggles between fit and a comfortable zoom.
+        let doubleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleDoubleTap(_:))
+        )
+        doubleTap.numberOfTapsRequired = 2
+        scrollView.addGestureRecognizer(doubleTap)
+
+        return scrollView
+    }
+
+    func updateUIView(_ uiView: CenteringScrollView, context: Context) {
+        // No dynamic props to sync; the image is fixed for the viewer's life.
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            (scrollView as? CenteringScrollView)?.imageView
+        }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            (scrollView as? CenteringScrollView)?.centerImage()
+        }
+
+        @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let scrollView = recognizer.view as? CenteringScrollView else { return }
+            if scrollView.zoomScale > scrollView.minimumZoomScale + 0.01 {
+                // Zoomed in → reset to fit.
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            } else {
+                // At fit → zoom toward the tapped point.
+                let target = min(scrollView.minimumZoomScale * 2.5, scrollView.maximumZoomScale)
+                let point = recognizer.location(in: scrollView.imageView)
+                let size = scrollView.bounds.size
+                let w = size.width / target
+                let h = size.height / target
+                let rect = CGRect(x: point.x - w / 2, y: point.y - h / 2, width: w, height: h)
+                scrollView.zoom(to: rect, animated: true)
+            }
+        }
+    }
+}
+
+/// A `UIScrollView` that keeps its single `imageView` sized to fit and
+/// centred. The minimum zoom scale is the aspect-fit scale, so "fit" is the
+/// true zoomed-out state and pinch-out never leaves dead space. Recomputes on
+/// bounds changes (rotation, sheet resize).
+private final class CenteringScrollView: UIScrollView {
+    var imageView: UIImageView?
+    private var lastBoundsSize: CGSize = .zero
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Recompute fit only when the bounds actually change, so a zoom
+        // (which triggers layout) doesn't clobber the user's current scale.
+        if bounds.size != lastBoundsSize {
+            lastBoundsSize = bounds.size
+            configureForFit()
+        }
+        centerImage()
+    }
+
+    /// Size the image view to the image's natural size, set the content size,
+    /// and derive the aspect-fit scale as the minimum zoom (and initial zoom).
+    private func configureForFit() {
+        guard let imageView, let image = imageView.image, bounds.width > 0, bounds.height > 0 else { return }
+        let imageSize = image.size
+        guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+        imageView.frame = CGRect(origin: .zero, size: imageSize)
+        contentSize = imageSize
+
+        let scaleW = bounds.width / imageSize.width
+        let scaleH = bounds.height / imageSize.height
+        let fitScale = min(scaleW, scaleH)
+
+        minimumZoomScale = fitScale
+        maximumZoomScale = max(fitScale * 5, fitScale)
+        zoomScale = fitScale
+    }
+
+    /// Keep the image centred when it's smaller than the viewport (fit /
+    /// zoomed-out), and pinned to the edges once it overflows (zoomed-in).
+    func centerImage() {
+        guard let imageView else { return }
+        let boundsSize = bounds.size
+        var frame = imageView.frame
+        frame.origin.x = frame.width < boundsSize.width
+            ? (boundsSize.width - frame.width) / 2
+            : 0
+        frame.origin.y = frame.height < boundsSize.height
+            ? (boundsSize.height - frame.height) / 2
+            : 0
+        imageView.frame = frame
+    }
+}
+
+// MARK: - PDF (PDFKit-backed)
+
+/// A `PDFView` with `autoScales = true`, which gives native pinch-zoom,
+/// page scrolling, and a fit-to-width initial layout. Loaded from the
+/// on-disk receipt URL.
+private struct PDFKitView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.backgroundColor = .clear
+        pdfView.document = PDFDocument(url: url)
+        return pdfView
+    }
+
+    func updateUIView(_ uiView: PDFView, context: Context) {
+        if uiView.document == nil {
+            uiView.document = PDFDocument(url: url)
         }
     }
 }

@@ -205,7 +205,7 @@ struct EmailInboxView: View {
                     .padding(Space.lg)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(logEntries.prefix(30).enumerated()), id: \.element.clientUUID) { index, entry in
+                    ForEach(Array(logEntries.prefix(10).enumerated()), id: \.element.clientUUID) { index, entry in
                         if index > 0 { divider }
                         logRow(entry)
                     }
