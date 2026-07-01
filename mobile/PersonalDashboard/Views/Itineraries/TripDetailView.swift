@@ -687,10 +687,9 @@ struct ItineraryItemEditorSheet: View {
                     .foregroundStyle(trimmedTitle.isEmpty ? Tokens.muted : Tokens.ink)
                 }
             }
-            .confirmationDialog(
+            .alert(
                 "Delete this item?",
-                isPresented: $showingDeleteConfirmation,
-                titleVisibility: .visible
+                isPresented: $showingDeleteConfirmation
             ) {
                 Button("Delete", role: .destructive) {
                     deleteItem()
