@@ -302,9 +302,13 @@ enum ToolDefinitions {
                 "type": .string("string"),
                 "description": .string("STAY ONLY, OPTIONAL: check-out time as a full ISO 8601 datetime with timezone (e.g., 2026-06-17T11:00:00-04:00). The DATE portion MUST match end_date. Set this when the user mentions a check-out time; otherwise omit.")
             ]),
+            "address": .object([
+                "type": .string("string"),
+                "description": .string("OPTIONAL postal address / location text for this item as it appears in the booking (e.g. the hotel, Airbnb, restaurant, or activity venue address). Used to locate the place on a map. The device builds the map link from this automatically, so extract the address text accurately. Omit or use empty string if none.")
+            ]),
             "google_maps_link": .object([
                 "type": .string("string"),
-                "description": .string("OPTIONAL Google Maps URL for the location (e.g., https://maps.app.goo.gl/abc or https://www.google.com/maps/place/...). Extract it ONLY if the source explicitly contains one; do NOT invent or guess a link. Omit (or use empty string) when there is no link.")
+                "description": .string("OPTIONAL Google Maps URL for the location (e.g., https://maps.app.goo.gl/abc or https://www.google.com/maps/place/...). Extract it ONLY if the source explicitly contains one; do NOT invent or guess a link (the device derives one from address instead). Omit (or use empty string) when there is no link.")
             ])
         ]),
         "required": .array([.string("day_date"), .string("kind"), .string("title"), .string("notes")])
@@ -362,7 +366,7 @@ enum ToolDefinitions {
 
     private static let editItineraryItem = AnthropicTool(
         name: "edit_itinerary_item",
-        description: "Edit an EXISTING itinerary item's day, kind, title, notes, start time, (for stays) check-out date / time, or Google Maps link. Requires the item UUID. IMPORTANT: At least one field must actually change. Use empty string for fields to keep unchanged. Use the literal string \"null\" for notes, start_time, end_date, end_time, or google_maps_link to CLEAR them. day_date, kind, and title cannot be cleared.",
+        description: "Edit an EXISTING itinerary item's day, kind, title, notes, start time, (for stays) check-out date / time, address, or Google Maps link. Requires the item UUID. IMPORTANT: At least one field must actually change. Use empty string for fields to keep unchanged. Use the literal string \"null\" for notes, start_time, end_date, end_time, address, or google_maps_link to CLEAR them. day_date, kind, and title cannot be cleared.",
         input_schema: object(
             properties: [
                 "id": string("The UUID of the existing itinerary item to edit (from EXISTING TRIPS context)."),
@@ -373,6 +377,7 @@ enum ToolDefinitions {
                 "start_time": string("New start time as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00). The date portion should match day_date. Use empty string to keep unchanged, or the literal \"null\" to clear (make the item untimed)."),
                 "end_date": string("STAY ONLY: new check-out date in ISO 8601 (e.g., 2026-06-17). Must be > day_date. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "end_time": string("STAY ONLY: new check-out time as a full ISO 8601 datetime with timezone (e.g., 2026-06-17T11:00:00-04:00). The date portion should match end_date. Use empty string to keep unchanged, or the literal \"null\" to clear."),
+                "address": string("New postal address / location text for the location (e.g. hotel or restaurant address). The device builds the map link from this automatically. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "google_maps_link": string("New Google Maps URL for the location. Use empty string to keep unchanged, or the literal \"null\" to clear.")
             ],
             required: ["id", "day_date", "kind", "title", "notes"]

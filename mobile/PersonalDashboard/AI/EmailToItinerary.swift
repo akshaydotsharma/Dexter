@@ -280,6 +280,14 @@ struct EmailToItinerary {
             }
         }
 
+        // #174: upgrade name+address search links on this trip to exact-coordinate
+        // pins via on-device forward geocoding. Runs AFTER execution, is fully
+        // best-effort, and never affects the ingest outcome (its own errors are
+        // swallowed inside). Skipped when nothing matched a trip.
+        if let tripUUID = matchedTripUUID {
+            await enrichMapLinks(tripUUID: tripUUID)
+        }
+
         // A change was made if we added items and/or reconcile-updated any.
         // Both surface as the `.added` outcome so the log/notification treat
         // it as a change, not a bare skip.
@@ -344,8 +352,9 @@ struct EmailToItinerary {
     ///  - Only updates a row whose `sourceConfirmation` is non-empty (an
     ///    email-sourced row); a purely manual row is never touched.
     ///  - Only the detail fields the email provides are sent
-    ///    (start_time / end_time / end_date / notes / google_maps_link),
-    ///    routed through `ExecuteDraftAction.updateItineraryItem` so date/time
+    ///    (start_time / end_time / end_date / notes / address /
+    ///    google_maps_link), routed through
+    ///    `ExecuteDraftAction.updateItineraryItem` so date/time
     ///    parsing is identical to the add path (post-#163). Never title, kind,
     ///    or day_date.
     ///  - Returns the row UUID ONLY when a field actually changed (snapshot
@@ -371,15 +380,15 @@ struct EmailToItinerary {
         // Keys must match what `updateItineraryItem` reads. Empty string = keep
         // (its tri-state), so a field the email omits is left untouched. We
         // never send title / kind / day_date (safeguard 4). `address` is
-        // intentionally not sent: `updateItineraryItem` doesn't read it and the
-        // email add-path doesn't populate it, so there's nothing to reconcile.
+        // included so a re-scan can backfill it onto items created before the
+        // add-path populated it (#169).
         let itemUUID = row.clientUUID
         var editInput: [String: AnthropicJSONValue] = [
             "id": .string(itemUUID.uuidString.lowercased())
         ]
         // Only include a detail key when the email actually supplied a value,
         // so we rely on "keep" semantics rather than emitting empty strings.
-        for key in ["start_time", "end_time", "end_date", "notes", "google_maps_link"] {
+        for key in ["start_time", "end_time", "end_date", "notes", "address", "google_maps_link"] {
             if let raw = dict[key]?.stringValue {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
@@ -397,6 +406,7 @@ struct EmailToItinerary {
             row.endTime,
             row.endDate,
             row.notes,
+            row.address,
             row.googleMapsLink
         )
 
@@ -418,7 +428,8 @@ struct EmailToItinerary {
             || after.endTime != before.1
             || after.endDate != before.2
             || after.notes != before.3
-            || after.googleMapsLink != before.4
+            || after.address != before.4
+            || after.googleMapsLink != before.5
         return changed ? itemUUID : nil
     }
 
@@ -442,6 +453,86 @@ struct EmailToItinerary {
             summary += " (\(skipped) already present, skipped.)"
         }
         return summary
+    }
+
+    // MARK: - Map-link enrichment (#174)
+
+    /// Max items forward-geocoded per run. `CLGeocoder` rate-limits to ~1
+    /// request/sec, so a large trip could otherwise blow the ~22s capture
+    /// budget. The rest keep their working name+address search links.
+    private static let maxGeocodesPerRun = 8
+
+    /// Upgrade name+address search links on the matched trip to exact-coordinate
+    /// pins. Idempotent and best-effort:
+    ///  - Targets only items whose `googleMapsLink` is a name+address SEARCH
+    ///    link (`/maps/search/?api=1&query=`) whose `query` is NOT already a
+    ///    bare `lat,lng` pair, and which have a non-empty `address`. This picks
+    ///    up freshly-added AND reconcile-backfilled items, skips explicit email
+    ///    links, and skips already-resolved coordinate pins so a re-scan never
+    ///    re-geocodes.
+    ///  - Geocodes SEQUENTIALLY (concurrent CLGeocoder requests get cancelled)
+    ///    and caps the batch, so it can't stall ingestion.
+    ///  - On a coordinate hit, rewrites `googleMapsLink` to the pin URL and
+    ///    saves; on a miss the search link is left untouched.
+    /// The whole pass is wrapped so a thrown error can never affect the ingest
+    /// result — geocoding is a pure enrichment.
+    private func enrichMapLinks(tripUUID: UUID) async {
+        let fk = tripUUID
+        let items = (try? store.context.fetch(
+            FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.tripUUID == fk })
+        )) ?? []
+
+        // Only search-link items with an address are candidates.
+        let candidates = items.filter { item in
+            !item.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && Self.isUpgradableSearchLink(item.googleMapsLink)
+        }
+        guard !candidates.isEmpty else { return }
+
+        let geocoder = AddressGeocoder()
+        var geocoded = 0
+        for item in candidates {
+            if geocoded >= Self.maxGeocodesPerRun {
+                NSLog("EmailToItinerary: geocode cap (%d) reached; %d item(s) left with search links",
+                      Self.maxGeocodesPerRun, candidates.count - geocoded)
+                break
+            }
+            geocoded += 1
+            guard let coordinate = await geocoder.resolveCoordinate(
+                address: item.address,
+                name: item.title
+            ), let pin = AddressGeocoder.pinURL(for: coordinate) else {
+                // No result / timeout / error: keep the working search link.
+                continue
+            }
+            item.googleMapsLink = pin.absoluteString
+            item.updatedAt = Date()
+            try? store.context.save()
+        }
+    }
+
+    /// `true` when the stored link is a name+address Google Maps SEARCH link
+    /// that has NOT yet been resolved to a coordinate pin — i.e. it contains
+    /// `/maps/search/?api=1&query=` and its `query` value is not a bare
+    /// `lat,lng` pair. Empty links and explicit non-search email links (which
+    /// take a different URL shape) both return `false`.
+    static func isUpgradableSearchLink(_ link: String) -> Bool {
+        let trimmed = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("/maps/search/"),
+              let components = URLComponents(string: trimmed),
+              let query = components.queryItems?.first(where: { $0.name == "query" })?.value,
+              !query.isEmpty else {
+            return false
+        }
+        // A coordinate pin's query is already `lat,lng` — leave it alone.
+        return !isCoordinatePair(query)
+    }
+
+    /// `true` when the string is just `lat,lng`. Mirrors the check in
+    /// `MapsLinkResolver`; used to skip items already resolved to a pin.
+    private static func isCoordinatePair(_ string: String) -> Bool {
+        let pattern = "^-?\\d{1,3}\\.\\d+,\\s*-?\\d{1,3}\\.\\d+$"
+        return string.range(of: pattern, options: .regularExpression) != nil
     }
 
     // MARK: - Helpers
@@ -575,14 +666,14 @@ struct EmailToItinerary {
 
         YOUR JOB:
         1. Read the forwarded email and work out what it is: a hotel/accommodation booking (stay), a flight or other transport (activity), a tour/event/ticket (activity), a restaurant reservation (restaurant), or a place to visit (place).
-        2. Find the ONE trip in the EXISTING TRIPS list whose date range CONTAINS the booking's date(s) AND whose destination plausibly matches. Both must hold.
+        2. Find the ONE trip in the EXISTING TRIPS list whose dates OVERLAP the booking's date(s) AND whose destination plausibly matches. Both must hold. OVERLAP, not strict containment: a booking matches when its stay/travel window intersects the trip's date range OR sits within about a day of either edge. Bookings routinely straddle a trip's boundaries — a hotel's LAST night commonly checks OUT the morning AFTER the trip's nominal end date, and an arrival hotel may check IN the night BEFORE the trip formally starts. Treat these as matching; do NOT reject a booking merely because its check-out is a day past the trip end or its check-in is a day before the trip start, as long as the stay clearly belongs to that trip.
         3. DESTINATION MATCHING IS LENIENT. The trip name is usually a country or region ("Italy"); the booking names a city, airport code, hotel, or neighbourhood. Treat the booking as matching when its location is plausibly inside the trip's destination: a flight to Rome (FCO) or Milan, or a hotel in Florence, all match an "Italy" trip. An IATA airport/city code counts (FCO/MXP/CIA → Italy, NRT/HND → Japan). When the date range fits and the destination is plausibly within the trip's region, MATCH IT — do not hold out for an exact city-name string match. Only refuse on destination when the location clearly belongs to a different country/region than every trip (a Tokyo hotel against a Vietnam trip).
         4. If exactly one trip matches, call add_itinerary_item with that trip_id and the item(s) parsed from the email.
-        5. If NO trip matches (dates clearly outside every range, or destination clearly in a different region), add NOTHING. Respond with one short sentence saying it didn't match and naming the booking's dates + destination so the user can see why. Do NOT force a match.
+        5. If NO trip matches (the booking's dates are clearly well outside every trip's range — not merely a day over an edge — or the destination is clearly in a different region), add NOTHING. Respond with one short sentence saying it didn't match and naming the booking's dates + destination so the user can see why. Do NOT force a match.
         6. If the email is not a booking/reservation at all (newsletter, receipt for something unrelated, spam), add nothing and say so briefly.
 
         YEAR INFERENCE (important):
-        Booking documents often show dates WITHOUT a year ("Mon, 7 Sept", "Check-in 7 Sept", "7–9 Sept"). NEVER emit a date with a missing or wrong year (no year 0, 0001, 1970, or blindly "this year"). Resolve the year from the MATCHED trip's date range first: if the trip runs 2026-09-05 → 2026-09-12 and the booking says "7 Sept", the date is 2026-09-07. If you cannot match a trip, resolve the year as the next future occurrence relative to the current date. The day_date you emit MUST fall inside the matched trip's date range; if "7 Sept" only fits one trip's range once you apply that trip's year, that is your match.
+        Booking documents often show dates WITHOUT a year ("Mon, 7 Sept", "Check-in 7 Sept", "7–9 Sept"). NEVER emit a date with a missing or wrong year (no year 0, 0001, 1970, or blindly "this year"). Resolve the year from the MATCHED trip's date range first: if the trip runs 2026-09-05 → 2026-09-12 and the booking says "7 Sept", the date is 2026-09-07. If you cannot match a trip, resolve the year as the next future occurrence relative to the current date. The day_date you emit should fall on or within the matched trip's date range (a stay's check-in on the trip's FINAL day is valid even when its check-out lands the day after the trip ends); if "7 Sept" only fits one trip's range once you apply that trip's year, that is your match.
 
         MAPPING RULES:
         - Hotel / accommodation / Airbnb confirmation -> kind "stay". Set day_date to the check-in date and end_date to the check-out date (stays require end_date). Include the hotel name in the title.
@@ -592,12 +683,13 @@ struct EmailToItinerary {
         - Sightseeing place with no booking -> kind "place".
 
         ITEM FIELDS:
-        - day_date: the date the item happens, ISO 8601 (yyyy-MM-dd is fine). MUST fall inside the matched trip's date range.
+        - day_date: the date the item happens, ISO 8601 (yyyy-MM-dd is fine). It should fall within the matched trip's date range. For a stay, day_date is the check-in date; the check-out (end_date) may be up to about a day after the trip's end — that is expected for a last-night booking, not a reason to skip.
         - title: concise and specific (vendor / flight number / hotel name).
-        - notes: confirmation number, address, times, and any other useful detail from the email. Keep it factual.
+        - notes: confirmation/booking number, times, and any other useful detail from the email. Keep it factual. The physical address goes in the address field (below), not here, so don't duplicate it verbatim into notes.
         - start_time: full ISO 8601 datetime with timezone when the email gives a clear time; otherwise omit.
         - For stays only: end_date (check-out) is required; end_time optional.
-        - google_maps_link: if the email or attachment contains an explicit Google Maps URL for the location (maps.app.goo.gl, goo.gl/maps, google.com/maps, maps.google.com), copy it verbatim into this field. Do NOT invent, guess, or construct a link from an address; omit the field when no real link is present.
+        - address: the venue's physical/postal address when the email or attachment contains one (hotel or Airbnb address for a stay, restaurant address, activity venue, the airport or terminal for a flight-as-activity). Applies to every kind, since they are all physical locations. Copy the address text as written; omit or use empty string when the source gives no address.
+        - google_maps_link: if the email or attachment contains an explicit Google Maps URL for the location (maps.app.goo.gl, goo.gl/maps, google.com/maps, maps.google.com), copy it verbatim into this field. Do NOT invent, guess, or construct a link from an address. The device builds the map link from the address field automatically, so focus on getting the address text right and leave google_maps_link empty unless a real link is present in the source.
 
         Be conservative. A wrong auto-add is worse than a miss — when the destination or dates are ambiguous, add nothing and explain in one sentence.
         \(contextBlock)
