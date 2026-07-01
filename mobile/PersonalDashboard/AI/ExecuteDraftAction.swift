@@ -772,7 +772,7 @@ struct ExecuteDraftAction {
             // Optional start_time: any unparseable value silently falls back
             // to nil (untimed) rather than failing the whole batch. The
             // model can omit the field entirely; we don't require it.
-            let startTime = parseAnyISODate(dict["start_time"]?.stringValue)
+            let startTime = parseWallClockTime(dict["start_time"]?.stringValue)
 
             // Stay-only check-out fields. For non-stay kinds, both are
             // discarded even if the model accidentally provided them.
@@ -783,7 +783,7 @@ struct ExecuteDraftAction {
                    let parsedEnd = parseAnyISODate(endRaw) {
                     endDateValue = cal.startOfDay(for: parsedEnd)
                 }
-                endTimeValue = parseAnyISODate(dict["end_time"]?.stringValue)
+                endTimeValue = parseWallClockTime(dict["end_time"]?.stringValue)
             }
 
             // Optional Google Maps link. A bare/empty value or the "null"
@@ -939,7 +939,7 @@ struct ExecuteDraftAction {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed == "null" {
                 row.startTime = nil; changed = true
-            } else if !trimmed.isEmpty, let parsed = parseAnyISODate(trimmed) {
+            } else if !trimmed.isEmpty, let parsed = parseWallClockTime(trimmed) {
                 row.startTime = parsed; changed = true
             }
         }
@@ -957,7 +957,7 @@ struct ExecuteDraftAction {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed == "null" {
                 row.endTime = nil; changed = true
-            } else if !trimmed.isEmpty, let parsed = parseAnyISODate(trimmed) {
+            } else if !trimmed.isEmpty, let parsed = parseWallClockTime(trimmed) {
                 row.endTime = parsed; changed = true
             }
         }
@@ -1107,6 +1107,30 @@ struct ExecuteDraftAction {
         return nil
     }
 
+    /// Parse an ISO 8601 datetime as a FLOATING wall-clock time. Itinerary
+    /// times are wall-clock at the destination: a 14:00 check-in in Milan must
+    /// read 14:00 no matter where the phone is. The AI emits the destination
+    /// offset (e.g. "...T14:00:00+02:00"); we drop the offset and reinterpret
+    /// the wall-clock in the device timezone so
+    /// `.formatted(.dateTime.hour().minute())` (which renders in device time)
+    /// shows the stated time. Returns nil for date-only or unparseable input
+    /// (→ untimed item).
+    private func parseWallClockTime(_ raw: String?) -> Date? {
+        guard let raw, raw != "null" else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // Strip a trailing timezone designator: "Z", "+02:00", "-0500", "+02".
+        let noOffset = trimmed.replacingOccurrences(
+            of: "(Z|[+-]\\d{2}(:?\\d{2})?)$",
+            with: "",
+            options: .regularExpression)
+        // Reinterpret the wall clock in the device timezone.
+        for fmt in Self.wallClockFormatters {
+            if let d = fmt.date(from: noOffset) { return d }
+        }
+        return nil
+    }
+
     private func trimmedString(_ value: AnthropicJSONValue?) -> String? {
         guard let raw = value?.stringValue else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1158,6 +1182,21 @@ struct ExecuteDraftAction {
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateFormat = "yyyy-MM-dd"
         return f
+    }()
+
+    /// Wall-clock parsers for itinerary time-of-day fields. Both use the
+    /// DEVICE timezone (`.current`) so an offset-stripped datetime like
+    /// "2026-09-02T14:00:00" is reinterpreted as 14:00 local, i.e. the time
+    /// the booking stated. One shape with fractional seconds, one without.
+    private static let wallClockFormatters: [DateFormatter] = {
+        ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS"].map { pattern in
+            let f = DateFormatter()
+            f.calendar = Calendar(identifier: .gregorian)
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = .current
+            f.dateFormat = pattern
+            return f
+        }
     }()
 }
 
