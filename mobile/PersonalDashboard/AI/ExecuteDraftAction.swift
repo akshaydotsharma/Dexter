@@ -1116,11 +1116,11 @@ struct ExecuteDraftAction {
     /// Parse an ISO 8601 datetime as a FLOATING wall-clock time. Itinerary
     /// times are wall-clock at the destination: a 14:00 check-in in Milan must
     /// read 14:00 no matter where the phone is. The AI emits the destination
-    /// offset (e.g. "...T14:00:00+02:00"); we drop the offset and reinterpret
-    /// the wall-clock in the device timezone so
-    /// `.formatted(.dateTime.hour().minute())` (which renders in device time)
-    /// shows the stated time. Returns nil for date-only or unparseable input
-    /// (→ untimed item).
+    /// offset (e.g. "...T14:00:00+02:00"); we drop the offset and anchor the
+    /// wall-clock to UTC (a FIXED internal anchor, never shown to the user)
+    /// so a UTC-pinned display formatter always renders the stated H:M
+    /// regardless of the device's current timezone. Returns nil for date-only
+    /// or unparseable input (→ untimed item).
     private func parseWallClockTime(_ raw: String?) -> Date? {
         guard let raw, raw != "null" else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1130,7 +1130,7 @@ struct ExecuteDraftAction {
             of: "(Z|[+-]\\d{2}(:?\\d{2})?)$",
             with: "",
             options: .regularExpression)
-        // Reinterpret the wall clock in the device timezone.
+        // Anchor the wall clock to UTC (fixed internal anchor).
         for fmt in Self.wallClockFormatters {
             if let d = fmt.date(from: noOffset) { return d }
         }
@@ -1191,16 +1191,19 @@ struct ExecuteDraftAction {
         return f
     }()
 
-    /// Wall-clock parsers for itinerary time-of-day fields. Both use the
-    /// DEVICE timezone (`.current`) so an offset-stripped datetime like
-    /// "2026-09-02T14:00:00" is reinterpreted as 14:00 local, i.e. the time
-    /// the booking stated. One shape with fractional seconds, one without.
+    /// Wall-clock parsers for itinerary time-of-day fields. Both anchor to
+    /// UTC so an offset-stripped datetime like "2026-09-02T14:00:00" parses
+    /// to 14:00:00 UTC, i.e. the time the booking stated. UTC is a FIXED
+    /// internal anchor (never shown to the user); a UTC-pinned display
+    /// formatter then renders the stated H:M no matter the device timezone,
+    /// so itinerary times never drift when the phone changes zones. One shape
+    /// with fractional seconds, one without.
     private static let wallClockFormatters: [DateFormatter] = {
         ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS"].map { pattern in
             let f = DateFormatter()
             f.calendar = Calendar(identifier: .gregorian)
             f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = .current
+            f.timeZone = TimeZone(identifier: "UTC")
             f.dateFormat = pattern
             return f
         }

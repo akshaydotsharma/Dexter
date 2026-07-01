@@ -333,10 +333,23 @@ enum TimelineEntry: Identifiable {
         }
     }
 
+    /// Locale-aware hour:minute formatter PINNED to UTC. Itinerary
+    /// `startTime`/`endTime` are stored as UTC wall-clock (their UTC H:M
+    /// equals the booking's stated local time), so rendering in UTC shows the
+    /// stated time and never drifts when the device timezone changes. The
+    /// "jmm" template keeps the user's 12/24-hour locale preference.
+    static let itineraryTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .current
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.setLocalizedDateFormatFromTemplate("jmm")
+        return f
+    }()
+
     /// The "Anytime / Check-in / Check-out · HH:mm" line shown inside the
     /// card below the kind chip.
     var dateTimeLine: String {
-        let timeFormat: (Date) -> String = { $0.formatted(.dateTime.hour().minute()) }
+        let timeFormat: (Date) -> String = { TimelineEntry.itineraryTimeFormatter.string(from: $0) }
         switch self {
         case .single(let item):
             if let t = item.startTime { return timeFormat(t) }
@@ -846,6 +859,44 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
+    /// Storage boundary → UTC. Read the (hour, minute) of `timeFrom` in the
+    /// DEVICE calendar (what the picker shows), then build a Date on `onDay`'s
+    /// calendar day with those same components anchored in UTC. The result's
+    /// UTC H:M equals the picked local H:M, so a UTC-pinned display formatter
+    /// renders exactly what the user picked, regardless of timezone.
+    private func utcWallClock(onDay: Date, timeFrom: Date) -> Date {
+        let local = Calendar.current
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let day = local.dateComponents([.year, .month, .day], from: onDay)
+        let time = local.dateComponents([.hour, .minute], from: timeFrom)
+        var comps = DateComponents()
+        comps.year = day.year
+        comps.month = day.month
+        comps.day = day.day
+        comps.hour = time.hour
+        comps.minute = time.minute
+        comps.second = 0
+        return utc.date(from: comps) ?? timeFrom
+    }
+
+    /// Storage boundary → picker. Inverse of `utcWallClock`: read the
+    /// (hour, minute) of a stored UTC wall-clock Date in a UTC calendar, then
+    /// build a DEVICE-local Date carrying those same components on `onDay`'s
+    /// local calendar day, so the DatePicker surfaces the stated time.
+    private func deviceLocalPickerDate(onDay: Date, utcWallClock: Date) -> Date {
+        let local = Calendar.current
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let time = utc.dateComponents([.hour, .minute], from: utcWallClock)
+        return local.date(
+            bySettingHour: time.hour ?? 0,
+            minute: time.minute ?? 0,
+            second: 0,
+            of: onDay
+        ) ?? onDay
+    }
+
     /// Returns `existing` with the time-of-day replaced by `defaultHour:00` if
     /// the existing time is midnight; otherwise leaves it as-is. Used when
     /// the "Include time" toggle flips on so the picker doesn't surface 12:00 AM.
@@ -1077,14 +1128,17 @@ struct ItineraryItemEditorSheet: View {
                 address = existing.address
                 googleMapsLink = existing.googleMapsLink
                 if let start = existing.startTime {
+                    // Stored as UTC wall-clock; seed the (device-local) picker
+                    // with a Date carrying the same H:M on the item's day, so
+                    // the picker surfaces the stated time.
                     hasTime = true
-                    dayDate = start
+                    dayDate = deviceLocalPickerDate(onDay: existing.dayDate, utcWallClock: start)
                 }
                 if let end = existing.endDate {
                     endDate = end
                     if let endT = existing.endTime {
                         hasEndTime = true
-                        endDate = endT
+                        endDate = deviceLocalPickerDate(onDay: end, utcWallClock: endT)
                     }
                 } else if existing.kindEnum == .stay {
                     // Stay with no persisted endDate (legacy item before the
@@ -1104,14 +1158,22 @@ struct ItineraryItemEditorSheet: View {
         let cal = Calendar.current
         let normalisedDay = cal.startOfDay(for: dayDate)
 
+        // Times are persisted as UTC wall-clock: the picker carries a
+        // device-local H:M, and we store a Date whose UTC H:M equals what the
+        // user picked, anchored on the item's day. This makes itinerary times
+        // timezone-independent (what you pick is what shows, forever). The day
+        // bucket (`normalisedDay`) stays device-local start-of-day so grouping
+        // is unaffected.
+        //
         // For non-stay or when "Include time" is off: persist only the day.
-        // For non-stay with time on: persist the full date+time as `startTime`,
-        // dayDate stays start-of-day so the grouping bucket is unambiguous.
-        let startTimeValue: Date? = hasTime ? dayDate : nil
+        // For non-stay with time on: persist startTime as UTC wall-clock on
+        // the item's day; dayDate stays start-of-day so the grouping bucket is
+        // unambiguous.
+        let startTimeValue: Date? = hasTime ? utcWallClock(onDay: dayDate, timeFrom: dayDate) : nil
 
         // Stay-only end fields. Other kinds clear both.
         let endDateValue: Date? = kind == .stay ? cal.startOfDay(for: endDate) : nil
-        let endTimeValue: Date? = (kind == .stay && hasEndTime) ? endDate : nil
+        let endTimeValue: Date? = (kind == .stay && hasEndTime) ? utcWallClock(onDay: endDate, timeFrom: endDate) : nil
 
         switch target {
         case .new:
