@@ -325,7 +325,7 @@ extension AnthropicClient {
         // lines via the existing array recovery (which trims a truncated array
         // back to its last complete element). This preserves the #184
         // large-statement recovery behaviour untouched.
-        guard let arrayString = Self.firstJSONArray(in: combinedText),
+        guard let arrayString = Self.linesArray(in: combinedText),
               let arrayData = arrayString.data(using: .utf8) else {
             throw StatementExtractionError.noJSON
         }
@@ -446,6 +446,61 @@ extension AnthropicClient {
       transaction lines.
     - Do not invent fields or add commentary outside the JSON fence.
     """
+
+    /// Pull the `"lines"` transaction array out of the model's response (#189).
+    ///
+    /// The payload is now an OBJECT — `{ "statement": {...}, "lines": [...] }` —
+    /// so the old "first `[` in the text" scan (`firstJSONArray`) swallowed the
+    /// wrapper object's trailing `}` and produced invalid JSON. We locate the
+    /// `"lines"` key, then bracket-match from its opening `[` (ignoring brackets
+    /// inside strings) to isolate exactly the array. If the array was truncated
+    /// by the token ceiling (no matching `]`), we recover the well-formed prefix
+    /// — trim to the last complete object and close the bracket — preserving the
+    /// #184 large-statement behaviour. Falls back to `firstJSONArray` when there
+    /// is no `"lines"` key (e.g. the model dropped the wrapper and emitted a bare
+    /// array).
+    static func linesArray(in text: String) -> String? {
+        guard let searchStart = text.range(of: "\"lines\"")?.upperBound,
+              let bracketStart = text.range(of: "[", range: searchStart..<text.endIndex) else {
+            // No wrapper object — fall back to the fenced / bare-array scan.
+            return firstJSONArray(in: text)
+        }
+
+        // Bracket-match the array, ignoring brackets inside string literals.
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var i = bracketStart.lowerBound
+        while i < text.endIndex {
+            let ch = text[i]
+            if escaped {
+                escaped = false
+            } else if ch == "\\" {
+                escaped = true
+            } else if ch == "\"" {
+                inString.toggle()
+            } else if !inString {
+                if ch == "[" {
+                    depth += 1
+                } else if ch == "]" {
+                    depth -= 1
+                    if depth == 0 {
+                        return String(text[bracketStart.lowerBound...i])
+                    }
+                }
+            }
+            i = text.index(after: i)
+        }
+
+        // No closing `]` — the array was truncated mid-stream by the token
+        // ceiling. Recover the well-formed prefix: trim to the last complete
+        // object and close the bracket (same recovery `firstJSONArray` uses).
+        let raw = String(text[bracketStart.lowerBound...])
+        if let lastObjectEnd = raw.range(of: "}", options: .backwards) {
+            return String(raw[raw.startIndex...lastObjectEnd.lowerBound]) + "]"
+        }
+        return nil
+    }
 
     /// Pull the first ```json``` fenced JSON ARRAY out of `text`. Falls back to
     /// a bare ``` fence, then to a raw `[ ... ]` array in the text. Also
