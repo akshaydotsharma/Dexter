@@ -141,6 +141,10 @@ enum DataArchive {
         let receiptImagePath: String?
         let source: String
         let createdAt: Date
+        /// Refund direction (#206). Optional so archives written before this
+        /// field existed still decode (missing key -> nil -> false on import,
+        /// i.e. a plain expense).
+        let isRefund: Bool?
     }
 
     struct VocabDTO: Codable {

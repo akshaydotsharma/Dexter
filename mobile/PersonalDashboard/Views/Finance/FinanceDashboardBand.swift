@@ -105,7 +105,10 @@ struct FinanceDashboardBand: View {
     }
 
     private func categoryBar(entry: (category: ExpenseCategory, total: Double), max: Double) -> some View {
-        let ratio = max > 0 ? entry.total / max : 0
+        // A net-negative category (refunds outweighed spend, #206) would give a
+        // negative ratio; clamp to 0 so the bar just empties rather than drawing
+        // a negative width. The trailing SGD label still shows the true net.
+        let ratio = max > 0 ? Swift.max(0, entry.total / max) : 0
         return HStack(spacing: Space.sm) {
             Image(systemName: entry.category.sfSymbol)
                 .font(.system(size: 12, weight: .regular))
@@ -169,7 +172,9 @@ struct FinanceDashboardBand: View {
             let step = size.width / CGFloat(count - 1)
             for (idx, value) in values.enumerated() {
                 let x = CGFloat(idx) * step
-                let normalised = maxValue > 0 ? CGFloat(value / maxValue) : 0
+                // Clamp to >= 0 so a net-negative (refund) day rests on the
+                // baseline instead of drawing below the frame (#206).
+                let normalised = maxValue > 0 ? Swift.max(0, CGFloat(value / maxValue)) : 0
                 let y = size.height - (normalised * (size.height - 2)) - 1
                 if idx == 0 {
                     path.move(to: CGPoint(x: x, y: y))
@@ -187,7 +192,7 @@ struct FinanceDashboardBand: View {
             path.move(to: CGPoint(x: 0, y: size.height))
             for (idx, value) in values.enumerated() {
                 let x = CGFloat(idx) * step
-                let normalised = maxValue > 0 ? CGFloat(value / maxValue) : 0
+                let normalised = maxValue > 0 ? Swift.max(0, CGFloat(value / maxValue)) : 0
                 let y = size.height - (normalised * (size.height - 2)) - 1
                 path.addLine(to: CGPoint(x: x, y: y))
             }

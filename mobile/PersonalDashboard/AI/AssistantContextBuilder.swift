@@ -217,12 +217,14 @@ struct AssistantContextBuilder {
                 let monthComps = cal.dateComponents([.year, .month], from: now)
                 let monthStart = cal.date(from: monthComps) ?? now
                 let monthRows = recent.filter { $0.date >= monthStart }
-                let monthTotal = monthRows.reduce(0.0) { $0 + $1.sgdAmount }
+                // Net refunds against spend (#206) so the figure the assistant
+                // reports matches the Finance UI's netted totals.
+                let monthTotal = monthRows.reduce(0.0) { $0 + $1.signedSGD }
 
-                // Category totals this month, biggest first.
+                // Category totals this month, biggest first (refunds netted).
                 var byCategory: [String: Double] = [:]
                 for row in monthRows {
-                    byCategory[row.category, default: 0] += row.sgdAmount
+                    byCategory[row.category, default: 0] += row.signedSGD
                 }
                 let topCategories = byCategory
                     .sorted { $0.value > $1.value }
@@ -256,6 +258,9 @@ struct AssistantContextBuilder {
                         line += String(format: " (\(row.originalCurrency.uppercased()) %.2f)", row.originalAmount)
                     }
                     line += " · \(category)"
+                    // Flag refunds so the assistant reads them as money-in, not
+                    // spend — the amount above is a positive magnitude (#206).
+                    if row.isRefund { line += " · refund (credit)" }
                     out += line
                 }
             }

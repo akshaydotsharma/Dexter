@@ -94,8 +94,11 @@ struct ExpenseService {
         eventUUID: UUID? = nil,
         eventName: String? = nil,
         numberOfShares: Int = 1,
+        isRefund: Bool = false,
         clientUUID: String? = nil
     ) throws -> LocalExpense {
+        // Amount is always the positive magnitude, even for a refund — the
+        // direction is carried by `isRefund`, so this guard stays valid (#206).
         guard originalAmount > 0 else { throw ExpenseServiceError.invalidAmount }
 
         let row = LocalExpense(
@@ -116,7 +119,8 @@ struct ExpenseService {
             personName: personName?.trimmedNonEmpty,
             eventUUID: eventUUID,
             eventName: eventName?.trimmedNonEmpty,
-            numberOfShares: max(numberOfShares, 1)
+            numberOfShares: max(numberOfShares, 1),
+            isRefund: isRefund
         )
         store.context.insert(row)
         try save()
@@ -261,7 +265,8 @@ struct ExpenseService {
         let rows = try fetch(in: start...end)
         var sums: [String: Double] = [:]
         for row in rows {
-            sums[row.category, default: 0] += row.sgdAmount
+            // Net refunds against the category they reverse (#206).
+            sums[row.category, default: 0] += row.signedSGD
         }
         return sums
             .sorted { $0.value > $1.value }
@@ -282,7 +287,7 @@ struct ExpenseService {
         var byDay: [Date: Double] = [:]
         for row in rows {
             let day = cal.startOfDay(for: row.date)
-            byDay[day, default: 0] += row.sgdAmount
+            byDay[day, default: 0] += row.signedSGD
         }
         var out: [(date: Date, total: Double)] = []
         for offset in 0..<30 {
@@ -310,7 +315,10 @@ struct ExpenseService {
     // MARK: - Helpers
 
     private func sum(in range: ClosedRange<Date>) throws -> Double {
-        try fetch(in: range).reduce(0) { $0 + $1.sgdAmount }
+        // Net: refunds subtract from the total (#206). Backs monthTotal /
+        // previousMonthTotal, so both the running month figure and the
+        // delta chip reflect money returned.
+        try fetch(in: range).reduce(0) { $0 + $1.signedSGD }
     }
 
     private func fetch(in range: ClosedRange<Date>) throws -> [LocalExpense] {

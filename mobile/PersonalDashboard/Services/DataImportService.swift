@@ -337,6 +337,7 @@ final class DataImportService {
                     receiptImagePath: restoredPath ?? dto.receiptImagePath,
                     source: dto.source,
                     createdAt: dto.createdAt,
+                    isRefund: dto.isRefund ?? false,
                     needsSync: false,
                     version: 0
                 ))
