@@ -39,7 +39,8 @@ final class StatementDedupeReconciliationTests: XCTestCase {
         _ amount: Double?,
         day: String = "2026-05-01",
         type: ExtractedStatementLine.LineType = .purchase,
-        currency: String = "SGD"
+        currency: String = "SGD",
+        descriptor: String? = nil
     ) -> ExtractedStatementLine {
         ExtractedStatementLine(
             merchant: merchant,
@@ -47,7 +48,8 @@ final class StatementDedupeReconciliationTests: XCTestCase {
             amount: amount,
             currency: currency,
             type: type,
-            category: "food_and_dining"
+            category: "food_and_dining",
+            descriptor: descriptor
         )
     }
 
@@ -185,6 +187,88 @@ final class StatementDedupeReconciliationTests: XCTestCase {
             result.totalParsed
         )
         XCTAssertEqual(result.totalParsed, 5)
+    }
+
+    // MARK: - (f) Merchant paraphrase across runs — same descriptor dedups (#208)
+
+    func test_merchantParaphrase_sameDescriptor_reimportInsertsZero() async throws {
+        // The exact bug: SHOPEE lines stored as merchant "SHOPEE SINGAPORE" on
+        // the first import and "SHOPEE SINGAPORE Shopee" on the re-import (the
+        // model paraphrases the merchant), but the VERBATIM descriptor off the
+        // statement text is identical across both runs.
+        let verbatim = "SHOPEE SINGAPORE Shopee SINGAPORE"
+
+        let first = await importer.insert(
+            lines: [line("SHOPEE SINGAPORE", 10.27, descriptor: verbatim)],
+            possiblyTruncated: false
+        )
+        XCTAssertEqual(first.imported, 1)
+
+        // Re-import: merchant paraphrased differently, SAME verbatim descriptor.
+        let second = await importer.insert(
+            lines: [line("SHOPEE SINGAPORE Shopee", 10.27, descriptor: verbatim)],
+            possiblyTruncated: false
+        )
+        XCTAssertEqual(second.imported, 0, "same verbatim descriptor must dedup despite paraphrased merchant")
+        XCTAssertEqual(second.skippedDuplicates, 1)
+        XCTAssertEqual(try storedCount(), 1, "no duplicate row on re-import")
+    }
+
+    // MARK: - (g) Legacy row (empty descriptor) is matched, not re-added
+
+    func test_legacyRowNoDescriptor_matchedByBucket_insertsZero() async throws {
+        // A pre-fix row (or a receipt / manual row) has an EMPTY dedupeDescriptor.
+        // A statement re-import that now carries a verbatim descriptor must still
+        // recognise it via the legacy bucket fallback (amount + date + currency)
+        // so existing data is never re-duplicated.
+        try seed(merchant: "SHOPEE SINGAPORE", amount: 5.97, source: .receipt)
+
+        let result = await importer.insert(
+            lines: [line("Shopee", 5.97, descriptor: "SHOPEE SINGAPORE Shopee SINGAPORE")],
+            possiblyTruncated: false
+        )
+        XCTAssertEqual(result.imported, 0, "legacy empty-descriptor row matched on amount+date+currency")
+        XCTAssertEqual(result.skippedDuplicates, 1)
+        XCTAssertEqual(try storedCount(), 1, "legacy row is not re-duplicated")
+    }
+
+    // MARK: - (h) Same amount + day, different descriptors — both import
+
+    func test_sameAmountDay_differentDescriptors_bothImport_thenReimportZero() async throws {
+        let lines = [
+            line("Cafe A", 8.0, descriptor: "CAFE ALPHA SINGAPORE SG"),
+            line("Cafe B", 8.0, descriptor: "BETA COFFEE ROASTERS SG")
+        ]
+
+        let first = await importer.insert(lines: lines, possiblyTruncated: false)
+        XCTAssertEqual(first.imported, 2, "distinct descriptors are distinct transactions")
+        XCTAssertEqual(first.skippedDuplicates, 0)
+        XCTAssertEqual(try storedCount(), 2)
+
+        let second = await importer.insert(lines: lines, possiblyTruncated: false)
+        XCTAssertEqual(second.imported, 0, "re-import is idempotent")
+        XCTAssertEqual(second.skippedDuplicates, 2)
+        XCTAssertEqual(try storedCount(), 2)
+    }
+
+    // MARK: - (i) Three identical descriptors — 3 then 0
+
+    func test_tripleIdenticalDescriptor_firstThreeThenZero() async throws {
+        let verbatim = "KULT YARD @ TIONG BAHRU SG"
+        let lines = [
+            line("Kult Yard", 16.5, descriptor: verbatim),
+            line("Kult Yard", 16.5, descriptor: verbatim),
+            line("Kult Yard", 16.5, descriptor: verbatim)
+        ]
+
+        let first = await importer.insert(lines: lines, possiblyTruncated: false)
+        XCTAssertEqual(first.imported, 3, "three identical lines all import on first pass")
+        XCTAssertEqual(try storedCount(), 3)
+
+        let second = await importer.insert(lines: lines, possiblyTruncated: false)
+        XCTAssertEqual(second.imported, 0, "3 match 3 → nothing re-adds")
+        XCTAssertEqual(second.skippedDuplicates, 3)
+        XCTAssertEqual(try storedCount(), 3)
     }
 
     // MARK: - existingCount helper counts multiplicity, not existence

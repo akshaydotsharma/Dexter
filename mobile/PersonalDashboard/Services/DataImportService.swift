@@ -338,6 +338,7 @@ final class DataImportService {
                     source: dto.source,
                     createdAt: dto.createdAt,
                     isRefund: dto.isRefund ?? false,
+                    dedupeDescriptor: dto.dedupeDescriptor ?? "",
                     needsSync: false,
                     version: 0
                 ))

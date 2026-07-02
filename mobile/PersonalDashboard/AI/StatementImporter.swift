@@ -88,21 +88,25 @@ struct StatementImportResult: Sendable {
 ///      the balance and would double-count against the purchases it paid off.
 ///      Refunds are NOT dropped: they import as credits (`isRefund: true`) that
 ///      net against spending totals (#206).
-///   3. Reconcile by structural class rather than boolean existence (#208).
-///      Group the remaining lines by their structural key
-///      (dir|merchant|day|amount|currency). For each class, let N = lines this
-///      statement asserts and M = matching rows already stored; insert
-///      `max(0, N - M)` of them (FX-convert + `ExpenseService` with `source:
-///      .pdf`, stamping the structural `dedupeKey`; statements carry no order
-///      reference, so `sourceReference` stays empty), and count the rest as
-///      skipped duplicates.
+///   3. Reconcile by VERBATIM descriptor within a bucket, not by the paraphrased
+///      merchant (#208). `ExpenseDedupe.statementInsertDecisions` multiset-matches
+///      each incoming line against already-stored rows inside its
+///      (dir|day|amount|currency) bucket, on the statement descriptor (with a
+///      legacy fallback for rows that predate the descriptor field). Unmatched
+///      lines are inserted (FX-convert + `ExpenseService` with `source: .pdf`,
+///      stamping `dedupeDescriptor` = the normalised verbatim descriptor and the
+///      structural `dedupeKey`; `sourceReference` stays empty); matched lines are
+///      counted as skipped duplicates.
 ///
-/// Why counts, not a boolean: statement rows have no per-line reference, so two
-/// genuine same-day/same-amount purchases (e.g. two coffees at one café) are
-/// structurally identical. A boolean `exists` skips every line after the first
-/// and under-counts real spend. Counting inserts the right multiplicity while
-/// staying idempotent on re-import (N == M → insert 0) and self-healing after a
-/// truncated import or a receipt already logged for one visit (N > M → top up).
+/// Why the verbatim descriptor: statement rows have no per-line reference, and
+/// the model paraphrases the merchant differently across extraction runs (e.g.
+/// "SHOPEE SINGAPORE" one run, "SHOPEE SINGAPORE Shopee" the next), so a
+/// merchant-keyed re-import silently re-inserted rows. The amount, date, and
+/// currency come from the statement's stable numeric columns; the descriptor is
+/// copied off the page character-for-character and is stable too. Matching on it
+/// keeps re-imports idempotent while two genuine same-day/same-amount lines with
+/// DIFFERENT descriptors both import, and self-heals after a truncated import or
+/// a receipt/legacy row already logged for one visit (that row is absorbed).
 ///
 /// Auto-import: there is no per-row review. The importer inserts survivors
 /// directly and returns counts for the summary.
@@ -174,10 +178,15 @@ struct StatementImporter {
             let category: ExpenseCategory
             let isRefund: Bool
             let proposed: ExpenseDedupe.Proposed
-            /// Structural class key. For a statement (no order reference) this is
-            /// the structural signature, so two same-merchant/day/amount/currency
-            /// lines of the same direction share it and reconcile together.
+            /// Structural class key (dir|merchant|day|amount|currency). Stamped on
+            /// the inserted row's `dedupeKey` for continuity with the email path;
+            /// NOT what statement re-import dedup keys on (that's `descKey`).
             let classKey: String
+            /// Normalised VERBATIM statement descriptor — the stable re-import
+            /// dedup key (#208). Falls back to the merchant when the model
+            /// returned no descriptor. Stamped on the inserted row's
+            /// `dedupeDescriptor`.
+            let descKey: String
         }
 
         // Pass 1 — classify every line. Payments are counted and dropped;
@@ -225,6 +234,17 @@ struct StatementImporter {
                 sourceReference: "",
                 isRefund: isRefund
             )
+
+            // Verbatim descriptor is the stable re-import dedup key (#208). The
+            // model paraphrases `merchant` differently across runs, so keying on
+            // it re-inserted the same line on re-import. If the model returned no
+            // descriptor for this line, fall back to the merchant so behaviour
+            // degrades to the old merchant-based key rather than an empty key
+            // that would over-merge unrelated same-amount/day lines.
+            let rawDescriptor = line.descriptor?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let descriptorSource = rawDescriptor.isEmpty ? (merchant ?? "") : rawDescriptor
+            let descKey = ExpenseDedupe.normalizeMerchant(descriptorSource)
+
             candidates.append(Candidate(
                 amount: amount,
                 currency: currency,
@@ -233,39 +253,51 @@ struct StatementImporter {
                 category: category,
                 isRefund: isRefund,
                 proposed: proposed,
-                classKey: ExpenseDedupe.signature(for: proposed)
+                classKey: ExpenseDedupe.signature(for: proposed),
+                descKey: descKey
             ))
         }
 
-        // Count reconciliation (#208). For each structural class, let N be the
-        // number of lines THIS statement asserts and M the number of matching
-        // rows ALREADY stored (computed ONCE, before this batch inserts anything).
-        // We may insert at most `max(0, N - M)` rows for the class; the rest are
-        // duplicates. `budget[classKey]` is that deficit, decremented as we
-        // consume slots so a re-query can't inflate M with rows we just inserted.
+        // Descriptor-based bucket reconciliation (#208). Within each (direction,
+        // day, amount, currency) bucket we multiset-match incoming lines against
+        // already-stored rows on the VERBATIM descriptor (with a legacy fallback
+        // for rows that predate the descriptor field), computed ONCE before this
+        // batch inserts anything. `decisions[i]` is true when candidate i is new
+        // spend to insert; false when it duplicates a stored row.
         //
-        // Behaviour: two identical coffees with none stored → N=2,M=0 → both
-        // import; a clean re-import → N=2,M=2 → both skip (idempotent); a
-        // truncated first import → N=2,M=1 → one imports (self-heals); a receipt
-        // already logged for one visit → N=2,M=1 → one imports (absorbs overlap).
-        var budget: [String: Int] = [:]
-        for candidate in candidates where budget[candidate.classKey] == nil {
-            let n = candidates.filter { $0.classKey == candidate.classKey }.count
-            let m = ExpenseDedupe.existingCount(matching: candidate.proposed, context: store.context)
-            budget[candidate.classKey] = max(0, n - m)
-        }
+        // Why descriptor, not merchant: the model paraphrases the merchant
+        // differently across extraction runs, so a merchant-keyed re-import
+        // silently re-inserted rows. The descriptor is copied off the page
+        // verbatim and is stable across runs.
+        //
+        // Behaviour: two identical lines with none stored → both import; a clean
+        // re-import → both skip (idempotent); a truncated first import → the
+        // missing one imports (self-heals); a receipt/legacy row already logged
+        // for one visit → absorbed; the SHOPEE merchant-paraphrase case → same
+        // descriptor → deduped.
+        let decisions = ExpenseDedupe.statementInsertDecisions(
+            incoming: candidates.map {
+                ExpenseDedupe.StatementIncoming(
+                    isRefund: $0.isRefund,
+                    date: $0.date,
+                    amount: $0.amount,
+                    currency: $0.currency,
+                    descriptor: $0.descKey
+                )
+            },
+            context: store.context
+        )
 
-        // Pass 2 — walk candidates in original statement order. A class with
-        // remaining budget attempts an insert (consuming a slot regardless of
-        // outcome, so a failed insert never promotes a later duplicate into its
-        // place); once the budget is spent, the rest of the class are skipped
-        // duplicates.
-        for candidate in candidates {
-            guard let remaining = budget[candidate.classKey], remaining > 0 else {
+        // Pass 2 — walk candidates in original statement order. A candidate the
+        // reconciler marked for insertion attempts one (a failed insert is
+        // counted as failed, never promoting a duplicate into its place, because
+        // decisions were fixed up front against the pre-batch store); the rest
+        // are skipped duplicates.
+        for (i, candidate) in candidates.enumerated() {
+            guard decisions[i] else {
                 skippedDuplicates += 1
                 continue
             }
-            budget[candidate.classKey] = remaining - 1
 
             // FX. SGD passes straight through; other currencies hit FXService
             // (cached 1 day). A rate failure counts the line as failed rather
@@ -293,12 +325,16 @@ struct StatementImporter {
                     source: .pdf,
                     isRefund: candidate.isRefund
                 )
-                // Stamp the structural dedupe signature. It's now EXPECTED that
-                // legit duplicates in the same class share this key — counting,
-                // not the key's uniqueness, is what keeps re-imports idempotent.
-                // sourceReference stays empty (the statement carries no reference).
+                // Stamp the structural dedupe signature (kept for continuity with
+                // the email path's fast-path). sourceReference stays empty (the
+                // statement carries no reference).
                 row.dedupeKey = candidate.classKey
                 row.sourceReference = ""
+                // The stable re-import dedup key (#208): the normalised verbatim
+                // descriptor. A future re-import matches on THIS within the
+                // (dir|day|amount|currency) bucket, so the same statement dedups
+                // even when the model paraphrases the merchant differently.
+                row.dedupeDescriptor = candidate.descKey
                 // Statement attribution (#189): which statement this came off.
                 // Display-only — deliberately NOT part of the dedupe signature.
                 row.statementLabel = statementLabel

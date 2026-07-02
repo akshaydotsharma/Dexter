@@ -20,6 +20,17 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
     let type: LineType?
     let category: String?      // ExpenseCategory.rawValue
 
+    /// The transaction description EXACTLY as printed on the statement,
+    /// verbatim (including any trailing location / country tokens and reference
+    /// codes), with NO cleanup or reformatting (#208). Used ONLY as the stable
+    /// dedup key: the numeric columns (amount / date / currency) are stable
+    /// across extraction runs, but the model paraphrases `merchant` differently
+    /// each run, which broke re-import idempotency. The verbatim descriptor is
+    /// copied off the page character-for-character, so it's identical across
+    /// runs. Optional so older / partial responses without it still decode; the
+    /// importer falls back to `merchant` for the key when it's nil/empty.
+    let descriptor: String?
+
     /// Statement line classification. Purchases, fees, and interest become
     /// expenses; payments (transfers to the card) and refunds/credits are
     /// tallied and skipped because `LocalExpense` stores only positive spend.
@@ -61,10 +72,13 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
         case currency
         case type
         case category
+        case descriptor
     }
 
     /// Lenient decode: an unrecognised `type` string decodes to nil rather than
     /// failing the whole array, so one odd row never sinks a 40-line statement.
+    /// `descriptor` is `decodeIfPresent`, so a response (or a JSON-recovery
+    /// prefix) that omits it decodes cleanly to nil.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         merchant = try c.decodeIfPresent(String.self, forKey: .merchant)
@@ -73,16 +87,19 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
         currency = try c.decodeIfPresent(String.self, forKey: .currency)
         type = (try? c.decodeIfPresent(LineType.self, forKey: .type)) ?? nil
         category = try c.decodeIfPresent(String.self, forKey: .category)
+        descriptor = try c.decodeIfPresent(String.self, forKey: .descriptor)
     }
 
-    /// Direct memberwise init for tests.
-    init(merchant: String?, date: String?, amount: Double?, currency: String?, type: LineType?, category: String?) {
+    /// Direct memberwise init for tests. `descriptor` defaults to nil so
+    /// existing call sites that don't exercise the dedup key stay unchanged.
+    init(merchant: String?, date: String?, amount: Double?, currency: String?, type: LineType?, category: String?, descriptor: String? = nil) {
         self.merchant = merchant
         self.date = date
         self.amount = amount
         self.currency = currency
         self.type = type
         self.category = category
+        self.descriptor = descriptor
     }
 }
 
@@ -449,6 +466,7 @@ extension AnthropicClient {
       "lines": [
         {
           "merchant": "Starbucks",
+          "descriptor": "STARBUCKS @ ION ORCHARD SINGAPORE SG",
           "date": "YYYY-MM-DD",
           "amount": 12.34,
           "currency": "SGD",
@@ -478,6 +496,18 @@ extension AnthropicClient {
     Transaction line rules ("lines" array):
     - Return one element per transaction line on the statement. Include ALL of
       them: purchases, fees, interest charges, card payments, and refunds.
+    - "merchant" is the clean, human-readable merchant / vendor name for display
+      (e.g. "Starbucks", "Shopee"). Tidy it up as you normally would.
+    - "descriptor" is the transaction description EXACTLY as printed on the
+      statement — verbatim, character-for-character. Copy the raw description
+      text as-is, INCLUDING any trailing location, city, or country tokens and
+      any reference / merchant codes (e.g. "STARBUCKS @ ION ORCHARD SINGAPORE
+      SG", "SHOPEE SINGAPORE Shopee SINGAPORE", "AMZN Mktp SG*A1B2C3"). Do NOT
+      clean it up, expand abbreviations, fix casing, remove codes, or reformat
+      it in any way — it must match the statement text so the same line reads
+      identically every time. Return the same descriptor value even for a
+      payment or refund. Only if a line genuinely has no printed description at
+      all, set it to the same value as "merchant".
     - "amount" is always a POSITIVE number (the magnitude of the line). Never
       emit a negative amount; the sign is conveyed by "type" instead.
     - "type" is EXACTLY one of: "purchase", "fee", "interest", "payment",
