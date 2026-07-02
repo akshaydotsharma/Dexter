@@ -63,7 +63,11 @@ struct ItinerariesView: View {
             }
         }
         .activeSection(.itineraries)
-        .onAppear { syncBackHandler() }
+        .onAppear {
+            consumeFocus()
+            syncBackHandler()
+        }
+        .onChange(of: router.focus) { _, _ in consumeFocus() }
         .onDisappear {
             if selectedTripUUID != nil {
                 router.leadingEdgeBackHandler = nil
@@ -136,6 +140,20 @@ struct ItinerariesView: View {
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    // MARK: - Activity deep-link consumption
+
+    /// The Activity timeline sets `router.focus` to a `.itineraries` focus whose
+    /// `id` is the trip UUID, then pushes this section. Open that trip's detail
+    /// and clear the focus so it doesn't re-fire. If the trip can't be resolved
+    /// (deleted since), we just clear focus and leave the root list showing.
+    private func consumeFocus() {
+        guard let focus = router.focus, focus.section == .itineraries else { return }
+        if trips.contains(where: { $0.clientUUID == focus.id }) {
+            withAnimation(.easeOut(duration: 0.2)) { selectedTripUUID = focus.id }
+        }
+        router.focus = nil
     }
 
     // MARK: - Back-swipe wiring (mirrors ListsView.syncBackHandler)

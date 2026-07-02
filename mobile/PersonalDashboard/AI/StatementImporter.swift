@@ -89,9 +89,9 @@ struct StatementImporter {
     /// (`StatementExtractionError`); per-line insert failures are caught and
     /// counted in the result, never propagated, so one bad row can't sink the
     /// whole import.
-    func importStatement(pdfData: Data) async throws -> StatementImportResult {
+    func importStatement(pdfData: Data, fileName: String? = nil) async throws -> StatementImportResult {
         let (lines, meta, truncated) = try await anthropic.extractStatement(pdfData: pdfData)
-        return await insert(lines: lines, meta: meta, possiblyTruncated: truncated)
+        return await insert(lines: lines, meta: meta, fileName: fileName, possiblyTruncated: truncated)
     }
 
     /// Bucket + insert already-parsed lines. Split out from `importStatement`
@@ -106,6 +106,7 @@ struct StatementImporter {
     func insert(
         lines: [ExtractedStatementLine],
         meta: ExtractedStatementMeta = ExtractedStatementMeta(issuer: nil, last4: nil, statementMonth: nil, statementYear: nil),
+        fileName: String? = nil,
         possiblyTruncated: Bool
     ) async -> StatementImportResult {
         var imported = 0
@@ -121,6 +122,7 @@ struct StatementImporter {
         // inserted this run (#189). Both are "" when the header couldn't be
         // read, in which case we write nothing rather than a placeholder.
         let statementLabel = meta.attributionLabel
+        let statementFileName = (fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let cardLabel = meta.cardLabel
         let paymentMethod = cardLabel.isEmpty ? nil : cardLabel
 
@@ -198,6 +200,10 @@ struct StatementImporter {
                 // Statement attribution (#189): which statement this came off.
                 // Display-only — deliberately NOT part of the dedupe signature.
                 row.statementLabel = statementLabel
+                // File name of the imported PDF (#198). Collapses the whole
+                // statement into a single Activity row titled by its file name,
+                // even when the header couldn't be parsed (empty statementLabel).
+                row.statementFileName = statementFileName
                 try? store.context.save()
 
                 imported += 1

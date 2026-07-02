@@ -384,7 +384,7 @@ struct FinanceView: View {
         }
 
         do {
-            let result = try await StatementImporter.default().importStatement(pdfData: pdfData)
+            let result = try await StatementImporter.default().importStatement(pdfData: pdfData, fileName: fileName)
             statementImportSummary = result.summaryLine
         } catch {
             let message: String = {

@@ -86,6 +86,16 @@ final class LocalExpense {
     // the same statement is treated as a duplicate.
     var statementLabel: String = ""
 
+    // The name of the PDF file this row was imported from, e.g.
+    // "Citi_May2026.pdf". Populated ONLY by the statement-import path; empty for
+    // every other source and for rows imported before this field existed. Used
+    // to collapse a whole statement into a single Activity row titled by its
+    // file name (#198). Additive with a default so the SwiftData migration on
+    // existing installs stays lightweight (add-with-default, never remove) and
+    // every existing call site is unaffected. Display-only — never part of the
+    // dedupe signature.
+    var statementFileName: String = ""
+
     // MARK: - Person / Event tags (#183)
     //
     // Two optional groupings any expense can carry: a Person ("who was this
@@ -142,6 +152,7 @@ final class LocalExpense {
         sourceReference: String = "",
         tripUUID: UUID? = nil,
         statementLabel: String = "",
+        statementFileName: String = "",
         personUUID: UUID? = nil,
         personName: String? = nil,
         eventUUID: UUID? = nil,
@@ -167,6 +178,7 @@ final class LocalExpense {
         self.sourceReference = sourceReference
         self.tripUUID = tripUUID
         self.statementLabel = statementLabel
+        self.statementFileName = statementFileName
         self.personUUID = personUUID
         self.personName = personName
         self.eventUUID = eventUUID
