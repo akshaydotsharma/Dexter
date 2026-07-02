@@ -421,14 +421,12 @@ struct FinanceView: View {
                 )
                 .padding(.horizontal, Space.lg)
 
-                searchField
-                    .padding(.horizontal, Space.lg)
-
                 FinanceFilterBar(state: $filterState)
 
-                // In-flight capture / import jobs (#186). Pinned above the
-                // day-grouped list so a "Processing…" row is the first thing
-                // the user sees after a pick, while the list stays scrollable.
+                // In-flight capture / import jobs (#186). Rendered as a status
+                // banner between the filter chips and the search field — NOT
+                // inside the expense list — so it reads as "something is
+                // happening in the background", never as a transaction row.
                 if !processingJobs.isEmpty {
                     VStack(spacing: Space.xs) {
                         ForEach(processingJobs) { job in
@@ -437,6 +435,9 @@ struct FinanceView: View {
                     }
                     .padding(.horizontal, Space.lg)
                 }
+
+                searchField
+                    .padding(.horizontal, Space.lg)
 
                 if filtered.isEmpty {
                     noResultsState

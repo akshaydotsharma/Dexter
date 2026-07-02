@@ -38,42 +38,37 @@ struct ProcessingJob: Identifiable, Equatable {
     }
 }
 
-/// Non-blocking "Processing…" row pinned above the day-grouped expense list.
-/// Same card shape / border as `ExpenseRow`, with a spinner where the amount
-/// would sit, so an in-flight job reads as a placeholder expense the list is
-/// about to fill in.
+/// Non-blocking "Processing…" status banner shown between the date-filter
+/// chips and the search field (#186 follow-up). Deliberately styled AWAY
+/// from `ExpenseRow`'s elevated card treatment — a flat, inline banner on
+/// `Tokens.surface2` with no border and a compact spinner, so it reads as
+/// system status ("something is happening"), never as a transaction the
+/// list is about to fill in. Multiple concurrent jobs stack in a tight
+/// VStack from the caller.
 struct FinanceProcessingRow: View {
     let job: ProcessingJob
 
     var body: some View {
-        HStack(spacing: Space.md) {
-            Image(systemName: job.kind.sfSymbol)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(Tokens.accentFinance)
-                .frame(width: 36, height: 36)
-                .background(Tokens.paper2, in: Circle())
+        HStack(spacing: Space.sm) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Tokens.accentFinance)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(job.kind.label)
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-                    .lineLimit(1)
-                Text("Working in the background")
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .lineLimit(1)
-            }
+            Image(systemName: job.kind.sfSymbol)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Tokens.accentFinance)
+
+            Text(job.kind.label)
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.inkSoft)
+                .lineLimit(1)
 
             Spacer()
-
-            ProgressView()
-                .tint(Tokens.accentFinance)
         }
         .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm + 2)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .paperBorder(Tokens.border, radius: 26)
+        .padding(.vertical, Space.sm)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(job.kind.label)
+        .accessibilityLabel("\(job.kind.label) Working in the background.")
     }
 }
