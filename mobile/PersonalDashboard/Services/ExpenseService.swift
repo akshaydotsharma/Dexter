@@ -56,6 +56,19 @@ enum ExpenseDateRanges {
         let end = nextMonth.addingTimeInterval(-1)
         return (start, end)
     }
+
+    /// Returns (startOfYear, end-of-last-day-of-that-year) for any reference
+    /// date. Mirrors `monthBounds` so the `.thisYear` / `.lastYear` presets
+    /// (#211) resolve to `startOfDay`-aligned bounds that match the normalised
+    /// `LocalExpense.date` field.
+    static func yearBounds(for reference: Date) -> (Date, Date) {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year], from: reference)
+        let start = cal.date(from: comps) ?? reference
+        let nextYear = cal.date(byAdding: .year, value: 1, to: start) ?? reference
+        let end = nextYear.addingTimeInterval(-1)
+        return (start, end)
+    }
 }
 
 /// CRUD + analytics over `LocalExpense`. Operates on the shared SwiftData

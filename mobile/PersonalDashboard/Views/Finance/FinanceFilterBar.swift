@@ -1,23 +1,45 @@
 import SwiftUI
 import SwiftData
 
-/// Preset windows offered in the date-range chip row. "Custom" pops a
-/// date-range picker; everything else maps to a calendar-derived range.
+/// Preset windows offered in the date-range picker. The date row shows the
+/// four "primary" presets as chips (`topRowPresets`); the rolling-window and
+/// year-ago presets (`customSheetPresets`) live as quick buttons inside the
+/// Custom sheet, which also exposes manual From/To pickers (#211).
 enum FinanceDateRangePreset: String, CaseIterable, Identifiable, Hashable {
     case thisMonth
     case lastMonth
+    case thisYear
+    case lastYear
     case last30
     case last90
     case custom
 
     var id: String { rawValue }
 
+    /// Primary presets rendered as chips in the top date row (#211).
+    static let topRowPresets: [FinanceDateRangePreset] = [.thisMonth, .lastMonth, .thisYear]
+
+    /// Quick-range presets offered as buttons inside the Custom sheet (#211).
+    static let customSheetPresets: [FinanceDateRangePreset] = [.last30, .last90, .lastYear]
+
+    /// True for any preset reached through the Custom sheet (a picked range or
+    /// one of the quick buttons). Drives the highlighted state + label of the
+    /// single "Custom" chip in the date row.
+    var isCustomFamily: Bool {
+        switch self {
+        case .last30, .last90, .lastYear, .custom: return true
+        case .thisMonth, .lastMonth, .thisYear:    return false
+        }
+    }
+
     var displayName: String {
         switch self {
         case .thisMonth: return "This month"
         case .lastMonth: return "Last month"
-        case .last30:    return "30d"
-        case .last90:    return "90d"
+        case .thisYear:  return "This year"
+        case .lastYear:  return "Last year"
+        case .last30:    return "Last 30 days"
+        case .last90:    return "Last 90 days"
         case .custom:    return "Custom"
         }
     }
@@ -29,19 +51,23 @@ enum FinanceDateRangePreset: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .thisMonth: return "This month"
         case .lastMonth: return "Last month"
+        case .thisYear:  return "This year"
+        case .lastYear:  return "Last year"
         case .last30:    return "Last 30 days"
         case .last90:    return "Last 90 days"
         case .custom:    return "Custom range"
         }
     }
 
-    /// Wording for the dashboard delta chip (#187). The two calendar-month
-    /// presets read naturally as "vs last/prior month"; the rolling-window and
-    /// custom presets compare against the preceding span of equal length.
+    /// Wording for the dashboard delta chip (#187). Calendar-month/year presets
+    /// read naturally as "vs last/prior <period>"; the rolling-window and custom
+    /// presets compare against the preceding span of equal length.
     var deltaComparisonLabel: String {
         switch self {
         case .thisMonth: return "vs last month"
         case .lastMonth: return "vs prior month"
+        case .thisYear:  return "vs last year"
+        case .lastYear:  return "vs prior year"
         case .last30, .last90, .custom: return "vs previous period"
         }
     }
@@ -105,6 +131,13 @@ struct FinanceFilterState: Equatable {
             let prev = cal.date(byAdding: .month, value: -1, to: now) ?? now
             let bounds = ExpenseDateRanges.monthBounds(for:prev)
             return bounds.0...bounds.1
+        case .thisYear:
+            let bounds = ExpenseDateRanges.yearBounds(for: now)
+            return bounds.0...bounds.1
+        case .lastYear:
+            let prev = cal.date(byAdding: .year, value: -1, to: now) ?? now
+            let bounds = ExpenseDateRanges.yearBounds(for: prev)
+            return bounds.0...bounds.1
         case .last30:
             guard let start = cal.date(byAdding: .day, value: -30, to: now) else { return nil }
             return cal.startOfDay(for: start)...now
@@ -120,123 +153,93 @@ struct FinanceFilterState: Equatable {
     }
 }
 
-/// Horizontal scroll of chips: date range presets, category multi-select,
-/// source multi-select. Custom date range opens a sheet.
+/// Finance filter bar (#211). A primary date row — four quick preset chips
+/// plus a trailing "more filters" icon — sits above the list. The Custom chip
+/// opens a sheet with quick ranges + manual From/To pickers; the icon opens a
+/// sheet holding the Person / Event / Category / Source multi-selects and shows
+/// an accent dot when any of those non-date filters is active.
 struct FinanceFilterBar: View {
     @Binding var state: FinanceFilterState
 
-    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
-    private var people: [LocalPerson]
-
-    @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
-    private var events: [LocalEvent]
-
     @State private var customDateSheetVisible: Bool = false
-    @State private var categorySheetVisible: Bool = false
-    @State private var sourceSheetVisible: Bool = false
-    @State private var personSheetVisible: Bool = false
-    @State private var eventSheetVisible: Bool = false
+    @State private var moreFiltersSheetVisible: Bool = false
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Space.sm) {
-                // Date range chips
-                ForEach(FinanceDateRangePreset.allCases) { preset in
+        HStack(spacing: Space.sm) {
+            // Primary date row: scrolls if the chips overflow, so the trailing
+            // filter icon always stays pinned to the right edge.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Space.sm) {
+                    ForEach(FinanceDateRangePreset.topRowPresets) { preset in
+                        chip(
+                            label: preset.displayName,
+                            icon: nil,
+                            selected: state.datePreset == preset,
+                            action: { state.datePreset = preset }
+                        )
+                    }
+
+                    // Single Custom chip — highlighted whenever the active preset
+                    // was reached through the Custom sheet (a picked range or a
+                    // quick button), with its label reflecting that choice.
                     chip(
-                        label: preset == .custom ? customLabel : preset.displayName,
-                        icon: preset == .custom ? "calendar" : nil,
-                        selected: state.datePreset == preset,
-                        action: {
-                            if preset == .custom {
-                                customDateSheetVisible = true
-                            } else {
-                                state.datePreset = preset
-                            }
-                        }
-                    )
-                }
-
-                divider
-
-                // Category filter chip — opens multi-select sheet
-                chip(
-                    label: categorySummary,
-                    icon: "line.3.horizontal.decrease.circle",
-                    selected: !state.categories.isEmpty,
-                    action: { categorySheetVisible = true }
-                )
-
-                // Source filter chip
-                chip(
-                    label: sourceSummary,
-                    icon: "antenna.radiowaves.left.and.right",
-                    selected: !state.sources.isEmpty,
-                    action: { sourceSheetVisible = true }
-                )
-
-                // Person filter chip — only when there are people to filter by.
-                if !people.isEmpty {
-                    chip(
-                        label: personSummary,
-                        icon: "person",
-                        selected: !state.people.isEmpty,
-                        action: { personSheetVisible = true }
-                    )
-                }
-
-                // Event filter chip — only when there are events to filter by.
-                if !events.isEmpty {
-                    chip(
-                        label: eventSummary,
+                        label: customLabel,
                         icon: "calendar",
-                        selected: !state.events.isEmpty,
-                        action: { eventSheetVisible = true }
+                        selected: state.datePreset.isCustomFamily,
+                        action: { customDateSheetVisible = true }
                     )
                 }
-
-                if hasActiveFilters {
-                    chip(
-                        label: "Clear",
-                        icon: "xmark",
-                        selected: false,
-                        action: {
-                            state.categories.removeAll()
-                            state.sources.removeAll()
-                            state.people.removeAll()
-                            state.events.removeAll()
-                        }
-                    )
-                }
+                .padding(.leading, Space.lg)
+                .padding(.trailing, Space.xs)
             }
-            .padding(.horizontal, Space.lg)
+
+            filterIconButton
+                .padding(.trailing, Space.lg)
         }
         .sheet(isPresented: $customDateSheetVisible) {
-            CustomDateRangeSheet(start: $state.customStart, end: $state.customEnd, onApply: {
-                state.datePreset = .custom
-            })
-            .presentationDetents([.medium])
+            CustomDateRangeSheet(
+                start: $state.customStart,
+                end: $state.customEnd,
+                onApplyCustom: { state.datePreset = .custom },
+                onSelectPreset: { state.datePreset = $0 }
+            )
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $categorySheetVisible) {
-            CategoryMultiSelectSheet(selection: $state.categories)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+        .sheet(isPresented: $moreFiltersSheetVisible) {
+            MoreFiltersSheet(
+                categories: $state.categories,
+                sources: $state.sources,
+                people: $state.people,
+                events: $state.events
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $sourceSheetVisible) {
-            SourceMultiSelectSheet(selection: $state.sources)
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
+    }
+
+    /// Trailing icon that opens the non-date filters. Tints accent and shows a
+    /// dot badge whenever any of person / event / category / source is active.
+    private var filterIconButton: some View {
+        Button {
+            moreFiltersSheetVisible = true
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(hasActiveFilters ? Tokens.accentFinance : Tokens.inkSoft)
+                .overlay(alignment: .topTrailing) {
+                    if hasActiveFilters {
+                        Circle()
+                            .fill(Tokens.accentFinance)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(Tokens.paper, lineWidth: 1.5))
+                            .offset(x: 3, y: -3)
+                    }
+                }
         }
-        .sheet(isPresented: $personSheetVisible) {
-            PersonMultiSelectSheet(selection: $state.people)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $eventSheetVisible) {
-            EventMultiSelectSheet(selection: $state.events)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("More filters")
+        .accessibilityValue(hasActiveFilters ? "Filters active" : "No filters active")
     }
 
     private var hasActiveFilters: Bool {
@@ -244,54 +247,18 @@ struct FinanceFilterBar: View {
             || !state.people.isEmpty || !state.events.isEmpty
     }
 
+    /// Label for the Custom chip: the picked span for `.custom`, the quick
+    /// preset's name when one is active, otherwise the plain "Custom".
     private var customLabel: String {
-        if state.datePreset == .custom {
+        switch state.datePreset {
+        case .custom:
             let fmt = DateFormatter()
             fmt.dateFormat = "d MMM"
             return "\(fmt.string(from: state.customStart)) – \(fmt.string(from: state.customEnd))"
-        }
-        return "Custom"
-    }
-
-    private var categorySummary: String {
-        switch state.categories.count {
-        case 0: return "Categories"
-        case 1: return state.categories.first?.displayName ?? "Categories"
-        default: return "\(state.categories.count) categories"
-        }
-    }
-
-    private var sourceSummary: String {
-        switch state.sources.count {
-        case 0: return "Sources"
-        case 1: return state.sources.first?.displayName ?? "Sources"
-        default: return "\(state.sources.count) sources"
-        }
-    }
-
-    private var personSummary: String {
-        switch state.people.count {
-        case 0: return "People"
-        case 1:
-            if let uuid = state.people.first,
-               let person = people.first(where: { $0.clientUUID == uuid }) {
-                return person.name
-            }
-            return "1 person"
-        default: return "\(state.people.count) people"
-        }
-    }
-
-    private var eventSummary: String {
-        switch state.events.count {
-        case 0: return "Events"
-        case 1:
-            if let uuid = state.events.first,
-               let event = events.first(where: { $0.clientUUID == uuid }) {
-                return event.name
-            }
-            return "1 event"
-        default: return "\(state.events.count) events"
+        case .last30, .last90, .lastYear:
+            return state.datePreset.displayName
+        default:
+            return "Custom"
         }
     }
 
@@ -316,37 +283,66 @@ struct FinanceFilterBar: View {
         }
         .buttonStyle(.plain)
     }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(Tokens.divider)
-            .frame(width: 0.5, height: 20)
-            .padding(.horizontal, 2)
-    }
 }
 
 // MARK: - Custom date range sheet
 
+/// Date-range picker sheet (#211). Offers the rolling-window / year-ago quick
+/// presets as buttons, plus manual From/To pickers for an arbitrary span.
+/// Tapping a quick preset applies it and dismisses; "Apply" commits the manual
+/// range as a `.custom` preset.
 private struct CustomDateRangeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var start: Date
     @Binding var end: Date
-    let onApply: () -> Void
+    /// Commit the manual From/To span as a `.custom` range.
+    let onApplyCustom: () -> Void
+    /// Apply one of the quick presets (last30 / last90 / lastYear).
+    let onSelectPreset: (FinanceDateRangePreset) -> Void
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Tokens.paper.ignoresSafeArea()
-                VStack(spacing: Space.lg) {
-                    DatePicker("From", selection: $start, in: ...Date(), displayedComponents: .date)
-                        .tint(Tokens.accentFinance)
-                    DatePicker("To", selection: $end, in: start...Date(), displayedComponents: .date)
-                        .tint(Tokens.accentFinance)
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    // Quick presets — one tap applies + dismisses.
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        Text("Quick ranges")
+                            .eyebrow()
+                        HStack(spacing: Space.sm) {
+                            ForEach(FinanceDateRangePreset.customSheetPresets) { preset in
+                                Button {
+                                    onSelectPreset(preset)
+                                    dismiss()
+                                } label: {
+                                    Text(preset.displayName)
+                                        .font(.edFootnote)
+                                        .foregroundStyle(Tokens.inkSoft)
+                                        .padding(.horizontal, Space.md)
+                                        .padding(.vertical, 6)
+                                        .background(Tokens.surface, in: Capsule())
+                                        .overlay(Capsule().stroke(Tokens.border, lineWidth: 0.5))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    // Manual span.
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        Text("Custom range")
+                            .eyebrow()
+                        DatePicker("From", selection: $start, in: ...Date(), displayedComponents: .date)
+                            .tint(Tokens.accentFinance)
+                        DatePicker("To", selection: $end, in: start...Date(), displayedComponents: .date)
+                            .tint(Tokens.accentFinance)
+                    }
+
                     Spacer()
                 }
                 .padding(Space.lg)
             }
-            .navigationTitle("Custom range")
+            .navigationTitle("Date range")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -355,7 +351,7 @@ private struct CustomDateRangeSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Apply") {
-                        onApply()
+                        onApplyCustom()
                         dismiss()
                     }
                     .foregroundStyle(Tokens.ink)
@@ -365,108 +361,137 @@ private struct CustomDateRangeSheet: View {
     }
 }
 
-// MARK: - Category multi-select sheet
+// MARK: - More filters sheet (#211)
 
-private struct CategoryMultiSelectSheet: View {
+/// Consolidates the Person / Event / Category / Source multi-selects — formerly
+/// four always-visible chips each with its own sheet (#183) — into a single
+/// sheet reached from the date row's filter icon. Each dimension is a
+/// collapsed-by-default `DisclosureGroup` (#211) that shows its selection
+/// summary ("All" / "N selected") and expands to the multi-select on tap;
+/// "Clear" resets all four at once.
+private struct MoreFiltersSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @Binding var selection: Set<ExpenseCategory>
+    @Binding var categories: Set<ExpenseCategory>
+    @Binding var sources: Set<ExpenseSource>
+    @Binding var people: Set<UUID>
+    @Binding var events: Set<UUID>
+
+    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    private var allPeople: [LocalPerson]
+
+    @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
+    private var allEvents: [LocalEvent]
+
+    // Per-dimension expansion state. Collapsed by default (#211).
+    @State private var personExpanded = false
+    @State private var eventExpanded = false
+    @State private var categoryExpanded = false
+    @State private var sourceExpanded = false
+
+    private var hasActiveFilters: Bool {
+        !categories.isEmpty || !sources.isEmpty || !people.isEmpty || !events.isEmpty
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Tokens.paper.ignoresSafeArea()
                 List {
-                    ForEach(ExpenseCategory.allCases) { cat in
-                        Button {
-                            if selection.contains(cat) {
-                                selection.remove(cat)
-                            } else {
-                                selection.insert(cat)
+                    // Person — only when there are people to filter by.
+                    if !allPeople.isEmpty {
+                        DisclosureGroup(isExpanded: $personExpanded) {
+                            ForEach(allPeople, id: \.clientUUID) { person in
+                                toggleRow(selected: people.contains(person.clientUUID)) {
+                                    toggle(person.clientUUID, in: &people)
+                                } label: {
+                                    Circle()
+                                        .fill(Color(personHex: person.colorHex))
+                                        .frame(width: 12, height: 12)
+                                        .frame(width: 24)
+                                    Text(person.name)
+                                        .foregroundStyle(Tokens.ink)
+                                }
                             }
                         } label: {
-                            HStack(spacing: Space.sm) {
+                            dimensionLabel("Person", summary: summary(people.count))
+                        }
+                        .tint(Tokens.accentFinance)
+                        .listRowBackground(Tokens.surface)
+                    }
+
+                    // Event — only when there are events to filter by.
+                    if !allEvents.isEmpty {
+                        DisclosureGroup(isExpanded: $eventExpanded) {
+                            ForEach(allEvents, id: \.clientUUID) { event in
+                                toggleRow(selected: events.contains(event.clientUUID)) {
+                                    toggle(event.clientUUID, in: &events)
+                                } label: {
+                                    Image(systemName: "calendar")
+                                        .foregroundStyle(Tokens.accentFinance)
+                                        .frame(width: 24)
+                                    Text(event.name)
+                                        .foregroundStyle(Tokens.ink)
+                                }
+                            }
+                        } label: {
+                            dimensionLabel("Event", summary: summary(events.count))
+                        }
+                        .tint(Tokens.accentFinance)
+                        .listRowBackground(Tokens.surface)
+                    }
+
+                    DisclosureGroup(isExpanded: $categoryExpanded) {
+                        ForEach(ExpenseCategory.allCases) { cat in
+                            toggleRow(selected: categories.contains(cat)) {
+                                toggle(cat, in: &categories)
+                            } label: {
                                 Image(systemName: cat.sfSymbol)
                                     .foregroundStyle(Tokens.accentFinance)
                                     .frame(width: 24)
                                 Text(cat.displayName)
                                     .foregroundStyle(Tokens.ink)
-                                Spacer()
-                                if selection.contains(cat) {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Tokens.accentFinance)
-                                }
                             }
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Tokens.surface)
+                    } label: {
+                        dimensionLabel("Category", summary: summary(categories.count))
                     }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(Tokens.paper)
-            }
-            .navigationTitle("Categories")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Clear") { selection.removeAll() }
-                        .foregroundStyle(Tokens.muted)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Tokens.ink)
-                }
-            }
-        }
-    }
-}
+                    .tint(Tokens.accentFinance)
+                    .listRowBackground(Tokens.surface)
 
-// MARK: - Source multi-select sheet
-
-private struct SourceMultiSelectSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var selection: Set<ExpenseSource>
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.ignoresSafeArea()
-                List {
-                    ForEach(ExpenseSource.allCases) { source in
-                        Button {
-                            if selection.contains(source) {
-                                selection.remove(source)
-                            } else {
-                                selection.insert(source)
-                            }
-                        } label: {
-                            HStack(spacing: Space.sm) {
+                    DisclosureGroup(isExpanded: $sourceExpanded) {
+                        ForEach(ExpenseSource.allCases) { source in
+                            toggleRow(selected: sources.contains(source)) {
+                                toggle(source, in: &sources)
+                            } label: {
                                 Image(systemName: source.sfSymbol)
                                     .foregroundStyle(Tokens.accentFinance)
                                     .frame(width: 24)
                                 Text(source.displayName)
                                     .foregroundStyle(Tokens.ink)
-                                Spacer()
-                                if selection.contains(source) {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Tokens.accentFinance)
-                                }
                             }
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Tokens.surface)
+                    } label: {
+                        dimensionLabel("Source", summary: summary(sources.count))
                     }
+                    .tint(Tokens.accentFinance)
+                    .listRowBackground(Tokens.surface)
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
             }
-            .navigationTitle("Sources")
+            .navigationTitle("Filters")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Clear") { selection.removeAll() }
-                        .foregroundStyle(Tokens.muted)
+                    Button("Clear") {
+                        categories.removeAll()
+                        sources.removeAll()
+                        people.removeAll()
+                        events.removeAll()
+                    }
+                    .foregroundStyle(Tokens.muted)
+                    .disabled(!hasActiveFilters)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -475,122 +500,54 @@ private struct SourceMultiSelectSheet: View {
             }
         }
     }
-}
 
-// MARK: - Person multi-select sheet (#183)
+    /// "All" when nothing is picked, otherwise "N selected" — the collapsed
+    /// summary shown next to each dimension name (#211).
+    private func summary(_ count: Int) -> String {
+        count == 0 ? "All" : "\(count) selected"
+    }
 
-private struct PersonMultiSelectSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var selection: Set<UUID>
-
-    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
-    private var people: [LocalPerson]
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.ignoresSafeArea()
-                List {
-                    ForEach(people, id: \.clientUUID) { person in
-                        Button {
-                            if selection.contains(person.clientUUID) {
-                                selection.remove(person.clientUUID)
-                            } else {
-                                selection.insert(person.clientUUID)
-                            }
-                        } label: {
-                            HStack(spacing: Space.sm) {
-                                Circle()
-                                    .fill(Color(personHex: person.colorHex))
-                                    .frame(width: 12, height: 12)
-                                Text(person.name)
-                                    .foregroundStyle(Tokens.ink)
-                                Spacer()
-                                if selection.contains(person.clientUUID) {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Tokens.accentFinance)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Tokens.surface)
-                    }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(Tokens.paper)
-            }
-            .navigationTitle("People")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Clear") { selection.removeAll() }
-                        .foregroundStyle(Tokens.muted)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Tokens.ink)
-                }
-            }
+    /// Collapsed row label: dimension name on the left, selection summary on
+    /// the right. The DisclosureGroup supplies the leading chevron.
+    private func dimensionLabel(_ name: String, summary: String) -> some View {
+        HStack {
+            Text(name)
+                .foregroundStyle(Tokens.ink)
+            Spacer()
+            Text(summary)
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.muted)
         }
     }
-}
 
-// MARK: - Event multi-select sheet (#183)
+    /// Insert-or-remove `value` in a selection set (the toggle idiom shared by
+    /// all four dimensions).
+    private func toggle<T: Hashable>(_ value: T, in set: inout Set<T>) {
+        if set.contains(value) {
+            set.remove(value)
+        } else {
+            set.insert(value)
+        }
+    }
 
-private struct EventMultiSelectSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var selection: Set<UUID>
-
-    @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
-    private var events: [LocalEvent]
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.ignoresSafeArea()
-                List {
-                    ForEach(events, id: \.clientUUID) { event in
-                        Button {
-                            if selection.contains(event.clientUUID) {
-                                selection.remove(event.clientUUID)
-                            } else {
-                                selection.insert(event.clientUUID)
-                            }
-                        } label: {
-                            HStack(spacing: Space.sm) {
-                                Image(systemName: "calendar")
-                                    .foregroundStyle(Tokens.accentFinance)
-                                    .frame(width: 24)
-                                Text(event.name)
-                                    .foregroundStyle(Tokens.ink)
-                                Spacer()
-                                if selection.contains(event.clientUUID) {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Tokens.accentFinance)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Tokens.surface)
-                    }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(Tokens.paper)
-            }
-            .navigationTitle("Events")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Clear") { selection.removeAll() }
-                        .foregroundStyle(Tokens.muted)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Tokens.ink)
+    /// One selectable row: a leading label (icon/swatch + text) and a trailing
+    /// checkmark when selected. Mirrors the old per-sheet row styling.
+    private func toggleRow<Label: View>(
+        selected: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: Space.sm) {
+                label()
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Tokens.accentFinance)
                 }
             }
         }
+        .buttonStyle(.plain)
+        .listRowBackground(Tokens.surface)
     }
 }
