@@ -315,7 +315,9 @@ private struct ListDetailContent: View {
                 .padding(.top, Space.lg)
                 .padding(.bottom, Space.sm)
                 .contentShape(Rectangle())
-                .onTapGesture { if draftActive { draftFocused = false } }
+                // Tapping the header strip commits any in-progress edit: draftFocused = false
+                // covers the tap-below draft; hideKeyboard() covers a focused item row.
+                .onTapGesture { draftFocused = false; hideKeyboard() }
 
                 Rectangle().fill(Tokens.divider).frame(height: 0.5)
                     .padding(.horizontal, Space.lg)
@@ -387,19 +389,25 @@ private struct ListDetailContent: View {
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                         }
-                        // Tap-below zone, always rendered:
-                        // - no draft → tap to start a draft.
-                        // - draft active → tap to dismiss the draft (resigns focus → commitDraft via onChange).
+                        // Add strip — one row-height tap target right after the last item.
+                        // Tapping here starts a new item (or dismisses an active draft).
                         Color.clear
-                            .frame(minHeight: 200)
+                            .frame(height: 44)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if draftActive {
-                                    draftFocused = false
-                                } else {
-                                    startDraft()
-                                }
+                                if draftActive { draftFocused = false; hideKeyboard() }
+                                else { startDraft() }
                             }
+                            .listRowBackground(Tokens.paper)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets())
+
+                        // Dismiss filler — the rest of the empty space below. Tapping here only
+                        // commits/deselects the current inline edit (or draft); it never adds.
+                        Color.clear
+                            .frame(minHeight: 160)
+                            .contentShape(Rectangle())
+                            .onTapGesture { draftFocused = false; hideKeyboard() }
                             .listRowBackground(Tokens.paper)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets())
@@ -411,10 +419,11 @@ private struct ListDetailContent: View {
                 .scrollDismissesKeyboard(.interactively)
 
                 addItemBar(list: list)
-                    // Tapping the addItemBar while a draft is active dismisses the draft.
+                    // Tapping the addItemBar commits any in-progress edit: draftFocused = false
+                    // covers the tap-below draft; hideKeyboard() covers a focused item row.
                     // simultaneousGesture fires alongside the inner TextField tap so the
                     // bar's own text field can still receive focus normally.
-                    .simultaneousGesture(TapGesture().onEnded { if draftActive { draftFocused = false } })
+                    .simultaneousGesture(TapGesture().onEnded { draftFocused = false; hideKeyboard() })
             }
             .sheet(item: $editingItem) { editing in
                 // Guard against a stale index if the list mutated while the sheet
@@ -575,7 +584,11 @@ private struct ItemRow: View {
 
     var body: some View {
         HStack(spacing: Space.md) {
-            Button(action: onToggle) {
+            // Empty Button action: the high-priority tap gesture below is the single
+            // source of the toggle. This guarantees one toggle per tap even while the
+            // inline field is focused (iOS's "first tap dismisses keyboard" would
+            // otherwise eat a plain row/Button tap).
+            Button(action: {}) {
                 ZStack {
                     Circle()
                         .stroke(item.checked ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
@@ -590,7 +603,7 @@ private struct ItemRow: View {
                 .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
-            .disabled(isEditing)
+            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
 
             if isEditing {
                 TextField("", text: $draft)
@@ -683,6 +696,13 @@ private struct ItemRow: View {
         }
         isEditing = false
         focused = false
+    }
+
+    /// Single-tap toggle. If the row is mid inline-edit, persist any rename first
+    /// (commit ends editing), then always toggle checked state.
+    private func handleToggle() {
+        if isEditing { commit() }
+        onToggle()
     }
 }
 

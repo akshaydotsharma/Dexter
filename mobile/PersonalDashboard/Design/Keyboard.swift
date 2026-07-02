@@ -19,6 +19,22 @@ extension View {
     func dismissKeyboardOnTap() -> some View {
         modifier(DismissKeyboardOnTapModifier())
     }
+
+    /// Imperatively resigns the first responder, dismissing whatever `TextField`
+    /// / `TextEditor` is currently focused. Callable from tap handlers on neutral
+    /// chrome (headers, count strips, add bars) so tapping them commits an
+    /// in-progress inline edit uniformly: every editable row and draft commits on
+    /// focus loss via its own `.onChange(of:)`, so resigning first responder here
+    /// routes through those commit paths without the parent needing per-row focus
+    /// state. Wraps the same `sendAction` idiom used inline elsewhere.
+    func hideKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
 }
 
 private struct DismissKeyboardOnTapModifier: ViewModifier {
