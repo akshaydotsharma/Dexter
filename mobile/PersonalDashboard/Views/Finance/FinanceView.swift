@@ -430,7 +430,7 @@ struct FinanceView: View {
 
     private var populatedContent: some View {
         let filtered = filteredExpenses
-        let stats = computeStats(range: dashboardRange, preset: filterState.datePreset)
+        let stats = computeStats(range: dashboardRange, preset: filterState.datePreset, filter: resolvedFilter)
         return ScrollView {
             VStack(spacing: Space.lg) {
                 FinanceDashboardBand(
@@ -630,10 +630,16 @@ struct FinanceView: View {
 
     // MARK: - Filtering + stats
 
-    private var filteredExpenses: [LocalExpense] {
+    /// The active filter (date preset + non-date dimensions + search), shared
+    /// by both the list (`filteredExpenses`) and the dashboard band
+    /// (`computeStats`) so the two stay in lockstep (#211).
+    private var resolvedFilter: ExpenseFilter {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filter = filterState.resolvedFilter(searchText: trimmed.isEmpty ? nil : trimmed)
-        return allExpenses.filter { matches($0, filter: filter) }
+        return filterState.resolvedFilter(searchText: trimmed.isEmpty ? nil : trimmed)
+    }
+
+    private var filteredExpenses: [LocalExpense] {
+        allExpenses.filter { matches($0, filter: resolvedFilter) }
     }
 
     /// In-view filter matcher. Mirrors `ExpenseService.matches` but inlined
@@ -667,8 +673,9 @@ struct FinanceView: View {
 
     /// Concrete window the dashboard totals + charts over (#187). Driven by the
     /// selected date-range preset so the band tracks the same period as the
-    /// list's date filter. Category / source filters and search still only
-    /// narrow the list below — the band reflects total spend in the window.
+    /// list. As of #211 the band also honours the non-date filters (person /
+    /// event / category / source / search) — see `computeStats` — so it sums
+    /// exactly the rows shown in the list, not the whole window.
     private var dashboardRange: ClosedRange<Date> {
         filterState.dashboardDateRange()
     }
@@ -682,15 +689,21 @@ struct FinanceView: View {
         return filterState.datePreset.dashboardLabel
     }
 
-    /// Stats for the dashboard band, computed over the selected range (#187).
-    /// Always uses the FULL expense set (not category/source/search-filtered)
-    /// so the band reflects total spend in the window; only the date range
-    /// narrows it. The delta compares the range against the immediately
-    /// preceding window of EQUAL LENGTH.
-    private func computeStats(range: ClosedRange<Date>, preset: FinanceDateRangePreset) -> FinanceDashboardStats {
+    /// Stats for the dashboard band (#187, #211). Applies the FULL active filter
+    /// — person / event / category / source / search — on top of the date
+    /// window, so the band sums exactly the rows shown in the list. The same
+    /// non-date filters are applied to the preceding comparison window too, so
+    /// the delta compares like-for-like. `filter.dateRange` is overridden
+    /// per-window (`range` for the headline, `prevRange` for the delta); the
+    /// caller's date range is ignored here in favour of those windows.
+    private func computeStats(range: ClosedRange<Date>, preset: FinanceDateRangePreset, filter: ExpenseFilter) -> FinanceDashboardStats {
         let cal = Calendar.current
 
-        let rangeRows = allExpenses.filter { range.contains($0.date) }
+        // Non-date filters applied to both windows; the date range is swapped
+        // in per-window below so each window keeps its own bounds.
+        var rangeFilter = filter
+        rangeFilter.dateRange = range
+        let rangeRows = allExpenses.filter { matches($0, filter: rangeFilter) }
         // All dashboard-band figures net refunds (#206): the headline total,
         // the delta comparison, the category bars, and the sparkline.
         let rangeTotal = rangeRows.reduce(0) { $0 + $1.signedSGD }
@@ -706,13 +719,21 @@ struct FinanceView: View {
             let prevMonthRef = cal.date(byAdding: .month, value: -1, to: range.lowerBound) ?? range.lowerBound
             let bounds = ExpenseDateRanges.monthBounds(for: prevMonthRef)
             prevRange = bounds.0...bounds.1
+        case .thisYear, .lastYear:
+            // Compare against the previous CALENDAR year (mirrors the month
+            // presets) so the delta isn't skewed by leap-year length (#211).
+            let prevYearRef = cal.date(byAdding: .year, value: -1, to: range.lowerBound) ?? range.lowerBound
+            let bounds = ExpenseDateRanges.yearBounds(for: prevYearRef)
+            prevRange = bounds.0...bounds.1
         case .last30, .last90, .custom:
             let span = range.upperBound.timeIntervalSince(range.lowerBound)
             let prevEnd = range.lowerBound.addingTimeInterval(-1)
             let prevStart = prevEnd.addingTimeInterval(-span)
             prevRange = prevStart...prevEnd
         }
-        let prevRows = allExpenses.filter { prevRange.contains($0.date) }
+        var prevFilter = filter
+        prevFilter.dateRange = prevRange
+        let prevRows = allExpenses.filter { matches($0, filter: prevFilter) }
         let prevTotal = prevRows.reduce(0) { $0 + $1.signedSGD }
 
         var byCategory: [ExpenseCategory: Double] = [:]
