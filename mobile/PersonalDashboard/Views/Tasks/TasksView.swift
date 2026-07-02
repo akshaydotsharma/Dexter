@@ -47,7 +47,9 @@ struct TasksView: View {
                     Color.clear
                         .frame(height: 96)
                         .contentShape(Rectangle())
-                        .onTapGesture { if draftBucket != nil { draftFocused = false } }
+                        // Commit any in-progress edit: draftFocused = false covers the
+                        // tap-below draft; hideKeyboard() covers a focused task row.
+                        .onTapGesture { draftFocused = false; hideKeyboard() }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets())
@@ -416,9 +418,10 @@ struct TasksView: View {
                 .padding(.top, Space.md)
                 .padding(.bottom, Space.xs)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // Dismiss draft alongside the expand/collapse toggle so keyboard
-                // collapses when the user taps the Completed header.
-                .simultaneousGesture(TapGesture().onEnded { if draftBucket != nil { draftFocused = false } })
+                // Commit any in-progress edit alongside the expand/collapse toggle so the
+                // keyboard collapses when the user taps the Completed header: draftFocused = false
+                // covers the tap-below draft; hideKeyboard() covers a focused task row.
+                .simultaneousGesture(TapGesture().onEnded { draftFocused = false; hideKeyboard() })
             }
             .background(Tokens.paper)
         }
@@ -443,9 +446,10 @@ struct TasksView: View {
         .padding(.bottom, Space.xs)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.paper)
-        // Tapping a section header while a draft is active dismisses the draft.
+        // Tapping a section header commits any in-progress edit: draftFocused = false
+        // covers the tap-below draft; hideKeyboard() covers a focused task row.
         .contentShape(Rectangle())
-        .onTapGesture { if draftBucket != nil { draftFocused = false } }
+        .onTapGesture { draftFocused = false; hideKeyboard() }
     }
 
     private func placeholderRow(_ text: String) -> some View {
@@ -522,7 +526,11 @@ private struct TaskRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            Button(action: onToggle) {
+            // Empty Button action: the high-priority tap gesture below is the single
+            // source of the toggle. This guarantees one toggle per tap even while the
+            // inline field is focused (iOS's "first tap dismisses keyboard" would
+            // otherwise eat a plain row/Button tap).
+            Button(action: {}) {
                 ZStack {
                     Circle()
                         .stroke(todo.completed ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
@@ -537,6 +545,7 @@ private struct TaskRow: View {
                 .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
+            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
             // Map the circle's center (with a 4pt body-font offset for x-height) to the
             // firstTextBaseline so the bullet visually centers on the title's first line.
             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
@@ -669,6 +678,13 @@ private struct TaskRow: View {
         }
         guard !trimmed.isEmpty, trimmed != todo.title else { return }
         onTitleCommit(trimmed)
+    }
+
+    /// Single-tap toggle. If the row is mid inline-edit, persist any rename first
+    /// (commitInlineEdit ends editing), then always toggle completion.
+    private func handleToggle() {
+        if isEditing { commitInlineEdit() }
+        onToggle()
     }
 
     private func dueColor(for date: Date) -> Color {
