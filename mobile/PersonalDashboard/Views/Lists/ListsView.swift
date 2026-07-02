@@ -235,22 +235,12 @@ private struct ListSummaryRow: View {
                     .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
                 Spacer()
-                HStack(spacing: 4) {
-                    Image(systemName: "number")
-                        .font(.system(size: 10, weight: .regular))
-                    Text("\(total)")
-                }
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .padding(.horizontal, Space.sm)
-                .padding(.vertical, 2)
-                .background(Tokens.paper2, in: Capsule())
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(Tokens.mutedSoft)
             }
             if total > 0 {
-                HStack(spacing: 4) {
+                HStack(spacing: Space.xs) {
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule().fill(Tokens.paper2).frame(height: 4)
@@ -263,6 +253,7 @@ private struct ListSummaryRow: View {
                     Text("\(completed)/\(total)")
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
+                        .monospacedDigit()
                 }
             } else {
                 Text("Empty")
