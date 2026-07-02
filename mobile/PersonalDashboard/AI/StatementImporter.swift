@@ -48,11 +48,21 @@ struct StatementImportResult: Sendable {
         if failed > 0 {
             parts.append("\(failed) couldn't be added")
         }
-        var line = parts.joined(separator: " · ")
-        if possiblyTruncated {
-            line += "\n\nThis statement was large, so some later transactions may not have been read. Re-import or add the rest manually if a few are missing."
-        }
-        return line
+        let counts = parts.joined(separator: " · ")
+        guard possiblyTruncated else { return counts }
+
+        // Chunking makes this essentially unreachable, but if a single chunk
+        // still ran out of output budget the import is genuinely incomplete —
+        // make that unmissable (leading warning, not a trailing footnote) with
+        // the count that DID land, so the user knows to re-import.
+        return """
+        ⚠️ Incomplete import — some transactions may be missing
+
+        \(counts)
+
+        Part of this statement was too long to read in one pass. Re-import the \
+        statement to try again, or add any missing transactions manually.
+        """
     }
 }
 
