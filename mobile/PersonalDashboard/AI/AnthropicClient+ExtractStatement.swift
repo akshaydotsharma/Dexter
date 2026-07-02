@@ -201,27 +201,84 @@ enum StatementExtractionError: LocalizedError {
 }
 
 extension AnthropicClient {
-    /// Larger token budget for statement extraction. Output scales with the
-    /// transaction count (~30-50 tokens per line), so the 1024-token default
-    /// used elsewhere would truncate any real statement. 8192 comfortably
-    /// covers ~150 lines; beyond that the model may still hit the ceiling and
-    /// we surface a `possiblyTruncated` flag on the result so the caller can
-    /// warn the user (see `StatementImporter`).
-    static let statementMaxTokens = 8192
+    /// Per-chunk token budget for statement extraction. Output scales with the
+    /// transaction count (~30-70 tokens per line). The primary guard against a
+    /// dropped tail is now page chunking (see `extractStatement` / `PDFChunker`),
+    /// which keeps each request to ~80 lines; this raised ceiling is the
+    /// secondary guard so an individual chunk essentially never truncates.
+    /// Sonnet 4.5 supports far more than the old 8192, so 16384 leaves generous
+    /// headroom. A chunk that somehow still hits the ceiling sets
+    /// `possiblyTruncated`, which propagates to a prominent warning in the
+    /// import summary (see `StatementImporter`).
+    static let statementMaxTokens = 16384
 
-    /// Send a whole credit-card statement PDF to Claude and ask for every
-    /// transaction line as a JSON array (#184). Uses a native `document` block
-    /// (behind the `pdfs-2024-09-25` beta header) so Claude reads the full
-    /// statement directly — this sidesteps the 6000-char text cap in
-    /// `EmailAttachmentProcessor.pdfText`, which a multi-page statement would
-    /// blow past.
+    /// Extract every transaction line from a credit-card statement PDF (#184),
+    /// splitting large statements into page-range chunks so nothing is lost to
+    /// the output-token ceiling (#202).
+    ///
+    /// Small statements (≤ one chunk's worth of pages) take the single-call
+    /// path unchanged. Larger statements are split by `PDFChunker` and each
+    /// chunk is extracted SEQUENTIALLY (not in parallel — the on-device tool
+    /// loop and API rate limits favour serial calls, and it avoids hammering
+    /// the key). The per-chunk line arrays are concatenated into one list; the
+    /// header/meta is taken from the first chunk that yields it (statements
+    /// print it on page 1). `possiblyTruncated` is the OR across chunks, so the
+    /// truncation warning still fires if any single chunk ran out of budget.
+    ///
+    /// Page-boundary duplicates (a rare row read on both sides of a split) are
+    /// harmless: the merged list flows through the EXISTING `ExpenseDedupe` in
+    /// `StatementImporter.insert`, which collapses structural duplicates.
+    func extractStatement(pdfData: Data) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
+        let chunks = PDFChunker.split(pdfData)
+
+        // Single chunk (small or unsplittable statement): identical behaviour
+        // to the pre-#202 path — one call, same request bytes.
+        if chunks.count <= 1 {
+            return try await extractStatementChunk(pdfData: chunks.first ?? pdfData)
+        }
+
+        var mergedLines: [ExtractedStatementLine] = []
+        var mergedMeta: ExtractedStatementMeta?
+        var anyTruncated = false
+
+        for chunk in chunks {
+            let (lines, meta, truncated) = try await extractStatementChunk(pdfData: chunk)
+            mergedLines.append(contentsOf: lines)
+            anyTruncated = anyTruncated || truncated
+            // Take the header from the FIRST chunk that carries any readable
+            // field (the statement header lives on page 1). Once found, keep it
+            // — a later page must never overwrite it with an invented header.
+            if mergedMeta == nil, Self.metaHasContent(meta) {
+                mergedMeta = meta
+            }
+        }
+
+        let finalMeta = mergedMeta ?? ExtractedStatementMeta(
+            issuer: nil, last4: nil, statementMonth: nil, statementYear: nil
+        )
+        return (mergedLines, finalMeta, anyTruncated)
+    }
+
+    /// True when a parsed header carries at least one readable field, so the
+    /// chunk-merge only adopts a header that actually came off the statement
+    /// rather than an all-nil placeholder.
+    private static func metaHasContent(_ meta: ExtractedStatementMeta) -> Bool {
+        meta.issuer != nil || meta.last4 != nil
+            || meta.statementMonth != nil || meta.statementYear != nil
+    }
+
+    /// Send ONE statement PDF (a whole small statement, or a single page-range
+    /// chunk of a large one) to Claude and ask for every transaction line as a
+    /// JSON array (#184). Uses a native `document` block (behind the
+    /// `pdfs-2024-09-25` beta header) so Claude reads the PDF directly — this
+    /// sidesteps the 6000-char text cap in `EmailAttachmentProcessor.pdfText`,
+    /// which a multi-page statement would blow past.
     ///
     /// Returns the parsed lines, the statement header metadata (#189), plus
     /// whether the model likely ran out of output tokens (stop_reason ==
-    /// "max_tokens"), which for a very large statement means the tail was cut
-    /// off. The header sits at the FRONT of the emitted object, so it survives
-    /// even when the trailing `lines` array is truncated.
-    func extractStatement(pdfData: Data) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
+    /// "max_tokens"). The header sits at the FRONT of the emitted object, so it
+    /// survives even when the trailing `lines` array is truncated.
+    func extractStatementChunk(pdfData: Data) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
         let base64 = pdfData.base64EncodedString()
         let content: [AnthropicJSONValue] = [
             .object([
