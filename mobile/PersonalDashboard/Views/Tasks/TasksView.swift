@@ -179,11 +179,75 @@ struct TasksView: View {
         }
     }
 
+    // MARK: - All caught up
+
+    /// Celebratory empty state shown when every open task is complete but the
+    /// Completed section still holds rows. Without this, `taskGroups` renders
+    /// only the Completed header's hairline + collapsed toggle — a floating
+    /// line with nothing above it that reads as broken. Reuses the inline-draft
+    /// mechanism (`startDraft(in: .noDate)`) for the quick-add affordance, so
+    /// tapping it seeds an undated task via the same path as every other
+    /// section's tap-below.
+    @ViewBuilder
+    private var allCaughtUpRow: some View {
+        VStack(spacing: Space.lg) {
+            // Celebratory block — matches the shared empty-state template
+            // (icon 28pt / muted, .edHeading / ink).
+            VStack(spacing: Space.md) {
+                Image(systemName: "checkmark.seal")
+                    .font(.system(size: 28, weight: .regular))
+                    .foregroundStyle(Tokens.muted)
+                Text("All caught up")
+                    .font(.edHeading)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.center)
+            }
+
+            // Quick-add: reuses the inline-draft flow. Tapping flips
+            // draftBucket to .noDate, which hides this state (draftBucket != nil)
+            // and surfaces the DraftTaskRow inside the "No Date" section below.
+            Button {
+                startDraft(in: .noDate)
+            } label: {
+                HStack(spacing: Space.xs) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Add a task")
+                        .font(.edBodyMedium)
+                }
+                .foregroundStyle(Tokens.muted)
+                .padding(.vertical, Space.sm)
+                .padding(.horizontal, Space.md)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add a task")
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.top, Space.xxxl)
+        .padding(.horizontal, Space.lg)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets())
+    }
+
     // MARK: - Grouped tasks
 
     @ViewBuilder
     private var taskGroups: some View {
         let buckets = computeBuckets()
+        // Every open bucket empty, no inline draft in flight, but completed
+        // tasks remain → show the celebratory "all caught up" state above the
+        // Completed section. Guarded on completed being non-empty; the
+        // genuinely-empty case is handled by the body's `todos.isEmpty` branch.
+        let hasOpenTasks = !buckets.overdue.isEmpty
+            || !buckets.today.isEmpty
+            || !buckets.thisWeek.isEmpty
+            || !buckets.later.isEmpty
+            || !buckets.noDate.isEmpty
+        if !hasOpenTasks && draftBucket == nil && !buckets.completed.isEmpty {
+            allCaughtUpRow
+        }
         // Overdue: no tap-below (adding a new overdue task is incoherent).
         if !buckets.overdue.isEmpty {
             taskSection(title: "Overdue", count: buckets.overdue.count, accent: Tokens.danger, soft: Tokens.dangerSoft, todos: buckets.overdue, bucket: nil)
