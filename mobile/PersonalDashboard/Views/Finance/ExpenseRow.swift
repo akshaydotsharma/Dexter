@@ -46,8 +46,8 @@ struct ExpenseRow: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
                 }
-                if hasTags {
-                    tagBadges
+                if hasBadges {
+                    badgeRow
                 }
             }
 
@@ -89,6 +89,19 @@ struct ExpenseRow: View {
         personLabel != nil || eventLabel != nil
     }
 
+    /// Whether any badge (person, event, or split) should render on the
+    /// secondary badge row.
+    private var hasBadges: Bool {
+        hasTags || expense.isSplit
+    }
+
+    /// Split badge label, e.g. "1/3 of SGD 90.00" (#188). Shows the user's
+    /// fraction of the derived receipt total in SGD so it lines up with the
+    /// primary SGD amount above it.
+    private var splitLabel: String {
+        "1/\(expense.numberOfShares) of \(FinanceDashboardBand.formatSGD(expense.receiptTotalSGD))"
+    }
+
     /// The tagged person's chip colour, resolved from the live person record
     /// (matched by FK, falling back to name). Defaults to the finance accent
     /// if the person was deleted but its denormalised name survives on the row.
@@ -104,7 +117,7 @@ struct ExpenseRow: View {
         return Tokens.accentFinance
     }
 
-    private var tagBadges: some View {
+    private var badgeRow: some View {
         HStack(spacing: Space.xs) {
             if let personLabel {
                 PersonEventBadge(kind: .person, label: personLabel, tint: personTint)
@@ -112,7 +125,29 @@ struct ExpenseRow: View {
             if let eventLabel {
                 PersonEventBadge(kind: .event, label: eventLabel)
             }
+            if expense.isSplit {
+                splitBadge
+            }
         }
+    }
+
+    /// Split badge (#188). Same capsule shape as `PersonEventBadge` but muted
+    /// (it's a factual annotation, not a colour-coded tag), with a split-bill
+    /// glyph and the "your share of receipt total" label.
+    private var splitBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.2.fill")
+                .font(.system(size: 9, weight: .semibold))
+            Text(splitLabel)
+                .font(.edCaption)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .foregroundStyle(Tokens.muted)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Tokens.muted.opacity(0.12), in: Capsule())
+        .accessibilityLabel("Split \(expense.numberOfShares) ways, your \(splitLabel)")
     }
 
     private var primaryLine: String {
@@ -167,6 +202,7 @@ struct ExpenseRow: View {
         }
         if let personLabel { pieces.append("for \(personLabel)") }
         if let eventLabel { pieces.append("event \(eventLabel)") }
+        if expense.isSplit { pieces.append("split \(expense.numberOfShares) ways, your \(splitLabel)") }
         return pieces.joined(separator: ", ") + ". Tap to edit."
     }
 }

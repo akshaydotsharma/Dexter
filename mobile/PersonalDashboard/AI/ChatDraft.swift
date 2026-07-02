@@ -193,12 +193,21 @@ extension ChatDraft {
             headline = categoryName
         }
 
-        let amountString = String(format: "%@ %.2f", cleanedCurrency, amount)
-        // Base line: headline · amount [· category], skipping the category
-        // when it's already the headline.
+        // Split shares (#188). `amount` from the model is the FULL receipt
+        // total; the stored expense is the user's equal share. Preview the
+        // share (what actually lands) and annotate the fraction.
+        let shares = max(dict["number_of_shares"]?.intValue
+            ?? Int(dict["number_of_shares"]?.stringValue ?? "")
+            ?? 1, 1)
+        let displayAmount = amount / Double(shares)
+
+        let amountString = String(format: "%@ %.2f", cleanedCurrency, displayAmount)
+        let shareSuffix = shares > 1 ? " (your 1/\(shares) share)" : ""
+        // Base line: headline · amount[ (your 1/N share)] [· category],
+        // skipping the category when it's already the headline.
         var line = headline == categoryName
-            ? "\(headline) · \(amountString)"
-            : "\(headline) · \(amountString) · \(categoryName)"
+            ? "\(headline) · \(amountString)\(shareSuffix)"
+            : "\(headline) · \(amountString)\(shareSuffix) · \(categoryName)"
 
         // Person / Event tags (#183) so the confirm card shows what the
         // expense was tagged with before the user commits.

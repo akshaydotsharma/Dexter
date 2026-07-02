@@ -401,7 +401,7 @@ enum ToolDefinitions {
     /// picks based on merchant + description.
     private static let addExpense = AnthropicTool(
         name: "add_expense",
-        description: "Log a NEW expense. Use this when the user says they spent money (e.g., \"I spent $20 on lunch at Starbucks\", \"add a 67 SGD grocery run yesterday\"). Pick the best-fitting category from the enum. If currency isn't specified, default to SGD. Date defaults to today if the user doesn't say. If the user names a person the expense is for/with (\"dinner with Sarah\") set person_name, and if they name an occasion or trip it belongs to (\"for the Bali trip\") set event_name — reuse the EXACT existing names from the PEOPLE / EVENTS context when they refer to one already there, so you don't create near-duplicates.",
+        description: "Log a NEW expense. Use this when the user says they spent money (e.g., \"I spent $20 on lunch at Starbucks\", \"add a 67 SGD grocery run yesterday\"). Pick the best-fitting category from the enum. If currency isn't specified, default to SGD. Date defaults to today if the user doesn't say. If the user names a person the expense is for/with (\"dinner with Sarah\") set person_name, and if they name an occasion or trip it belongs to (\"for the Bali trip\") set event_name — reuse the EXACT existing names from the PEOPLE / EVENTS context when they refer to one already there, so you don't create near-duplicates. If the user says the bill was split among several people (e.g., \"split 3 ways\", \"between the 4 of us\"), set number_of_shares to that count and pass the FULL receipt total in original_amount — the app records only the user's share.",
         input_schema: object(
             properties: [
                 "id": string("UUID string for the new expense. Generate a fresh one for every call (any valid lowercase UUID, e.g., 9b3a8e1c-2f6f-4a3b-9d2c-7e0a1b4c5d6e)."),
@@ -418,7 +418,11 @@ enum ToolDefinitions {
                 "source": string("How this expense was captured. Use \"receipt\" ONLY when logging from a forwarded purchase/receipt email; leave empty otherwise. Allowed values: manual, text, voice, photo, receipt, pdf, recurring."),
                 "trip_id": string("UUID of the EXISTING trip this expense belongs to, when (and only when) it is a travel fare for a trip in the EXISTING TRIPS context (e.g., a flight or hotel charge). Use empty string for any non-travel purchase."),
                 "person_name": string("Name of the person this expense is for or with (e.g., \"Sarah\"), when the user names one. Reuse the exact name from the PEOPLE context if it already exists. Use empty string if none."),
-                "event_name": string("Name of the occasion, group, or trip this expense belongs to (e.g., \"Bali trip\", \"Diwali gifts\"), when the user names one. Reuse the exact name from the EVENTS context if it already exists. Use empty string if none.")
+                "event_name": string("Name of the occasion, group, or trip this expense belongs to (e.g., \"Bali trip\", \"Diwali gifts\"), when the user names one. Reuse the exact name from the EVENTS context if it already exists. Use empty string if none."),
+                "number_of_shares": .object([
+                    "type": .string("integer"),
+                    "description": .string("How many people the bill was split among, when the user says it was shared (e.g. \"split 3 ways\" => 3). When set, original_amount MUST be the FULL receipt total — the app stores only the user's equal share (total / number_of_shares). Omit or use 1 for a normal unshared expense.")
+                ])
             ],
             required: ["id", "date", "category", "merchant", "description", "original_amount", "original_currency", "payment_method"]
         )
