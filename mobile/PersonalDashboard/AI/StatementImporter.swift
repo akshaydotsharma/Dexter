@@ -88,15 +88,24 @@ struct StatementImportResult: Sendable {
 ///      the balance and would double-count against the purchases it paid off.
 ///      Refunds are NOT dropped: they import as credits (`isRefund: true`) that
 ///      net against spending totals (#206).
-///   3. For each remaining line: build an `ExpenseDedupe.Proposed`, skip if it
-///      already exists, else FX-convert and insert via `ExpenseService` with
-///      `source: .pdf`, then stamp `dedupeKey` (structural — statements carry
-///      no order reference, so `sourceReference` stays empty like the email
-///      path leaves it for reference-less rows).
+///   3. Reconcile by structural class rather than boolean existence (#208).
+///      Group the remaining lines by their structural key
+///      (dir|merchant|day|amount|currency). For each class, let N = lines this
+///      statement asserts and M = matching rows already stored; insert
+///      `max(0, N - M)` of them (FX-convert + `ExpenseService` with `source:
+///      .pdf`, stamping the structural `dedupeKey`; statements carry no order
+///      reference, so `sourceReference` stays empty), and count the rest as
+///      skipped duplicates.
+///
+/// Why counts, not a boolean: statement rows have no per-line reference, so two
+/// genuine same-day/same-amount purchases (e.g. two coffees at one café) are
+/// structurally identical. A boolean `exists` skips every line after the first
+/// and under-counts real spend. Counting inserts the right multiplicity while
+/// staying idempotent on re-import (N == M → insert 0) and self-healing after a
+/// truncated import or a receipt already logged for one visit (N > M → top up).
 ///
 /// Auto-import: there is no per-row review. The importer inserts survivors
-/// directly and returns counts for the summary. Dedup makes a re-import of the
-/// same statement idempotent.
+/// directly and returns counts for the summary.
 @MainActor
 struct StatementImporter {
     let anthropic: AnthropicClient
@@ -153,15 +162,37 @@ struct StatementImporter {
         let cardLabel = meta.cardLabel
         let paymentMethod = cardLabel.isEmpty ? nil : cardLabel
 
+        // One statement line reduced to everything the insert step needs, plus
+        // its structural class key. Built in the classification pass below so the
+        // insert pass can reconcile by class (#208) instead of skipping every
+        // structurally-identical line after the first.
+        struct Candidate {
+            let amount: Double
+            let currency: String
+            let date: Date
+            let merchant: String?
+            let category: ExpenseCategory
+            let isRefund: Bool
+            let proposed: ExpenseDedupe.Proposed
+            /// Structural class key. For a statement (no order reference) this is
+            /// the structural signature, so two same-merchant/day/amount/currency
+            /// lines of the same direction share it and reconcile together.
+            let classKey: String
+        }
+
+        // Pass 1 — classify every line. Payments are counted and dropped;
+        // amount-less lines fail here (they can't form a valid class); everything
+        // else becomes an ordered candidate carrying its structural class key.
+        var candidates: [Candidate] = []
         for line in lines {
-            // Classification. A missing/unknown type defaults to `.purchase`
-            // (import it) — the model reliably tags payments/refunds, so an
-            // untyped line is far more likely a normal purchase than a credit.
+            // A missing/unknown type defaults to `.purchase` (import it) — the
+            // model reliably tags payments/refunds, so an untyped line is far
+            // more likely a normal purchase than a credit.
             let type = line.type ?? .purchase
             guard type.shouldImport else {
-                // Card payments only — they settle the balance and must never
-                // be imported (they'd double-count against the purchases they
-                // paid off). Refunds fall through and import as credits.
+                // Card payments only — they settle the balance and must never be
+                // imported (they'd double-count against the purchases they paid
+                // off). Refunds fall through and import as credits.
                 ignoredNonSpend += 1
                 continue
             }
@@ -182,58 +213,91 @@ struct StatementImporter {
             let merchant = line.merchant?.trimmingCharacters(in: .whitespacesAndNewlines)
             let category = ExpenseCategory(rawValue: (line.category ?? "").lowercased()) ?? .other
 
-            // Dedup against existing rows using the EXISTING helper, exactly as
-            // the email path does. Statements have no order reference, so the
-            // signature falls back to the structural key
-            // (merchant|date|amount|currency).
+            // Statements have no order reference, so the signature falls back to
+            // the structural key (dir|merchant|date|amount|currency). Direction is
+            // part of equivalence (#206): a £50 refund must not collapse into a
+            // same-day £50 purchase, and each direction reconciles on its own.
             let proposed = ExpenseDedupe.Proposed(
                 merchant: merchant ?? "",
                 date: Calendar(identifier: .gregorian).startOfDay(for: date),
                 originalAmount: amount,
                 originalCurrency: currency,
                 sourceReference: "",
-                // Direction is part of equivalence (#206): a £50 refund must not
-                // be swallowed as a "duplicate" of a same-day £50 purchase, and
-                // a re-imported refund still dedupes against the prior refund.
                 isRefund: isRefund
             )
-            let signature = ExpenseDedupe.signature(for: proposed)
-            if ExpenseDedupe.exists(signature: signature, proposed: proposed, context: store.context) {
+            candidates.append(Candidate(
+                amount: amount,
+                currency: currency,
+                date: date,
+                merchant: merchant,
+                category: category,
+                isRefund: isRefund,
+                proposed: proposed,
+                classKey: ExpenseDedupe.signature(for: proposed)
+            ))
+        }
+
+        // Count reconciliation (#208). For each structural class, let N be the
+        // number of lines THIS statement asserts and M the number of matching
+        // rows ALREADY stored (computed ONCE, before this batch inserts anything).
+        // We may insert at most `max(0, N - M)` rows for the class; the rest are
+        // duplicates. `budget[classKey]` is that deficit, decremented as we
+        // consume slots so a re-query can't inflate M with rows we just inserted.
+        //
+        // Behaviour: two identical coffees with none stored → N=2,M=0 → both
+        // import; a clean re-import → N=2,M=2 → both skip (idempotent); a
+        // truncated first import → N=2,M=1 → one imports (self-heals); a receipt
+        // already logged for one visit → N=2,M=1 → one imports (absorbs overlap).
+        var budget: [String: Int] = [:]
+        for candidate in candidates where budget[candidate.classKey] == nil {
+            let n = candidates.filter { $0.classKey == candidate.classKey }.count
+            let m = ExpenseDedupe.existingCount(matching: candidate.proposed, context: store.context)
+            budget[candidate.classKey] = max(0, n - m)
+        }
+
+        // Pass 2 — walk candidates in original statement order. A class with
+        // remaining budget attempts an insert (consuming a slot regardless of
+        // outcome, so a failed insert never promotes a later duplicate into its
+        // place); once the budget is spent, the rest of the class are skipped
+        // duplicates.
+        for candidate in candidates {
+            guard let remaining = budget[candidate.classKey], remaining > 0 else {
                 skippedDuplicates += 1
                 continue
             }
+            budget[candidate.classKey] = remaining - 1
 
             // FX. SGD passes straight through; other currencies hit FXService
             // (cached 1 day). A rate failure counts the line as failed rather
             // than inserting a silent zero.
             let conversion: (sgdAmount: Double, rate: Double)
             do {
-                conversion = try await fx.convert(amount, from: currency)
+                conversion = try await fx.convert(candidate.amount, from: candidate.currency)
             } catch {
-                NSLog("StatementImporter: FX convert failed for %@: %@", currency, error.localizedDescription)
+                NSLog("StatementImporter: FX convert failed for %@: %@", candidate.currency, error.localizedDescription)
                 failed += 1
                 continue
             }
 
             do {
                 let row = try service.addExpense(
-                    date: date,
-                    category: category,
-                    merchant: merchant,
+                    date: candidate.date,
+                    category: candidate.category,
+                    merchant: candidate.merchant,
                     expenseDescription: nil,
-                    originalAmount: amount,
-                    originalCurrency: currency,
+                    originalAmount: candidate.amount,
+                    originalCurrency: candidate.currency,
                     sgdAmount: conversion.sgdAmount,
                     fxRate: conversion.rate,
                     paymentMethod: paymentMethod,
                     source: .pdf,
-                    isRefund: isRefund
+                    isRefund: candidate.isRefund
                 )
-                // Stamp the dedupe signature so a re-import of the same
-                // statement dedups against this row cheaply, mirroring the
-                // email path. sourceReference stays empty (structural key) —
-                // the statement carries no order/booking reference.
-                row.dedupeKey = signature
+                // Stamp the structural dedupe signature. It's now EXPECTED that
+                // legit duplicates in the same class share this key — counting,
+                // not the key's uniqueness, is what keeps re-imports idempotent.
+                // sourceReference stays empty (the statement carries no reference).
+                row.dedupeKey = candidate.classKey
                 row.sourceReference = ""
                 // Statement attribution (#189): which statement this came off.
                 // Display-only — deliberately NOT part of the dedupe signature.
@@ -245,7 +309,7 @@ struct StatementImporter {
                 try? store.context.save()
 
                 imported += 1
-                if isRefund { refunds += 1 }
+                if candidate.isRefund { refunds += 1 }
                 if let uuid = UUID(uuidString: row.clientUUID) {
                     importedUUIDs.append(uuid)
                 }

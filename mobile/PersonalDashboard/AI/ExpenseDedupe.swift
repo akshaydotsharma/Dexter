@@ -97,6 +97,32 @@ enum ExpenseDedupe {
         return false
     }
 
+    /// How many stored `LocalExpense` rows already match the STRUCTURAL class of
+    /// `proposed` (#208). Used by the statement importer to reconcile *counts*
+    /// rather than mere existence: a boolean `exists` can only ever say "at least
+    /// one", so once the first of two identical Kult Yard coffees lands, every
+    /// further identical line looks like a duplicate and real spend is
+    /// under-counted. This returns the multiplicity so the importer can insert
+    /// `max(0, N - M)` rows for a class.
+    ///
+    /// Counts purely by structural key (`merchant|day|amount|currency` +
+    /// refund-direction namespace). Reference matching is deliberately ignored:
+    /// statements carry no order/booking reference, so structural multiplicity is
+    /// the only thing that matters here. Because legit duplicates now share the
+    /// same structural `dedupeKey`, we must NOT take the fast `dedupeKey`-count
+    /// path (it would conflate reference/structural keys and can't see rows from
+    /// other sources); instead we fetch and compare each row's structural key the
+    /// SAME way `exists` does, so an already-logged receipt / email row for the
+    /// same visit also counts (and is absorbed rather than double-imported).
+    @MainActor
+    static func existingCount(matching proposed: Proposed, context: ModelContext) -> Int {
+        let target = structuralKey(proposed)
+        let rows = (try? context.fetch(FetchDescriptor<LocalExpense>())) ?? []
+        return rows.reduce(0) { count, row in
+            rowStructuralKey(row) == target ? count + 1 : count
+        }
+    }
+
     /// The structural key (reference-free) for a proposed expense.
     private static func structuralKey(_ proposed: Proposed) -> String {
         let merchant = normalizeMerchant(proposed.merchant)
