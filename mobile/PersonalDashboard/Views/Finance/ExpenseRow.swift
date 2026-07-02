@@ -25,6 +25,20 @@ struct ExpenseRow: View {
                         .foregroundStyle(Tokens.muted)
                         .lineLimit(1)
                 }
+                // Statement attribution (#189): which imported statement this
+                // row came off, e.g. "May 2026 Citi - 1234". Only shown for
+                // statement-sourced rows that captured a header — a small
+                // secondary caption that never clutters other rows.
+                if let statement = expense.statementLabel.trimmedNonEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 9, weight: .regular))
+                        Text(statement)
+                            .lineLimit(1)
+                    }
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+                }
             }
 
             Spacer()
@@ -97,6 +111,9 @@ struct ExpenseRow: View {
         var pieces: [String] = [primaryLine, FinanceDashboardBand.formatSGD(expense.sgdAmount), expense.categoryEnum.displayName]
         if expense.originalCurrency.uppercased() != "SGD" {
             pieces.append("\(originalAmountLabel) original")
+        }
+        if let statement = expense.statementLabel.trimmedNonEmpty {
+            pieces.append("from \(statement)")
         }
         return pieces.joined(separator: ", ") + ". Tap to edit."
     }

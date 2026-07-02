@@ -101,11 +101,11 @@ struct FinanceView: View {
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
             handleCaptureData(data, source: .photoLibrary)
         }
-        .pdfPicker(isPresented: $showingPDFPicker) { data in
+        .pdfPicker(isPresented: $showingPDFPicker) { data, _ in
             handleCaptureData(data, source: .pdf)
         }
-        .pdfPicker(isPresented: $showingStatementPicker) { data in
-            handleStatementData(data)
+        .pdfPicker(isPresented: $showingStatementPicker) { data, fileName in
+            handleStatementData(data, fileName: fileName)
         }
         .alert(
             "Statement import",
@@ -354,9 +354,10 @@ struct FinanceView: View {
     // MARK: - Statement import (#184)
 
     /// Entry point for the statement file picker. `data == nil` is a cancel.
-    private func handleStatementData(_ data: Data?) {
+    /// `fileName` (e.g. "Citi_May2026.pdf") labels the processing banner (#189).
+    private func handleStatementData(_ data: Data?, fileName: String?) {
         guard let data else { return }
-        Task { await importStatement(pdfData: data) }
+        Task { await importStatement(pdfData: data, fileName: fileName) }
     }
 
     /// Parse the statement PDF and batch-import every purchase/fee/interest
@@ -364,10 +365,15 @@ struct FinanceView: View {
     /// are inserted directly and the outcome is surfaced as a summary. Parse
     /// failures show the "couldn't process" alert; a successful parse with zero
     /// transactions still shows a (benign) summary explaining nothing matched.
-    private func importStatement(pdfData: Data) async {
+    private func importStatement(pdfData: Data, fileName: String? = nil) async {
         // Non-blocking processing row while the batch import runs (#186); the
-        // list stays interactive and multiple imports can queue up.
-        let job = ProcessingJob(kind: .statement)
+        // list stays interactive and multiple imports can queue up. When we
+        // know the picked file name, label the row "Importing <name>…" so it's
+        // clear which statement is being processed (#189).
+        let bannerLabel = fileName
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            .map { "Importing \($0)…" }
+        let job = ProcessingJob(kind: .statement, overrideLabel: bannerLabel)
         withAnimation(.easeInOut(duration: 0.15)) {
             processingJobs.append(job)
         }

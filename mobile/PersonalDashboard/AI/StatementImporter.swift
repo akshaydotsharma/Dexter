@@ -90,14 +90,24 @@ struct StatementImporter {
     /// counted in the result, never propagated, so one bad row can't sink the
     /// whole import.
     func importStatement(pdfData: Data) async throws -> StatementImportResult {
-        let (lines, truncated) = try await anthropic.extractStatement(pdfData: pdfData)
-        return await insert(lines: lines, possiblyTruncated: truncated)
+        let (lines, meta, truncated) = try await anthropic.extractStatement(pdfData: pdfData)
+        return await insert(lines: lines, meta: meta, possiblyTruncated: truncated)
     }
 
     /// Bucket + insert already-parsed lines. Split out from `importStatement`
     /// so the classification/dedup/insert logic is unit-testable without a live
     /// Anthropic call.
-    func insert(lines: [ExtractedStatementLine], possiblyTruncated: Bool) async -> StatementImportResult {
+    ///
+    /// `meta` carries the statement header (issuer / last4 / period) used to
+    /// stamp each imported row's attribution label and payment method (#189).
+    /// It defaults to an empty header so existing test call sites that only pass
+    /// `lines` keep compiling and behave exactly as before (no label, no
+    /// payment method).
+    func insert(
+        lines: [ExtractedStatementLine],
+        meta: ExtractedStatementMeta = ExtractedStatementMeta(issuer: nil, last4: nil, statementMonth: nil, statementYear: nil),
+        possiblyTruncated: Bool
+    ) async -> StatementImportResult {
         var imported = 0
         var skippedDuplicates = 0
         var ignoredNonSpend = 0
@@ -106,6 +116,13 @@ struct StatementImporter {
 
         let fx = FXService(store: store)
         let service = ExpenseService(store: store)
+
+        // Statement-level attribution, computed once and stamped on every row
+        // inserted this run (#189). Both are "" when the header couldn't be
+        // read, in which case we write nothing rather than a placeholder.
+        let statementLabel = meta.attributionLabel
+        let cardLabel = meta.cardLabel
+        let paymentMethod = cardLabel.isEmpty ? nil : cardLabel
 
         for line in lines {
             // Classification. A missing/unknown type defaults to `.purchase`
@@ -169,7 +186,7 @@ struct StatementImporter {
                     originalCurrency: currency,
                     sgdAmount: conversion.sgdAmount,
                     fxRate: conversion.rate,
-                    paymentMethod: nil,
+                    paymentMethod: paymentMethod,
                     source: .pdf
                 )
                 // Stamp the dedupe signature so a re-import of the same
@@ -178,6 +195,9 @@ struct StatementImporter {
                 // the statement carries no order/booking reference.
                 row.dedupeKey = signature
                 row.sourceReference = ""
+                // Statement attribution (#189): which statement this came off.
+                // Display-only — deliberately NOT part of the dedupe signature.
+                row.statementLabel = statementLabel
                 try? store.context.save()
 
                 imported += 1

@@ -32,9 +32,19 @@ struct ProcessingJob: Identifiable, Equatable {
     let id: UUID
     let kind: Kind
 
-    init(kind: Kind) {
+    /// Optional per-instance label that overrides `kind.label`. Used to show
+    /// the picked file name in the statement banner, e.g. "Importing
+    /// Citi_May2026.pdf…" (#189). nil falls back to the kind's generic copy.
+    let overrideLabel: String?
+
+    /// The label actually rendered on the row: the override when present,
+    /// otherwise the kind's generic copy.
+    var displayLabel: String { overrideLabel ?? kind.label }
+
+    init(kind: Kind, overrideLabel: String? = nil) {
         self.id = UUID()
         self.kind = kind
+        self.overrideLabel = overrideLabel
     }
 }
 
@@ -58,10 +68,11 @@ struct FinanceProcessingRow: View {
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Tokens.accentFinance)
 
-            Text(job.kind.label)
+            Text(job.displayLabel)
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.inkSoft)
                 .lineLimit(1)
+                .truncationMode(.middle)
 
             Spacer()
         }
@@ -69,6 +80,6 @@ struct FinanceProcessingRow: View {
         .padding(.vertical, Space.sm)
         .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(job.kind.label) Working in the background.")
+        .accessibilityLabel("\(job.displayLabel) Working in the background.")
     }
 }

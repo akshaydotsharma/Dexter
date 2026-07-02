@@ -72,6 +72,108 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
     }
 }
 
+/// Statement-level header metadata, extracted ONCE per PDF (not per line) so
+/// each imported expense can record which statement it came from — e.g.
+/// "May 2026 Citi - 1234" (#189). Every field is optional because a statement
+/// may not expose all of them (a terse export might omit the issuer name, or
+/// mask the card number entirely); the label builder degrades gracefully when
+/// pieces are missing rather than inventing "Unknown".
+struct ExtractedStatementMeta: Decodable, Sendable, Equatable {
+    /// Card issuer / bank as printed on the statement (e.g. "Citi", "DBS",
+    /// "Amex"). nil when the statement doesn't name it plainly.
+    let issuer: String?
+    /// Last 4 digits of the card number, as a string (leading zeros matter).
+    let last4: String?
+    /// Billing / statement month, 1-12. nil when unreadable.
+    let statementMonth: Int?
+    /// Billing / statement year, four digits. nil when unreadable.
+    let statementYear: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case issuer
+        case last4
+        case statementMonth
+        case statementYear
+    }
+
+    /// Lenient decode: any field the model omits or emits as the wrong JSON
+    /// type decodes to nil rather than failing the whole extraction. `last4`
+    /// tolerates a number-typed value (some models emit `1234` not `"1234"`).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        issuer = (try? c.decodeIfPresent(String.self, forKey: .issuer)).flatMap { $0 }
+        if let s = try? c.decodeIfPresent(String.self, forKey: .last4) {
+            last4 = s
+        } else if let n = try? c.decodeIfPresent(Int.self, forKey: .last4) {
+            last4 = String(n)
+        } else {
+            last4 = nil
+        }
+        statementMonth = (try? c.decodeIfPresent(Int.self, forKey: .statementMonth)).flatMap { $0 }
+        statementYear = (try? c.decodeIfPresent(Int.self, forKey: .statementYear)).flatMap { $0 }
+    }
+
+    /// Direct memberwise init for tests.
+    init(issuer: String?, last4: String?, statementMonth: Int?, statementYear: Int?) {
+        self.issuer = issuer
+        self.last4 = last4
+        self.statementMonth = statementMonth
+        self.statementYear = statementYear
+    }
+
+    /// Human-readable attribution label — "<Month YYYY> <Issuer> - <last4>",
+    /// e.g. "May 2026 Citi - 1234". Each piece is omitted gracefully when
+    /// missing:
+    ///   - period ("May 2026") needs BOTH month (1-12) and year.
+    ///   - card ("Citi - 1234") uses whichever of issuer / last4 is present,
+    ///     joined with " - " only when both exist.
+    /// When issuer, last4, AND period are all missing this is "" (the caller
+    /// stores nothing rather than a placeholder like "Unknown").
+    var attributionLabel: String {
+        var pieces: [String] = []
+        if let period { pieces.append(period) }
+        let card = cardLabel
+        if !card.isEmpty { pieces.append(card) }
+        return pieces.joined(separator: " ")
+    }
+
+    /// "<Issuer> - <last4>" for the expense's payment method, using whichever
+    /// pieces exist ("Citi - 1234", "Citi", "1234", or "").
+    var cardLabel: String {
+        let trimmedIssuer = issuer?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLast4 = normalizedLast4
+        switch (trimmedIssuer?.isEmpty == false ? trimmedIssuer : nil, trimmedLast4) {
+        case let (issuer?, last4?): return "\(issuer) - \(last4)"
+        case let (issuer?, nil):    return issuer
+        case let (nil, last4?):     return last4
+        case (nil, nil):            return ""
+        }
+    }
+
+    /// "May 2026" when both month and year are present and valid; nil otherwise.
+    var period: String? {
+        guard let statementYear, statementYear > 0,
+              let statementMonth, (1...12).contains(statementMonth) else { return nil }
+        let monthName = Self.monthSymbols[statementMonth - 1]
+        return "\(monthName) \(statementYear)"
+    }
+
+    /// last4 reduced to digits, kept only when exactly 4 remain (guards against
+    /// the model returning a masked string like "****1234" or a full PAN).
+    private var normalizedLast4: String? {
+        let digits = (last4 ?? "").filter { $0.isNumber }
+        return digits.count == 4 ? digits : nil
+    }
+
+    /// Full English month names, POSIX locale, so "May 2026" renders the same
+    /// regardless of device locale (matches how the rest of Finance formats).
+    private static let monthSymbols: [String] = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f.monthSymbols
+    }()
+}
+
 /// Errors surfaced to the Finance UI when statement extraction fails. Distinct
 /// from `ReceiptExtractionError` so the import summary can phrase them for the
 /// batch context ("couldn't read the statement" vs "couldn't read the receipt").
@@ -114,10 +216,12 @@ extension AnthropicClient {
     /// `EmailAttachmentProcessor.pdfText`, which a multi-page statement would
     /// blow past.
     ///
-    /// Returns the parsed lines plus whether the model likely ran out of output
-    /// tokens (stop_reason == "max_tokens"), which for a very large statement
-    /// means the tail was cut off.
-    func extractStatement(pdfData: Data) async throws -> (lines: [ExtractedStatementLine], possiblyTruncated: Bool) {
+    /// Returns the parsed lines, the statement header metadata (#189), plus
+    /// whether the model likely ran out of output tokens (stop_reason ==
+    /// "max_tokens"), which for a very large statement means the tail was cut
+    /// off. The header sits at the FRONT of the emitted object, so it survives
+    /// even when the trailing `lines` array is truncated.
+    func extractStatement(pdfData: Data) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
         let base64 = pdfData.base64EncodedString()
         let content: [AnthropicJSONValue] = [
             .object([
@@ -144,7 +248,7 @@ extension AnthropicClient {
     private func runStatementExtraction(
         content: [AnthropicJSONValue],
         extraHeaders: [String: String]
-    ) async throws -> (lines: [ExtractedStatementLine], possiblyTruncated: Bool) {
+    ) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
         guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
             throw StatementExtractionError.notConfigured
         }
@@ -212,23 +316,39 @@ extension AnthropicClient {
             return nil
         }.joined(separator: "\n")
 
-        guard let jsonString = Self.firstJSONArray(in: combinedText),
-              let jsonData = jsonString.data(using: .utf8) else {
+        // The model now wraps the result in an object:
+        //   { "statement": { issuer, last4, statementMonth, statementYear },
+        //     "lines": [ ... ] }
+        // The header comes FIRST so it stays intact even when the trailing
+        // `lines` array is truncated by the token ceiling. We pull the two
+        // parts out separately: the header via a tolerant object scan, the
+        // lines via the existing array recovery (which trims a truncated array
+        // back to its last complete element). This preserves the #184
+        // large-statement recovery behaviour untouched.
+        guard let arrayString = Self.firstJSONArray(in: combinedText),
+              let arrayData = arrayString.data(using: .utf8) else {
             throw StatementExtractionError.noJSON
         }
         let lines: [ExtractedStatementLine]
         do {
-            lines = try Self.decoder.decode([ExtractedStatementLine].self, from: jsonData)
+            lines = try Self.decoder.decode([ExtractedStatementLine].self, from: arrayData)
         } catch {
             throw StatementExtractionError.parse(error)
         }
+
+        // Header is best-effort: a statement with no readable header still
+        // imports fine, just without an attribution label. Never fail the whole
+        // import over a missing/garbled header.
+        let meta = Self.statementMeta(in: combinedText) ?? ExtractedStatementMeta(
+            issuer: nil, last4: nil, statementMonth: nil, statementYear: nil
+        )
 
         // `max_tokens` stop means the generation was cut off mid-array — for a
         // large statement the tail rows are missing. `firstJSONArray` still
         // recovers the well-formed prefix, so we return what parsed plus the
         // truncation flag.
         let truncated = decoded.stop_reason == "max_tokens"
-        return (lines, truncated)
+        return (lines, meta, truncated)
     }
 
     // MARK: - Prompt + parsing
@@ -243,21 +363,48 @@ extension AnthropicClient {
     }
 
     static let statementPrompt: String = """
-    This is a credit-card statement PDF. Extract EVERY transaction line item as
-    a JSON array. Return STRICT JSON inside a ```json fence and nothing else —
-    no prose before or after.
+    This is a credit-card statement PDF. Extract the statement HEADER plus EVERY
+    transaction line item. Return STRICT JSON inside a ```json fence and nothing
+    else — no prose before or after.
 
-    Each element:
+    Return a single JSON OBJECT with exactly two keys, in this order:
     {
-      "merchant": "Starbucks",
-      "date": "YYYY-MM-DD",
-      "amount": 12.34,
-      "currency": "SGD",
-      "type": "purchase",
-      "category": "food_and_dining"
+      "statement": {
+        "issuer": "Citi",
+        "last4": "1234",
+        "statementMonth": 5,
+        "statementYear": 2026
+      },
+      "lines": [
+        {
+          "merchant": "Starbucks",
+          "date": "YYYY-MM-DD",
+          "amount": 12.34,
+          "currency": "SGD",
+          "type": "purchase",
+          "category": "food_and_dining"
+        }
+      ]
     }
 
-    Rules:
+    Put "statement" FIRST, before "lines".
+
+    Statement header rules ("statement" object):
+    - "issuer": the card issuer / bank name as printed on the statement (e.g.
+      "Citi", "DBS", "HSBC", "American Express"). Use the short brand name, not
+      the full legal entity. null if the statement doesn't name it.
+    - "last4": the LAST FOUR digits of the card number, as a 4-character STRING
+      (e.g. "1234", keep any leading zeros). Statements usually mask the card as
+      "**** **** **** 1234" or "XXXX-1234" — return just the trailing 4 digits.
+      null if the card number isn't shown at all.
+    - "statementMonth" / "statementYear": the billing period the statement
+      covers, as integers (month 1-12, four-digit year). Use the statement /
+      closing date's month and year (e.g. a statement dated "15 May 2026" →
+      month 5, year 2026). null for either if you genuinely can't tell.
+    - Any header field you cannot read from the statement must be null. Do NOT
+      guess or invent an issuer, card number, or period.
+
+    Transaction line rules ("lines" array):
     - Return one element per transaction line on the statement. Include ALL of
       them: purchases, fees, interest charges, card payments, and refunds.
     - "amount" is always a POSITIVE number (the magnitude of the line). Never
@@ -349,5 +496,53 @@ extension AnthropicClient {
             return recover(String(text[open.lowerBound...]))
         }
         return nil
+    }
+
+    /// Pull the statement HEADER object out of the model's response (#189).
+    ///
+    /// The response is `{ "statement": { ... }, "lines": [ ... ] }`, header
+    /// first. We isolate the `"statement": { ... }` object by brace-matching
+    /// from the key, so it decodes cleanly even when the trailing `lines` array
+    /// is truncated (the header is small and always complete). Returns nil when
+    /// the key is absent or the object can't be balanced — the caller treats a
+    /// missing header as "no attribution", never a hard failure.
+    static func statementMeta(in text: String) -> ExtractedStatementMeta? {
+        guard let keyRange = text.range(of: "\"statement\"") else { return nil }
+        // Find the opening brace of the statement object after the key/colon.
+        guard let braceStart = text.range(of: "{", range: keyRange.upperBound..<text.endIndex) else {
+            return nil
+        }
+        // Brace-match to find the matching close, ignoring braces inside strings.
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var endIndex: String.Index?
+        var i = braceStart.lowerBound
+        while i < text.endIndex {
+            let ch = text[i]
+            if escaped {
+                escaped = false
+            } else if ch == "\\" {
+                escaped = true
+            } else if ch == "\"" {
+                inString.toggle()
+            } else if !inString {
+                if ch == "{" {
+                    depth += 1
+                } else if ch == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        endIndex = text.index(after: i)
+                        break
+                    }
+                }
+            }
+            i = text.index(after: i)
+        }
+        guard let endIndex,
+              let data = String(text[braceStart.lowerBound..<endIndex]).data(using: .utf8) else {
+            return nil
+        }
+        return try? decoder.decode(ExtractedStatementMeta.self, from: data)
     }
 }

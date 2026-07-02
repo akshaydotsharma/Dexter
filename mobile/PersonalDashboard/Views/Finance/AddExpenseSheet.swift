@@ -48,6 +48,12 @@ struct AddExpenseSheet: View {
     /// Relative path under `Documents/`. Non-nil if a receipt is attached.
     @State private var receiptImagePath: String?
 
+    /// Statement attribution (#189), e.g. "May 2026 Citi - 1234". Read-only —
+    /// set only when editing an expense that was imported from a statement;
+    /// shown as a small caption so the user can see which statement it came
+    /// off. Empty for every other source.
+    @State private var statementLabel: String = ""
+
     /// Banner state when the user came in from a failed extraction.
     @State private var extractionBanner: String?
 
@@ -99,6 +105,9 @@ struct AddExpenseSheet: View {
                         merchantField
                         descriptionFieldView
                         paymentField
+                        if let statement = statementLabel.trimmedNonEmpty {
+                            statementAttribution(statement)
+                        }
 
                         if let errorMessage {
                             Text(errorMessage)
@@ -366,6 +375,31 @@ struct AddExpenseSheet: View {
         }
     }
 
+    /// Read-only statement attribution caption (#189). Mirrors the receipt
+    /// thumbnail's flat-surface treatment but text-only — it's provenance, not
+    /// an editable field, so it sits below the inputs as a quiet footnote.
+    private func statementAttribution(_ statement: String) -> some View {
+        HStack(spacing: Space.sm) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Tokens.muted)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Imported from statement")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+                Text(statement)
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Space.md)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Imported from statement \(statement)")
+    }
+
     // MARK: - Persistence
 
     private func loadIfNeeded() {
@@ -396,6 +430,7 @@ struct AddExpenseSheet: View {
                 paymentMethod = existing.paymentMethod ?? ""
                 receiptImagePath = existing.receiptImagePath
                 source = existing.sourceEnum
+                statementLabel = existing.statementLabel
             }
 
         case .prefilled(let prefill):
@@ -516,6 +551,15 @@ struct AddExpenseSheet: View {
         formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = false
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+}
+
+private extension String {
+    /// Trim whitespace, return nil for empty. Local copy of the same helper
+    /// used elsewhere in Finance (kept file-private to avoid a public API).
+    var trimmedNonEmpty: String? {
+        let t = trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
     }
 }
 
