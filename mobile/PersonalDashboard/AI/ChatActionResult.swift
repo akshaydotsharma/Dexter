@@ -44,7 +44,8 @@ struct ChatActionResult: Identifiable, Hashable, Sendable {
         switch outcome.action {
         case ActionString.created:
             return .created
-        case ActionString.deleted:
+        case ActionString.deleted, ActionString.cleared:
+            // A bulk clear reads as a removal in the card vocabulary.
             return .deleted
         default:
             // completed / reopened / updated / items_added / item_updated /

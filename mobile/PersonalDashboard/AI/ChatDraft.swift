@@ -163,9 +163,48 @@ extension ChatDraft {
         case .addExpense:
             return Self.addExpenseSummary(dict: dict)
 
+        case .clearExpenses:
+            return Self.clearExpensesSummary(dict: dict)
+
         case .unknown:
             return "Unknown action"
         }
+    }
+
+    /// Preview for `clear_expenses`. The card is rendered before the executor
+    /// runs, so the exact count isn't known here — describe the SCOPE instead
+    /// ("Clear Groceries expenses after 1 Jun 2026"). An unfiltered clear reads
+    /// "Clear ALL expenses"; without confirm_all it flags that confirmation is
+    /// still required, mirroring the executor's guard.
+    private static func clearExpensesSummary(dict: [String: AnthropicJSONValue]) -> String {
+        let after = (dict["after_date"]?.stringValue).flatMap(parseAnyDate)
+        let before = (dict["before_date"]?.stringValue).flatMap(parseAnyDate)
+        let categoryRaw = (dict["category"]?.stringValue ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let category = categoryRaw.isEmpty ? nil : ExpenseCategory(rawValue: categoryRaw)
+        let confirmAll = dict["confirm_all"]?.boolValue ?? false
+
+        let hasFilter = after != nil || before != nil || !categoryRaw.isEmpty
+        if !hasFilter {
+            return confirmAll ? "Clear ALL expenses" : "Clear ALL expenses — needs confirmation"
+        }
+
+        var parts: [String] = []
+        if let category {
+            parts.append(category.displayName)
+        } else if !categoryRaw.isEmpty {
+            parts.append(categoryRaw)
+        }
+        var scope = "Clear \(parts.isEmpty ? "" : parts.joined() + " ")expenses"
+        if let after, let before {
+            scope += " between \(shortDayMonth.string(from: after)) and \(shortDayMonth.string(from: before))"
+        } else if let after {
+            scope += " after \(shortDayMonth.string(from: after))"
+        } else if let before {
+            scope += " before \(shortDayMonth.string(from: before))"
+        }
+        return scope
     }
 
     /// Preview for `add_expense`. Format aims for the same scannable shape

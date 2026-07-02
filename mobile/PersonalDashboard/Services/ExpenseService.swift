@@ -196,6 +196,48 @@ struct ExpenseService {
         try save()
     }
 
+    /// Bulk-delete expenses matching an optional filter (#204). The three
+    /// parameters are ANDed; a nil parameter means "no constraint on that
+    /// dimension". When ALL are nil this deletes EVERY expense, so any caller
+    /// that exposes this to the assistant MUST gate the unfiltered case behind
+    /// an explicit confirmation (see `ExecuteDraftAction.clearExpenses`).
+    /// Returns the number of rows deleted.
+    ///
+    /// Date bounds are STRICT (`> after`, `< before`). `category` matches on
+    /// `LocalExpense.category` (== `ExpenseCategory.rawValue`). Mirrors the
+    /// fetch-then-filter shape of `expenses(filter:)` above rather than a
+    /// `#Predicate`: `clientUUID` is a `String` (not `UUID`), the dataset is
+    /// personal-scale, and in-memory filtering sidesteps the optional-unwrap
+    /// fragility of building a predicate from three nullable bounds. Deletes
+    /// in a single `save()`, like the `deleteTrip` cascade.
+    @discardableResult
+    func deleteExpenses(
+        after: Date? = nil,
+        before: Date? = nil,
+        category: ExpenseCategory? = nil
+    ) throws -> Int {
+        let all = try store.context.fetch(FetchDescriptor<LocalExpense>())
+        let categoryRaw = category?.rawValue
+        let matches = all.filter { row in
+            if let after, !(row.date > after) { return false }
+            if let before, !(row.date < before) { return false }
+            if let categoryRaw, row.category != categoryRaw { return false }
+            return true
+        }
+        guard !matches.isEmpty else { return 0 }
+        for row in matches {
+            store.context.delete(row)
+        }
+        try save()
+        return matches.count
+    }
+
+    /// Total number of stored expenses. Backs the full-wipe confirmation
+    /// message ("This clears all N expenses…") without materialising rows.
+    func totalCount() throws -> Int {
+        try store.context.fetchCount(FetchDescriptor<LocalExpense>())
+    }
+
     // MARK: - Analytics
 
     /// Total SGD spent this calendar month (start-of-month → now).
