@@ -131,6 +131,18 @@ struct ExecuteDraftAction {
         let personName = trimmedString(input["person_name"])
         let eventName = trimmedString(input["event_name"])
 
+        // Optional split shares (#188). The model emits the FULL receipt total
+        // in `original_amount` plus a share count; we store the user's equal
+        // share (total / shares). Tolerate a JSON int, double, or numeric
+        // string; clamp to >= 1 so a missing / bogus value behaves as unsplit.
+        let numberOfShares = max(
+            input["number_of_shares"]?.intValue
+                ?? Int(input["number_of_shares"]?.stringValue ?? "")
+                ?? 1,
+            1
+        )
+        let shareAmount = originalAmount / Double(numberOfShares)
+
         // Optional UUID override from the tool input. If the model emitted
         // a valid UUID we use it; otherwise we generate one.
         let providedID = trimmedString(input["id"])
@@ -147,7 +159,7 @@ struct ExecuteDraftAction {
         let fx = FXService(store: store)
         let conversion: (sgdAmount: Double, rate: Double)
         do {
-            conversion = try await fx.convert(originalAmount, from: currency)
+            conversion = try await fx.convert(shareAmount, from: currency)
         } catch {
             throw DraftExecutionError.invalidArgument(
                 field: "original_currency",
@@ -163,12 +175,13 @@ struct ExecuteDraftAction {
                 category: category,
                 merchant: merchant,
                 expenseDescription: descriptionField,
-                originalAmount: originalAmount,
+                originalAmount: shareAmount,
                 originalCurrency: currency,
                 sgdAmount: conversion.sgdAmount,
                 fxRate: conversion.rate,
                 paymentMethod: paymentMethod,
                 source: source,
+                numberOfShares: numberOfShares,
                 clientUUID: clientUUID
             )
         } catch {

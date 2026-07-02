@@ -48,6 +48,11 @@ struct AddExpenseSheet: View {
     @State private var showingPersonPicker: Bool = false
     @State private var showingEventPicker: Bool = false
 
+    /// How many people the bill is split among (#188). The amount field holds
+    /// the RECEIPT TOTAL; on save we divide by this to get the stored per-share
+    /// amount. Default 1 = not split. Clamped to 1...50 by the stepper.
+    @State private var numberOfShares: Int = 1
+
     /// Where this expense will be tagged as having come from. Defaults to
     /// `.manual` for `.new`; carried over from the existing row on edit;
     /// set by `PrefilledExpense.source` on prefill.
@@ -87,6 +92,12 @@ struct AddExpenseSheet: View {
         Double(amountText.replacingOccurrences(of: ",", with: ".")) ?? 0
     }
 
+    /// The user's per-person share of the entered receipt total (#188). This
+    /// is what gets stored as `originalAmount`. Equal-split only in v1.
+    private var perShareValue: Double {
+        amountValue / Double(max(numberOfShares, 1))
+    }
+
     private var canSave: Bool {
         amountValue > 0 && !saving
     }
@@ -118,6 +129,7 @@ struct AddExpenseSheet: View {
                         }
                         personField
                         eventField
+                        sharesField
 
                         if let errorMessage {
                             Text(errorMessage)
@@ -444,6 +456,81 @@ struct AddExpenseSheet: View {
         )
     }
 
+    // MARK: - Split shares (#188)
+
+    /// A stepper for how many people the bill is split among, plus a live
+    /// "Your share" readout so the user sees exactly what will be stored
+    /// before saving. The amount field holds the receipt total; the stored
+    /// expense is `total ÷ shares`. Sits below Person / Event because it's the
+    /// same "who was this with" mental model — the split follows the people.
+    private var sharesField: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            HStack {
+                Text("Split").eyebrow()
+                Spacer()
+                Text("Optional")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            VStack(alignment: .leading, spacing: Space.sm) {
+                HStack(spacing: Space.sm) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Tokens.accentFinance)
+                        .frame(width: 24)
+                    Text(numberOfShares == 1 ? "Not split" : "Split \(numberOfShares) ways")
+                        .font(.edBody)
+                        .foregroundStyle(numberOfShares == 1 ? Tokens.inkSoft : Tokens.ink)
+                    Spacer()
+                    Stepper(
+                        "",
+                        value: $numberOfShares,
+                        in: 1...50
+                    )
+                    .labelsHidden()
+                    .tint(Tokens.accentFinance)
+                }
+
+                if numberOfShares > 1 {
+                    shareReadout
+                }
+            }
+            .padding(Space.md)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(numberOfShares == 1 ? "Split: not split" : "Split \(numberOfShares) ways")
+    }
+
+    /// "Your share: CUR X of CUR Y" line shown only when the bill is split.
+    /// Amounts are in the entered currency (pre-FX) so it reads back exactly
+    /// what the user typed divided by the number of people.
+    private var shareReadout: some View {
+        let cur = currency.uppercased()
+        return HStack(spacing: 4) {
+            Text("Your share:")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+            Text("\(cur) \(formatShare(perShareValue))")
+                .font(.edCaption)
+                .monospacedDigit()
+                .foregroundStyle(Tokens.ink)
+            Text("of \(cur) \(formatShare(amountValue))")
+                .font(.edCaption)
+                .monospacedDigit()
+                .foregroundStyle(Tokens.mutedSoft)
+        }
+    }
+
+    private func formatShare(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+    }
+
     /// Shared "tappable field that opens a picker" row for Person / Event.
     /// Shows the selected name (or a placeholder), a chevron, and a clear
     /// button when a value is set.
@@ -524,7 +611,12 @@ struct AddExpenseSheet: View {
                 predicate: #Predicate { $0.clientUUID == uuid }
             )
             if let existing = try? modelContext.fetch(descriptor).first {
-                amountText = formatAmountForEdit(existing.originalAmount)
+                // Shares first: the stored `originalAmount` is the per-share
+                // figure, so we reconstruct the RECEIPT TOTAL for the field
+                // (share × shares) — consistent with what the user typed on
+                // entry. Save() re-divides by shares to store the share again.
+                numberOfShares = max(existing.numberOfShares, 1)
+                amountText = formatAmountForEdit(existing.receiptTotalOriginal)
                 currency = existing.originalCurrency
                 category = existing.categoryEnum
                 date = existing.date
@@ -590,9 +682,16 @@ struct AddExpenseSheet: View {
         let fx = FXService(store: store)
         let service = ExpenseService(store: store)
 
+        // The amount field holds the RECEIPT TOTAL; the user's SHARE is what
+        // we store (#188). Divide first, then FX-convert the share so
+        // `originalAmount` / `sgdAmount` are already the per-person figure and
+        // every aggregation site stays correct without change. Equal split only.
+        let shares = max(numberOfShares, 1)
+        let shareAmount = amountValue / Double(shares)
+
         let conversion: (sgdAmount: Double, rate: Double)
         do {
-            conversion = try await fx.convert(amountValue, from: currency)
+            conversion = try await fx.convert(shareAmount, from: currency)
         } catch {
             errorMessage = "Couldn't convert \(currency) to SGD. Try again when online."
             return
@@ -606,7 +705,7 @@ struct AddExpenseSheet: View {
                     category: category,
                     merchant: merchant,
                     expenseDescription: descriptionField,
-                    originalAmount: amountValue,
+                    originalAmount: shareAmount,
                     originalCurrency: currency,
                     sgdAmount: conversion.sgdAmount,
                     fxRate: conversion.rate,
@@ -615,7 +714,8 @@ struct AddExpenseSheet: View {
                     personUUID: selectedPerson?.uuid,
                     personName: selectedPerson?.name,
                     eventUUID: selectedEvent?.uuid,
-                    eventName: selectedEvent?.name
+                    eventName: selectedEvent?.name,
+                    numberOfShares: shares
                 )
                 // ExpenseService.addExpense doesn't take receiptImagePath
                 // (Phase A signature). Set it directly and save again — the
@@ -636,13 +736,14 @@ struct AddExpenseSheet: View {
                         category: category,
                         merchant: merchant,
                         expenseDescription: descriptionField,
-                        originalAmount: amountValue,
+                        originalAmount: shareAmount,
                         originalCurrency: currency,
                         sgdAmount: conversion.sgdAmount,
                         fxRate: conversion.rate,
                         paymentMethod: paymentMethod,
                         person: .some(selectedPerson),
-                        event: .some(selectedEvent)
+                        event: .some(selectedEvent),
+                        numberOfShares: shares
                     )
                     // Persist receipt-path / source changes (e.g. user
                     // removed the image, or scan path → manual edit).

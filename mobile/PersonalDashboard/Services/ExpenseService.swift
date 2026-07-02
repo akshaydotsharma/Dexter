@@ -93,6 +93,7 @@ struct ExpenseService {
         personName: String? = nil,
         eventUUID: UUID? = nil,
         eventName: String? = nil,
+        numberOfShares: Int = 1,
         clientUUID: String? = nil
     ) throws -> LocalExpense {
         guard originalAmount > 0 else { throw ExpenseServiceError.invalidAmount }
@@ -114,7 +115,8 @@ struct ExpenseService {
             personUUID: personUUID,
             personName: personName?.trimmedNonEmpty,
             eventUUID: eventUUID,
-            eventName: eventName?.trimmedNonEmpty
+            eventName: eventName?.trimmedNonEmpty,
+            numberOfShares: max(numberOfShares, 1)
         )
         store.context.insert(row)
         try save()
@@ -138,7 +140,8 @@ struct ExpenseService {
         fxRate: Double? = nil,
         paymentMethod: String? = nil,
         person: ExpenseTag?? = nil,
-        event: ExpenseTag?? = nil
+        event: ExpenseTag?? = nil,
+        numberOfShares: Int? = nil
     ) throws {
         if let date {
             expense.date = Calendar.current.startOfDay(for: date)
@@ -178,6 +181,12 @@ struct ExpenseService {
         if let event {
             expense.eventUUID = event?.uuid
             expense.eventName = event?.name.trimmedNonEmpty
+        }
+        // Split shares (#188). Clamp to >= 1; the caller passes the stored
+        // per-share `originalAmount` / `sgdAmount` alongside, so no re-division
+        // happens here — the sheet computes the share before calling update.
+        if let numberOfShares {
+            expense.numberOfShares = max(numberOfShares, 1)
         }
         try save()
     }

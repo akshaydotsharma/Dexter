@@ -104,6 +104,18 @@ final class LocalExpense {
     var eventUUID: UUID? = nil
     var eventName: String? = nil
 
+    // MARK: - Split shares (#188)
+    //
+    // How many people the bill was split among. When > 1 this row's
+    // `originalAmount` / `sgdAmount` already hold the USER'S SHARE (receipt
+    // total ÷ shares, computed once at save time), so every aggregation site
+    // keeps reading `sgdAmount` and stays correct without change. The full
+    // receipt total for display is derived: `originalAmount * numberOfShares`.
+    // Additive with a default of 1 so the SwiftData migration on existing
+    // installs stays lightweight (add-with-default, never remove) and every
+    // existing call site behaves exactly as before (unsplit = 1 share).
+    var numberOfShares: Int = 1
+
     // MARK: - Dead-field parity with other LocalModels
     //
     // These are intentionally unused on Phase A. Kept so that the SwiftData
@@ -134,6 +146,7 @@ final class LocalExpense {
         personName: String? = nil,
         eventUUID: UUID? = nil,
         eventName: String? = nil,
+        numberOfShares: Int = 1,
         needsSync: Bool = false,
         version: Int = 0
     ) {
@@ -158,6 +171,7 @@ final class LocalExpense {
         self.personName = personName
         self.eventUUID = eventUUID
         self.eventName = eventName
+        self.numberOfShares = numberOfShares
         self.needsSync = needsSync
         self.version = version
     }
@@ -170,5 +184,25 @@ final class LocalExpense {
 
     var sourceEnum: ExpenseSource {
         ExpenseSource(rawValue: source) ?? .manual
+    }
+
+    /// Whether this expense was split among more than one person (#188).
+    var isSplit: Bool {
+        numberOfShares > 1
+    }
+
+    /// The full receipt total in the original currency, derived from the
+    /// stored per-share `originalAmount`. Cosmetic rounding is accepted on
+    /// uneven splits (e.g. 100 / 3 shows ≈ 99.99). Never stored — always
+    /// recomputed from `originalAmount * numberOfShares`.
+    var receiptTotalOriginal: Double {
+        originalAmount * Double(max(numberOfShares, 1))
+    }
+
+    /// The full receipt total in SGD, derived from the frozen per-share
+    /// `sgdAmount`. Used for the split badge so the displayed total matches
+    /// the home-currency figures elsewhere on the row.
+    var receiptTotalSGD: Double {
+        sgdAmount * Double(max(numberOfShares, 1))
     }
 }
