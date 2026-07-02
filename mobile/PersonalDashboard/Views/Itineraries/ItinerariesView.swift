@@ -114,9 +114,24 @@ struct ItinerariesView: View {
         .padding(.horizontal, Space.lg)
     }
 
+    /// Trips ordered by travel date (issue #210): upcoming/current trips first,
+    /// ascending so the soonest sits at the top, then past trips below,
+    /// most-recently-ended first. A trip counts as current until its end date
+    /// passes, so a trip spanning today stays in the upcoming group.
+    private var orderedTrips: [LocalTrip] {
+        let today = Calendar.current.startOfDay(for: .now)
+        let upcoming = trips
+            .filter { $0.endDate >= today }
+            .sorted { ($0.startDate, $0.endDate) < ($1.startDate, $1.endDate) }
+        let past = trips
+            .filter { $0.endDate < today }
+            .sorted { ($0.endDate, $0.startDate) > ($1.endDate, $1.startDate) }
+        return upcoming + past
+    }
+
     private var tripList: some View {
         List {
-            ForEach(trips) { trip in
+            ForEach(orderedTrips) { trip in
                 TripRow(trip: trip, itemCount: itemCount(for: trip)) {
                     withAnimation(.easeOut(duration: 0.2)) {
                         selectedTripUUID = trip.clientUUID
