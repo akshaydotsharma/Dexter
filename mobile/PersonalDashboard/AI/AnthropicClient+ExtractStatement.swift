@@ -30,12 +30,26 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
         case payment
         case refund
 
-        /// True when this line represents money spent (should become an
-        /// expense). Payments and refunds are excluded.
+        /// True when this line represents money spent (a debit). Payments and
+        /// refunds are NOT spend. Kept for callers that need the strict
+        /// spend/credit distinction; import routing uses `shouldImport`.
         var isSpend: Bool {
             switch self {
             case .purchase, .fee, .interest: return true
             case .payment, .refund:          return false
+            }
+        }
+
+        /// True when this line should be IMPORTED as a `LocalExpense` (#206).
+        /// Spend types import as expenses; a `refund` also imports, but as a
+        /// credit (`isRefund: true`) that nets against totals. A `payment` (a
+        /// transfer TO the card that reduces the balance) is NEVER imported —
+        /// it's counted and skipped, because it isn't spending and double-counts
+        /// against the purchases it paid off.
+        var shouldImport: Bool {
+            switch self {
+            case .purchase, .fee, .interest, .refund: return true
+            case .payment:                            return false
             }
         }
     }
@@ -477,8 +491,10 @@ extension AnthropicClient {
           GIRO). These are NOT spending — but still return them, tagged
           "payment", so they can be counted and skipped.
         - "refund": a credit / reversal / chargeback / cashback on a purchase
-          (money coming back). Return them tagged "refund" so they can be
-          counted and skipped.
+          (money coming back to you). Tag these "refund". They ARE imported —
+          they net against your spending — so give a refund the same accurate
+          merchant, date, amount, and category you'd give the purchase it
+          reverses.
     - "date" is the transaction date in ISO 8601 (YYYY-MM-DD). Statement lines
       often omit the year (e.g. "07 SEP", "12/09"). Infer the year from the
       statement period / billing cycle shown on the statement. If a line's
@@ -496,8 +512,10 @@ extension AnthropicClient {
       Pick the best fit from the merchant (a supermarket → groceries, a
       restaurant → food_and_dining, an airline/hotel → travel, Netflix/Spotify
       → subscriptions, a utility → bills_and_utilities). For fees and interest
-      use "bills_and_utilities". Use "other" only when nothing fits. For
-      payments and refunds, still pick a plausible category (it is ignored).
+      use "bills_and_utilities". Use "other" only when nothing fits. A refund
+      is imported, so give it the category of the purchase it reverses (a
+      grocery refund → groceries). For a payment, still pick a plausible
+      category (a payment is skipped, so its category is ignored).
     - Do NOT include summary rows, balances, "total", "opening/closing
       balance", minimum-payment lines, or reward-point lines — only real
       transaction lines.

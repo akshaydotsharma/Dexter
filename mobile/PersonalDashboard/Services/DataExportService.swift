@@ -217,7 +217,8 @@ final class DataExportService {
             paymentMethod: expense.paymentMethod,
             receiptImagePath: expense.receiptImagePath,
             source: expense.source,
-            createdAt: expense.createdAt
+            createdAt: expense.createdAt,
+            isRefund: expense.isRefund
         )
     }
 

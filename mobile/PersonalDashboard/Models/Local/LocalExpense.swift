@@ -126,6 +126,21 @@ final class LocalExpense {
     // existing call site behaves exactly as before (unsplit = 1 share).
     var numberOfShares: Int = 1
 
+    // MARK: - Refund direction (#206)
+    //
+    // True when this row is a credit-card REFUND / reversal / cashback rather
+    // than a spend, i.e. money coming IN. A refund NETS AGAINST spending
+    // totals (see `signedSGD`), but its `originalAmount` / `sgdAmount` stay
+    // POSITIVE (the magnitude) so the existing `> 0` insert guards and the
+    // per-category math still hold — the direction is carried solely by this
+    // flag. Populated ONLY by the statement-import path (`StatementImporter`)
+    // today; every other source (manual / chat / voice / receipt / email)
+    // leaves it false, i.e. a plain expense. Additive with a default so the
+    // SwiftData migration on existing installs stays lightweight
+    // (add-with-default, never remove) and every existing call site compiles
+    // and behaves unchanged (existing rows default to false = expense).
+    var isRefund: Bool = false
+
     // MARK: - Dead-field parity with other LocalModels
     //
     // These are intentionally unused on Phase A. Kept so that the SwiftData
@@ -158,6 +173,7 @@ final class LocalExpense {
         eventUUID: UUID? = nil,
         eventName: String? = nil,
         numberOfShares: Int = 1,
+        isRefund: Bool = false,
         needsSync: Bool = false,
         version: Int = 0
     ) {
@@ -184,6 +200,7 @@ final class LocalExpense {
         self.eventUUID = eventUUID
         self.eventName = eventName
         self.numberOfShares = numberOfShares
+        self.isRefund = isRefund
         self.needsSync = needsSync
         self.version = version
     }
@@ -196,6 +213,18 @@ final class LocalExpense {
 
     var sourceEnum: ExpenseSource {
         ExpenseSource(rawValue: source) ?? .manual
+    }
+
+    /// Signed home-currency contribution this row makes to any spending total
+    /// (#206). A normal expense contributes `+sgdAmount` (money out); a refund
+    /// contributes `-sgdAmount` (money in, netting the total down). Every
+    /// aggregation site — month total, previous-month, per-category, daily
+    /// sparkline, day-group headers — sums THIS value rather than the raw
+    /// `sgdAmount`, so refunds net cleanly without ever storing a negative
+    /// amount (the `> 0` insert guards stay valid). A net category or day can
+    /// legitimately reach zero or go slightly negative; that is correct.
+    var signedSGD: Double {
+        isRefund ? -sgdAmount : sgdAmount
     }
 
     /// Whether this expense was split among more than one person (#188).

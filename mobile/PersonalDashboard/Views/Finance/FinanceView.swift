@@ -563,7 +563,8 @@ struct FinanceView: View {
         let dict = Dictionary(grouping: rows) { cal.startOfDay(for: $0.date) }
         return dict.keys.sorted(by: >).map { day in
             let dayRows = dict[day] ?? []
-            let total = dayRows.reduce(0) { $0 + $1.sgdAmount }
+            // Net refunds into the day-group header total (#206).
+            let total = dayRows.reduce(0) { $0 + $1.signedSGD }
             return DailyGroup(day: day, total: total, rows: dayRows)
         }
     }
@@ -690,7 +691,9 @@ struct FinanceView: View {
         let cal = Calendar.current
 
         let rangeRows = allExpenses.filter { range.contains($0.date) }
-        let rangeTotal = rangeRows.reduce(0) { $0 + $1.sgdAmount }
+        // All dashboard-band figures net refunds (#206): the headline total,
+        // the delta comparison, the category bars, and the sparkline.
+        let rangeTotal = rangeRows.reduce(0) { $0 + $1.signedSGD }
 
         // Preceding comparison window. Calendar-month presets compare against
         // the previous CALENDAR month (so month-length differences don't skew
@@ -710,11 +713,11 @@ struct FinanceView: View {
             prevRange = prevStart...prevEnd
         }
         let prevRows = allExpenses.filter { prevRange.contains($0.date) }
-        let prevTotal = prevRows.reduce(0) { $0 + $1.sgdAmount }
+        let prevTotal = prevRows.reduce(0) { $0 + $1.signedSGD }
 
         var byCategory: [ExpenseCategory: Double] = [:]
         for row in rangeRows {
-            byCategory[row.categoryEnum, default: 0] += row.sgdAmount
+            byCategory[row.categoryEnum, default: 0] += row.signedSGD
         }
         let topCategories = byCategory
             .sorted { $0.value > $1.value }
@@ -729,7 +732,7 @@ struct FinanceView: View {
         var dailyDict: [Date: Double] = [:]
         for row in rangeRows {
             let day = cal.startOfDay(for: row.date)
-            dailyDict[day, default: 0] += row.sgdAmount
+            dailyDict[day, default: 0] += row.signedSGD
         }
         var dailyTotals: [(date: Date, total: Double)] = []
         for offset in 0..<max(dayCount, 1) {

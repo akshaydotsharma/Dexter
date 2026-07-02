@@ -5,13 +5,22 @@ import SwiftData
 /// pipeline (#184). Every parsed line lands in exactly one of these buckets, so
 /// `imported + skippedDuplicates + ignoredNonSpend + failed == total parsed`.
 struct StatementImportResult: Sendable {
-    /// Purchase/fee/interest lines that deduped clean and were inserted.
+    /// Lines that deduped clean and were inserted. Counts BOTH spend
+    /// (purchase/fee/interest) and refund rows — every row that produced a
+    /// `LocalExpense` this run. `refunds` (below) is the refund subset, so the
+    /// spend-only count is `imported - refunds`.
     let imported: Int
-    /// Spend lines that matched an existing expense via `ExpenseDedupe` and were
-    /// skipped.
+    /// Subset of `imported` that were refunds/credits, inserted with
+    /// `isRefund: true` so they net against spending totals (#206). Surfaced
+    /// separately in the summary ("including N refunds") so it's clear money
+    /// came back in, not just out.
+    let refunds: Int
+    /// Lines (spend or refund) that matched an existing expense via
+    /// `ExpenseDedupe` and were skipped.
     let skippedDuplicates: Int
-    /// Payment (card transfer) and refund/credit lines — counted, never
-    /// inserted (the positive-only `LocalExpense` model can't represent them).
+    /// Payment (card transfer) lines — counted, never inserted. A payment is a
+    /// transfer TO the card that pays down the balance; importing it would
+    /// double-count against the purchases it settled (#206).
     let ignoredNonSpend: Int
     /// Spend lines that failed to insert (bad amount, FX failure, persistence
     /// error). Non-fatal — the batch continues past each one.
@@ -31,19 +40,23 @@ struct StatementImportResult: Sendable {
 
     /// User-facing one-liner for the summary alert. Mentions only the buckets
     /// that have entries so a clean import reads simply. Examples:
-    ///   "Imported 42 · Skipped 8 duplicates · Ignored 5 payments/refunds"
+    ///   "Imported 42 (including 3 refunds) · Skipped 8 duplicates · Ignored 5 payments"
     ///   "Imported 12"
     ///   "Nothing to import — no transactions found."
     var summaryLine: String {
         guard totalParsed > 0 else {
             return "Nothing to import — no transactions found on this statement."
         }
-        var parts: [String] = ["Imported \(imported)"]
+        var head = "Imported \(imported)"
+        if refunds > 0 {
+            head += " (including \(refunds) refund\(refunds == 1 ? "" : "s"))"
+        }
+        var parts: [String] = [head]
         if skippedDuplicates > 0 {
             parts.append("Skipped \(skippedDuplicates) duplicate\(skippedDuplicates == 1 ? "" : "s")")
         }
         if ignoredNonSpend > 0 {
-            parts.append("Ignored \(ignoredNonSpend) payment\(ignoredNonSpend == 1 ? "" : "s")/refund\(ignoredNonSpend == 1 ? "" : "s")")
+            parts.append("Ignored \(ignoredNonSpend) payment\(ignoredNonSpend == 1 ? "" : "s")")
         }
         if failed > 0 {
             parts.append("\(failed) couldn't be added")
@@ -71,7 +84,10 @@ struct StatementImportResult: Sendable {
 /// Mirrors `EmailToItinerary`'s "parse → dedupe → insert → stamp keys → count
 /// skipped" shape, but for a whole statement rather than one receipt:
 ///   1. Ask Claude for the full transaction array (native PDF block).
-///   2. Drop payment/refund lines (tally as `ignoredNonSpend`).
+///   2. Drop card-payment lines (tally as `ignoredNonSpend`) — a payment settles
+///      the balance and would double-count against the purchases it paid off.
+///      Refunds are NOT dropped: they import as credits (`isRefund: true`) that
+///      net against spending totals (#206).
 ///   3. For each remaining line: build an `ExpenseDedupe.Proposed`, skip if it
 ///      already exists, else FX-convert and insert via `ExpenseService` with
 ///      `source: .pdf`, then stamp `dedupeKey` (structural — statements carry
@@ -120,6 +136,7 @@ struct StatementImporter {
         possiblyTruncated: Bool
     ) async -> StatementImportResult {
         var imported = 0
+        var refunds = 0
         var skippedDuplicates = 0
         var ignoredNonSpend = 0
         var failed = 0
@@ -141,10 +158,16 @@ struct StatementImporter {
             // (import it) — the model reliably tags payments/refunds, so an
             // untyped line is far more likely a normal purchase than a credit.
             let type = line.type ?? .purchase
-            guard type.isSpend else {
+            guard type.shouldImport else {
+                // Card payments only — they settle the balance and must never
+                // be imported (they'd double-count against the purchases they
+                // paid off). Refunds fall through and import as credits.
                 ignoredNonSpend += 1
                 continue
             }
+            // A refund imports as a credit: positive magnitude, `isRefund: true`
+            // so it nets against totals. Everything else is ordinary spend.
+            let isRefund = (type == .refund)
 
             // Amount must be positive to be a valid LocalExpense. A statement
             // line with no readable amount is dropped as a failure so the count
@@ -168,7 +191,11 @@ struct StatementImporter {
                 date: Calendar(identifier: .gregorian).startOfDay(for: date),
                 originalAmount: amount,
                 originalCurrency: currency,
-                sourceReference: ""
+                sourceReference: "",
+                // Direction is part of equivalence (#206): a £50 refund must not
+                // be swallowed as a "duplicate" of a same-day £50 purchase, and
+                // a re-imported refund still dedupes against the prior refund.
+                isRefund: isRefund
             )
             let signature = ExpenseDedupe.signature(for: proposed)
             if ExpenseDedupe.exists(signature: signature, proposed: proposed, context: store.context) {
@@ -199,7 +226,8 @@ struct StatementImporter {
                     sgdAmount: conversion.sgdAmount,
                     fxRate: conversion.rate,
                     paymentMethod: paymentMethod,
-                    source: .pdf
+                    source: .pdf,
+                    isRefund: isRefund
                 )
                 // Stamp the dedupe signature so a re-import of the same
                 // statement dedups against this row cheaply, mirroring the
@@ -217,6 +245,7 @@ struct StatementImporter {
                 try? store.context.save()
 
                 imported += 1
+                if isRefund { refunds += 1 }
                 if let uuid = UUID(uuidString: row.clientUUID) {
                     importedUUIDs.append(uuid)
                 }
@@ -228,6 +257,7 @@ struct StatementImporter {
 
         return StatementImportResult(
             imported: imported,
+            refunds: refunds,
             skippedDuplicates: skippedDuplicates,
             ignoredNonSpend: ignoredNonSpend,
             failed: failed,

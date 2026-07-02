@@ -28,6 +28,11 @@ enum ExpenseDedupe {
         let originalAmount: Double  // amount in the original currency
         let originalCurrency: String // ISO 4217, uppercased
         let sourceReference: String // order / booking reference, or "" if none
+        /// Direction (#206). A refund and a same-magnitude purchase are NOT
+        /// equivalent, so this is folded into the structural key. Defaulted to
+        /// false so every existing caller (email path) is unchanged and only
+        /// the statement importer, which can propose refunds, sets it.
+        var isRefund: Bool = false
     }
 
     /// Compute the equivalence signature for a proposed expense.
@@ -46,7 +51,11 @@ enum ExpenseDedupe {
         let day = dayKey(proposed.date)
         let amount = amountKey(proposed.originalAmount)
         let currency = proposed.originalCurrency.uppercased()
-        return "s:\(merchant)|\(day)|\(amount)|\(currency)"
+        // A refund gets its own namespace so it never collides with a
+        // same-magnitude purchase; an expense keeps the original format so
+        // existing stored `dedupeKey`s stay valid (#206).
+        let dir = proposed.isRefund ? "refund|" : ""
+        return "s:\(dir)\(merchant)|\(day)|\(amount)|\(currency)"
     }
 
     /// True when an equivalent expense already exists. Checks both the stored
@@ -94,7 +103,8 @@ enum ExpenseDedupe {
         let day = dayKey(proposed.date)
         let amount = amountKey(proposed.originalAmount)
         let currency = proposed.originalCurrency.uppercased()
-        return "\(merchant)|\(day)|\(amount)|\(currency)"
+        let dir = proposed.isRefund ? "refund|" : ""
+        return "\(dir)\(merchant)|\(day)|\(amount)|\(currency)"
     }
 
     /// The structural key for an existing stored row, computed the SAME way as
@@ -105,7 +115,8 @@ enum ExpenseDedupe {
         let day = dayKey(row.date)
         let amount = amountKey(row.originalAmount)
         let currency = row.originalCurrency.uppercased()
-        return "\(merchant)|\(day)|\(amount)|\(currency)"
+        let dir = row.isRefund ? "refund|" : ""
+        return "\(dir)\(merchant)|\(day)|\(amount)|\(currency)"
     }
 
     // MARK: - Normalisation

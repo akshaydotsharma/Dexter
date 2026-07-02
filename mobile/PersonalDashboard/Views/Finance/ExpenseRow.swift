@@ -54,15 +54,18 @@ struct ExpenseRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 2) {
-                Text(FinanceDashboardBand.formatSGD(expense.sgdAmount))
+                // Refunds are money coming IN: shown in the success (green)
+                // colour with a leading "+" so they read as a credit against
+                // spend, distinct from a normal debit (#206).
+                Text(sgdAmountLabel)
                     .font(.edBodyMedium)
                     .monospacedDigit()
-                    .foregroundStyle(Tokens.ink)
+                    .foregroundStyle(expense.isRefund ? Tokens.success : Tokens.ink)
                 if expense.originalCurrency.uppercased() != "SGD" {
                     Text(originalAmountLabel)
                         .font(.edCaption)
                         .monospacedDigit()
-                        .foregroundStyle(Tokens.mutedSoft)
+                        .foregroundStyle(expense.isRefund ? Tokens.success.opacity(0.8) : Tokens.mutedSoft)
                 }
             }
         }
@@ -183,17 +186,29 @@ struct ExpenseRow: View {
         return pieces.isEmpty ? nil : pieces.joined(separator: " · ")
     }
 
+    /// Primary SGD amount, with a leading "+" for refunds so a credit is
+    /// unmistakable at a glance (the colour alone isn't enough for the
+    /// colour-blind, and "+" carries the meaning in VoiceOver too) (#206).
+    private var sgdAmountLabel: String {
+        let base = FinanceDashboardBand.formatSGD(expense.sgdAmount)
+        return expense.isRefund ? "+\(base)" : base
+    }
+
     private var originalAmountLabel: String {
         let formatter = NumberFormatter()
         formatter.minimumFractionDigits = 2
         formatter.maximumFractionDigits = 2
         formatter.numberStyle = .decimal
         let amount = formatter.string(from: NSNumber(value: expense.originalAmount)) ?? "\(expense.originalAmount)"
-        return "\(expense.originalCurrency.uppercased()) \(amount)"
+        let base = "\(expense.originalCurrency.uppercased()) \(amount)"
+        return expense.isRefund ? "+\(base)" : base
     }
 
     private var accessibilityLabel: String {
-        var pieces: [String] = [primaryLine, FinanceDashboardBand.formatSGD(expense.sgdAmount), expense.categoryEnum.displayName]
+        let amountSpoken = expense.isRefund
+            ? "refund \(FinanceDashboardBand.formatSGD(expense.sgdAmount))"
+            : FinanceDashboardBand.formatSGD(expense.sgdAmount)
+        var pieces: [String] = [primaryLine, amountSpoken, expense.categoryEnum.displayName]
         if expense.originalCurrency.uppercased() != "SGD" {
             pieces.append("\(originalAmountLabel) original")
         }
