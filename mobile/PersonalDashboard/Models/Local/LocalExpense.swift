@@ -73,6 +73,19 @@ final class LocalExpense {
     var sourceReference: String = ""
     var tripUUID: UUID? = nil
 
+    // MARK: - Statement-import attribution (#189)
+    //
+    // Populated ONLY by the statement-import path (`StatementImporter`): the
+    // human-readable statement this expense came off, e.g. "May 2026 Citi -
+    // 1234". Empty for every other source (manual / chat / voice / receipt /
+    // email) and for statement rows whose header couldn't be read. Additive
+    // with a default so the SwiftData migration on existing installs stays
+    // lightweight (add-with-default, never remove) and all existing call sites
+    // are unaffected. NOT part of the dedupe signature (see `ExpenseDedupe`) —
+    // it's display-only metadata and must never change whether a re-import of
+    // the same statement is treated as a duplicate.
+    var statementLabel: String = ""
+
     // MARK: - Person / Event tags (#183)
     //
     // Two optional groupings any expense can carry: a Person ("who was this
@@ -116,6 +129,7 @@ final class LocalExpense {
         dedupeKey: String = "",
         sourceReference: String = "",
         tripUUID: UUID? = nil,
+        statementLabel: String = "",
         personUUID: UUID? = nil,
         personName: String? = nil,
         eventUUID: UUID? = nil,
@@ -139,6 +153,7 @@ final class LocalExpense {
         self.dedupeKey = dedupeKey
         self.sourceReference = sourceReference
         self.tripUUID = tripUUID
+        self.statementLabel = statementLabel
         self.personUUID = personUUID
         self.personName = personName
         self.eventUUID = eventUUID

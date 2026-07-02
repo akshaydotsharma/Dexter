@@ -49,10 +49,20 @@ struct FinanceView: View {
     @State private var showingPhotoLibrary: Bool = false
     @State private var showingPDFPicker: Bool = false
 
-    /// On-screen overlay while Vision runs. The receipt file is already
-    /// saved before this flips on, so cancelling here just opens the
-    /// AddExpenseSheet with the receipt attached and no prefilled fields.
-    @State private var extractionInProgress: Bool = false
+    /// Separate file-picker flag for the batch statement import (#184). Kept
+    /// distinct from `showingPDFPicker` (the single-receipt path) so the two
+    /// PDF flows don't share presentation state.
+    @State private var showingStatementPicker: Bool = false
+
+    /// In-flight capture / import jobs, rendered as non-blocking "Processing…"
+    /// rows pinned above the expense list (#186). Modelled as an array (not a
+    /// bool) so two uploads in a row show two rows and the list stays fully
+    /// interactive while extraction / import runs in the background.
+    @State private var processingJobs: [ProcessingJob] = []
+
+    /// Summary shown after a statement import completes (#184), e.g.
+    /// "Imported 42 · Skipped 8 duplicates · Ignored 5 payments/refunds".
+    @State private var statementImportSummary: String?
 
     /// Surfaced to the user when extraction fails with no usable receipt
     /// to attach (e.g. file save failed). Successful saves with failed
@@ -74,10 +84,6 @@ struct FinanceView: View {
             }
 
             captureMenuButton
-
-            if extractionInProgress {
-                extractionOverlay
-            }
         }
         .activeSection(.finance)
         .sheet(item: $editingTarget) { target in
@@ -95,8 +101,20 @@ struct FinanceView: View {
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
             handleCaptureData(data, source: .photoLibrary)
         }
-        .pdfPicker(isPresented: $showingPDFPicker) { data in
+        .pdfPicker(isPresented: $showingPDFPicker) { data, _ in
             handleCaptureData(data, source: .pdf)
+        }
+        .pdfPicker(isPresented: $showingStatementPicker) { data, fileName in
+            handleStatementData(data, fileName: fileName)
+        }
+        .alert(
+            "Statement import",
+            isPresented: statementSummaryBinding,
+            presenting: statementImportSummary
+        ) { _ in
+            Button("OK", role: .cancel) { statementImportSummary = nil }
+        } message: { summary in
+            Text(summary)
         }
         .alert(
             "Couldn't process receipt",
@@ -151,6 +169,11 @@ struct FinanceView: View {
             } label: {
                 Label("PDF from Files", systemImage: "doc.text")
             }
+            Button {
+                showingStatementPicker = true
+            } label: {
+                Label("Import statement", systemImage: "doc.text.magnifyingglass")
+            }
             Divider()
             Button {
                 editingTarget = .new
@@ -165,27 +188,6 @@ struct FinanceView: View {
         .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .accessibilityLabel("Add expense")
-    }
-
-    private var extractionOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.25).ignoresSafeArea()
-            VStack(spacing: Space.md) {
-                ProgressView()
-                    .tint(Tokens.ink)
-                Text("Reading receipt…")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-            }
-            .padding(.horizontal, Space.xl)
-            .padding(.vertical, Space.lg)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
-        }
-        .transition(.opacity)
-        .allowsHitTesting(true)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Reading receipt")
     }
 
     // MARK: - Capture lifecycle
@@ -205,10 +207,14 @@ struct FinanceView: View {
         Task { await processCapturedAsset(data: data, captureSource: source) }
     }
 
-    /// Save the asset to disk, kick off Vision, then open AddExpenseSheet
-    /// with either prefilled fields (success) or just the receipt attached
-    /// (failure). Receipt save errors bubble up to the alert; Vision errors
-    /// don't — those are non-fatal because the user can fill in the form.
+    /// Save the asset to disk, show a non-blocking "Processing…" row, then run
+    /// Vision in the background (#186). On success we AUTO-ADD the expense right
+    /// away (mirroring what `AddExpenseSheet.save()` did for the `.prefilled`
+    /// case) and open the sheet on that now-real row so the user confirms /
+    /// tweaks an existing expense — never a second insert. On failure we fall
+    /// back to the old behaviour: open the form with the receipt attached and
+    /// an error banner. Receipt save errors bubble up to the alert; Vision
+    /// errors don't — those are non-fatal because the user can fill in the form.
     private func processCapturedAsset(data: Data, captureSource: FinanceCaptureSource) async {
         let storage = ReceiptStorage.shared
         let client = AnthropicClient()
@@ -242,13 +248,15 @@ struct FinanceView: View {
             return
         }
 
-        // 2. Show progress, run Vision.
+        // 2. Show a non-blocking processing row; remove it whichever way we
+        //    exit. The list stays scrollable / tappable while Vision runs.
+        let job = ProcessingJob(kind: .receipt)
         withAnimation(.easeInOut(duration: 0.15)) {
-            extractionInProgress = true
+            processingJobs.append(job)
         }
         defer {
             withAnimation(.easeInOut(duration: 0.15)) {
-                extractionInProgress = false
+                processingJobs.removeAll { $0.id == job.id }
             }
         }
 
@@ -268,9 +276,10 @@ struct FinanceView: View {
                 receiptImagePath: relativePath,
                 source: expenseSource
             )
-            editingTarget = .prefilled(prefill)
+            await autoAddThenEdit(prefill: prefill)
         } catch {
-            // Save the receipt regardless; open the form with a banner.
+            // Save the receipt regardless; open the form with a banner. No row
+            // was created, so `.prefilled` inserting on save is correct here.
             let message: String = {
                 if let typed = error as? ReceiptExtractionError {
                     return typed.localizedDescription
@@ -286,10 +295,112 @@ struct FinanceView: View {
         }
     }
 
+    /// Persist the extracted expense immediately, then open the edit sheet on
+    /// the saved row (#186). This is the "auto-add then confirm" path: the row
+    /// appears in the list the instant extraction succeeds, and the sheet edits
+    /// that existing `LocalExpense` rather than inserting a second one.
+    ///
+    /// Insert logic mirrors `AddExpenseSheet.save()` for `.prefilled` (FX
+    /// convert → `service.addExpense` → attach receipt path). If we can't build
+    /// a valid row (no usable amount, or FX conversion fails), we fall back to
+    /// the review sheet with the fields prefilled so `AddExpenseSheet` handles
+    /// the insert on save — again, no double-insert.
+    private func autoAddThenEdit(prefill: PrefilledExpense) async {
+        guard let amount = prefill.amount, amount > 0 else {
+            // Nothing solid to persist yet — let the user complete the form.
+            editingTarget = .prefilled(prefill)
+            return
+        }
+
+        let store = SwiftDataStore.shared
+        let fx = FXService(store: store)
+        let service = ExpenseService(store: store)
+        let currency = (prefill.currency?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+            $0.isEmpty ? nil : $0.uppercased()
+        } ?? "SGD"
+
+        do {
+            let conversion = try await fx.convert(amount, from: currency)
+            let row = try service.addExpense(
+                date: prefill.date ?? Date(),
+                category: prefill.category ?? .other,
+                merchant: prefill.merchant,
+                expenseDescription: prefill.descriptionText,
+                originalAmount: amount,
+                originalCurrency: currency,
+                sgdAmount: conversion.sgdAmount,
+                fxRate: conversion.rate,
+                paymentMethod: nil,
+                source: prefill.source
+            )
+            row.receiptImagePath = prefill.receiptImagePath
+            try modelContext.save()
+            // Open the sheet on the now-real row so confirm/adjust edits it.
+            editingTarget = .existing(row.clientUUID)
+        } catch {
+            // FX or persistence failed — hand off to the review sheet, which
+            // retries the conversion on save. The row wasn't created.
+            editingTarget = .prefilled(prefill)
+        }
+    }
+
     private var captureErrorBinding: Binding<Bool> {
         Binding(
             get: { captureErrorMessage != nil },
             set: { newValue in if !newValue { captureErrorMessage = nil } }
+        )
+    }
+
+    // MARK: - Statement import (#184)
+
+    /// Entry point for the statement file picker. `data == nil` is a cancel.
+    /// `fileName` (e.g. "Citi_May2026.pdf") labels the processing banner (#189).
+    private func handleStatementData(_ data: Data?, fileName: String?) {
+        guard let data else { return }
+        Task { await importStatement(pdfData: data, fileName: fileName) }
+    }
+
+    /// Parse the statement PDF and batch-import every purchase/fee/interest
+    /// line, deduping against existing expenses. No per-row review — survivors
+    /// are inserted directly and the outcome is surfaced as a summary. Parse
+    /// failures show the "couldn't process" alert; a successful parse with zero
+    /// transactions still shows a (benign) summary explaining nothing matched.
+    private func importStatement(pdfData: Data, fileName: String? = nil) async {
+        // Non-blocking processing row while the batch import runs (#186); the
+        // list stays interactive and multiple imports can queue up. When we
+        // know the picked file name, label the row "Importing <name>…" so it's
+        // clear which statement is being processed (#189).
+        let bannerLabel = fileName
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            .map { "Importing \($0)…" }
+        let job = ProcessingJob(kind: .statement, overrideLabel: bannerLabel)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            processingJobs.append(job)
+        }
+        defer {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                processingJobs.removeAll { $0.id == job.id }
+            }
+        }
+
+        do {
+            let result = try await StatementImporter.default().importStatement(pdfData: pdfData)
+            statementImportSummary = result.summaryLine
+        } catch {
+            let message: String = {
+                if let typed = error as? StatementExtractionError {
+                    return typed.localizedDescription
+                }
+                return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
+            }()
+            captureErrorMessage = message
+        }
+    }
+
+    private var statementSummaryBinding: Binding<Bool> {
+        Binding(
+            get: { statementImportSummary != nil },
+            set: { newValue in if !newValue { statementImportSummary = nil } }
         )
     }
 
@@ -306,16 +417,33 @@ struct FinanceView: View {
 
     private var populatedContent: some View {
         let filtered = filteredExpenses
-        let stats = computeStats()
+        let stats = computeStats(range: dashboardRange, preset: filterState.datePreset)
         return ScrollView {
             VStack(spacing: Space.lg) {
-                FinanceDashboardBand(stats: stats)
+                FinanceDashboardBand(
+                    stats: stats,
+                    headerLabel: dashboardHeaderLabel,
+                    deltaComparisonLabel: filterState.datePreset.deltaComparisonLabel
+                )
+                .padding(.horizontal, Space.lg)
+
+                FinanceFilterBar(state: $filterState)
+
+                // In-flight capture / import jobs (#186). Rendered as a status
+                // banner between the filter chips and the search field — NOT
+                // inside the expense list — so it reads as "something is
+                // happening in the background", never as a transaction row.
+                if !processingJobs.isEmpty {
+                    VStack(spacing: Space.xs) {
+                        ForEach(processingJobs) { job in
+                            FinanceProcessingRow(job: job)
+                        }
+                    }
                     .padding(.horizontal, Space.lg)
+                }
 
                 searchField
                     .padding(.horizontal, Space.lg)
-
-                FinanceFilterBar(state: $filterState)
 
                 if filtered.isEmpty {
                     noResultsState
@@ -507,24 +635,56 @@ struct FinanceView: View {
         return true
     }
 
-    /// Stats for the dashboard band. Always uses the FULL expense set
-    /// (not the filtered list) so the band always reflects "your real
-    /// finances" — filters only narrow the list below.
-    private func computeStats() -> FinanceDashboardStats {
+    /// Concrete window the dashboard totals + charts over (#187). Driven by the
+    /// selected date-range preset so the band tracks the same period as the
+    /// list's date filter. Category / source filters and search still only
+    /// narrow the list below — the band reflects total spend in the window.
+    private var dashboardRange: ClosedRange<Date> {
+        filterState.dashboardDateRange()
+    }
+
+    /// Header label for the band, reflecting the selected preset (#187).
+    /// `.custom` folds in the concrete date span; the rest are fixed words.
+    private var dashboardHeaderLabel: String {
+        if filterState.datePreset == .custom {
+            return filterState.customDashboardLabel()
+        }
+        return filterState.datePreset.dashboardLabel
+    }
+
+    /// Stats for the dashboard band, computed over the selected range (#187).
+    /// Always uses the FULL expense set (not category/source/search-filtered)
+    /// so the band reflects total spend in the window; only the date range
+    /// narrows it. The delta compares the range against the immediately
+    /// preceding window of EQUAL LENGTH.
+    private func computeStats(range: ClosedRange<Date>, preset: FinanceDateRangePreset) -> FinanceDashboardStats {
         let cal = Calendar.current
-        let now = Date()
-        let (monthStart, monthEnd) = ExpenseDateRanges.monthBounds(for: now)
-        let prev = cal.date(byAdding: .month, value: -1, to: now) ?? now
-        let (prevStart, prevEnd) = ExpenseDateRanges.monthBounds(for: prev)
 
-        let monthRows = allExpenses.filter { $0.date >= monthStart && $0.date <= monthEnd }
-        let prevRows = allExpenses.filter { $0.date >= prevStart && $0.date <= prevEnd }
+        let rangeRows = allExpenses.filter { range.contains($0.date) }
+        let rangeTotal = rangeRows.reduce(0) { $0 + $1.sgdAmount }
 
-        let monthTotal = monthRows.reduce(0) { $0 + $1.sgdAmount }
+        // Preceding comparison window. Calendar-month presets compare against
+        // the previous CALENDAR month (so month-length differences don't skew
+        // the delta and "This month" keeps its exact prior behaviour); rolling
+        // and custom windows compare against the prior span of EQUAL LENGTH,
+        // ending just before the range start.
+        let prevRange: ClosedRange<Date>
+        switch preset {
+        case .thisMonth, .lastMonth:
+            let prevMonthRef = cal.date(byAdding: .month, value: -1, to: range.lowerBound) ?? range.lowerBound
+            let bounds = ExpenseDateRanges.monthBounds(for: prevMonthRef)
+            prevRange = bounds.0...bounds.1
+        case .last30, .last90, .custom:
+            let span = range.upperBound.timeIntervalSince(range.lowerBound)
+            let prevEnd = range.lowerBound.addingTimeInterval(-1)
+            let prevStart = prevEnd.addingTimeInterval(-span)
+            prevRange = prevStart...prevEnd
+        }
+        let prevRows = allExpenses.filter { prevRange.contains($0.date) }
         let prevTotal = prevRows.reduce(0) { $0 + $1.sgdAmount }
 
         var byCategory: [ExpenseCategory: Double] = [:]
-        for row in monthRows {
+        for row in rangeRows {
             byCategory[row.categoryEnum, default: 0] += row.sgdAmount
         }
         let topCategories = byCategory
@@ -532,25 +692,25 @@ struct FinanceView: View {
             .prefix(3)
             .map { (category: $0.key, total: $0.value) }
 
-        // Daily totals for last 30 days inclusive.
-        let endOfToday = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now))?
-            .addingTimeInterval(-1) ?? now
-        let startSpark = cal.date(byAdding: .day, value: -29, to: cal.startOfDay(for: now)) ?? now
-        let recent30 = allExpenses.filter { $0.date >= startSpark && $0.date <= endOfToday }
+        // Sparkline: one bucket per calendar day across the selected range,
+        // inclusive of both ends. Days with no spend draw a flat segment.
+        let sparkStart = cal.startOfDay(for: range.lowerBound)
+        let sparkEndDay = cal.startOfDay(for: range.upperBound)
+        let dayCount = (cal.dateComponents([.day], from: sparkStart, to: sparkEndDay).day ?? 0) + 1
         var dailyDict: [Date: Double] = [:]
-        for row in recent30 {
+        for row in rangeRows {
             let day = cal.startOfDay(for: row.date)
             dailyDict[day, default: 0] += row.sgdAmount
         }
         var dailyTotals: [(date: Date, total: Double)] = []
-        for offset in 0..<30 {
-            if let day = cal.date(byAdding: .day, value: offset, to: startSpark) {
+        for offset in 0..<max(dayCount, 1) {
+            if let day = cal.date(byAdding: .day, value: offset, to: sparkStart) {
                 dailyTotals.append((day, dailyDict[day] ?? 0))
             }
         }
 
         return FinanceDashboardStats(
-            monthTotal: monthTotal,
+            monthTotal: rangeTotal,
             previousMonthTotal: prevTotal,
             topCategories: topCategories,
             dailyTotals: dailyTotals
