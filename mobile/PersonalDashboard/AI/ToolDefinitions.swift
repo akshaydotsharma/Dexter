@@ -428,6 +428,26 @@ enum ToolDefinitions {
         )
     )
 
+    /// Bulk-delete finance entries matching an optional filter (#204). All
+    /// filters are optional and ANDed. An unfiltered call is a full wipe of
+    /// EVERY expense — the model must not issue that until the user has
+    /// explicitly confirmed, and then it passes `confirm_all: true`. The
+    /// executor enforces the same guard so the auto-executing capture / voice
+    /// path can't wipe everything on a single unconfirmed request.
+    private static let clearExpenses = AnthropicTool(
+        name: "clear_expenses",
+        description: "Bulk-delete expenses (finance entries) matching an optional filter. Use for requests like \"clear my expenses\", \"delete all my food expenses\", \"remove expenses before May\". Apply whichever of after_date / before_date / category the user gives as an AND filter. SAFETY: if you provide NO filter (no after_date, no before_date, no category) this deletes EVERY expense. Do NOT call this unfiltered on a first request — instead reply in plain text telling the user this will erase ALL their expenses and ask them to confirm (e.g. \"yes, clear all\"). Only after they explicitly confirm, call clear_expenses again with confirm_all: true. Filtered clears (any of after_date / before_date / category present) apply immediately and do NOT need confirm_all.",
+        input_schema: object(
+            properties: [
+                "after_date": string("OPTIONAL ISO 8601 date (e.g. 2026-06-01). Delete only expenses dated STRICTLY AFTER this day. Omit or use empty string for no lower bound."),
+                "before_date": string("OPTIONAL ISO 8601 date. Delete only expenses dated STRICTLY BEFORE this day. Omit or use empty string for no upper bound."),
+                "category": string("OPTIONAL category to restrict the clear to. One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Omit or use empty string to clear across all categories."),
+                "confirm_all": bool("Set true ONLY to confirm an unfiltered clear of ALL expenses, and ONLY after the user has explicitly confirmed they want to erase everything. Ignored when any filter is present. Defaults to false.")
+            ],
+            required: []
+        )
+    )
+
     // MARK: - Public surface
 
     static let allTools: [AnthropicTool] = [
@@ -453,7 +473,8 @@ enum ToolDefinitions {
         deleteTrip,
         editItineraryItem,
         deleteItineraryItem,
-        addExpense
+        addExpense,
+        clearExpenses
     ]
 
     /// Subset of `allTools` excluded from the capture (Shortcut) auto-execute
@@ -496,6 +517,7 @@ enum ToolDefinitions {
         "delete_trip": .deleteTrip,
         "edit_itinerary_item": .updateItineraryItem,
         "delete_itinerary_item": .deleteItineraryItem,
-        "add_expense": .addExpense
+        "add_expense": .addExpense,
+        "clear_expenses": .clearExpenses
     ]
 }

@@ -236,6 +236,16 @@ struct CaptureToDashboardIntent: AppIntent {
         case (_, "deleted"):
             return "Deleted \(typeLabel)\(titleClause)."
 
+        // Bulk expense clear (#204): the title already carries the full
+        // count-bearing sentence ("Cleared 12 expenses…"), so surface it
+        // verbatim rather than wrapping it in the singular delete phrasing.
+        case ("expense", "cleared"):
+            return title.isEmpty ? "Cleared expenses." : title
+        // Full-wipe guard tripped — nothing was deleted; the title is the
+        // confirmation prompt to read back to the user.
+        case (_, "needs_confirmation"):
+            return title.isEmpty ? "That needs confirmation before I can clear it." : title
+
         default:
             return "Done."
         }

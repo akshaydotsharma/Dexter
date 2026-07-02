@@ -75,6 +75,7 @@ struct ExecuteDraftAction {
         case .updateItineraryItem: return try updateItineraryItem(input)
         case .deleteItineraryItem: return try deleteItineraryItem(input)
         case .addExpense: return try await addExpense(input)
+        case .clearExpenses: return try clearExpenses(input)
         case .unknown:
             throw DraftExecutionError.invalidArgument(field: "action", reason: "unknown action type")
         }
@@ -236,6 +237,121 @@ struct ExecuteDraftAction {
             addedNames: nil
         )
     }
+
+    /// `clear_expenses` tool handler (#204). Bulk-deletes finance entries
+    /// matching an optional after/before/category filter. Synchronous — unlike
+    /// `addExpense` there's no FX round-trip.
+    ///
+    /// Full-wipe safety guard: an UNFILTERED clear (no after_date, no
+    /// before_date, no category) deletes EVERY expense, so it only executes
+    /// when `confirm_all: true` is passed. Without it, nothing is deleted and
+    /// a `needs_confirmation` outcome is returned telling the user to confirm.
+    /// This guard lives here (not just in the system prompt) so the
+    /// auto-executing capture / voice path can't wipe everything on one
+    /// unconfirmed request. Filtered clears always execute directly, matching
+    /// every other delete on these surfaces.
+    private func clearExpenses(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let cal = Calendar.current
+        // Normalise the bounds to start-of-day so day-granular "after 1 Jun"
+        // semantics line up with `LocalExpense.date` (also start-of-day).
+        let after = parseAnyISODate(input["after_date"]?.stringValue).map { cal.startOfDay(for: $0) }
+        let before = parseAnyISODate(input["before_date"]?.stringValue).map { cal.startOfDay(for: $0) }
+
+        let categoryRaw = (trimmedString(input["category"]) ?? "").lowercased()
+        let category = categoryRaw.isEmpty ? nil : ExpenseCategory(rawValue: categoryRaw)
+
+        // A filter is "present" whenever the model supplied any dimension —
+        // including a category string we don't recognise (handled just below),
+        // so an unknown category never silently degrades into a full wipe.
+        let hasFilter = (after != nil) || (before != nil) || !categoryRaw.isEmpty
+        let confirmAll = input["confirm_all"]?.boolValue ?? false
+
+        let service = ExpenseService(store: store)
+
+        // Full-wipe safety guard: unfiltered clear-all needs explicit confirm.
+        if !hasFilter && !confirmAll {
+            let count = (try? service.totalCount()) ?? 0
+            let message = count == 0
+                ? "There are no expenses to clear."
+                : "This clears all \(count) expense\(count == 1 ? "" : "s"). Say \"yes, clear all\" to confirm."
+            return DraftActionOutcome(
+                type: "expense",
+                action: ActionString.needsConfirmation,
+                id: "",
+                title: message,
+                dueDate: nil,
+                addedNames: nil
+            )
+        }
+
+        // Unknown-category guard: the model passed a category we can't map.
+        // Refuse rather than fall through to an unfiltered wipe.
+        if !categoryRaw.isEmpty && category == nil {
+            return DraftActionOutcome(
+                type: "expense",
+                action: ActionString.needsConfirmation,
+                id: "",
+                title: "I don't recognise the category \"\(categoryRaw)\", so nothing was cleared.",
+                dueDate: nil,
+                addedNames: nil
+            )
+        }
+
+        let deleted: Int
+        do {
+            deleted = try service.deleteExpenses(after: after, before: before, category: category)
+        } catch {
+            throw DraftExecutionError.persistence(error)
+        }
+
+        return DraftActionOutcome(
+            type: "expense",
+            action: ActionString.cleared,
+            id: "",
+            title: Self.clearedExpensesTitle(deleted: deleted, after: after, before: before, category: category),
+            dueDate: nil,
+            addedNames: nil
+        )
+    }
+
+    /// Scope-aware summary for a `clear_expenses` outcome, e.g.
+    /// "Cleared 12 expenses", "Cleared 3 expenses in Groceries after 1 Jun 2026",
+    /// or "No expenses matched before 1 May 2026." when nothing was deleted.
+    private static func clearedExpensesTitle(
+        deleted: Int,
+        after: Date?,
+        before: Date?,
+        category: ExpenseCategory?
+    ) -> String {
+        let scope = clearScopeSuffix(after: after, before: before, category: category)
+        guard deleted > 0 else {
+            return "No expenses matched\(scope)."
+        }
+        let noun = deleted == 1 ? "expense" : "expenses"
+        return "Cleared \(deleted) \(noun)\(scope)."
+    }
+
+    private static func clearScopeSuffix(after: Date?, before: Date?, category: ExpenseCategory?) -> String {
+        var parts: [String] = []
+        if let category {
+            parts.append("in \(category.displayName)")
+        }
+        if let after, let before {
+            parts.append("between \(clearDateFormatter.string(from: after)) and \(clearDateFormatter.string(from: before))")
+        } else if let after {
+            parts.append("after \(clearDateFormatter.string(from: after))")
+        } else if let before {
+            parts.append("before \(clearDateFormatter.string(from: before))")
+        }
+        return parts.isEmpty ? "" : " " + parts.joined(separator: " ")
+    }
+
+    private static let clearDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
 
     // MARK: - CREATE
 
@@ -1309,4 +1425,11 @@ enum ActionString {
     static let itemsAdded = "items_added"
     static let itemUpdated = "item_updated"
     static let itemRemoved = "item_removed"
+    /// Bulk clear of finance entries (#204). Distinct from `deleted` (single
+    /// row) so the dialog / cards can render a count-bearing summary.
+    static let cleared = "cleared"
+    /// A `clear_expenses` call that was refused because it would wipe ALL
+    /// expenses without confirmation (or named an unknown category). Nothing
+    /// was deleted; the outcome `title` carries the message to surface.
+    static let needsConfirmation = "needs_confirmation"
 }

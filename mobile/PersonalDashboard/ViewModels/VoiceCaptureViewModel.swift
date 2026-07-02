@@ -460,6 +460,7 @@ final class VoiceCaptureViewModel {
         case .createTrip, .updateTrip, .deleteTrip, .addItineraryItems: return "trip"
         case .updateItineraryItem, .deleteItineraryItem:           return "item"
         case .addExpense:                                          return "expense"
+        case .clearExpenses:                                       return "expenses"
         case .unknown:                                             return "action"
         }
     }

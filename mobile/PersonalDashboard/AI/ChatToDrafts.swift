@@ -233,6 +233,7 @@ struct ChatToDrafts {
         - remove_list_item: Remove a specific item from a list (requires list_id and item_index)
         - delete_trip: Delete an existing trip (cascades to all its itinerary items)
         - delete_itinerary_item: Delete a single itinerary item
+        - clear_expenses: Bulk-delete expenses matching an OPTIONAL filter (after_date, before_date, category). Filters are ANDed and apply immediately. FULL-WIPE SAFETY: a call with NO filter deletes EVERY expense — never issue an unfiltered clear on a first request. Instead respond with assistant text warning the user this erases ALL their expenses and asking them to confirm (e.g. "yes, clear all"). Only after they explicitly confirm, call clear_expenses with confirm_all: true. A clear that carries any filter never needs confirm_all.
 
         CAPTURE DEFAULTS (for NEW items via draft_task / draft_note / draft_list / draft_trip):
         You MUST capture every new-item request into the best-fit type. Never refuse a capture with "I can't help with that". Pick the best fit from the user's intent and create the draft.
