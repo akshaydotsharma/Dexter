@@ -60,7 +60,14 @@ final class ReceiptStorage {
     /// `targetMaxEdge` first — captured camera photos are way overkill for
     /// receipt OCR and the original byte-count routinely exceeds the API
     /// cap. Use the returned data for BOTH the Vision call AND the disk save.
-    func compress(imageData: Data) throws -> Data {
+    ///
+    /// `nonisolated` so callers can run it off the main actor (via
+    /// `Task.detached`): the decode + downsize + JPEG re-encode is the
+    /// expensive step, and keeping it off main lets the Finance "Processing"
+    /// row render immediately rather than after compression finishes (#200
+    /// follow-up). It reads only immutable value-typed constants and touches
+    /// no actor-isolated state, so it's safe to call from any executor.
+    nonisolated func compress(imageData: Data) throws -> Data {
         guard let image = UIImage(data: imageData) else {
             throw ReceiptStorageError.imageEncodingFailed
         }

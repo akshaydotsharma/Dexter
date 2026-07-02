@@ -219,22 +219,46 @@ struct FinanceView: View {
         let storage = ReceiptStorage.shared
         let client = AnthropicClient()
 
-        // 1. Persist the file. For images we compress ONCE here and use the
+        // 1. Show the non-blocking "Processing" row IMMEDIATELY — before any
+        //    compression, disk I/O, or the Vision call — so the user gets
+        //    instant confirmation the capture was accepted (#200 follow-up).
+        //    Previously the row only appeared after the synchronous HEIC→JPEG
+        //    compress finished on the main actor, which read as a lag on
+        //    multi-MB photos. Removed on every exit path.
+        let job = ProcessingJob(kind: .receipt)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            processingJobs.append(job)
+        }
+        defer {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                processingJobs.removeAll { $0.id == job.id }
+            }
+        }
+
+        // 2. Persist the file. For images we compress ONCE here and use the
         //    same JPEG bytes for both the disk save and the Vision call —
         //    otherwise the original raw camera data (HEIC, multi-MB)
         //    overflows Anthropic's 5 MB base64 limit and the API rejects it.
+        //    Compression (decode + downsize + re-encode) is the expensive
+        //    step, so it runs OFF the main actor via `Task.detached` — that
+        //    keeps the row we just added rendering and the list responsive
+        //    instead of freezing the main thread until the JPEG is ready.
         let relativePath: String
         let expenseSource: ExpenseSource
         let visionImageData: Data?  // nil for PDFs, otherwise the compressed JPEG
         do {
             switch captureSource {
             case .camera:
-                let compressed = try storage.compress(imageData: data)
+                let compressed = try await Task.detached(priority: .userInitiated) {
+                    try storage.compress(imageData: data)
+                }.value
                 relativePath = try storage.saveCompressedJpeg(compressed)
                 expenseSource = .receipt
                 visionImageData = compressed
             case .photoLibrary:
-                let compressed = try storage.compress(imageData: data)
+                let compressed = try await Task.detached(priority: .userInitiated) {
+                    try storage.compress(imageData: data)
+                }.value
                 relativePath = try storage.saveCompressedJpeg(compressed)
                 expenseSource = .photo
                 visionImageData = compressed
@@ -248,18 +272,7 @@ struct FinanceView: View {
             return
         }
 
-        // 2. Show a non-blocking processing row; remove it whichever way we
-        //    exit. The list stays scrollable / tappable while Vision runs.
-        let job = ProcessingJob(kind: .receipt)
-        withAnimation(.easeInOut(duration: 0.15)) {
-            processingJobs.append(job)
-        }
-        defer {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                processingJobs.removeAll { $0.id == job.id }
-            }
-        }
-
+        // 3. Run Vision in the background; the processing row is already visible.
         do {
             let extracted: ExtractedExpense
             switch captureSource {
@@ -433,10 +446,26 @@ struct FinanceView: View {
                 // banner between the filter chips and the search field — NOT
                 // inside the expense list — so it reads as "something is
                 // happening in the background", never as a transaction row.
+                // Grouped under a "Processing" eyebrow header (#200) so it's
+                // clear the rows are in-flight work; the whole block — header
+                // included — disappears when nothing is in flight.
                 if !processingJobs.isEmpty {
-                    VStack(spacing: Space.xs) {
-                        ForEach(processingJobs) { job in
-                            FinanceProcessingRow(job: job)
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        HStack {
+                            Text("Processing")
+                                .eyebrow()
+                            Spacer()
+                            if processingJobs.count > 1 {
+                                Text("\(processingJobs.count)")
+                                    .font(.edFootnote)
+                                    .monospacedDigit()
+                                    .foregroundStyle(Tokens.muted)
+                            }
+                        }
+                        VStack(spacing: Space.xs) {
+                            ForEach(processingJobs) { job in
+                                FinanceProcessingRow(job: job)
+                            }
                         }
                     }
                     .padding(.horizontal, Space.lg)
