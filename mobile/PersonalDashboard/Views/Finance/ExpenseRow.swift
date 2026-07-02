@@ -1,10 +1,17 @@
 import SwiftUI
+import SwiftData
 
 /// Single-row presentation of a `LocalExpense`. Tap → edit (handler passed
 /// in by the parent so we don't couple the row to a sheet binding).
 struct ExpenseRow: View {
     let expense: LocalExpense
     let onTap: () -> Void
+
+    /// People, so a tagged expense's chip renders in that person's colour.
+    /// Cheap (people are few) and keeps the row's chip accurate without
+    /// denormalising the colour onto every expense.
+    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    private var people: [LocalPerson]
 
     var body: some View {
         HStack(spacing: Space.md) {
@@ -14,7 +21,7 @@ struct ExpenseRow: View {
                 .frame(width: 36, height: 36)
                 .background(Tokens.paper2, in: Circle())
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(primaryLine)
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
@@ -38,6 +45,9 @@ struct ExpenseRow: View {
                     }
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
+                }
+                if hasTags {
+                    tagBadges
                 }
             }
 
@@ -63,6 +73,46 @@ struct ExpenseRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    // MARK: - Person / Event badges (#183)
+
+    private var personLabel: String? {
+        expense.personName?.trimmedNonEmpty
+    }
+
+    private var eventLabel: String? {
+        expense.eventName?.trimmedNonEmpty
+    }
+
+    private var hasTags: Bool {
+        personLabel != nil || eventLabel != nil
+    }
+
+    /// The tagged person's chip colour, resolved from the live person record
+    /// (matched by FK, falling back to name). Defaults to the finance accent
+    /// if the person was deleted but its denormalised name survives on the row.
+    private var personTint: Color {
+        if let uuid = expense.personUUID,
+           let person = people.first(where: { $0.clientUUID == uuid }) {
+            return Color(personHex: person.colorHex)
+        }
+        if let name = personLabel,
+           let person = people.first(where: { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }) {
+            return Color(personHex: person.colorHex)
+        }
+        return Tokens.accentFinance
+    }
+
+    private var tagBadges: some View {
+        HStack(spacing: Space.xs) {
+            if let personLabel {
+                PersonEventBadge(kind: .person, label: personLabel, tint: personTint)
+            }
+            if let eventLabel {
+                PersonEventBadge(kind: .event, label: eventLabel)
+            }
+        }
     }
 
     private var primaryLine: String {
@@ -115,6 +165,8 @@ struct ExpenseRow: View {
         if let statement = expense.statementLabel.trimmedNonEmpty {
             pieces.append("from \(statement)")
         }
+        if let personLabel { pieces.append("for \(personLabel)") }
+        if let eventLabel { pieces.append("event \(eventLabel)") }
         return pieces.joined(separator: ", ") + ". Tap to edit."
     }
 }

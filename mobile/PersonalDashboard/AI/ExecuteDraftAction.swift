@@ -123,6 +123,14 @@ struct ExecuteDraftAction {
         // is standalone. Only a valid UUID is honoured.
         let tripUUID: UUID? = trimmedString(input["trip_id"]).flatMap { UUID(uuidString: $0) }
 
+        // Optional Person / Event tags (#183). The model emits a NAME; we
+        // find-or-create the record (case-insensitive) and stamp the FK +
+        // denormalised name onto the row post-insert, mirroring how trip
+        // linkage is stamped below. An event linked to a matched trip carries
+        // that trip's UUID so travel spend rolls up.
+        let personName = trimmedString(input["person_name"])
+        let eventName = trimmedString(input["event_name"])
+
         // Optional UUID override from the tool input. If the model emitted
         // a valid UUID we use it; otherwise we generate one.
         let providedID = trimmedString(input["id"])
@@ -174,6 +182,28 @@ struct ExecuteDraftAction {
         // dedup, mirroring how itinerary items are stamped post-add.
         if let tripUUID {
             row.tripUUID = tripUUID
+            try? save()
+        }
+
+        // Tag Person / Event by name (#183). find-or-create so "Sarah" typed
+        // twice reuses one record. When the event is linked to a matched trip,
+        // pass that trip's UUID so the event rolls up under the trip. Stamp the
+        // FK + denormalised name on the row, then re-save (same post-insert
+        // pattern as trip linkage above).
+        var tagged = false
+        if let personName {
+            let person = try PersonService(store: store).findOrCreate(name: personName)
+            row.personUUID = person.clientUUID
+            row.personName = person.name
+            tagged = true
+        }
+        if let eventName {
+            let event = try EventService(store: store).findOrCreate(name: eventName, tripUUID: tripUUID)
+            row.eventUUID = event.clientUUID
+            row.eventName = event.name
+            tagged = true
+        }
+        if tagged {
             try? save()
         }
 

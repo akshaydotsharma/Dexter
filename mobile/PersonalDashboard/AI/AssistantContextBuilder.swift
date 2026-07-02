@@ -171,6 +171,30 @@ struct AssistantContextBuilder {
             }.joined(separator: "\n")
         }
 
+        // People / Events (#183): existing tags the model should reuse by
+        // EXACT name when logging an expense, so "dinner with Sarah" links to
+        // the existing Sarah instead of creating a near-duplicate. Names only —
+        // the model passes person_name / event_name and the executor does the
+        // find-or-create, so UUIDs aren't needed here. Skipped when empty.
+        if let people = try? context.fetch(
+            FetchDescriptor<LocalPerson>(sortBy: [SortDescriptor(\.name, order: .forward)])
+        ), !people.isEmpty {
+            out += "\n\nPEOPLE (reuse the exact name when an expense is for/with one of these):\n"
+            out += people
+                .prefix(50)
+                .map { "- \(Self.safe($0.name, maxLen: 100))" }
+                .joined(separator: "\n")
+        }
+        if let events = try? context.fetch(
+            FetchDescriptor<LocalEvent>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])
+        ), !events.isEmpty {
+            out += "\n\nEVENTS (reuse the exact name when an expense belongs to one of these):\n"
+            out += events
+                .prefix(50)
+                .map { "- \(Self.safe($0.name, maxLen: 120))" }
+                .joined(separator: "\n")
+        }
+
         // Expenses (Finance v1): up to 20 most-recent expenses from the
         // last 30 days plus this-month and per-category SGD totals. Keeps
         // the prompt budget reasonable while giving the model enough

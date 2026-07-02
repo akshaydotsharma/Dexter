@@ -16,6 +16,14 @@ enum ExpenseServiceError: LocalizedError {
     }
 }
 
+/// A resolved Person / Event tag (FK + denormalised name) passed to
+/// `updateExpense` (#183). Bundling both keeps the row's link and its
+/// self-describing name in sync in one argument.
+struct ExpenseTag: Equatable {
+    let uuid: UUID
+    let name: String
+}
+
 /// Filter criteria applied by `ExpenseService.expenses(filter:)`. All
 /// fields are optional — nil means "no constraint on this dimension".
 /// Backs both the Finance list and the future analytics surface.
@@ -23,6 +31,11 @@ struct ExpenseFilter: Equatable {
     var dateRange: ClosedRange<Date>?
     var categories: Set<ExpenseCategory>?
     var sources: Set<ExpenseSource>?
+    /// Person tags to include (#183). nil / empty = no constraint. An expense
+    /// matches when its `personUUID` is in the set (OR within the dimension).
+    var people: Set<UUID>?
+    /// Event tags to include (#183). Same OR-within-dimension semantics.
+    var events: Set<UUID>?
     var searchText: String?
 
     static let none = ExpenseFilter()
@@ -76,6 +89,10 @@ struct ExpenseService {
         fxRate: Double,
         paymentMethod: String?,
         source: ExpenseSource,
+        personUUID: UUID? = nil,
+        personName: String? = nil,
+        eventUUID: UUID? = nil,
+        eventName: String? = nil,
         clientUUID: String? = nil
     ) throws -> LocalExpense {
         guard originalAmount > 0 else { throw ExpenseServiceError.invalidAmount }
@@ -93,7 +110,11 @@ struct ExpenseService {
             paymentMethod: paymentMethod?.trimmedNonEmpty,
             receiptImagePath: nil,
             source: source.rawValue,
-            createdAt: Date()
+            createdAt: Date(),
+            personUUID: personUUID,
+            personName: personName?.trimmedNonEmpty,
+            eventUUID: eventUUID,
+            eventName: eventName?.trimmedNonEmpty
         )
         store.context.insert(row)
         try save()
@@ -115,7 +136,9 @@ struct ExpenseService {
         originalCurrency: String? = nil,
         sgdAmount: Double? = nil,
         fxRate: Double? = nil,
-        paymentMethod: String? = nil
+        paymentMethod: String? = nil,
+        person: ExpenseTag?? = nil,
+        event: ExpenseTag?? = nil
     ) throws {
         if let date {
             expense.date = Calendar.current.startOfDay(for: date)
@@ -144,6 +167,17 @@ struct ExpenseService {
         }
         if let paymentMethod {
             expense.paymentMethod = paymentMethod.trimmedNonEmpty
+        }
+        // Person / Event tags (#183). Tri-state via a double-optional: the
+        // outer nil (default) means "no change"; `.some(nil)` clears the tag;
+        // `.some(tag)` sets both the FK and the denormalised name.
+        if let person {
+            expense.personUUID = person?.uuid
+            expense.personName = person?.name.trimmedNonEmpty
+        }
+        if let event {
+            expense.eventUUID = event?.uuid
+            expense.eventName = event?.name.trimmedNonEmpty
         }
         try save()
     }
@@ -248,6 +282,12 @@ struct ExpenseService {
         if let sources = filter.sources, !sources.isEmpty {
             guard let source = ExpenseSource(rawValue: expense.source) else { return false }
             if !sources.contains(source) { return false }
+        }
+        if let people = filter.people, !people.isEmpty {
+            guard let personUUID = expense.personUUID, people.contains(personUUID) else { return false }
+        }
+        if let events = filter.events, !events.isEmpty {
+            guard let eventUUID = expense.eventUUID, events.contains(eventUUID) else { return false }
         }
         if let search = filter.searchText?.trimmedNonEmpty?.lowercased(), !search.isEmpty {
             let merchant = expense.merchant?.lowercased() ?? ""

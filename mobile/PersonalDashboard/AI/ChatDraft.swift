@@ -194,11 +194,23 @@ extension ChatDraft {
         }
 
         let amountString = String(format: "%@ %.2f", cleanedCurrency, amount)
-        // If the headline is already the category, don't repeat it.
-        if headline == categoryName {
-            return "\(headline) · \(amountString)"
+        // Base line: headline · amount [· category], skipping the category
+        // when it's already the headline.
+        var line = headline == categoryName
+            ? "\(headline) · \(amountString)"
+            : "\(headline) · \(amountString) · \(categoryName)"
+
+        // Person / Event tags (#183) so the confirm card shows what the
+        // expense was tagged with before the user commits.
+        let person = (dict["person_name"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let event = (dict["event_name"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !person.isEmpty {
+            line += " · with \(person)"
         }
-        return "\(headline) · \(amountString) · \(categoryName)"
+        if !event.isEmpty {
+            line += " · \(event)"
+        }
+        return line
     }
 
     /// Build the preview for `edit_trip`. Falls back to a generic line if
