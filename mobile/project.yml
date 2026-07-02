@@ -119,6 +119,28 @@ targets:
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+
+  # Logic-level unit tests, hosted in the app so `@testable import
+  # PersonalDashboard` can reach the importer + dedup internals. Wired for the
+  # `test` action only (not `all`), so `ship-lan.sh`'s archive of the app target
+  # never builds it. Depending on the app target makes xcodegen set TEST_HOST /
+  # BUNDLE_LOADER automatically.
+  PersonalDashboardTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PersonalDashboardTests
+    dependencies:
+      - target: PersonalDashboard
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard.tests
+        DEVELOPMENT_TEAM: "PJFPUSSNUW"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   PersonalDashboard:
@@ -126,7 +148,9 @@ schemes:
       targets:
         PersonalDashboard: all
         PersonalDashboardUITests: [test]
+        PersonalDashboardTests: [test]
     test:
       gatherCoverageData: false
       targets:
+        - PersonalDashboardTests
         - PersonalDashboardUITests

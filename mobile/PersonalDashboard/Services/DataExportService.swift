@@ -218,7 +218,8 @@ final class DataExportService {
             receiptImagePath: expense.receiptImagePath,
             source: expense.source,
             createdAt: expense.createdAt,
-            isRefund: expense.isRefund
+            isRefund: expense.isRefund,
+            dedupeDescriptor: expense.dedupeDescriptor
         )
     }
 

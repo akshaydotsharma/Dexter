@@ -141,6 +141,27 @@ final class LocalExpense {
     // and behaves unchanged (existing rows default to false = expense).
     var isRefund: Bool = false
 
+    // MARK: - Statement dedup descriptor (#208)
+    //
+    // The VERBATIM transaction descriptor as printed on the statement, lowercased
+    // and whitespace-collapsed (the same normalisation merchants get). Populated
+    // ONLY by the statement-import path (`StatementImporter`); every other source
+    // and every row created before this field existed leaves it empty ("").
+    //
+    // Why it exists: the dedup key used to include the PARAPHRASED `merchant`,
+    // which the LLM rewrites slightly differently across extraction runs (e.g.
+    // "SHOPEE SINGAPORE" one run, "SHOPEE SINGAPORE Shopee" the next). The amount,
+    // date, and currency come from the statement's numeric columns and are stable;
+    // the merchant is the only unstable field. Keying re-import dedup on this
+    // stable verbatim descriptor (via `ExpenseDedupe`) makes re-importing the same
+    // statement idempotent. `merchant` is unchanged and still drives display.
+    //
+    // Additive with a default so the SwiftData migration on existing installs
+    // stays lightweight (add-with-default, never remove); an empty value marks a
+    // legacy row, which the importer matches on amount + date + currency alone so
+    // pre-fix data is never re-duplicated on a future re-import.
+    var dedupeDescriptor: String = ""
+
     // MARK: - Dead-field parity with other LocalModels
     //
     // These are intentionally unused on Phase A. Kept so that the SwiftData
@@ -174,6 +195,7 @@ final class LocalExpense {
         eventName: String? = nil,
         numberOfShares: Int = 1,
         isRefund: Bool = false,
+        dedupeDescriptor: String = "",
         needsSync: Bool = false,
         version: Int = 0
     ) {
@@ -201,6 +223,7 @@ final class LocalExpense {
         self.eventName = eventName
         self.numberOfShares = numberOfShares
         self.isRefund = isRefund
+        self.dedupeDescriptor = dedupeDescriptor
         self.needsSync = needsSync
         self.version = version
     }

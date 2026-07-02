@@ -145,6 +145,11 @@ enum DataArchive {
         /// field existed still decode (missing key -> nil -> false on import,
         /// i.e. a plain expense).
         let isRefund: Bool?
+        /// Verbatim statement descriptor used as the dedup key (#208). Optional
+        /// so archives written before this field existed still decode (missing
+        /// key -> nil -> "" on import, i.e. a legacy row matched on
+        /// amount+date+currency alone).
+        let dedupeDescriptor: String?
     }
 
     struct VocabDTO: Codable {

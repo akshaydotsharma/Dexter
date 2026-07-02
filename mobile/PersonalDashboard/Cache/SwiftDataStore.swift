@@ -128,6 +128,15 @@ final class SwiftDataStore {
         }
     }
 
+    /// Test/preview-only initializer backed by an explicit container (usually
+    /// `makeInMemory()`), so isolated tests exercise the real service + dedup
+    /// paths against an in-memory store instead of the on-disk singleton. Skips
+    /// the launch-time itinerary migration (irrelevant to a fresh store). Never
+    /// used by the app, which always goes through `.shared`.
+    init(container: ModelContainer) {
+        self.container = container
+    }
+
     /// Build an in-memory container for tests or previews.
     static func makeInMemory() -> ModelContainer {
         do {
