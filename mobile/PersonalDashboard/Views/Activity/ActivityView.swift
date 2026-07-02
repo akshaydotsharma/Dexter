@@ -10,35 +10,44 @@ import SwiftData
 /// confirm) updates the feed automatically without a pull-to-refresh.
 struct ActivityView: View {
     enum Filter: Equatable, CaseIterable, Identifiable {
-        case all, note, todo, list, folder
+        case all, note, todo, list, folder, trips, finance
 
         var id: String {
             switch self {
-            case .all:    return "all"
-            case .note:   return "note"
-            case .todo:   return "todo"
-            case .list:   return "list"
-            case .folder: return "folder"
+            case .all:     return "all"
+            case .note:    return "note"
+            case .todo:    return "todo"
+            case .list:    return "list"
+            case .folder:  return "folder"
+            case .trips:   return "trips"
+            case .finance: return "finance"
             }
         }
 
         var label: String {
             switch self {
-            case .all:    return "All"
-            case .note:   return "Notes"
-            case .todo:   return "Todos"
-            case .list:   return "Lists"
-            case .folder: return "Folders"
+            case .all:     return "All"
+            case .note:    return "Notes"
+            case .todo:    return "Todos"
+            case .list:    return "Lists"
+            case .folder:  return "Folders"
+            case .trips:   return "Trips"
+            case .finance: return "Finance"
             }
         }
 
-        var typeMatch: ActivityItem.ItemType? {
+        /// Whether a given row type belongs under this chip. Finance folds the
+        /// two expense flavours (individual + collapsed statement) into one
+        /// chip; Trips maps to itinerary rows.
+        func includes(_ type: ActivityItem.ItemType) -> Bool {
             switch self {
-            case .all:    return nil
-            case .note:   return .note
-            case .todo:   return .todo
-            case .list:   return .list
-            case .folder: return .folder
+            case .all:     return true
+            case .note:    return type == .note
+            case .todo:    return type == .todo
+            case .list:    return type == .list
+            case .folder:  return type == .folder
+            case .trips:   return type == .itinerary
+            case .finance: return type == .expense || type == .statement
             }
         }
     }
@@ -56,6 +65,16 @@ struct ActivityView: View {
 
     @Query(filter: #Predicate<LocalNoteFolder> { $0.deletedAt == nil })
     private var folders: [LocalNoteFolder]
+
+    // Expenses and itinerary items are hard-deleted (no `deletedAt` field —
+    // FinanceView / TripDetailView query them the same way), so there are no
+    // soft-deleted rows to exclude. Trips power the itinerary parent-chip
+    // (trip name) + deep-link target lookup.
+    @Query private var expenses: [LocalExpense]
+
+    @Query private var itineraryItems: [LocalItineraryItem]
+
+    @Query private var trips: [LocalTrip]
 
     @State private var filter: Filter = .all
     @State private var visibleCount: Int = pageSize
@@ -219,13 +238,99 @@ struct ActivityView: View {
             ))
         }
 
-        let filtered: [ActivityItem]
-        if let match = filter.typeMatch {
-            filtered = out.filter { $0.type == match }
-        } else {
-            filtered = out
+        // Itinerary items: one row each, parent chip = trip name, deep-link to
+        // the owning trip. Snippet is the kind (+ start time when present).
+        let tripNameByUUID: [UUID: String] = Dictionary(
+            trips.map { ($0.clientUUID, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        for item in itineraryItems {
+            let kindLabel = item.kindEnum.displayName
+            let snippet: String? = {
+                guard let start = item.startTime else { return kindLabel }
+                return "\(kindLabel) · \(start.formatted(date: .omitted, time: .shortened))"
+            }()
+            out.append(ActivityItem(
+                id: item.clientUUID,
+                type: .itinerary,
+                title: item.title,
+                snippet: snippet,
+                parent: tripNameByUUID[item.tripUUID],
+                // Activity = when the item was added, like expenses. Using
+                // createdAt (not max with updatedAt) keeps a yesterday booking
+                // from resurfacing at the top of Today when its trip is touched.
+                sortDate: item.createdAt,
+                createdAt: item.createdAt,
+                tripUUID: item.tripUUID
+            ))
         }
 
+        // Expenses. EVERY PDF-source expense collapses into ONE `.statement`
+        // row so a statement upload never explodes the feed — the user only
+        // wants the statement itself, not each parsed line. The group key +
+        // title prefer the imported file name, fall back to the parsed
+        // attribution label, and finally to the import day (rows imported
+        // before file-name capture existed, or statements whose header couldn't
+        // be read, so both fields are empty). Every non-PDF expense (manual /
+        // chat / voice / photo / email receipt) stays an individual `.expense`
+        // row. `groupKey` gives each statement row a stable identity across
+        // feed recomputes.
+        var statementGroups: [String: (title: String, rows: [LocalExpense])] = [:]
+
+        for expense in expenses {
+            if expense.sourceEnum == .pdf {
+                let fileName = expense.statementFileName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let label = expense.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key: String
+                let title: String
+                if !fileName.isEmpty {
+                    key = "file:\(fileName)"; title = fileName
+                } else if !label.isEmpty {
+                    key = "label:\(label)"; title = label
+                } else {
+                    let day = Calendar.current.startOfDay(for: expense.createdAt)
+                    key = "day:\(day.timeIntervalSince1970)"; title = "Statement import"
+                }
+                if statementGroups[key] == nil {
+                    statementGroups[key] = (title, [expense])
+                } else {
+                    statementGroups[key]?.rows.append(expense)
+                }
+                continue
+            }
+            out.append(ActivityItem(
+                id: UUID(uuidString: expense.clientUUID) ?? UUID(),
+                type: .expense,
+                title: expenseTitle(expense),
+                snippet: expenseSnippet(expense),
+                parent: nil,
+                // LocalExpense has no `updatedAt`; createdAt is the only bump.
+                sortDate: expense.createdAt,
+                createdAt: expense.createdAt
+            ))
+        }
+
+        for (key, group) in statementGroups {
+            let rows = group.rows
+            let maxCreated = rows.map(\.createdAt).max() ?? Date()
+            // Representative id = the newest expense in the group (stable across
+            // recomputes); rowKey keys off `key` via groupKey.
+            let representative = rows.max(by: { $0.createdAt < $1.createdAt })
+            let count = rows.count
+            out.append(ActivityItem(
+                id: representative.flatMap { UUID(uuidString: $0.clientUUID) } ?? UUID(),
+                type: .statement,
+                title: group.title,
+                snippet: "\(count) expense\(count == 1 ? "" : "s")",
+                parent: nil,
+                sortDate: maxCreated,
+                createdAt: maxCreated,
+                groupKey: key
+            ))
+        }
+
+        let filtered = out.filter { filter.includes($0.type) }
         return filtered.sorted { $0.sortDate > $1.sortDate }
     }
 
@@ -237,19 +342,55 @@ struct ActivityView: View {
         return Array(all.prefix(visibleCount))
     }
 
+    // MARK: - Expense row text
+
+    /// Title for an individual expense row. Merchant first (task spec); falls
+    /// back to the free-form description, then the category, so a row never
+    /// renders as "Untitled".
+    private func expenseTitle(_ expense: LocalExpense) -> String {
+        if let merchant = expense.merchant?.trimmingCharacters(in: .whitespacesAndNewlines), !merchant.isEmpty {
+            return merchant
+        }
+        if let desc = expense.expenseDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
+            return desc
+        }
+        return expense.categoryEnum.displayName
+    }
+
+    /// Snippet for an individual expense row: SGD amount + category, matching
+    /// the Finance surface's formatting (`FinanceDashboardBand.formatSGD`).
+    private func expenseSnippet(_ expense: LocalExpense) -> String {
+        "\(FinanceDashboardBand.formatSGD(expense.sgdAmount)) · \(expense.categoryEnum.displayName)"
+    }
+
     // MARK: - Tap → deep-link
 
     private func handleTap(item: ActivityItem) {
-        let target: AppSection
-        let isFolder: Bool
         switch item.type {
-        case .note:   target = .notes; isFolder = false
-        case .todo:   target = .tasks; isFolder = false
-        case .list:   target = .lists; isFolder = false
-        case .folder: target = .notes; isFolder = true
+        case .note:
+            router.focus = ActivityFocus(section: .notes, id: item.id, isFolder: false)
+            router.go(to: .notes)
+        case .todo:
+            router.focus = ActivityFocus(section: .tasks, id: item.id, isFolder: false)
+            router.go(to: .tasks)
+        case .list:
+            router.focus = ActivityFocus(section: .lists, id: item.id, isFolder: false)
+            router.go(to: .lists)
+        case .folder:
+            router.focus = ActivityFocus(section: .notes, id: item.id, isFolder: true)
+            router.go(to: .notes)
+        case .itinerary:
+            // Deep-link into the owning trip. ItinerariesView consumes a
+            // `.itineraries` focus whose id is the trip UUID and opens that
+            // trip's detail. Falls back to the Itineraries root if the trip
+            // can't be resolved.
+            if let tripUUID = item.tripUUID {
+                router.focus = ActivityFocus(section: .itineraries, id: tripUUID, isFolder: false)
+            }
+            router.go(to: .itineraries)
+        case .expense, .statement:
+            router.go(to: .finance)
         }
-        router.focus = ActivityFocus(section: target, id: item.id, isFolder: isFolder)
-        router.go(to: target)
     }
 
     // MARK: - Grouping
@@ -259,9 +400,13 @@ struct ActivityView: View {
         var current: DayGroup?
         let calendar = Calendar.current
         for item in items {
-            // Day-bucket by the visible-row date (createdAt) so the header
-            // matches the "1h ago" / "Yesterday" labels users see.
-            let key = calendar.startOfDay(for: item.createdAt)
+            // Day-bucket by the SAME date the feed is sorted by (sortDate).
+            // Grouping by a different date than the sort produces
+            // non-contiguous day groups that share a `key`; the outer
+            // `ForEach(groups, id: \.key)` then sees duplicate ids and SwiftUI
+            // duplicates / drops rows. Keying on sortDate guarantees contiguous,
+            // uniquely-keyed groups because the list is already sorted by it.
+            let key = calendar.startOfDay(for: item.sortDate)
             if current?.key != key {
                 if let c = current { result.append(c) }
                 current = DayGroup(key: key, items: [item])
@@ -376,9 +521,10 @@ private struct ActivityRow: View {
                                 .lineLimit(1)
                         }
                     }
-                    if item.type == .note, let parent = item.parent, !parent.isEmpty {
+                    if let parent = item.parent, !parent.isEmpty,
+                       item.type == .note || item.type == .itinerary {
                         HStack(spacing: 4) {
-                            Image(systemName: "folder")
+                            Image(systemName: item.type == .itinerary ? "airplane" : "folder")
                                 .font(.system(size: 10))
                             Text(parent)
                                 .lineLimit(1)
@@ -390,10 +536,12 @@ private struct ActivityRow: View {
 
                 Spacer(minLength: Space.sm)
 
-                Text(formatRelative(item.createdAt))
+                // Timestamp mirrors the sort/group key so the row's relative
+                // label always agrees with its day header.
+                Text(formatRelative(item.sortDate))
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
-                    .accessibilityLabel(formatAbsolute(item.createdAt))
+                    .accessibilityLabel(formatAbsolute(item.sortDate))
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
@@ -417,36 +565,48 @@ private struct ActivityRow: View {
 
     private func iconName(for type: ActivityItem.ItemType) -> String {
         switch type {
-        case .note:   return "note.text"
-        case .todo:   return "checkmark.square"
-        case .list:   return "list.bullet"
-        case .folder: return "folder"
+        case .note:      return "note.text"
+        case .todo:      return "checkmark.square"
+        case .list:      return "list.bullet"
+        case .folder:    return "folder"
+        case .itinerary: return "airplane"
+        case .expense:   return "creditcard"
+        case .statement: return "doc.text"
         }
     }
 
     private func iconAccent(for type: ActivityItem.ItemType) -> Color {
         switch type {
-        case .note:   return Tokens.accentNotes
-        case .todo:   return Tokens.accentTasks
-        case .list:   return Tokens.accentLists
-        case .folder: return Tokens.muted
+        case .note:      return Tokens.accentNotes
+        case .todo:      return Tokens.accentTasks
+        case .list:      return Tokens.accentLists
+        case .folder:    return Tokens.muted
+        case .itinerary: return Tokens.accentItineraries
+        case .expense:   return Tokens.accentFinance
+        case .statement: return Tokens.accentFinance
         }
     }
 
     private var accessibilityLabel: String {
         let kind: String
         switch item.type {
-        case .note:   kind = "Note"
-        case .todo:   kind = "Task"
-        case .list:   kind = "List"
-        case .folder: kind = "Folder"
+        case .note:      kind = "Note"
+        case .todo:      kind = "Task"
+        case .list:      kind = "List"
+        case .folder:    kind = "Folder"
+        case .itinerary: kind = "Itinerary item"
+        case .expense:   kind = "Expense"
+        case .statement: kind = "Statement import"
         }
         var parts = ["\(kind) created.", item.title.isEmpty ? "Untitled" : item.title]
         if let s = item.snippet, !s.isEmpty { parts.append(s) }
         if item.type == .note, let p = item.parent, !p.isEmpty {
             parts.append("In \(p) folder.")
         }
-        parts.append(formatAbsolute(item.createdAt))
+        if item.type == .itinerary, let p = item.parent, !p.isEmpty {
+            parts.append("Trip: \(p).")
+        }
+        parts.append(formatAbsolute(item.sortDate))
         return parts.joined(separator: " ")
     }
 }
@@ -480,7 +640,7 @@ private struct EmptyStateView: View {
     }
 
     private var sub: String {
-        if filter == .all { return "Notes, todos, lists, and folders you create will show up here." }
+        if filter == .all { return "Notes, todos, lists, folders, trips, and expenses you capture will show up here." }
         return "Switch to All to see everything."
     }
 }
