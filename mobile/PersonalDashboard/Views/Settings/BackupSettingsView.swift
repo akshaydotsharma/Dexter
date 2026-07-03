@@ -128,7 +128,7 @@ struct BackupSettingsView: View {
 
                 Toggle("", isOn: $enabled)
                     .labelsHidden()
-                    .tint(Tokens.accent(for: .settings))
+                    .tint(Tokens.accentItineraries)
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
