@@ -990,6 +990,21 @@ struct ExecuteDraftAction {
                 ? (LocalItineraryItem.googleMapsSearchURL(name: title, address: address)?.absoluteString ?? "")
                 : explicitMapsLink
 
+            // Ticket text fields (#224). Seat / venue take the same
+            // empty/"null"/value handling as address. Gate is a short code the
+            // model most often fabricates from a stray token, so it's routed
+            // through `TicketField.code` (which also rejects the "null"
+            // sentinel, placeholders, and lone letters) — a junk value stores
+            // as empty rather than persisting. Barcode + attachment fields are
+            // NOT set here: they come from the on-device decode enrichment step.
+            let seatRaw = (dict["seat"]?.stringValue ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let seat = seatRaw == "null" ? "" : seatRaw
+            let gate = TicketField.code(dict["gate"]?.stringValue) ?? ""
+            let venueRaw = (dict["venue"]?.stringValue ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let venue = venueRaw == "null" ? "" : venueRaw
+
             let maxForDay = existing
                 .filter { cal.isDate($0.dayDate, inSameDayAs: dayStart) }
                 .map { $0.sortOrder }
@@ -1007,6 +1022,9 @@ struct ExecuteDraftAction {
                 sortOrder: maxForDay + 1,
                 address: address,
                 googleMapsLink: mapsLink,
+                seat: seat,
+                gate: gate,
+                venue: venue,
                 createdAt: now,
                 updatedAt: now
             )
@@ -1178,6 +1196,36 @@ struct ExecuteDraftAction {
                 row.googleMapsLink = ""; changed = true
             } else if !trimmed.isEmpty {
                 row.googleMapsLink = trimmed; changed = true
+            }
+        }
+        // Ticket text fields (#224): seat / venue take the same
+        // empty/"null"/value tri-state as address. Empty = keep, "null" =
+        // clear, anything else = set. Barcode + attachment stay out of the
+        // tool path (they're stamped by the on-device decode enrichment).
+        if let raw = input["seat"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.seat = ""; changed = true
+            } else if !trimmed.isEmpty {
+                row.seat = trimmed; changed = true
+            }
+        }
+        // gate: empty = keep. A non-empty value is sanitized via
+        // `TicketField.code`, which maps the "null" sentinel, placeholders, and
+        // lone letters to nil. An explicit "null" therefore clears; a junk
+        // value also clears rather than persisting.
+        if let raw = input["gate"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                row.gate = TicketField.code(trimmed) ?? ""; changed = true
+            }
+        }
+        if let raw = input["venue"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.venue = ""; changed = true
+            } else if !trimmed.isEmpty {
+                row.venue = trimmed; changed = true
             }
         }
         // If the kind isn't stay any more, clear the stay-only fields so the

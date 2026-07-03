@@ -309,6 +309,18 @@ enum ToolDefinitions {
             "google_maps_link": .object([
                 "type": .string("string"),
                 "description": .string("OPTIONAL Google Maps URL for the location (e.g., https://maps.app.goo.gl/abc or https://www.google.com/maps/place/...). Extract it ONLY if the source explicitly contains one; do NOT invent or guess a link (the device derives one from address instead). Omit (or use empty string) when there is no link.")
+            ]),
+            "seat": .object([
+                "type": .string("string"),
+                "description": .string("OPTIONAL seat assignment as printed (e.g. \"12A\", \"Coach 4 / 21\", \"Block A Row 14 Seat 7\"). Set ONLY when a real seat is explicitly present on the booking/ticket; never infer it. Omit or use empty string otherwise.")
+            ]),
+            "gate": .object([
+                "type": .string("string"),
+                "description": .string("OPTIONAL boarding gate as printed on a boarding pass (e.g. \"B22\", \"14\"). Set ONLY when a real gate is explicitly printed; never infer, never emit a dash, \"TBD\", or a lone letter. Omit or use empty string otherwise.")
+            ]),
+            "venue": .object([
+                "type": .string("string"),
+                "description": .string("OPTIONAL venue / location name for an event or show (e.g. \"The O2, London\", \"Wembley Stadium\"). Set ONLY when the booking names a venue explicitly. Omit or use empty string for flights and anything without a named venue.")
             ])
         ]),
         "required": .array([.string("day_date"), .string("kind"), .string("title"), .string("notes")])

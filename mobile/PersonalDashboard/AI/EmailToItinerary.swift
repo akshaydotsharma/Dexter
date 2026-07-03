@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import UIKit
 
 /// Result of running one forwarded email through the on-device pipeline.
 struct EmailIngestResult: Sendable {
@@ -139,6 +140,12 @@ struct EmailToItinerary {
         let confirmation = EmailItemDedupe.extractConfirmation(from: fullText)
 
         var addedItemUUIDs: [UUID] = []
+        // #224: existing rows a dedup-SKIPPED booking maps to. After the loop,
+        // the ticket-enrichment step may stamp a decoded attachment onto one of
+        // these IN PLACE (the booking-confirmation-then-boarding-pass flow),
+        // but only when the row currently carries no ticket. Never re-inserts,
+        // never touches the dedup key.
+        var upgradeCandidateUUIDs: Set<UUID> = []
         // Expenses logged from this email (#177). Deduped against existing rows
         // and stamped with dedupeKey/sourceReference/tripUUID after execution.
         var addedExpenseUUIDs: [UUID] = []
@@ -223,6 +230,18 @@ struct EmailToItinerary {
                     let proposed = Self.proposedItem(from: dict, confirmation: confirmation)
                     let sig = EmailItemDedupe.signature(tripUUID: tripUUID, proposed: proposed)
                     if EmailItemDedupe.exists(signature: sig, proposed: proposed, tripUUID: tripUUID, context: store.context) {
+                        // #224: remember the existing row this booking maps to,
+                        // so the enrichment step can attach a decoded ticket to
+                        // it in place when it has none yet (a boarding pass
+                        // forwarded after the original booking confirmation).
+                        if let (existingRow, _) = EmailItemDedupe.match(
+                            signature: sig,
+                            proposed: proposed,
+                            tripUUID: tripUUID,
+                            context: store.context
+                        ) {
+                            upgradeCandidateUUIDs.insert(existingRow.clientUUID)
+                        }
                         // A matching row already exists. On the explicit
                         // Re-scan (#165) ONLY, try to reconcile-update it from
                         // the email's parsed detail fields. Everything short of
@@ -314,6 +333,18 @@ struct EmailToItinerary {
                 break
             }
         }
+
+        // #224: decode any ticket attachments (boarding-pass PDF417/Aztec/QR,
+        // event QR) and stamp them onto the matching itinerary rows — freshly
+        // inserted, or an existing ticketless row from an earlier forward
+        // (upgrade-in-place). Runs BEFORE the result build so the enriched rows
+        // are persisted regardless of the outcome branch. Fully best-effort:
+        // a mis-match persists nothing rather than stamping the wrong leg.
+        await enrichTickets(
+            message: message,
+            insertedUUIDs: addedItemUUIDs,
+            upgradeCandidateUUIDs: upgradeCandidateUUIDs
+        )
 
         // #174: upgrade name+address search links on this trip to exact-coordinate
         // pins via on-device forward geocoding. Runs AFTER execution, is fully
@@ -626,7 +657,11 @@ struct EmailToItinerary {
         ]
         // Only include a detail key when the email actually supplied a value,
         // so we rely on "keep" semantics rather than emitting empty strings.
-        for key in ["start_time", "end_time", "end_date", "notes", "address", "google_maps_link"] {
+        // #224: seat / gate / venue are included so an explicit re-scan can
+        // backfill the ticket text fields onto an item created before Phase 2.
+        // Barcode / attachment stamping is NOT done here — that lives in the
+        // decode enrichment step, which handles the file bytes directly.
+        for key in ["start_time", "end_time", "end_date", "notes", "address", "google_maps_link", "seat", "gate", "venue"] {
             if let raw = dict[key]?.stringValue {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
@@ -645,7 +680,10 @@ struct EmailToItinerary {
             row.endDate,
             row.notes,
             row.address,
-            row.googleMapsLink
+            row.googleMapsLink,
+            row.seat,
+            row.gate,
+            row.venue
         )
 
         do {
@@ -668,6 +706,9 @@ struct EmailToItinerary {
             || after.notes != before.3
             || after.address != before.4
             || after.googleMapsLink != before.5
+            || after.seat != before.6
+            || after.gate != before.7
+            || after.venue != before.8
         return changed ? itemUUID : nil
     }
 
@@ -709,6 +750,240 @@ struct EmailToItinerary {
             summary += " (\(skipped) already present, skipped.)"
         }
         return summary
+    }
+
+    // MARK: - Ticket enrichment (#224)
+
+    /// One ticket attachment that decoded to a barcode, plus the raw bytes we'll
+    /// persist and the deterministic BCBP parse when it's a boarding pass.
+    private struct DecodedTicketAsset {
+        let data: Data
+        let isPDF: Bool
+        let payload: String
+        let symbology: BarcodeSymbology
+        let bcbp: BCBPTicket?
+    }
+
+    /// Decode the email's image/PDF attachments on-device and stamp each
+    /// recognised ticket onto the itinerary row it belongs to.
+    ///
+    /// Matching is deliberately conservative — a wrong stamp (the return leg's
+    /// seat on the outbound flight) is worse than a plain row:
+    ///  - A decoded BCBP boarding pass matches the row whose title/notes carry
+    ///    the same flight number (leading-zero-tolerant) OR both endpoint IATA
+    ///    codes. Only that one row is stamped.
+    ///  - When there's exactly ONE candidate row and ONE decoded ticket (a
+    ///    single-item email, or a lone event QR with no BCBP), it attaches to
+    ///    that sole row.
+    ///  - Anything ambiguous (several rows, no confident match) persists
+    ///    nothing.
+    ///
+    /// Candidate rows are the freshly-inserted rows plus any existing ticketless
+    /// row a dedup-skipped booking mapped to (upgrade-in-place). Each row gets
+    /// at most one ticket per run, and an existing attachment is never
+    /// overwritten. The whole pass is best-effort: a decode/persist failure logs
+    /// and moves on, never affecting the ingest outcome.
+    private func enrichTickets(
+        message: EmailMessage,
+        insertedUUIDs: [UUID],
+        upgradeCandidateUUIDs: Set<UUID>
+    ) async {
+        // 1. Decode every image/PDF attachment; keep the ones that yielded a
+        //    barcode. Non-visual attachments (.ics, etc.) are skipped.
+        var decoded: [DecodedTicketAsset] = []
+        for attachment in message.attachments {
+            guard attachment.isImage || attachment.isPDF else { continue }
+            let hit: DecodedBarcode?
+            if attachment.isPDF {
+                hit = BarcodeService.decode(pdfData: attachment.data)
+            } else if let image = UIImage(data: attachment.data) {
+                hit = BarcodeService.decode(image: image)
+            } else {
+                hit = nil
+            }
+            guard let hit else { continue }
+            decoded.append(DecodedTicketAsset(
+                data: attachment.data,
+                isPDF: attachment.isPDF,
+                payload: hit.payload,
+                symbology: hit.symbology,
+                bcbp: BCBPParser.parse(hit.payload)
+            ))
+        }
+        guard !decoded.isEmpty else { return }
+
+        // 2. Build the candidate row set. Inserted rows are fresh (no ticket) so
+        //    they're always eligible; upgrade candidates only when they carry no
+        //    ticket and no attachment yet (never overwrite an existing one).
+        let insertedSet = Set(insertedUUIDs)
+        var candidates: [LocalItineraryItem] = []
+        for uuid in insertedUUIDs {
+            if let row = fetchItem(uuid) { candidates.append(row) }
+        }
+        for uuid in upgradeCandidateUUIDs where !insertedSet.contains(uuid) {
+            guard let row = fetchItem(uuid) else { continue }
+            let hasAttachment = !row.attachmentPath.trimmingCharacters(in: .whitespaces).isEmpty
+            if !row.hasTicket && !hasAttachment {
+                candidates.append(row)
+            }
+        }
+        guard !candidates.isEmpty else { return }
+
+        // 3. Match + stamp. One ticket per row; ambiguous tickets persist
+        //    nothing.
+        var stampedRows: Set<UUID> = []
+        for ticket in decoded {
+            var target: LocalItineraryItem?
+            if let bcbp = ticket.bcbp {
+                target = Self.matchBoardingPass(bcbp, in: candidates, excluding: stampedRows)
+            }
+            // Sole-candidate fallback: exactly one row and one decoded ticket,
+            // nothing stamped yet. Covers a single-item email and a lone event
+            // QR (no BCBP) alike.
+            if target == nil,
+               decoded.count == 1,
+               candidates.count == 1,
+               stampedRows.isEmpty {
+                target = candidates.first
+            }
+            guard let row = target, !stampedRows.contains(row.clientUUID) else {
+                // No confident match — leave the row(s) plain.
+                continue
+            }
+            if stampTicket(ticket, onto: row) {
+                stampedRows.insert(row.clientUUID)
+            }
+        }
+    }
+
+    /// Find the candidate row a decoded boarding pass belongs to. Prefers a
+    /// flight-number match (leading-zero tolerant, digit-boundary safe), then a
+    /// both-endpoints IATA route match. Returns nil when neither is confident.
+    private static func matchBoardingPass(
+        _ bcbp: BCBPTicket,
+        in candidates: [LocalItineraryItem],
+        excluding: Set<UUID>
+    ) -> LocalItineraryItem? {
+        let carrier = (bcbp.carrier ?? "").uppercased()
+        let number = bcbp.flightNumber ?? ""   // leading zeros already stripped
+        let origin = bcbp.originCode?.uppercased()
+        let dest = bcbp.destinationCode?.uppercased()
+
+        // Flight-number pass first (the strongest signal).
+        for row in candidates where !excluding.contains(row.clientUUID) {
+            let haystack = squashed(row.title + " " + row.notes)
+            if matchesFlight(haystack, carrier: carrier, number: number) {
+                return row
+            }
+        }
+        // Route pass: BOTH endpoint codes present as standalone tokens.
+        if let origin, let dest, !origin.isEmpty, !dest.isEmpty {
+            for row in candidates where !excluding.contains(row.clientUUID) {
+                let text = (row.title + " " + row.notes).uppercased()
+                if containsCode(text, origin) && containsCode(text, dest) {
+                    return row
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Uppercased, whitespace-stripped form so "EK 091" and "EK091" collapse to
+    /// the same string for flight-number containment.
+    private static func squashed(_ s: String) -> String {
+        s.uppercased().components(separatedBy: .whitespacesAndNewlines).joined()
+    }
+
+    /// True when `haystack` (already squashed/uppercased) contains the carrier +
+    /// flight number, tolerating any leading zeros the printed number carries
+    /// ("EK91" matches "EK091") and refusing a partial-number match ("EK91"
+    /// must NOT match "EK912").
+    private static func matchesFlight(_ haystack: String, carrier: String, number: String) -> Bool {
+        guard !carrier.isEmpty, !number.isEmpty else { return false }
+        let pattern = NSRegularExpression.escapedPattern(for: carrier)
+            + "0*"
+            + NSRegularExpression.escapedPattern(for: number)
+            + "(?![0-9])"
+        return haystack.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// True when `text` contains `code` (a 3-letter IATA code) as a standalone
+    /// token, not embedded inside a longer alpha run — so "DXB" doesn't match
+    /// inside "DXBAYVIEW".
+    private static func containsCode(_ text: String, _ code: String) -> Bool {
+        let pattern = "(?<![A-Z])" + NSRegularExpression.escapedPattern(for: code) + "(?![A-Z])"
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// Persist a decoded ticket's bytes via `TicketStorage` and stamp the
+    /// attachment / barcode / (BCBP) meta onto `row` in place. Mirrors
+    /// `TicketExtraction.buildItem`'s field construction. Returns true on
+    /// success; on a save failure it deletes the just-written file so we never
+    /// leak an orphan (mirrors `attachReceipt`). Never overwrites an existing
+    /// attachment (the caller only passes ticketless candidates).
+    private func stampTicket(_ ticket: DecodedTicketAsset, onto row: LocalItineraryItem) -> Bool {
+        let storage = TicketStorage.shared
+        let relativePath: String
+        do {
+            relativePath = ticket.isPDF
+                ? try storage.save(pdfData: ticket.data)
+                : try storage.saveCompressedJpeg(storage.compress(imageData: ticket.data))
+        } catch {
+            NSLog("EmailToItinerary: ticket save failed: %@", error.localizedDescription)
+            return false
+        }
+
+        row.attachmentPath = relativePath
+        row.barcodePayload = ticket.payload
+        row.barcodeSymbology = ticket.symbology.rawValue
+
+        // BCBP is authoritative for the machine-read codes; merge onto whatever
+        // meta the row already carries (usually none), never clobbering a value
+        // already present. `isBoardingPass = true` makes `isBoardingPassStyle`
+        // render the boarding-pass card layout.
+        if let bcbp = ticket.bcbp {
+            var meta = row.ticketMeta ?? TicketMeta()
+            meta.originCode      = Self.firstNonEmpty(meta.originCode, bcbp.originCode)
+            meta.destinationCode = Self.firstNonEmpty(meta.destinationCode, bcbp.destinationCode)
+            meta.flightNumber    = Self.firstNonEmpty(meta.flightNumber, bcbp.flightLabel)
+            meta.passengerName   = Self.firstNonEmpty(meta.passengerName, bcbp.passengerName)
+            meta.cabin           = Self.firstNonEmpty(meta.cabin, bcbp.cabin)
+            meta.isBoardingPass  = true
+            row.ticketMetaJSON = meta.isEmpty ? "" : meta.encodedString()
+
+            // Seat: the model-provided value wins when it's real; otherwise fall
+            // back to the BCBP seat. `TicketField.code` rejects junk/lone-letter
+            // values so we don't keep a fabricated seat over the barcode's.
+            if TicketField.code(row.seat) == nil,
+               let seat = bcbp.seat?.trimmingCharacters(in: .whitespaces), !seat.isEmpty {
+                row.seat = seat
+            }
+        }
+
+        row.updatedAt = Date()
+        do {
+            try store.context.save()
+        } catch {
+            NSLog("EmailToItinerary: ticket stamp save failed: %@", error.localizedDescription)
+            try? storage.delete(relativePath: relativePath)
+            return false
+        }
+        return true
+    }
+
+    /// Fetch a single itinerary row by UUID, or nil.
+    private func fetchItem(_ uuid: UUID) -> LocalItineraryItem? {
+        let fk = uuid
+        return try? store.context.fetch(
+            FetchDescriptor<LocalItineraryItem>(predicate: #Predicate { $0.clientUUID == fk })
+        ).first
+    }
+
+    /// First non-empty, whitespace-trimmed value of the two, or nil.
+    private static func firstNonEmpty(_ a: String?, _ b: String?) -> String? {
+        if let a = a?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty { return a }
+        if let b = b?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty { return b }
+        return nil
     }
 
     // MARK: - Map-link enrichment (#174)
@@ -995,6 +1270,9 @@ struct EmailToItinerary {
         - For stays only: end_date (check-out) is required; end_time optional.
         - address: the venue's physical/postal address when the email or attachment contains one (hotel or Airbnb address for a stay, restaurant address, activity venue, the airport or terminal for a flight-as-activity). Applies to every kind, since they are all physical locations. Copy the address text as written; omit or use empty string when the source gives no address.
         - google_maps_link: if the email or attachment contains an explicit Google Maps URL for the location (maps.app.goo.gl, goo.gl/maps, google.com/maps, maps.google.com), copy it verbatim into this field. Do NOT invent, guess, or construct a link from an address. The device builds the map link from the address field automatically, so focus on getting the address text right and leave google_maps_link empty unless a real link is present in the source.
+        - seat: the seat assignment as printed (e.g. "12A", "Coach 4 / 21", "Block A Row 14 Seat 7"). For a flight, set this when a boarding pass prints a seat; for an event ticket, set it when the ticket prints one. Emit it ONLY when a real seat is explicitly present — never infer or guess. Omit or use empty string otherwise.
+        - gate: the boarding gate as printed on a boarding pass (e.g. "B22", "14"). Emit it ONLY when a real gate is explicitly printed. Never infer it, never emit a dash, "TBD", or a lone letter — omit or use empty string otherwise. (A booking confirmation without a boarding pass almost never has a gate.)
+        - venue: the venue / location NAME for an event, show, or concert (e.g. "The O2, London", "Wembley Stadium"). Set it for tickets to a named venue. Omit or use empty string for flights, hotels, and anything without a named venue.
 
         EXPENSE (log a purchase with add_expense):
         - Log an expense whenever the email shows a REAL amount the user paid: an order total, a receipt total, a fare, a subscription charge, a paid restaurant bill. One expense per purchase (do not split an order into line items; use the order total).
