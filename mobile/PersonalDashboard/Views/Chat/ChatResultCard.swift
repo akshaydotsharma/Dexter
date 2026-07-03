@@ -124,6 +124,8 @@ struct ChatResultCard: View {
             return "item"
         case .addExpense:
             return "expense"
+        case .addRecurringExpense:
+            return "recurring expense"
         case .clearExpenses:
             return "expenses"
         case .unknown:

@@ -131,6 +131,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         EmailIngestCoordinator.shared.registerBackgroundTask()
+        // Recurring-expense materialisation background task (#236). Best-effort;
+        // the foreground pass in PersonalDashboardApp is the reliable path.
+        RecurringExpenseCoordinator.shared.registerBackgroundTask()
         return true
     }
 }

@@ -24,6 +24,11 @@ struct PersonalDashboardApp: App {
                     // Opportunistic email-to-itinerary fetch on launch (#143).
                     // No-ops unless the user has configured + enabled the inbox.
                     await EmailIngestCoordinator.shared.runForegroundFetch()
+                    // Post any due / missed recurring expenses on launch (#236).
+                    // scenePhase .active doesn't reliably fire for the initial
+                    // launch value, so the launch pass lives here (the coordinator
+                    // guards against overlapping cycles).
+                    await RecurringExpenseCoordinator.shared.runForegroundMaterialize()
                 }
         }
         .modelContainer(SwiftDataStore.shared.container)
@@ -31,6 +36,8 @@ struct PersonalDashboardApp: App {
             // Re-fetch email when the app returns to the foreground (#143).
             if newPhase == .active {
                 Task { await EmailIngestCoordinator.shared.runForegroundFetch() }
+                // Materialise due / missed recurring expenses on foreground (#236).
+                Task { await RecurringExpenseCoordinator.shared.runForegroundMaterialize() }
             }
             // Opt-in automatic backup (#141). Fires on becoming active (covers
             // cold launch and foregrounding) and on entering background (catches

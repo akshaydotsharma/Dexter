@@ -445,6 +445,34 @@ enum ToolDefinitions {
         )
     )
 
+    /// Create a recurring monthly expense TEMPLATE (#236). Does NOT log an
+    /// expense immediately — it defines a fixed monthly charge that the app
+    /// materialises into a real expense on its posting day each month (with
+    /// backfill for missed months). If the posting day has already passed this
+    /// month when the template is created, the app posts that month right away.
+    private static let addRecurringExpense = AnthropicTool(
+        name: "add_recurring_expense",
+        description: "Create a RECURRING monthly expense template. Use this when the user describes a fixed charge that repeats every month (e.g. \"add my $2,000 rent on the 1st every month\", \"Netflix is 19.98 SGD monthly on the 15th\", \"log my insurance premium of 120 each month\"). This sets up a template — the app automatically posts the expense on the chosen day each month, so do NOT also call add_expense for the same charge. Pick the best-fitting category from the enum. If currency isn't specified, default to SGD. day_of_month is 1-31; a value past the end of a short month posts on that month's last day.",
+        input_schema: object(
+            properties: [
+                "id": string("UUID string for the new recurring template. Generate a fresh one for every call (any valid lowercase UUID, e.g., 9b3a8e1c-2f6f-4a3b-9d2c-7e0a1b4c5d6e)."),
+                "amount": .object([
+                    "type": .string("number"),
+                    "description": .string("The monthly charge amount in the original currency. Must be greater than zero.")
+                ]),
+                "currency": string("ISO 4217 currency code (e.g. \"SGD\", \"USD\", \"EUR\"). Default to \"SGD\" if the user did not specify a currency."),
+                "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit (rent/insurance -> bills_and_utilities; streaming/software -> subscriptions)."),
+                "merchant": string("Merchant or payee name (e.g. \"Landlord\", \"Netflix\"). Use empty string if unknown."),
+                "description": string("Short description of the recurring charge (e.g. \"monthly rent\", \"car insurance\"). Use empty string if none."),
+                "payment_method": string("Optional payment method (e.g. \"GIRO\", \"Visa **1234\"). Use empty string if unknown."),
+                "day_of_month": int("Day of the month the charge posts, 1-31. A value past a short month's end (e.g. 31) posts on that month's last day. If the user says \"the 1st\" use 1, \"the 15th\" use 15, etc. If they say \"start of the month\" use 1; \"end of the month\" use 31."),
+                "start_date": string("OPTIONAL ISO 8601 date for the first month this should apply (e.g. 2026-07-01). Use empty string to start from the current month."),
+                "end_date": string("OPTIONAL ISO 8601 date after which the charge should stop (e.g. 2027-06-30). Use empty string for an open-ended recurring charge.")
+            ],
+            required: ["id", "amount", "currency", "category", "merchant", "description", "payment_method", "day_of_month"]
+        )
+    )
+
     /// Bulk-delete finance entries matching an optional filter (#204). All
     /// filters are optional and ANDed. An unfiltered call is a full wipe of
     /// EVERY expense — the model must not issue that until the user has
@@ -491,6 +519,7 @@ enum ToolDefinitions {
         editItineraryItem,
         deleteItineraryItem,
         addExpense,
+        addRecurringExpense,
         clearExpenses
     ]
 
@@ -535,6 +564,7 @@ enum ToolDefinitions {
         "edit_itinerary_item": .updateItineraryItem,
         "delete_itinerary_item": .deleteItineraryItem,
         "add_expense": .addExpense,
+        "add_recurring_expense": .addRecurringExpense,
         "clear_expenses": .clearExpenses
     ]
 }
