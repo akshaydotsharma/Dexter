@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct ListsView: View {
     @State private var viewModel = ListsViewModel()
@@ -54,6 +55,10 @@ struct ListsView: View {
             }
         }
         .activeSection(.lists)
+        // Live-refresh when the voice-capture or chat path writes a list / item.
+        .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
+            Task { await viewModel.load() }
+        }
         .task { await viewModel.load() }
         .onAppear {
             // Activity timeline deep-link consumption. Same shape as TasksView:
