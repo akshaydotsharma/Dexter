@@ -114,6 +114,16 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                 }
             ) {
                 content
+                    // Commit to the proposed width and grow vertically to
+                    // the wrapped height. `horizontal: false` means the row
+                    // still uses the width the List proposes (no wide/unbounded
+                    // natural width leaking out — the pill background keeps
+                    // sizing to the row), while `vertical: true` stops the
+                    // hosting controller from collapsing multiline `Text` to a
+                    // single truncated line. Rows that set their own
+                    // `.lineLimit` keep that line count; this only removes the
+                    // forced single-line clamp.
+                    .fixedSize(horizontal: false, vertical: true)
                     .background(
                         RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
                             .fill(tintColor)
@@ -280,9 +290,23 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
         context: Context
     ) -> CGSize? {
         guard let host = uiView.host else { return nil }
-        let proposedWidth = proposal.width ?? UIView.layoutFittingCompressedSize.width
+        // Fall back to the screen width (not 0) when the List proposes no
+        // width — a 0-width proposal would wrap the text to nothing and
+        // report an absurd height.
+        let proposedWidth = proposal.width ?? UIScreen.main.bounds.width
+        // Measure at the concrete proposed width with an UNBOUNDED height.
+        // The previous code proposed `layoutFittingCompressedSize.height`
+        // (== 0), which asks the hosted content for its *smallest* height
+        // at that width. A multiline `Text` with no `lineLimit` can shrink
+        // to a single truncated line, so the row was measured (and then
+        // laid out) one line tall and the text rendered with an ellipsis.
+        // Proposing an expanded height lets the host report the fully
+        // wrapped height, so rows without a `lineLimit` grow to fit.
+        // Truncation-neutral: content that sets its own `.lineLimit(1)`
+        // (e.g. NotesView) still measures one line because it cannot exceed
+        // that regardless of the height offered here.
         let measured = host.sizeThatFits(
-            in: CGSize(width: proposedWidth, height: UIView.layoutFittingCompressedSize.height)
+            in: CGSize(width: proposedWidth, height: UIView.layoutFittingExpandedSize.height)
         )
         return CGSize(width: proposedWidth, height: measured.height)
     }
