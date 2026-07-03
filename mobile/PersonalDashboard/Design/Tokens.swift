@@ -104,6 +104,22 @@ enum Tokens {
     static let accentHelp      = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)
 
+    // Wallet-style ticket surfaces (#222). A subtle itinerary-accent wash so a
+    // ticket card reads as a distinct physical object in the timeline, correct
+    // in light and dark. `ticketTintTop` carries the tint; the fill settles
+    // toward the neutral surface at the bottom so text keeps its contrast.
+    static let ticketTintTop    = Color.paper(0xF1EAFB, 0x272033)
+    static let ticketTintBottom = Color.paper(0xFCFAFF, 0x1A1620)
+    static let ticketBorder     = Color.paper(0xE3D7F4, 0x3C3352)
+    /// Thin vertical rule between facts cells on the tinted card.
+    static let ticketFactRule   = Color.paper(0xE1D8F0, 0x352E48)
+    /// The barcode "stub" panel. Always near-white in both themes so the
+    /// on-device-rendered (white-backed) code merges seamlessly and reads as
+    /// scannable, the way a real ticket stub does.
+    static let ticketStub       = Color(hex: 0xFFFFFF)
+    static let ticketStubInk    = Color(hex: 0x1B1712)
+    static let ticketStubMuted  = Color(hex: 0x6B6255)
+
     // Semantics
     static let success      = Color.paper(0x15803D, 0x4ADE80)
     static let successSoft  = Color.paper(0xDCFCE7, 0x052E16)

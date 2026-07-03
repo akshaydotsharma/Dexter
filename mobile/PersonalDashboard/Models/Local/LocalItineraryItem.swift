@@ -111,6 +111,47 @@ final class LocalItineraryItem {
     /// resolves to a non-nil URL.
     var googleMapsLink: String = ""
 
+    // MARK: - Wallet-style ticket fields (#222)
+    //
+    // All ADDITIVE with defaults so SwiftData's lightweight migration is safe on
+    // existing installs, and a code revert leaves them as harmless dead columns.
+    // NEVER remove or rename these. An item is a "ticket" when it carries either
+    // a stored attachment or a decoded barcode payload (see `hasTicket`).
+
+    /// Relative path to the original uploaded ticket file in
+    /// `Documents/tickets/<uuid>.{jpg|pdf}` (mirrors `LocalExpense.receiptImagePath`).
+    /// Empty when the item has no attachment. Resolved via `TicketStorage.load`.
+    var attachmentPath: String = ""
+
+    /// Raw decoded barcode payload (e.g. the IATA BCBP "M1..." string, a QR
+    /// URL, or a numeric code). Empty when no barcode was found. Re-rendered on
+    /// the scan screen in its original symbology so a gate scanner can read it.
+    var barcodePayload: String = ""
+
+    /// Normalised symbology id for `barcodePayload`: "qr" / "aztec" / "pdf417" /
+    /// "code128" / "other". Drives which CoreImage generator re-renders the
+    /// code. Empty when there is no barcode. See `BarcodeSymbology`.
+    var barcodeSymbology: String = ""
+
+    /// Seat assignment as printed (e.g. "12A", "Coach 4 / 21"). Empty when none.
+    /// A real column (not in `ticketMetaJSON`) because both the card and the
+    /// scan screen surface it prominently.
+    var seat: String = ""
+
+    /// Gate / boarding gate as printed (e.g. "B22"). Empty when none.
+    var gate: String = ""
+
+    /// Venue / location label for an event ticket (e.g. "The O2, London").
+    /// Distinct from `address` (the postal address used for the map link):
+    /// `venue` is the human name shown on the card. Empty when none.
+    var venue: String = ""
+
+    /// Flexible ticket extras as a JSON string (airline, flightNumber,
+    /// originCode/destinationCode, terminal, section, row, eventType, …).
+    /// Encoded/decoded via `TicketMeta`. Empty string when there are no extras.
+    /// Kept as JSON so new ticket shapes never force another @Model migration.
+    var ticketMetaJSON: String = ""
+
     var createdAt: Date
     var updatedAt: Date
 
@@ -127,6 +168,13 @@ final class LocalItineraryItem {
         sortOrder: Int = 0,
         address: String = "",
         googleMapsLink: String = "",
+        attachmentPath: String = "",
+        barcodePayload: String = "",
+        barcodeSymbology: String = "",
+        seat: String = "",
+        gate: String = "",
+        venue: String = "",
+        ticketMetaJSON: String = "",
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -142,6 +190,13 @@ final class LocalItineraryItem {
         self.sortOrder = sortOrder
         self.address = address
         self.googleMapsLink = googleMapsLink
+        self.attachmentPath = attachmentPath
+        self.barcodePayload = barcodePayload
+        self.barcodeSymbology = barcodeSymbology
+        self.seat = seat
+        self.gate = gate
+        self.venue = venue
+        self.ticketMetaJSON = ticketMetaJSON
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -204,5 +259,47 @@ final class LocalItineraryItem {
             URLQueryItem(name: "query", value: query)
         ]
         return components?.url
+    }
+
+    // MARK: - Ticket accessors (#222)
+
+    /// `true` when this item should render as a wallet-style ticket card: it
+    /// carries an uploaded attachment and/or a decoded barcode. Items without
+    /// either render exactly as before (plain timeline row).
+    var hasTicket: Bool {
+        !attachmentPath.trimmingCharacters(in: .whitespaces).isEmpty
+            || !barcodePayload.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// `true` when a barcode payload exists that we can either re-render or fall
+    /// back to the attachment for. Gates the "scan" affordance on the card.
+    var hasBarcode: Bool {
+        !barcodePayload.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Decoded ticket extras, or `nil` when none are stored. Cheap enough to
+    /// decode on demand at render time (the JSON is a few hundred bytes).
+    var ticketMeta: TicketMeta? {
+        TicketMeta.decode(ticketMetaJSON)
+    }
+
+    /// Whether to use the boarding-pass layout (big origin→destination codes)
+    /// vs the event-ticket layout. Boarding-pass when the meta says it's a
+    /// transport ticket.
+    var isBoardingPassStyle: Bool {
+        ticketMeta?.isTransport ?? false
+    }
+
+    /// `true` when a `.stay` carries any booking info worth surfacing as a
+    /// wallet-style stay card: a source confirmation code (the common
+    /// email-imported hotel case), an uploaded attachment, or a decoded barcode.
+    /// A stay is a *duration*, not a moment, so it stays a compact timeline row
+    /// on both its check-in and check-out days; this flag instead drives a
+    /// discoverability chip on the row and a tap that opens the stay card in a
+    /// detail sheet. A bare, manually-added stay (none of these) keeps the plain
+    /// row and the plain tap-to-edit behavior. Always `false` for non-stay kinds.
+    var hasStayBooking: Bool {
+        guard kindEnum == .stay else { return false }
+        return !sourceConfirmation.trimmingCharacters(in: .whitespaces).isEmpty || hasTicket
     }
 }
