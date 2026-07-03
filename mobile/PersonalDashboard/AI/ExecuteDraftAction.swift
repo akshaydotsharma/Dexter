@@ -961,6 +961,13 @@ struct ExecuteDraftAction {
             // model can omit the field entirely; we don't require it.
             let startTime = parseWallClockTime(dict["start_time"]?.stringValue)
 
+            // Activity-only arrival/landing time (same wall-clock parse as
+            // start_time). Discarded for non-activity kinds even if the model
+            // accidentally provided it — arrival only renders on activity rows.
+            let arrivalTime = kind == .activity
+                ? parseWallClockTime(dict["arrival_time"]?.stringValue)
+                : nil
+
             // Stay-only check-out fields. For non-stay kinds, both are
             // discarded even if the model accidentally provided them.
             var endDateValue: Date? = nil
@@ -1019,6 +1026,7 @@ struct ExecuteDraftAction {
                 startTime: startTime,
                 endDate: endDateValue,
                 endTime: endTimeValue,
+                arrivalTime: arrivalTime,
                 sortOrder: maxForDay + 1,
                 address: address,
                 googleMapsLink: mapsLink,
@@ -1159,6 +1167,16 @@ struct ExecuteDraftAction {
                 row.startTime = parsed; changed = true
             }
         }
+        // arrival_time: same empty/"null"/value tri-state as start_time. The
+        // stale-shape guard below clears it when the kind isn't activity.
+        if let raw = input["arrival_time"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "null" {
+                row.arrivalTime = nil; changed = true
+            } else if !trimmed.isEmpty, let parsed = parseWallClockTime(trimmed) {
+                row.arrivalTime = parsed; changed = true
+            }
+        }
         // end_date / end_time: same tri-state. Cleared automatically when
         // kind switches away from stay (handled below after `changed` check).
         if let raw = input["end_date"]?.stringValue {
@@ -1233,6 +1251,11 @@ struct ExecuteDraftAction {
         if row.kindEnum != .stay {
             if row.endDate != nil { row.endDate = nil; changed = true }
             if row.endTime != nil { row.endTime = nil; changed = true }
+        }
+        // arrivalTime is activity-only; clear it if the kind moved away from
+        // activity so a stale arrival can't leak onto a place/restaurant/stay.
+        if row.kindEnum != .activity, row.arrivalTime != nil {
+            row.arrivalTime = nil; changed = true
         }
 
         guard changed else {

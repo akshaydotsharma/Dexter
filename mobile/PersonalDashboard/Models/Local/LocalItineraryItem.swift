@@ -77,6 +77,17 @@ final class LocalItineraryItem {
     /// `startTime`). Only used when `endDate` is set.
     var endTime: Date?
 
+    /// Optional arrival / end time for a timed `.activity` item (a flight's
+    /// landing time, a train's arrival). Stored as UTC wall-clock exactly like
+    /// `startTime` — the stored `Date`'s UTC hour:minute equals the booking's
+    /// stated local time, so the timeline shows "10:35 → 15:35" without drifting
+    /// when the device timezone changes. Only meaningful when `startTime` is
+    /// also set. `nil` for untimed items and for kinds other than `.activity`.
+    /// Distinct from `endTime`, which is the stay-only check-out time. Additive
+    /// with a `nil` default so adding it to an existing install is a safe
+    /// lightweight migration (no data loss); NEVER remove or rename it.
+    var arrivalTime: Date?
+
     /// Ordering within a single day. Lower numbers render first; ties are
     /// broken by `createdAt`. Skeleton uses append-on-create (max + 1); a
     /// drag-to-reorder UI is a follow-up.
@@ -165,6 +176,7 @@ final class LocalItineraryItem {
         startTime: Date? = nil,
         endDate: Date? = nil,
         endTime: Date? = nil,
+        arrivalTime: Date? = nil,
         sortOrder: Int = 0,
         address: String = "",
         googleMapsLink: String = "",
@@ -187,6 +199,7 @@ final class LocalItineraryItem {
         self.startTime = startTime
         self.endDate = endDate
         self.endTime = endTime
+        self.arrivalTime = arrivalTime
         self.sortOrder = sortOrder
         self.address = address
         self.googleMapsLink = googleMapsLink

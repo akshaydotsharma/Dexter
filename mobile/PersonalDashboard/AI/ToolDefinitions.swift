@@ -294,6 +294,10 @@ enum ToolDefinitions {
                 "type": .string("string"),
                 "description": .string("OPTIONAL start time for this item as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00 or 2026-06-14T11:00:00Z). The DATE portion MUST match day_date. Set this whenever the user mentions a time (e.g., 'dinner at 8', '11am check-in', 'tour at 14:00'); otherwise omit. Items without a start_time render as 'untimed' on the timeline.")
             ]),
+            "arrival_time": .object([
+                "type": .string("string"),
+                "description": .string("ACTIVITY ONLY, OPTIONAL: the arrival / landing / end time for a timed transport activity (a flight's landing, a train's arrival) as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T22:35:00+01:00). The DATE portion should match day_date. Set this together with start_time (departure) whenever the booking states an arrival time for a flight/train/bus/ferry/transfer; otherwise omit. Not for stays (use end_time), places, or restaurants.")
+            ]),
             "end_date": .object([
                 "type": .string("string"),
                 "description": .string("STAY ONLY: ISO 8601 date for the check-out day (e.g., 2026-06-17). REQUIRED when kind is 'stay' (use day_date + 1 if user didn't specify, since most stays are at least one night). Must be > day_date. Omit for non-stay kinds.")
@@ -387,6 +391,7 @@ enum ToolDefinitions {
                 "title": string("New title. Use empty string to keep unchanged."),
                 "notes": string("New notes. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "start_time": string("New start time as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00). The date portion should match day_date. Use empty string to keep unchanged, or the literal \"null\" to clear (make the item untimed)."),
+                "arrival_time": string("ACTIVITY ONLY: new arrival / landing / end time (for a flight or train) as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T22:35:00+01:00). The date portion should match day_date. Set together with start_time. Use empty string to keep unchanged, or the literal \"null\" to clear. Ignored for non-activity kinds."),
                 "end_date": string("STAY ONLY: new check-out date in ISO 8601 (e.g., 2026-06-17). Must be > day_date. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "end_time": string("STAY ONLY: new check-out time as a full ISO 8601 datetime with timezone (e.g., 2026-06-17T11:00:00-04:00). The date portion should match end_date. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "address": string("New postal address / location text for the location (e.g. hotel or restaurant address). The device builds the map link from this automatically. Use empty string to keep unchanged, or the literal \"null\" to clear."),
