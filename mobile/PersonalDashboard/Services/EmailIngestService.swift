@@ -318,14 +318,18 @@ struct EmailIngestService {
         try? store.context.save()
     }
 
-    /// Keep the ingest log to the most recent 100 entries.
+    /// Keep the ingest log bounded. Raised from 100 to 2000 (#234): the log is
+    /// now a user-facing permanent history in Parsed Files & Imports, not just a
+    /// recent-activity strip, so it should retain far more. Still capped so the
+    /// store can't grow without bound on a device.
     private func trimLog() {
+        let cap = 2000
         var descriptor = FetchDescriptor<LocalEmailIngestLog>(
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
-        descriptor.fetchLimit = 1000
-        guard let all = try? store.context.fetch(descriptor), all.count > 100 else { return }
-        for stale in all[100...] {
+        descriptor.fetchLimit = cap + 500
+        guard let all = try? store.context.fetch(descriptor), all.count > cap else { return }
+        for stale in all[cap...] {
             store.context.delete(stale)
         }
         try? store.context.save()

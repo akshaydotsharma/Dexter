@@ -355,6 +355,29 @@ struct StatementImporter {
             }
         }
 
+        // Persist a permanent parse record for the Parsed Files & Imports
+        // history (#234). Written on the SAME context the expenses were inserted
+        // on, so it lands in the same store. Recorded only when the run actually
+        // imported rows — a clean re-import that skips everything doesn't create
+        // an empty history entry (and the existing rows already have a record).
+        // Additive model, so this never changes the returned result or the
+        // summary alert; it's purely a side record.
+        if imported > 0 {
+            let record = LocalStatementImport(
+                fileName: statementFileName,
+                statementLabel: statementLabel,
+                imported: imported,
+                skippedDuplicates: skippedDuplicates,
+                ignoredNonSpend: ignoredNonSpend,
+                failed: failed,
+                refunds: refunds,
+                possiblyTruncated: possiblyTruncated,
+                importedExpenseUUIDs: importedUUIDs
+            )
+            store.context.insert(record)
+            try? store.context.save()
+        }
+
         return StatementImportResult(
             imported: imported,
             refunds: refunds,

@@ -35,6 +35,7 @@ final class SwiftDataStore {
                 LocalFXRate.self,
                 LocalProcessedEmail.self,
                 LocalEmailIngestLog.self,
+                LocalStatementImport.self,
             ])
             // SwiftData defaults the store URL to Application Support, but
             // on a fresh simulator that directory doesn't exist yet and
@@ -154,6 +155,7 @@ final class SwiftDataStore {
                 LocalFXRate.self,
                 LocalProcessedEmail.self,
                 LocalEmailIngestLog.self,
+                LocalStatementImport.self,
             ])
             let configuration = ModelConfiguration(
                 schema: schema,
