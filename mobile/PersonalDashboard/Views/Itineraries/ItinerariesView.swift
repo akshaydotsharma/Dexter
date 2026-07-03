@@ -307,6 +307,11 @@ private struct TripDetailHeader: View {
     let onBack: () -> Void
     let onEdit: () -> Void
 
+    /// Drives the read-only calendar popover (#230). Held locally so the
+    /// change stays contained to the header and the `.popover` anchors to the
+    /// calendar button.
+    @State private var showingCalendar = false
+
     var body: some View {
         HStack(spacing: Space.md) {
             Button(action: onBack) {
@@ -331,6 +336,17 @@ private struct TripDetailHeader: View {
                     .lineLimit(1)
             }
             Spacer()
+            Button {
+                showingCalendar = true
+            } label: {
+                Image(systemName: "calendar")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(Tokens.muted)
+            }
+            .accessibilityLabel("View calendar")
+            .popover(isPresented: $showingCalendar) {
+                TripCalendarPopover(trip: trip)
+            }
             Button(action: onEdit) {
                 Image(systemName: "square.and.pencil")
                     .frame(width: 44, height: 44)
