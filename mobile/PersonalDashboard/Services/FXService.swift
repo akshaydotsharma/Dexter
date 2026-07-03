@@ -93,6 +93,31 @@ struct FXService {
         return (amount * rate, rate)
     }
 
+    /// Warm the cached display-currency factor for the money formatter.
+    ///
+    /// Reads `FinanceSettings.displayCurrencyCode`, resolves its "1 unit =
+    /// N SGD" factor through the existing `rate(for:)` path (same daily cache,
+    /// no new fetch route), and writes it to `FinanceSettings.displayRateToSGD`
+    /// so `FinanceDashboardBand.formatMoney` can convert synchronously.
+    ///
+    /// SGD short-circuits to 1.0 (passthrough). On any failure the last cached
+    /// factor is left untouched — we never overwrite a good rate with a bad
+    /// one, so totals keep rendering with the previous conversion offline.
+    func refreshDisplayRate() async {
+        let code = FinanceSettings.displayCurrencyCode.uppercased()
+        if code == "SGD" {
+            FinanceSettings.displayRateToSGD = 1.0
+            return
+        }
+        do {
+            let factor = try await rate(for: code)
+            guard factor.isFinite, factor > 0 else { return }
+            FinanceSettings.displayRateToSGD = factor
+        } catch {
+            // Leave the last cached factor (or the 1.0 default) in place.
+        }
+    }
+
     // MARK: - Cache I/O
 
     private func fetchCached(code: String) throws -> LocalFXRate? {

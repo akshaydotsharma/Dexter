@@ -61,7 +61,7 @@ struct ExpenseRow: View {
                     .font(.edBodyMedium)
                     .monospacedDigit()
                     .foregroundStyle(expense.isRefund ? Tokens.success : Tokens.ink)
-                if expense.originalCurrency.uppercased() != "SGD" {
+                if showsOriginalAmount {
                     Text(originalAmountLabel)
                         .font(.edCaption)
                         .monospacedDigit()
@@ -102,7 +102,7 @@ struct ExpenseRow: View {
     /// fraction of the derived receipt total in SGD so it lines up with the
     /// primary SGD amount above it.
     private var splitLabel: String {
-        "1/\(expense.numberOfShares) of \(FinanceDashboardBand.formatSGD(expense.receiptTotalSGD))"
+        "1/\(expense.numberOfShares) of \(FinanceDashboardBand.formatMoney(expense.receiptTotalSGD))"
     }
 
     /// The tagged person's chip colour, resolved from the live person record
@@ -190,8 +190,18 @@ struct ExpenseRow: View {
     /// unmistakable at a glance (the colour alone isn't enough for the
     /// colour-blind, and "+" carries the meaning in VoiceOver too) (#206).
     private var sgdAmountLabel: String {
-        let base = FinanceDashboardBand.formatSGD(expense.sgdAmount)
+        let base = FinanceDashboardBand.formatMoney(expense.sgdAmount)
         return expense.isRefund ? "+\(base)" : base
+    }
+
+    /// Show the original-currency sub-label whenever the expense was captured
+    /// in a currency other than the one we're displaying totals in. Previously
+    /// hardcoded against "SGD"; now compares against the chosen display
+    /// currency so, e.g., a USD expense shown while the display currency is USD
+    /// hides the redundant sub-label, and an SGD expense shown while displaying
+    /// EUR surfaces the "SGD …" original.
+    private var showsOriginalAmount: Bool {
+        expense.originalCurrency.uppercased() != FinanceSettings.displayCurrencyCode.uppercased()
     }
 
     private var originalAmountLabel: String {
@@ -206,10 +216,10 @@ struct ExpenseRow: View {
 
     private var accessibilityLabel: String {
         let amountSpoken = expense.isRefund
-            ? "refund \(FinanceDashboardBand.formatSGD(expense.sgdAmount))"
-            : FinanceDashboardBand.formatSGD(expense.sgdAmount)
+            ? "refund \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
+            : FinanceDashboardBand.formatMoney(expense.sgdAmount)
         var pieces: [String] = [primaryLine, amountSpoken, expense.categoryEnum.displayName]
-        if expense.originalCurrency.uppercased() != "SGD" {
+        if showsOriginalAmount {
             pieces.append("\(originalAmountLabel) original")
         }
         if let statement = expense.statementLabel.trimmedNonEmpty {

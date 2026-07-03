@@ -37,7 +37,7 @@ struct FinanceDashboardBand: View {
                 Spacer()
                 deltaChip
             }
-            Text(Self.formatSGD(stats.monthTotal))
+            Text(Self.formatMoney(stats.monthTotal))
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
                 .tracking(-0.6)
@@ -129,7 +129,7 @@ struct FinanceDashboardBand: View {
                 }
             }
             .frame(height: 6)
-            Text(Self.formatSGD(entry.total))
+            Text(Self.formatMoney(entry.total))
                 .font(.edFootnote)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -205,7 +205,39 @@ struct FinanceDashboardBand: View {
 
     // MARK: - Formatting
 
-    static func formatSGD(_ value: Double) -> String {
+    /// Format an SGD-base value in the user's chosen display currency.
+    ///
+    /// Finance stores everything in SGD (`LocalExpense.sgdAmount`); this is a
+    /// display-only conversion applied at render time. Reads the chosen
+    /// currency + cached factor from `FinanceSettings` and computes
+    /// `displayValue = sgdValue / factor` (the factor is "1 display unit =
+    /// N SGD"). Falls back to the original SGD formatting when the display
+    /// currency IS SGD or no usable cached factor exists, so the app behaves
+    /// exactly as before until a foreign currency is picked and warmed.
+    static func formatMoney(_ sgdValue: Double) -> String {
+        let code = FinanceSettings.displayCurrencyCode.uppercased()
+        let factor = FinanceSettings.displayRateToSGD
+
+        // SGD, or a missing/invalid cached factor → keep the original SGD
+        // styling ("SGD 1,247.50" reads cleaner than "$1,247.50 SGD").
+        guard code != "SGD", factor.isFinite, factor > 0 else {
+            return formatSGD(sgdValue)
+        }
+
+        let displayValue = sgdValue / factor
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        // Prefix "<CODE> " for a consistent, locale-independent read that
+        // matches the SGD styling (e.g. "USD 927.31", "EUR 812.40").
+        formatter.currencySymbol = "\(code) "
+        return formatter.string(from: NSNumber(value: displayValue)) ?? "\(code) 0.00"
+    }
+
+    /// SGD-only formatter (the base-currency fast path used by `formatMoney`).
+    private static func formatSGD(_ value: Double) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.currencyCode = "SGD"

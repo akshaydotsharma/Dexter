@@ -9,6 +9,13 @@ struct SettingsView: View {
     @State private var showingEmailInbox: Bool = false
     @State private var showingBackup: Bool = false
 
+    /// Currency all finances are DISPLAYED in (#220). SGD stays the canonical
+    /// stored base — this is a display-only conversion applied at format time.
+    /// Keyed to the same UserDefaults string `FinanceSettings` reads, so the
+    /// picker and the money formatter stay in lockstep.
+    @AppStorage(FinanceSettings.Key.displayCurrencyCode)
+    private var displayCurrencyCode: String = "SGD"
+
     var body: some View {
         ZStack {
             Tokens.paper.ignoresSafeArea()
@@ -41,6 +48,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.xl) {
                     appearanceSection
+                    financeSection
                     automationSection
                     dataSection
                     aboutSection
@@ -65,6 +73,39 @@ struct SettingsView: View {
                 ThemePicker(value: $schemePref)
             }
             .padding(Space.lg)
+        }
+    }
+
+    private var financeSection: some View {
+        SettingsSection(title: "Finance") {
+            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Default currency")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                    Text("Show all finances converted to this currency")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                }
+
+                Spacer(minLength: Space.md)
+
+                Picker("Default currency", selection: $displayCurrencyCode) {
+                    ForEach(SupportedCurrency.all, id: \.self) { code in
+                        Text(code).tag(code)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(Tokens.accentFinance)
+                .labelsHidden()
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+            // Re-warm the FX factor whenever the choice changes so totals
+            // reflect the new currency on the next Finance visit (#220).
+            .onChange(of: displayCurrencyCode) { _, _ in
+                Task { await FXService.default().refreshDisplayRate() }
+            }
         }
     }
 
