@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 /// Vertical timeline for a single `LocalTrip` (issue #108).
 ///
@@ -22,6 +23,22 @@ struct TripDetailView: View {
     /// Drives the item editor. `.new(day:)` carries the pre-filled day;
     /// `.existing(_)` carries the item UUID for edit.
     @State private var editingItem: ItineraryItemEditorTarget?
+
+    // MARK: Ticket upload / scan state (#222)
+    @State private var showingTicketCamera: Bool = false
+    @State private var showingTicketPhotoLibrary: Bool = false
+    @State private var showingTicketPDFPicker: Bool = false
+    /// Blocks the FAB and shows a lightweight "Reading ticket…" overlay while
+    /// the decode + extraction pipeline runs.
+    @State private var isProcessingTicket: Bool = false
+    /// Present the full-screen scan surface for a ticket item.
+    @State private var scanTarget: TicketScanTarget?
+    /// Present the stay booking detail sheet (the card + its actions) for a
+    /// booked stay.
+    @State private var stayDetailTarget: StayDetailTarget?
+    /// Hard-failure banner (only when the upload couldn't be saved at all — the
+    /// happy and degraded paths always produce a card instead).
+    @State private var ticketError: String?
 
     init(trip: LocalTrip) {
         self.trip = trip
@@ -50,12 +67,88 @@ struct TripDetailView: View {
             // 96pt bumper at the end of the scroll content guarantees the
             // last card is not hidden by this overlay.
             fabOverlay
+
+            if isProcessingTicket {
+                ticketProcessingOverlay
+            }
         }
         .sheet(item: $editingItem) { target in
             ItineraryItemEditorSheet(trip: trip, target: target)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        // Ticket upload pickers (#222). Camera is a full-screen cover (UIKit's
+        // camera UI is itself full-screen); photo/PDF are system pickers.
+        .fullScreenCover(isPresented: $showingTicketCamera) {
+            CameraPicker { data in
+                showingTicketCamera = false
+                handleTicketData(data, isPDF: false)
+            }
+            .ignoresSafeArea()
+        }
+        .photoLibraryPicker(isPresented: $showingTicketPhotoLibrary) { data in
+            handleTicketData(data, isPDF: false)
+        }
+        .pdfPicker(isPresented: $showingTicketPDFPicker) { data, _ in
+            handleTicketData(data, isPDF: true)
+        }
+        // Full-screen scan surface for a ticket card tap (or right after a
+        // successful upload).
+        .fullScreenCover(item: $scanTarget) { target in
+            if let item = items.first(where: { $0.clientUUID == target.id }) {
+                TicketScanView(item: item)
+            }
+        }
+        // Full-screen detail surface for a booked stay: the tinted stay card
+        // plus its actions (scan / view original / edit). Presented as a
+        // full-screen cover to match TicketScanView; the sheet's own "Done"
+        // button closes it. Shown from either the check-in or the check-out
+        // row — both resolve to the same item.
+        .fullScreenCover(item: $stayDetailTarget) { target in
+            if let item = items.first(where: { $0.clientUUID == target.id }) {
+                StayBookingDetailSheet(item: item) {
+                    // Route Edit to the existing editor. Dismiss this surface
+                    // first, then present the editor on the next runloop so the
+                    // two presentations don't fight.
+                    let uuid = item.clientUUID
+                    stayDetailTarget = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        editingItem = .existing(uuid)
+                    }
+                }
+            }
+        }
+        .alert(
+            "Couldn't save the ticket",
+            isPresented: Binding(
+                get: { ticketError != nil },
+                set: { if !$0 { ticketError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { ticketError = nil }
+        } message: {
+            Text(ticketError ?? "")
+        }
+    }
+
+    // MARK: - Ticket processing overlay
+
+    private var ticketProcessingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.12).ignoresSafeArea()
+            VStack(spacing: Space.md) {
+                ProgressView()
+                    .tint(Tokens.accent(for: .itineraries))
+                Text("Reading ticket…")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+            }
+            .padding(Space.xl)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.lg)
+            .shadowMd()
+        }
+        .transition(.opacity)
     }
 
     // MARK: - Timeline
@@ -70,6 +163,26 @@ struct TripDetailView: View {
                         entries: cluster.entries,
                         topPadding: idx == 0 ? Space.xl : Space.xl,
                         onTap: { item in
+                            // A booked stay opens its card in a detail sheet
+                            // (the hub for scan / view-original / edit). A
+                            // non-stay ticket taps straight through to the scan
+                            // surface. Everything else — a plain item, a bare
+                            // stay — opens the editor.
+                            if item.kindEnum == .stay {
+                                if item.hasStayBooking {
+                                    Haptics.light()
+                                    stayDetailTarget = StayDetailTarget(id: item.clientUUID)
+                                } else {
+                                    editingItem = .existing(item.clientUUID)
+                                }
+                            } else if item.hasTicket {
+                                Haptics.light()
+                                scanTarget = TicketScanTarget(id: item.clientUUID)
+                            } else {
+                                editingItem = .existing(item.clientUUID)
+                            }
+                        },
+                        onEdit: { item in
                             editingItem = .existing(item.clientUUID)
                         },
                         onDelete: { item in
@@ -159,9 +272,34 @@ struct TripDetailView: View {
             Spacer()
             HStack {
                 Spacer()
-                Button {
-                    Haptics.light()
-                    editingItem = .new(day: defaultDayForNewItem)
+                Menu {
+                    Button {
+                        Haptics.light()
+                        editingItem = .new(day: defaultDayForNewItem)
+                    } label: {
+                        Label("Add a stop", systemImage: "plus")
+                    }
+                    Divider()
+                    // Camera is hidden on hardware without one (simulator), where
+                    // UIImagePickerController would silently fall back to the
+                    // library and make two menu items redundant.
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        Button {
+                            showingTicketCamera = true
+                        } label: {
+                            Label("Scan a ticket", systemImage: "camera")
+                        }
+                    }
+                    Button {
+                        showingTicketPhotoLibrary = true
+                    } label: {
+                        Label("Ticket from Photos", systemImage: "photo")
+                    }
+                    Button {
+                        showingTicketPDFPicker = true
+                    } label: {
+                        Label("Ticket from PDF", systemImage: "doc.text")
+                    }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 17, weight: .regular))
@@ -170,13 +308,52 @@ struct TripDetailView: View {
                         .background(Tokens.accent(for: .itineraries), in: Circle())
                         .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Add itinerary item")
+                .disabled(isProcessingTicket)
+                .accessibilityLabel("Add to trip")
             }
         }
         .padding(.trailing, Space.lg)
         .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
         .allowsHitTesting(true)
+    }
+
+    // MARK: - Ticket upload
+
+    /// Picker callback: `data == nil` is a user cancel. Otherwise kick off the
+    /// on-device decode + extraction pipeline.
+    private func handleTicketData(_ data: Data?, isPDF: Bool) {
+        guard let data else { return }
+        Task { await processTicket(data: data, isPDF: isPDF) }
+    }
+
+    /// Persist the upload, decode + extract, and land a wallet-style card on the
+    /// timeline. On success we open the scan surface on the new card; on a
+    /// degraded read (extraction failed) we open the editor so the user can
+    /// complete the details — the attachment is never lost. Only a hard file
+    /// save failure surfaces the error banner.
+    private func processTicket(data: Data, isPDF: Bool) async {
+        withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = true }
+        defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = false } }
+
+        do {
+            let result = try await TicketExtraction().run(
+                data: data,
+                isPDF: isPDF,
+                trip: trip,
+                context: modelContext
+            )
+            Haptics.tick()
+            if result.degraded {
+                // Nothing reliable to scan yet — take the user straight to the
+                // editor to fill in the details.
+                editingItem = .existing(result.itemUUID)
+            } else {
+                scanTarget = TicketScanTarget(id: result.itemUUID)
+            }
+        } catch {
+            ticketError = (error as? LocalizedError)?.errorDescription
+                ?? "We couldn't save that ticket. Please try again."
+        }
     }
 
     // MARK: - Grouping
@@ -381,6 +558,20 @@ enum ItineraryItemEditorTarget: Identifiable {
     }
 }
 
+/// Identifiable wrapper for the `.fullScreenCover(item:)` that drives the ticket
+/// scan surface. Carries the item's UUID; the view resolves the live item from
+/// the trip's `@Query` results so it always reflects the latest edits.
+struct TicketScanTarget: Identifiable {
+    let id: UUID
+}
+
+/// Identifiable wrapper for the `.sheet(item:)` that drives the stay booking
+/// detail sheet. Carries the item's UUID; the view resolves the live item from
+/// the trip's `@Query` results so it always reflects the latest edits.
+struct StayDetailTarget: Identifiable {
+    let id: UUID
+}
+
 // MARK: - Day cluster
 
 /// One day's eyebrow + items. The connecting rail is NOT drawn here: it's a
@@ -395,6 +586,9 @@ private struct TripDayCluster: View {
     let entries: [TimelineEntry]
     let topPadding: CGFloat
     let onTap: (LocalItineraryItem) -> Void
+    /// Opens the editor. Wired to the context-menu "Edit details" action on
+    /// ticket rows (whose tap goes to the scan surface instead of the editor).
+    let onEdit: (LocalItineraryItem) -> Void
     let onDelete: (LocalItineraryItem) -> Void
 
     var body: some View {
@@ -467,6 +661,17 @@ private struct TripDayCluster: View {
                     .contentShape(Rectangle())
                     .onTapGesture { onTap(entry.item) }
                     .contextMenu {
+                        // Rows whose tap does NOT open the editor (non-stay
+                        // ticket rows go to scan; booked stays go to the detail
+                        // sheet) get a discoverable edit path in the context
+                        // menu. Plain rows and bare stays already edit on tap.
+                        if entry.item.hasTicket || entry.item.hasStayBooking {
+                            Button {
+                                onEdit(entry.item)
+                            } label: {
+                                Label("Edit details", systemImage: "pencil")
+                            }
+                        }
                         Button(role: .destructive) {
                             onDelete(entry.item)
                         } label: {
@@ -491,8 +696,25 @@ private struct TripTimelineRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             markerColumn
-            card
+            // A ticket item renders the wallet-style card; everything else
+            // keeps the original plain card (zero visual change for non-ticket
+            // items). We don't swap the check-OUT half of a stay to a ticket
+            // card — the ticket lives on the check-in entry.
+            if showsTicketCard {
+                TicketCardView(item: entry.item, timeText: entry.dateTimeLine)
+            } else {
+                card
+            }
         }
+    }
+
+    /// True when this entry should render the inline wallet-style ticket card.
+    /// Only non-stay ticket items (flights / events) do — they're single
+    /// moments on the timeline. A stay is a duration, so it stays a compact row
+    /// on both its days and opens its card in a detail sheet on tap instead.
+    private var showsTicketCard: Bool {
+        guard entry.item.kindEnum != .stay else { return false }
+        return entry.item.hasTicket
     }
 
     /// Fixed-width column whose center sits on `railLeading`. The marker
@@ -656,6 +878,14 @@ struct ItineraryItemEditorSheet: View {
     @FocusState private var titleFocused: Bool
     @Environment(\.openURL) private var openURL
 
+    // Ticket section (#222). Loaded from the existing item; the editor never
+    // mutates these on save (ticket fields round-trip untouched) — only the
+    // explicit "Remove ticket" action clears them + deletes the file.
+    @State private var ticketAttachmentPath: String = ""
+    @State private var ticketHasBarcode: Bool = false
+    @State private var showingTicketOriginal: Bool = false
+    @State private var showingRemoveTicketConfirmation: Bool = false
+
     private let titleMaxLength = 96
     private let notesMaxLength = 1000
     private let addressMaxLength = 200
@@ -676,6 +906,9 @@ struct ItineraryItemEditorSheet: View {
                         notesField
                         addressField
                         googleMapsLinkField
+                        if hasTicketData {
+                            ticketSection
+                        }
                         if isEditing {
                             deleteButton
                                 .padding(.top, Space.sm)
@@ -710,6 +943,18 @@ struct ItineraryItemEditorSheet: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This can't be undone.")
+            }
+            .alert(
+                "Remove this ticket?",
+                isPresented: $showingRemoveTicketConfirmation
+            ) {
+                Button("Remove", role: .destructive) { removeTicket() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The scanned barcode and the saved file will be deleted. The stop stays on your trip.")
+            }
+            .sheet(isPresented: $showingTicketOriginal) {
+                TicketOriginalViewer(attachmentPath: ticketAttachmentPath)
             }
         }
         .onAppear { loadIfNeeded() }
@@ -1028,6 +1273,56 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
+    /// Ticket section: a thumbnail of the uploaded file, a "View original"
+    /// affordance, and a destructive "Remove ticket" action. Only shown when the
+    /// item carries ticket data (attachment and/or barcode).
+    private var ticketSection: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            Text("Ticket").eyebrow()
+            HStack(spacing: Space.md) {
+                TicketAttachmentThumbnail(relativePath: ticketAttachmentPath)
+                    .frame(width: 52, height: 52)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+                    .paperBorder(Tokens.border, radius: Radius.sm)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ticketHasBarcode ? "Scannable ticket attached" : "Ticket file attached")
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.ink)
+                    if !ticketAttachmentPath.isEmpty {
+                        Button("View original") { showingTicketOriginal = true }
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.accent(for: .itineraries))
+                            .buttonStyle(.plain)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(Space.md)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+
+            Button {
+                showingRemoveTicketConfirmation = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13, weight: .regular))
+                    Text("Remove ticket")
+                        .font(.edFootnote)
+                }
+                .foregroundStyle(Tokens.danger)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, Space.xxs)
+            .accessibilityLabel("Remove ticket")
+        }
+    }
+
+    private var hasTicketData: Bool {
+        isEditing && (!ticketAttachmentPath.isEmpty || ticketHasBarcode)
+    }
+
     /// The current editor's maps link as a URL, coercing a bare host to https.
     /// `nil` when the field is empty (so the Open button is hidden).
     private var editorMapsURL: URL? {
@@ -1127,6 +1422,8 @@ struct ItineraryItemEditorSheet: View {
                 notes = existing.notes
                 address = existing.address
                 googleMapsLink = existing.googleMapsLink
+                ticketAttachmentPath = existing.attachmentPath
+                ticketHasBarcode = existing.hasBarcode
                 if let start = existing.startTime {
                     // Stored as UTC wall-clock; seed the (device-local) picker
                     // with a Date carrying the same H:M on the item's day, so
@@ -1215,6 +1512,33 @@ struct ItineraryItemEditorSheet: View {
             }
         }
         try? modelContext.save()
+    }
+
+    /// Remove the ticket from an existing item: delete the stored file and clear
+    /// every ticket field so the row reverts to a plain timeline item. The stop
+    /// itself is kept. Updates the in-editor state so the section hides
+    /// immediately without needing a re-fetch.
+    private func removeTicket() {
+        guard case .existing(let uuid) = target else { return }
+        let descriptor = FetchDescriptor<LocalItineraryItem>(
+            predicate: #Predicate { $0.clientUUID == uuid }
+        )
+        guard let existing = try? modelContext.fetch(descriptor).first else { return }
+        if !existing.attachmentPath.isEmpty {
+            try? TicketStorage.shared.delete(relativePath: existing.attachmentPath)
+        }
+        existing.attachmentPath = ""
+        existing.barcodePayload = ""
+        existing.barcodeSymbology = ""
+        existing.seat = ""
+        existing.gate = ""
+        existing.venue = ""
+        existing.ticketMetaJSON = ""
+        existing.updatedAt = Date()
+        try? modelContext.save()
+        Haptics.destructive()
+        ticketAttachmentPath = ""
+        ticketHasBarcode = false
     }
 
     /// Fetch the existing item by UUID and remove it from the model context.
