@@ -33,7 +33,7 @@ struct AddExpenseSheet: View {
     let target: ExpenseEditorTarget
 
     @State private var amountText: String = ""
-    @State private var currency: String = "SGD"
+    @State private var currency: String = FinanceSettings.displayCurrencyCode
     @State private var category: ExpenseCategory = .other
     @State private var date: Date = Date()
     @State private var merchant: String = ""

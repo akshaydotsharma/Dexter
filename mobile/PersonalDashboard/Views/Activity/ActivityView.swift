@@ -358,9 +358,9 @@ struct ActivityView: View {
     }
 
     /// Snippet for an individual expense row: SGD amount + category, matching
-    /// the Finance surface's formatting (`FinanceDashboardBand.formatSGD`).
+    /// the Finance surface's formatting (`FinanceDashboardBand.formatMoney`).
     private func expenseSnippet(_ expense: LocalExpense) -> String {
-        "\(FinanceDashboardBand.formatSGD(expense.sgdAmount)) · \(expense.categoryEnum.displayName)"
+        "\(FinanceDashboardBand.formatMoney(expense.sgdAmount)) · \(expense.categoryEnum.displayName)"
     }
 
     // MARK: - Tap → deep-link

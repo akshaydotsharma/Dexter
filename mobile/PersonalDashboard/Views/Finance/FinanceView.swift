@@ -86,6 +86,12 @@ struct FinanceView: View {
             captureMenuButton
         }
         .activeSection(.finance)
+        .task {
+            // Warm the chosen display currency's FX factor so month/day/
+            // category totals render in it on first paint (#220). SGD is a
+            // no-op passthrough; a failed fetch leaves the last cached factor.
+            await FXService.default().refreshDisplayRate()
+        }
         .sheet(item: $editingTarget) { target in
             AddExpenseSheet(target: target)
                 .presentationDetents([.large])
@@ -532,7 +538,7 @@ struct FinanceView: View {
                         Text(dayHeader(for: group.day))
                             .eyebrow()
                         Spacer()
-                        Text(FinanceDashboardBand.formatSGD(group.total))
+                        Text(FinanceDashboardBand.formatMoney(group.total))
                             .font(.edFootnote)
                             .monospacedDigit()
                             .foregroundStyle(Tokens.muted)
@@ -783,7 +789,7 @@ struct FinanceView: View {
         let label = expense.merchant?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? expense.expenseDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? expense.categoryEnum.displayName
-        let amount = FinanceDashboardBand.formatSGD(expense.sgdAmount)
+        let amount = FinanceDashboardBand.formatMoney(expense.sgdAmount)
         return "\(label) · \(amount)"
     }
 
