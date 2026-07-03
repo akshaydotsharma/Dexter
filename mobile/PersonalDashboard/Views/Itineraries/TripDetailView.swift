@@ -529,7 +529,14 @@ enum TimelineEntry: Identifiable {
         let timeFormat: (Date) -> String = { TimelineEntry.itineraryTimeFormatter.string(from: $0) }
         switch self {
         case .single(let item):
-            if let t = item.startTime { return timeFormat(t) }
+            if let dep = item.startTime {
+                // "10:35 → 15:35" when an arrival is also set; departure alone
+                // otherwise. Both render through the UTC-pinned formatter.
+                if let arr = item.arrivalTime {
+                    return "\(timeFormat(dep)) → \(timeFormat(arr))"
+                }
+                return timeFormat(dep)
+            }
             return "Anytime"
         case .stayCheckIn(let item):
             if let t = item.startTime { return "Check-in · \(timeFormat(t))" }
@@ -868,6 +875,11 @@ struct ItineraryItemEditorSheet: View {
     /// the kind first switches to stay.
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var hasEndTime: Bool = false
+    /// Activity only: the arrival / landing time. Shares the item's day for its
+    /// date component (like `startTime`), so the picker surfaces just the time.
+    /// Only settable when a departure (`hasTime`) is present.
+    @State private var arrivalTime: Date = Calendar.current.startOfDay(for: Date())
+    @State private var hasArrival: Bool = false
     @State private var notes: String = ""
     @State private var address: String = ""
     @State private var googleMapsLink: String = ""
@@ -902,6 +914,11 @@ struct ItineraryItemEditorSheet: View {
                         primaryDateField
                         if kind == .stay {
                             endDateField
+                        }
+                        // Arrival is activity-only and only meaningful once a
+                        // departure time is set (no lone arrival with no start).
+                        if kind == .activity && hasTime {
+                            arrivalTimeField
                         }
                         notesField
                         addressField
@@ -994,6 +1011,16 @@ struct ItineraryItemEditorSheet: View {
             // Default check-out time: 11 AM (most hotels). Same midnight
             // guard as the check-in time toggle.
             endDate = seededTime(on: endDate, defaultHour: 11)
+        }
+        .onChange(of: hasArrival) { _, newValue in
+            // Toggling arrival on: seed the picker at the departure time so it
+            // doesn't open at 12:00 AM; the user then nudges it forward.
+            guard newValue else { return }
+            let cal = Calendar.current
+            let comps = cal.dateComponents([.hour, .minute], from: arrivalTime)
+            if (comps.hour ?? 0) == 0 && (comps.minute ?? 0) == 0 {
+                arrivalTime = dayDate
+            }
         }
     }
 
@@ -1098,6 +1125,44 @@ struct ItineraryItemEditorSheet: View {
                         .tint(Tokens.accent(for: .itineraries))
                 }
                 .padding(Space.md)
+            }
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
+
+    /// Activity-only arrival-time field. Arrival shares the item's day, so the
+    /// picker shows only the time. A toggle mirrors the "Include time" pattern;
+    /// the picker appears only when arrival is on, so it never surfaces a stray
+    /// 12:00 AM. Gated to `.activity` with a departure present by the caller.
+    private var arrivalTimeField: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            Text("Arrival time").eyebrow()
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Include arrival time").font(.edBody).foregroundStyle(Tokens.inkSoft)
+                    Spacer()
+                    Toggle("", isOn: $hasArrival)
+                        .labelsHidden()
+                        .tint(Tokens.accent(for: .itineraries))
+                }
+                .padding(Space.md)
+
+                if hasArrival {
+                    Divider().background(Tokens.divider)
+
+                    HStack {
+                        DatePicker(
+                            "",
+                            selection: $arrivalTime,
+                            displayedComponents: .hourAndMinute
+                        )
+                        .labelsHidden()
+                        .tint(Tokens.accent(for: .itineraries))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(Space.md)
+                }
             }
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
             .paperBorder(Tokens.border, radius: Radius.md)
@@ -1431,6 +1496,12 @@ struct ItineraryItemEditorSheet: View {
                     hasTime = true
                     dayDate = deviceLocalPickerDate(onDay: existing.dayDate, utcWallClock: start)
                 }
+                if let arrival = existing.arrivalTime {
+                    // Stored UTC wall-clock; seed the device-local picker on the
+                    // item's day so it surfaces the stated arrival time.
+                    hasArrival = true
+                    arrivalTime = deviceLocalPickerDate(onDay: existing.dayDate, utcWallClock: arrival)
+                }
                 if let end = existing.endDate {
                     endDate = end
                     if let endT = existing.endTime {
@@ -1468,6 +1539,12 @@ struct ItineraryItemEditorSheet: View {
         // unambiguous.
         let startTimeValue: Date? = hasTime ? utcWallClock(onDay: dayDate, timeFrom: dayDate) : nil
 
+        // Activity-only arrival time, stored UTC wall-clock on the item's day.
+        // Only when the kind is activity, a departure is set, and arrival is on.
+        let arrivalTimeValue: Date? = (kind == .activity && hasTime && hasArrival)
+            ? utcWallClock(onDay: dayDate, timeFrom: arrivalTime)
+            : nil
+
         // Stay-only end fields. Other kinds clear both.
         let endDateValue: Date? = kind == .stay ? cal.startOfDay(for: endDate) : nil
         let endTimeValue: Date? = (kind == .stay && hasEndTime) ? utcWallClock(onDay: endDate, timeFrom: endDate) : nil
@@ -1484,6 +1561,7 @@ struct ItineraryItemEditorSheet: View {
                 startTime: startTimeValue,
                 endDate: endDateValue,
                 endTime: endTimeValue,
+                arrivalTime: arrivalTimeValue,
                 sortOrder: nextSort,
                 address: cleanAddress,
                 googleMapsLink: cleanMapsLink
@@ -1508,6 +1586,7 @@ struct ItineraryItemEditorSheet: View {
                 existing.startTime = startTimeValue
                 existing.endDate = endDateValue
                 existing.endTime = endTimeValue
+                existing.arrivalTime = arrivalTimeValue
                 existing.updatedAt = Date()
             }
         }

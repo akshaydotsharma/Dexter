@@ -661,7 +661,7 @@ struct EmailToItinerary {
         // backfill the ticket text fields onto an item created before Phase 2.
         // Barcode / attachment stamping is NOT done here — that lives in the
         // decode enrichment step, which handles the file bytes directly.
-        for key in ["start_time", "end_time", "end_date", "notes", "address", "google_maps_link", "seat", "gate", "venue"] {
+        for key in ["start_time", "arrival_time", "end_time", "end_date", "notes", "address", "google_maps_link", "seat", "gate", "venue"] {
             if let raw = dict[key]?.stringValue {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { continue }
@@ -683,7 +683,8 @@ struct EmailToItinerary {
             row.googleMapsLink,
             row.seat,
             row.gate,
-            row.venue
+            row.venue,
+            row.arrivalTime
         )
 
         do {
@@ -709,6 +710,7 @@ struct EmailToItinerary {
             || after.seat != before.6
             || after.gate != before.7
             || after.venue != before.8
+            || after.arrivalTime != before.9
         return changed ? itemUUID : nil
     }
 
@@ -1257,7 +1259,7 @@ struct EmailToItinerary {
 
         MAPPING RULES:
         - Hotel / accommodation / Airbnb confirmation -> kind "stay". Set day_date to the check-in date and end_date to the check-out date (stays require end_date). Include the hotel name in the title.
-        - Flight, train, bus, ferry, car transfer -> kind "activity" (there is no transport kind). Title like "Flight BA123 LHR->FCO" or "Train to Kyoto". Put the departure datetime in start_time when known. For a multi-leg flight or multi-segment journey (connections, layovers, return legs), create a SEPARATE activity item for EACH leg — each with its own departure date in day_date, its departure datetime in start_time, and the route/flight number in the title (e.g. "Flight SQ424 SIN->DXB", "Flight SQ494 DXB->LHR"). Never merge multiple legs into one item, even when they share one confirmation code.
+        - Flight, train, bus, ferry, car transfer -> kind "activity" (there is no transport kind). Title like "Flight BA123 LHR->FCO" or "Train to Kyoto". Put the departure datetime in start_time and, when the booking states it, the arrival (landing) datetime in arrival_time. For a multi-leg flight or multi-segment journey (connections, layovers, return legs), create a SEPARATE activity item for EACH leg — each with its own departure date in day_date, its departure datetime in start_time, its arrival datetime in arrival_time, and the route/flight number in the title (e.g. "Flight SQ424 SIN->DXB", "Flight SQ494 DXB->LHR"). Never merge multiple legs into one item, even when they share one confirmation code.
         - Tour, attraction ticket, event, show -> kind "activity".
         - Restaurant reservation -> kind "restaurant", with the reservation time in start_time.
         - Sightseeing place with no booking -> kind "place".
@@ -1267,6 +1269,7 @@ struct EmailToItinerary {
         - title: concise and specific (vendor / flight number / hotel name).
         - notes: confirmation/booking number, times, and any other useful detail from the email. Keep it factual. The physical address goes in the address field (below), not here, so don't duplicate it verbatim into notes.
         - start_time: full ISO 8601 datetime with timezone when the email gives a clear time; otherwise omit.
+        - arrival_time: for a flight/train/bus/ferry/transfer (kind "activity"), the arrival (landing) datetime as full ISO 8601 with timezone when the booking states it; otherwise omit. Not for stays, restaurants, or places.
         - For stays only: end_date (check-out) is required; end_time optional.
         - address: the venue's physical/postal address when the email or attachment contains one (hotel or Airbnb address for a stay, restaurant address, activity venue, the airport or terminal for a flight-as-activity). Applies to every kind, since they are all physical locations. Copy the address text as written; omit or use empty string when the source gives no address.
         - google_maps_link: if the email or attachment contains an explicit Google Maps URL for the location (maps.app.goo.gl, goo.gl/maps, google.com/maps, maps.google.com), copy it verbatim into this field. Do NOT invent, guess, or construct a link from an address. The device builds the map link from the address field automatically, so focus on getting the address text right and leave google_maps_link empty unless a real link is present in the source.

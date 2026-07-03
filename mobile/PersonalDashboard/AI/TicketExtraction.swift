@@ -135,6 +135,7 @@ struct TicketExtraction {
             ?? cal.startOfDay(for: trip.startDate)
 
         let startTime = Self.parseWallClockTime(extracted?.startTime)
+        let arrivalTime = Self.parseWallClockTime(extracted?.arrivalTime)
 
         // Merge ticket meta: BCBP is authoritative for the machine-read codes;
         // the LLM fills the human-readable extras it can see on the pass.
@@ -196,6 +197,7 @@ struct TicketExtraction {
             startTime: startTime,
             endDate: nil,
             endTime: nil,
+            arrivalTime: arrivalTime,
             sortOrder: maxForDay + 1,
             address: address,
             googleMapsLink: mapsLink,
@@ -346,6 +348,7 @@ struct ExtractedTicket {
     var kind: String?
     var dayDate: String?
     var startTime: String?
+    var arrivalTime: String?
     var venue: String?
     var address: String?
     var seat: String?
@@ -373,6 +376,7 @@ struct ExtractedTicket {
         kind = s("kind")
         dayDate = s("day_date")
         startTime = s("start_time")
+        arrivalTime = s("arrival_time")
         venue = s("venue")
         address = s("address")
         seat = s("seat")
@@ -414,6 +418,7 @@ extension TicketExtraction {
                 ]),
                 "day_date": field("The date the ticket is valid / the flight departs / the event starts, ISO 8601 (yyyy-MM-dd). Read the printed date. If the year is missing, resolve it from the trip's date range provided below."),
                 "start_time": field("OPTIONAL departure / start / boarding time as a full ISO 8601 datetime with timezone if printed (e.g. 2026-06-14T19:00:00+02:00). The date portion must match day_date. Omit if no time is shown."),
+                "arrival_time": field("OPTIONAL arrival / landing / end time — the time the traveller arrives at the destination — as a full ISO 8601 datetime with timezone if printed (e.g. 2026-06-14T22:35:00+01:00), or the ticket's stated local time in HH:mm (24h). For a flight/train this is the landing / arrival time. Omit for events and when no arrival time is shown."),
                 "venue": field("OPTIONAL venue / location NAME for an event (e.g. \"The O2, London\", \"Wembley Stadium\"). Omit for flights."),
                 "address": field("OPTIONAL postal address of the venue / terminal / departure point, as printed. Omit if none."),
                 "seat": field("OPTIONAL seat as printed (e.g. \"12A\", \"Block A Row 14 Seat 7\"). Omit if none."),
