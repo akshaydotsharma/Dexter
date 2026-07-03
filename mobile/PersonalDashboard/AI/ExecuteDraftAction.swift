@@ -727,7 +727,7 @@ struct ExecuteDraftAction {
         }
 
         var items = row.items
-        items.append(contentsOf: newItems)
+        items.insert(contentsOf: newItems, at: 0)
         row.items = items
         row.updatedAt = Date()
         try save()
