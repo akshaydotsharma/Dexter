@@ -22,11 +22,6 @@ struct EmailInboxView: View {
     @State private var isFetching = false
     @State private var fetchSummary: String?
     @State private var saveConfirmation = false
-    @State private var selectedEntry: LocalEmailIngestLog?
-
-    // Recent log, newest first.
-    @Query(sort: \LocalEmailIngestLog.createdAt, order: .reverse)
-    private var logEntries: [LocalEmailIngestLog]
 
     var body: some View {
         NavigationStack {
@@ -37,7 +32,7 @@ struct EmailInboxView: View {
                         intro
                         credentialsSection
                         actionsSection
-                        logSection
+                        historyHint
                     }
                     .padding(.horizontal, Space.lg)
                     .padding(.top, Space.lg)
@@ -54,9 +49,6 @@ struct EmailInboxView: View {
                     Button("Save") { save() }
                         .fontWeight(.semibold)
                 }
-            }
-            .sheet(item: $selectedEntry) { entry in
-                EmailIngestDetailView(entry: entry)
             }
         }
         .onAppear(perform: load)
@@ -194,59 +186,15 @@ struct EmailInboxView: View {
         }
     }
 
-    @ViewBuilder
-    private var logSection: some View {
-        Section(title: "Recent activity") {
-            if logEntries.isEmpty {
-                Text("No emails processed yet. Forward a hotel or flight confirmation to get started.")
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Space.lg)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(logEntries.prefix(10).enumerated()), id: \.element.clientUUID) { index, entry in
-                        if index > 0 { divider }
-                        logRow(entry)
-                    }
-                }
-            }
-        }
-    }
-
-    private func logRow(_ entry: LocalEmailIngestLog) -> some View {
-        Button {
-            selectedEntry = entry
-        } label: {
-            HStack(alignment: .top, spacing: Space.md) {
-                Image(systemName: entry.outcomeEnum.icon)
-                    .font(.system(size: 15))
-                    .foregroundStyle(color(for: entry.outcomeEnum))
-                    .frame(width: 20)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.subject.isEmpty ? "(no subject)" : entry.subject)
-                        .font(.edBodyMedium)
-                        .foregroundStyle(Tokens.ink)
-                        .lineLimit(1)
-                    Text(entry.summary)
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.muted)
-                        .lineLimit(2)
-                    Text(entry.createdAt, format: .dateTime.month().day().hour().minute())
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.mutedSoft)
-                }
-                Spacer(minLength: Space.sm)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Tokens.mutedSoft)
-                    .padding(.top, 2)
-            }
-            .padding(.horizontal, Space.lg)
-            .padding(.vertical, Space.md)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    /// The processed-email history moved to the dedicated Parsed Files & Imports
+    /// screen (#234), so there's a single home for parsing history. This just
+    /// points the user there.
+    private var historyHint: some View {
+        Text("Processed emails now live in Settings › Parsed files & imports, alongside your statement imports.")
+            .font(.edCaption)
+            .foregroundStyle(Tokens.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Space.xs)
     }
 
     // MARK: - Building blocks
@@ -272,14 +220,6 @@ struct EmailInboxView: View {
             .fill(Tokens.divider)
             .frame(height: 0.5)
             .padding(.leading, Space.lg)
-    }
-
-    private func color(for outcome: EmailIngestOutcome) -> Color {
-        switch outcome {
-        case .added:   return Tokens.success
-        case .skipped: return Tokens.muted
-        case .failed:  return Tokens.danger
-        }
     }
 
     private var canFetch: Bool {
@@ -368,66 +308,6 @@ private struct Section<Content: View>: View {
             content
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
                 .paperBorder()
-        }
-    }
-}
-
-/// Diagnostics detail for a single ingest-log entry (#143): the outcome, the
-/// parsed body text the model actually received, and the trip-matching context
-/// it was given. This is what lets us tell a parser miss ("just a signature")
-/// apart from a real no-match, without needing the device console.
-private struct EmailIngestDetailView: View {
-    let entry: LocalEmailIngestLog
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Space.lg) {
-                        field("Outcome", entry.outcomeEnum.displayName)
-                        field("Subject", entry.subject.isEmpty ? "(none)" : entry.subject)
-                        if !entry.sender.isEmpty { field("From", entry.sender) }
-                        field("Summary", entry.summary)
-                        monospaceBlock("Parsed body the model received",
-                                       entry.debugBody.isEmpty ? "(not recorded)" : entry.debugBody)
-                        monospaceBlock("Trips the model could match against",
-                                       entry.debugTripContext.isEmpty ? "(not recorded)" : entry.debugTripContext)
-                    }
-                    .padding(Space.lg)
-                }
-            }
-            .navigationTitle("Email detail")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-
-    private func field(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            Text(label).eyebrow()
-            Text(value)
-                .font(.edBody)
-                .foregroundStyle(Tokens.ink)
-                .textSelection(.enabled)
-        }
-    }
-
-    private func monospaceBlock(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            Text(label).eyebrow()
-            Text(value)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(Tokens.inkSoft)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Space.md)
-                .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                .textSelection(.enabled)
         }
     }
 }

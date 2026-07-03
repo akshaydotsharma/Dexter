@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var showingResetData: Bool = false
     @State private var showingDataTransfer: Bool = false
     @State private var showingEmailInbox: Bool = false
+    @State private var showingParsedFiles: Bool = false
     @State private var showingBackup: Bool = false
 
     /// Currency all finances are DISPLAYED in (#220). SGD stays the canonical
@@ -30,6 +31,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingEmailInbox) {
             EmailInboxView()
+        }
+        .sheet(isPresented: $showingParsedFiles) {
+            ParsedFilesView()
         }
         .sheet(isPresented: $showingBackup) {
             BackupSettingsView()
@@ -111,29 +115,53 @@ struct SettingsView: View {
 
     private var automationSection: some View {
         SettingsSection(title: "Automation") {
-            Button {
-                showingEmailInbox = true
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Receipts inbox")
-                            .font(.edBody)
-                            .foregroundStyle(Tokens.ink)
-                        Text("Auto-add itinerary items from forwarded booking emails")
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                    }
-                    Spacer(minLength: Space.md)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Tokens.mutedSoft)
+            VStack(spacing: 0) {
+                Button {
+                    showingEmailInbox = true
+                } label: {
+                    automationRow(
+                        title: "Receipts inbox",
+                        subtitle: "Connect the inbox that auto-adds from forwarded booking emails"
+                    )
                 }
-                .padding(.horizontal, Space.lg)
-                .padding(.vertical, Space.md)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+                    .padding(.leading, Space.lg)
+
+                Button {
+                    showingParsedFiles = true
+                } label: {
+                    automationRow(
+                        title: "Parsed files & imports",
+                        subtitle: "History of everything read from statements and forwarded emails"
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
+    }
+
+    private func automationRow(title: String, subtitle: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                Text(subtitle)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+            }
+            Spacer(minLength: Space.md)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Tokens.mutedSoft)
+        }
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.md)
+        .contentShape(Rectangle())
     }
 
     private var dataSection: some View {
