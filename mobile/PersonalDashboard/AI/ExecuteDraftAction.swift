@@ -1275,6 +1275,10 @@ struct ExecuteDraftAction {
     private func save() throws {
         do {
             try store.context.save()
+            // Notify manual-fetch surfaces (Tasks / Notes / Lists) that the
+            // shared store changed so they can live-refresh. This is the single
+            // choke point for both the voice-capture and chat write paths.
+            NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
         } catch {
             throw DraftExecutionError.persistence(error)
         }

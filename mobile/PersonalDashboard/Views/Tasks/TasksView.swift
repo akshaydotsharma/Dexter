@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct TasksView: View {
     @State private var viewModel = TodosViewModel()
@@ -77,6 +78,10 @@ struct TasksView: View {
             .animation(.easeOut(duration: 0.15), value: draftBucket)
         }
         .activeSection(.tasks)
+        // Live-refresh when the voice-capture or chat path writes a task.
+        .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
+            Task { await viewModel.load() }
+        }
         .task { await viewModel.load() }
         .onAppear {
             // Activity timeline deep-link consumption. The Activity surface

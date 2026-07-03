@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct NotesView: View {
     @State private var viewModel = NotesViewModel()
@@ -81,6 +82,10 @@ struct NotesView: View {
             }
         }
         .activeSection(.notes)
+        // Live-refresh when the voice-capture or chat path writes a note.
+        .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
+            Task { await viewModel.load() }
+        }
         .task {
             await viewModel.load()
             if let id = pendingFolderLaunchId,
