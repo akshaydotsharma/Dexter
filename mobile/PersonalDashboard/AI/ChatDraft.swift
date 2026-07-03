@@ -163,6 +163,9 @@ extension ChatDraft {
         case .addExpense:
             return Self.addExpenseSummary(dict: dict)
 
+        case .addRecurringExpense:
+            return Self.addRecurringExpenseSummary(dict: dict)
+
         case .clearExpenses:
             return Self.clearExpensesSummary(dict: dict)
 
@@ -205,6 +208,59 @@ extension ChatDraft {
             scope += " before \(shortDayMonth.string(from: before))"
         }
         return scope
+    }
+
+    /// Preview for `add_recurring_expense`. Reads like a recurring rule:
+    /// "Rent · SGD 2000.00/mo · on the 1st · Bills & Utilities".
+    private static func addRecurringExpenseSummary(dict: [String: AnthropicJSONValue]) -> String {
+        let amount = dict["amount"]?.doubleValue
+            ?? Double(dict["amount"]?.stringValue ?? "")
+            ?? 0
+        let currency = (dict["currency"]?.stringValue ?? "SGD")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        let cleanedCurrency = currency.isEmpty ? "SGD" : currency
+
+        let categoryRaw = (dict["category"]?.stringValue ?? "").lowercased()
+        let categoryName = ExpenseCategory(rawValue: categoryRaw)?.displayName ?? "Other"
+
+        let merchant = (dict["merchant"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = (dict["description"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let headline: String
+        if !merchant.isEmpty {
+            headline = merchant
+        } else if !description.isEmpty {
+            headline = description
+        } else {
+            headline = categoryName
+        }
+
+        let day = max(min(dict["day_of_month"]?.intValue
+            ?? Int(dict["day_of_month"]?.stringValue ?? "")
+            ?? 1, 31), 1)
+
+        let amountString = String(format: "%@ %.2f/mo", cleanedCurrency, amount)
+        var line = headline == categoryName
+            ? "\(amountString) · on the \(ordinal(day))"
+            : "\(headline) · \(amountString) · on the \(ordinal(day)) · \(categoryName)"
+
+        if let endRaw = dict["end_date"]?.stringValue, let end = parseAnyDate(endRaw) {
+            line += " · until \(shortDayMonth.string(from: end))"
+        }
+        return line
+    }
+
+    /// "1st", "2nd", "3rd", "21st", "31st" for the day-of-month readout.
+    private static func ordinal(_ n: Int) -> String {
+        let suffix: String
+        switch (n % 100, n % 10) {
+        case (11, _), (12, _), (13, _): suffix = "th"
+        case (_, 1): suffix = "st"
+        case (_, 2): suffix = "nd"
+        case (_, 3): suffix = "rd"
+        default: suffix = "th"
+        }
+        return "\(n)\(suffix)"
     }
 
     /// Preview for `add_expense`. Format aims for the same scannable shape

@@ -75,6 +75,7 @@ struct ExecuteDraftAction {
         case .updateItineraryItem: return try updateItineraryItem(input)
         case .deleteItineraryItem: return try deleteItineraryItem(input)
         case .addExpense: return try await addExpense(input)
+        case .addRecurringExpense: return try await addRecurringExpense(input)
         case .clearExpenses: return try clearExpenses(input)
         case .unknown:
             throw DraftExecutionError.invalidArgument(field: "action", reason: "unknown action type")
@@ -232,6 +233,87 @@ struct ExecuteDraftAction {
             type: "expense",
             action: ActionString.created,
             id: row.clientUUID,
+            title: title,
+            dueDate: nil,
+            addedNames: nil
+        )
+    }
+
+    /// `add_recurring_expense` tool handler (#236). Creates a recurring
+    /// TEMPLATE — it does NOT log an expense directly. After creating it we run
+    /// one materialisation pass (WITHOUT a notification, since the user is right
+    /// here getting an on-screen confirmation) so that a template whose posting
+    /// day has already passed this month posts its first expense immediately;
+    /// otherwise the next foreground / background pass handles posting.
+    private func addRecurringExpense(_ input: [String: AnthropicJSONValue]) async throws -> DraftActionOutcome {
+        let amount = input["amount"]?.doubleValue
+            ?? Double(input["amount"]?.stringValue ?? "")
+            ?? 0
+        guard amount > 0 else {
+            throw DraftExecutionError.invalidArgument(field: "amount", reason: "must be > 0")
+        }
+
+        let categoryRaw = (input["category"]?.stringValue ?? "").lowercased()
+        let category = ExpenseCategory(rawValue: categoryRaw) ?? .other
+
+        let currencyRaw = trimmedString(input["currency"]) ?? "SGD"
+        let currency = currencyRaw.isEmpty ? "SGD" : currencyRaw.uppercased()
+
+        // day_of_month: tolerate int or numeric string; clamp to 1...31.
+        let rawDay = input["day_of_month"]?.intValue
+            ?? Int(input["day_of_month"]?.stringValue ?? "")
+            ?? 1
+        let dayOfMonth = min(max(rawDay, 1), 31)
+
+        let merchant = trimmedString(input["merchant"])
+        let descriptionField = trimmedString(input["description"])
+        let paymentMethod = trimmedString(input["payment_method"])
+
+        let startDate = parseAnyISODate(input["start_date"]?.stringValue) ?? Date()
+        let endDate = parseAnyISODate(input["end_date"]?.stringValue)
+
+        let providedID = trimmedString(input["id"])
+        let clientUUID: String? = {
+            if let raw = providedID, UUID(uuidString: raw) != nil { return raw.lowercased() }
+            return nil
+        }()
+
+        let service = RecurringExpenseService(store: store)
+        let template: RecurringExpense
+        do {
+            template = try service.create(
+                amount: amount,
+                currency: currency,
+                category: category,
+                merchant: merchant,
+                expenseDescription: descriptionField,
+                paymentMethod: paymentMethod,
+                dayOfMonth: dayOfMonth,
+                isActive: true,
+                startDate: startDate,
+                endDate: endDate,
+                clientUUID: clientUUID
+            )
+        } catch {
+            throw DraftExecutionError.persistence(error)
+        }
+
+        // Post immediately if this month's posting day has already passed.
+        // notify:false — the caller (chat card / capture dialog) already tells
+        // the user; a banner on top would be redundant.
+        _ = await service.materialize(notify: false)
+
+        // Let manual-fetch Finance surfaces refresh if anything posted.
+        NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
+
+        let title = template.merchant
+            ?? template.expenseDescription
+            ?? category.displayName
+
+        return DraftActionOutcome(
+            type: "recurring_expense",
+            action: ActionString.created,
+            id: template.clientUUID,
             title: title,
             dueDate: nil,
             addedNames: nil

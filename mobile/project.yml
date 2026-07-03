@@ -83,6 +83,10 @@ targets:
           - processing
         BGTaskSchedulerPermittedIdentifiers:
           - com.akshaysharma.personaldashboard.emailIngestRefresh
+          # Recurring-expense materialisation (#236). Must match
+          # RecurringExpenseCoordinator.refreshTaskId. Best-effort background
+          # top-up; the foreground pass is the reliable path.
+          - com.akshaysharma.personaldashboard.recurringExpenseRefresh
         UIAppFonts:
           - Calistoga-Regular.ttf
           - Inter-Regular.ttf

@@ -24,6 +24,7 @@ enum DraftActionType: String, Codable, Hashable, Sendable {
     case updateItineraryItem = "UPDATE_ITINERARY_ITEM"
     case deleteItineraryItem = "DELETE_ITINERARY_ITEM"
     case addExpense = "ADD_EXPENSE"
+    case addRecurringExpense = "ADD_RECURRING_EXPENSE"
     case clearExpenses = "CLEAR_EXPENSES"
     case unknown = "UNKNOWN"
 }

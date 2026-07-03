@@ -213,6 +213,8 @@ struct CaptureToDashboardIntent: AppIntent {
             return "Added folder\(titleClause)."
         case ("expense", "created"):
             return "Logged expense\(titleClause)."
+        case ("recurring_expense", "created"):
+            return "Set up recurring expense\(titleClause)."
 
         case ("todo", "completed"):
             return "Marked task\(titleClause) complete."
@@ -258,6 +260,7 @@ struct CaptureToDashboardIntent: AppIntent {
         case "list": return "list"
         case "folder": return "folder"
         case "expense": return "expense"
+        case "recurring_expense": return "recurring expense"
         default: return type
         }
     }

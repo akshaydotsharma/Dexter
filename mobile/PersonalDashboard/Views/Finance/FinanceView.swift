@@ -54,6 +54,9 @@ struct FinanceView: View {
     /// PDF flows don't share presentation state.
     @State private var showingStatementPicker: Bool = false
 
+    /// Presents the recurring-expense management sheet (#236).
+    @State private var showingRecurring: Bool = false
+
     /// In-flight capture / import jobs, rendered as non-blocking "Processing…"
     /// rows pinned above the expense list (#186). Modelled as an array (not a
     /// bool) so two uploads in a row show two rows and the list stays fully
@@ -94,6 +97,11 @@ struct FinanceView: View {
         }
         .sheet(item: $editingTarget) { target in
             AddExpenseSheet(target: target)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingRecurring) {
+            RecurringExpensesView()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -185,6 +193,11 @@ struct FinanceView: View {
                 editingTarget = .new
             } label: {
                 Label("Enter manually", systemImage: "pencil")
+            }
+            Button {
+                showingRecurring = true
+            } label: {
+                Label("Recurring expenses", systemImage: "arrow.triangle.2.circlepath")
             }
         } label: {
             Image(systemName: "plus")
