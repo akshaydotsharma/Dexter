@@ -128,7 +128,7 @@ final class ListsViewModel {
         guard !text.isEmpty,
               let listIndex = lists.firstIndex(where: { $0.id == list.id }) else { return }
         var snapshot = lists[listIndex]
-        snapshot.items.append(ChecklistItem(text: text, checked: false))
+        snapshot.items.insert(ChecklistItem(text: text, checked: false), at: 0)
         lists[listIndex] = snapshot
         await update(snapshot)
     }
