@@ -132,8 +132,10 @@ struct FinanceDashboardBand: View {
             Text(Self.formatSGD(entry.total))
                 .font(.edFootnote)
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .foregroundStyle(Tokens.inkSoft)
-                .frame(width: 86, alignment: .trailing)
+                .frame(width: 108, alignment: .trailing)
         }
     }
 
