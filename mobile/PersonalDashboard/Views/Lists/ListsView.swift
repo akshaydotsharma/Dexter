@@ -774,6 +774,7 @@ private struct ItemDetailsSheet: View {
     @State private var nameText: String = ""
     @State private var urlText: String = ""
     @State private var showingDeleteConfirmation = false
+    @FocusState private var nameFocused: Bool
 
     /// Save is only blocked in new-item mode with an empty name. Existing-item
     /// edits can always save (URL may legitimately be cleared).
@@ -800,6 +801,7 @@ private struct ItemDetailsSheet: View {
                             Text("Item").eyebrow()
                             if nameEditable {
                                 TextField("Type item name…", text: $nameText)
+                                    .focused($nameFocused)
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
                                     .padding(Space.md)
@@ -894,7 +896,17 @@ private struct ItemDetailsSheet: View {
             } message: {
                 Text("This can't be undone.")
             }
-            .onAppear { urlText = initialURL; nameText = itemName }
+            .onAppear {
+                urlText = initialURL
+                nameText = itemName
+                // Auto-focus the name field in new-item mode so the keyboard is
+                // up and the cursor active immediately. Deferred to the next
+                // runloop tick — SwiftUI drops focus set too early in a freshly
+                // presented sheet (same pattern as startDraft's focus set).
+                if nameEditable {
+                    DispatchQueue.main.async { nameFocused = true }
+                }
+            }
         }
     }
 }
