@@ -125,9 +125,21 @@ struct TicketExtraction {
     ) -> LocalItineraryItem {
         let cal = Calendar(identifier: .gregorian)
 
-        // Kind: extracted value if valid, else activity (flights/trains/events
-        // all live under activity this phase).
-        let kind = ItineraryKind(rawValue: (extracted?.kind ?? "").lowercased()) ?? .activity
+        // Kind: extracted value if valid, else activity. A decoded boarding pass
+        // (BCBP) is always a flight, so it forces transport/flight regardless of
+        // what the model returned.
+        var kind = ItineraryKind(rawValue: (extracted?.kind ?? "").lowercased()) ?? .activity
+        if bcbp != nil { kind = .transport }
+
+        // Transport mode (transport-only): a BCBP is a flight; otherwise take the
+        // model's mode, falling back to flight when a flight number is present
+        // and .other when nothing else is known.
+        let hasFlightNumber = firstNonEmpty(bcbp?.flightLabel, extracted?.flightNumber) != nil
+        let transportMode: TransportMode? = kind == .transport
+            ? (bcbp != nil
+                ? .flight
+                : (TransportMode(rawValue: (extracted?.mode ?? "").lowercased()) ?? (hasFlightNumber ? .flight : .other)))
+            : nil
 
         // Day: extracted date, else trip start (a safe in-range fallback the
         // user can correct in the editor).
@@ -192,6 +204,7 @@ struct TicketExtraction {
             tripUUID: trip.clientUUID,
             dayDate: day,
             kind: kind,
+            transportMode: transportMode,
             title: title,
             notes: "",
             startTime: startTime,
@@ -346,6 +359,7 @@ private extension LocalItineraryItem {
 struct ExtractedTicket {
     var title: String?
     var kind: String?
+    var mode: String?
     var dayDate: String?
     var startTime: String?
     var arrivalTime: String?
@@ -374,6 +388,7 @@ struct ExtractedTicket {
         func s(_ key: String) -> String? { input[key]?.stringValue }
         title = s("title")
         kind = s("kind")
+        mode = s("mode")
         dayDate = s("day_date")
         startTime = s("start_time")
         arrivalTime = s("arrival_time")
@@ -413,8 +428,13 @@ extension TicketExtraction {
                 "title": field("Concise, specific title for the timeline row. For a flight use the route + flight number (e.g. \"SQ322 · SIN→LHR\"); for a train the route; for an event the event name (e.g. \"Coldplay · Music of the Spheres\")."),
                 "kind": .object([
                     "type": .string("string"),
-                    "enum": .array([.string("stay"), .string("activity"), .string("place"), .string("restaurant")]),
-                    "description": .string("Category. Map flights, trains, and events to \"activity\"; a hotel booking to \"stay\". Do NOT invent other kinds.")
+                    "enum": .array([.string("stay"), .string("transport"), .string("activity"), .string("place"), .string("restaurant")]),
+                    "description": .string("Category. Map a flight or train to \"transport\" (and set the mode field); an event/concert/match to \"activity\"; a hotel booking to \"stay\". Do NOT invent other kinds.")
+                ]),
+                "mode": .object([
+                    "type": .string("string"),
+                    "enum": .array([.string("flight"), .string("train"), .string("car"), .string("bus"), .string("ferry"), .string("other")]),
+                    "description": .string("TRANSPORT ONLY: the mode of transport. A boarding pass / flight -> \"flight\"; a rail ticket -> \"train\"; a coach -> \"bus\"; a ferry -> \"ferry\"; a car/transfer -> \"car\". Omit for non-transport tickets.")
                 ]),
                 "day_date": field("The date the ticket is valid / the flight departs / the event starts, ISO 8601 (yyyy-MM-dd). Read the printed date. If the year is missing, resolve it from the trip's date range provided below."),
                 "start_time": field("OPTIONAL departure / start / boarding time as a full ISO 8601 datetime with timezone if printed (e.g. 2026-06-14T19:00:00+02:00). The date portion must match day_date. Omit if no time is shown."),

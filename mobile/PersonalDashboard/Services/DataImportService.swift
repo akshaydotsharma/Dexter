@@ -302,11 +302,15 @@ final class DataImportService {
 
             for dto in payload.itineraryDays where !existingItineraryUUIDs.contains(dto.clientUUID) {
                 let kind = ItineraryKind(rawValue: dto.kind) ?? .activity
+                let transportMode = (dto.transportMode?.isEmpty ?? true)
+                    ? nil
+                    : TransportMode(rawValue: dto.transportMode!)
                 modelContext.insert(LocalItineraryItem(
                     clientUUID: dto.clientUUID,
                     tripUUID: dto.tripClientUUID,
                     dayDate: dto.dayDate,
                     kind: kind,
+                    transportMode: transportMode,
                     title: dto.title,
                     notes: dto.notes,
                     startTime: dto.startTime,

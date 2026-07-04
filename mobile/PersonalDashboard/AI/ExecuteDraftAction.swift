@@ -1035,6 +1035,13 @@ struct ExecuteDraftAction {
             let kindRaw = (dict["kind"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let kind = ItineraryKind(rawValue: kindRaw) ?? .activity
 
+            // Transport-only mode. Discarded for non-transport kinds even if the
+            // model provided it. Defaults to .other when transport but the mode
+            // is missing/unrecognised, so a transport row always renders a mode.
+            let transportMode: TransportMode? = kind == .transport
+                ? (TransportMode(rawValue: (dict["mode"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) ?? .other)
+                : nil
+
             let notes = (dict["notes"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let cleanNotes = notes == "null" ? "" : notes
 
@@ -1043,10 +1050,10 @@ struct ExecuteDraftAction {
             // model can omit the field entirely; we don't require it.
             let startTime = parseWallClockTime(dict["start_time"]?.stringValue)
 
-            // Activity-only arrival/landing time (same wall-clock parse as
-            // start_time). Discarded for non-activity kinds even if the model
-            // accidentally provided it — arrival only renders on activity rows.
-            let arrivalTime = kind == .activity
+            // Arrival/landing time for a transport leg or activity (same
+            // wall-clock parse as start_time). Discarded for other kinds even if
+            // the model accidentally provided it — arrival only renders there.
+            let arrivalTime = (kind == .activity || kind == .transport)
                 ? parseWallClockTime(dict["arrival_time"]?.stringValue)
                 : nil
 
@@ -1103,6 +1110,7 @@ struct ExecuteDraftAction {
                 tripUUID: tripUUID,
                 dayDate: dayStart,
                 kind: kind,
+                transportMode: transportMode,
                 title: title,
                 notes: cleanNotes,
                 startTime: startTime,
@@ -1225,6 +1233,14 @@ struct ExecuteDraftAction {
            let kind = ItineraryKind(rawValue: raw) {
             row.kind = kind.rawValue; changed = true
         }
+        // mode: transport-only. Empty = keep. Applied only when the (possibly
+        // just-updated) kind is transport; the stale-shape guard below clears it
+        // for any non-transport kind.
+        if let raw = input["mode"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !raw.isEmpty, raw != "null",
+           let mode = TransportMode(rawValue: raw) {
+            row.transportModeEnum = mode; changed = true
+        }
         if let title = trimmedString(input["title"]), !title.isEmpty {
             row.title = title; changed = true
         }
@@ -1334,10 +1350,16 @@ struct ExecuteDraftAction {
             if row.endDate != nil { row.endDate = nil; changed = true }
             if row.endTime != nil { row.endTime = nil; changed = true }
         }
-        // arrivalTime is activity-only; clear it if the kind moved away from
-        // activity so a stale arrival can't leak onto a place/restaurant/stay.
-        if row.kindEnum != .activity, row.arrivalTime != nil {
+        // arrivalTime is for transport / activity legs; clear it if the kind
+        // moved away from both so a stale arrival can't leak onto a
+        // place/restaurant/stay.
+        if row.kindEnum != .activity, row.kindEnum != .transport, row.arrivalTime != nil {
             row.arrivalTime = nil; changed = true
+        }
+        // transportMode is transport-only; clear it if the kind moved away so a
+        // stale mode can't leak onto another kind.
+        if row.kindEnum != .transport, !row.transportMode.isEmpty {
+            row.transportMode = ""; changed = true
         }
 
         guard changed else {

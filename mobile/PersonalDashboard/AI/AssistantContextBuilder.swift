@@ -162,6 +162,11 @@ struct AssistantContextBuilder {
                         let dayISO = Self.isoDate.string(from: day)
                         let pretty = dayItems.map { item -> String in
                             let kind = ItineraryKind(rawValue: item.kind) ?? .activity
+                            // For transport, surface the mode so the model can
+                            // reference/edit it (e.g. "transport/train").
+                            if kind == .transport, let mode = item.transportModeEnum {
+                                return "\(Self.safe(item.title, maxLen: 120)) (\(kind.rawValue)/\(mode.rawValue))"
+                            }
                             return "\(Self.safe(item.title, maxLen: 120)) (\(kind.rawValue))"
                         }.joined(separator: ", ")
                         line += "\n  Day \(dayNumber) (\(dayISO)): \(pretty)"

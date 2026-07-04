@@ -541,8 +541,9 @@ extension AnthropicClient {
     - "category" must be EXACTLY one of these raw values: \(categoryRawList).
       Pick the best fit from the merchant (a supermarket → groceries, a
       restaurant → food_and_dining, an airline/hotel → travel, Netflix/Spotify
-      → subscriptions, a utility → bills_and_utilities). For fees and interest
-      use "bills_and_utilities". Use "other" only when nothing fits. A refund
+      → subscriptions, a utility → bills_and_utilities, a monthly rent/lease
+      payment → rent). For fees and interest use "bills_and_utilities". Use
+      "other" only when nothing fits. A refund
       is imported, so give it the category of the purchase it reverses (a
       grocery refund → groceries). For a payment, still pick a plausible
       category (a payment is skipped, so its category is ignored).
