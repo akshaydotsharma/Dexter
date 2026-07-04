@@ -290,6 +290,9 @@ private struct ListDetailContent: View {
     // Item Details sheet: holds the item currently being edited (with its array
     // index, needed to route the save through the view-model's index-based API).
     @State private var editingItem: EditingItem?
+    // New-item flow (FAB): presents the Item Details popover in editable-name
+    // mode. Nothing is created until Save — Cancel creates nothing.
+    @State private var creatingItem = false
 
     var body: some View {
         if let list = viewModel.lists.first(where: { $0.id == listId }) {
@@ -420,7 +423,7 @@ private struct ListDetailContent: View {
                 // never covers the row being typed (mirrors TasksView).
                 .overlay(alignment: .bottomTrailing) {
                     Button {
-                        startDraft()
+                        creatingItem = true
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -450,6 +453,28 @@ private struct ListDetailContent: View {
                     onDelete: {
                         Haptics.destructive()
                         Task { await viewModel.removeItem(from: list, at: editing.index) }
+                    }
+                )
+            }
+            .sheet(isPresented: $creatingItem) {
+                // New-item mode: editable name + link. Creation is deferred to
+                // Save so Cancel leaves no orphan blank item. addItem inserts at
+                // index 0, so a supplied URL is applied to index 0 right after.
+                ItemDetailsSheet(
+                    itemName: "",
+                    initialURL: "",
+                    onSave: { _ in },
+                    onDelete: {},
+                    nameEditable: true,
+                    onCreate: { name, url in
+                        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmedName.isEmpty else { return }
+                        Task {
+                            await viewModel.addItem(to: list, text: trimmedName)
+                            if !url.isEmpty {
+                                await viewModel.setItemURL(in: list, at: 0, to: url)
+                            }
+                        }
                     }
                 )
             }
@@ -736,11 +761,25 @@ private struct ItemDetailsSheet: View {
     let initialURL: String
     let onSave: (String) -> Void
     let onDelete: () -> Void
+    /// New-item mode: the name becomes an editable text field and Save routes
+    /// through `onCreate(name, url)` instead of `onSave(url)`. Defaults to false
+    /// so the existing (edit-an-existing-item) caller is unchanged.
+    var nameEditable: Bool = false
+    /// Called on Save in new-item mode with the entered (name, url). Nil for the
+    /// existing-item path, which keeps using `onSave`.
+    var onCreate: ((String, String) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @State private var nameText: String = ""
     @State private var urlText: String = ""
     @State private var showingDeleteConfirmation = false
+
+    /// Save is only blocked in new-item mode with an empty name. Existing-item
+    /// edits can always save (URL may legitimately be cleared).
+    private var canSave: Bool {
+        !nameEditable || !nameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// The current field value coerced into a URL (bare host → https). `nil`
     /// when empty, so the Open button stays hidden. Mirrors TaskEditorSheet.
@@ -759,13 +798,23 @@ private struct ItemDetailsSheet: View {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             Text("Item").eyebrow()
-                            Text(itemName)
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.ink)
-                                .padding(Space.md)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                                .paperBorder(Tokens.border, radius: Radius.md)
+                            if nameEditable {
+                                TextField("Type item name…", text: $nameText)
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.ink)
+                                    .padding(Space.md)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                    .paperBorder(Tokens.border, radius: Radius.md)
+                            } else {
+                                Text(itemName)
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.ink)
+                                    .padding(Space.md)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                    .paperBorder(Tokens.border, radius: Radius.md)
+                            }
                         }
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             Text("Link (URL)").eyebrow()
@@ -799,17 +848,20 @@ private struct ItemDetailsSheet: View {
                         // Canonical destructive action, matching the itinerary
                         // item editor. Confirmation dialog before the delete;
                         // routes through the same removeItem path the row swipe /
-                        // context menu uses.
-                        DeleteRowButton(title: "Delete item") {
-                            showingDeleteConfirmation = true
+                        // context menu uses. Hidden in new-item mode — there's
+                        // nothing to delete until Save creates the item.
+                        if !nameEditable {
+                            DeleteRowButton(title: "Delete item") {
+                                showingDeleteConfirmation = true
+                            }
+                            .padding(.top, Space.sm)
                         }
-                        .padding(.top, Space.sm)
                     }
                     .padding(Space.lg)
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
-            .navigationTitle("Item details")
+            .navigationTitle(nameEditable ? "New item" : "Item details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -817,10 +869,16 @@ private struct ItemDetailsSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        onSave(urlText.trimmingCharacters(in: .whitespacesAndNewlines))
+                        let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if nameEditable {
+                            onCreate?(nameText.trimmingCharacters(in: .whitespacesAndNewlines), url)
+                        } else {
+                            onSave(url)
+                        }
                         dismiss()
                     }
-                    .foregroundStyle(Tokens.ink)
+                    .foregroundStyle(canSave ? Tokens.ink : Tokens.muted)
+                    .disabled(!canSave)
                 }
             }
             .confirmationDialog(
@@ -836,7 +894,7 @@ private struct ItemDetailsSheet: View {
             } message: {
                 Text("This can't be undone.")
             }
-            .onAppear { urlText = initialURL }
+            .onAppear { urlText = initialURL; nameText = itemName }
         }
     }
 }
