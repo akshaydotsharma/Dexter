@@ -413,6 +413,23 @@ private struct ListDetailContent: View {
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
                 .scrollDismissesKeyboard(.interactively)
+                // Floating "+" FAB, matching the app-wide root FAB. Scoped to the
+                // List (not the outer VStack) so its bottom edge sits right at the
+                // top of the docked addItemBar — it floats just above the bar with
+                // no hardcoded offsets. Hidden while an inline draft is active so it
+                // never covers the row being typed (mirrors TasksView).
+                .overlay(alignment: .bottomTrailing) {
+                    Button {
+                        startDraft()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+                    .padding(.trailing, 22)
+                    .padding(.bottom, Space.sm)
+                    .opacity(draftActive ? 0 : 1)
+                    .animation(.easeOut(duration: 0.15), value: draftActive)
+                }
 
                 addItemBar(list: list)
                     // Tapping the addItemBar commits any in-progress edit: draftFocused = false
