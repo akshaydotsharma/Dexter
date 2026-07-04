@@ -279,12 +279,17 @@ enum ToolDefinitions {
             ]),
             "kind": .object([
                 "type": .string("string"),
-                "enum": .array([.string("stay"), .string("activity"), .string("place"), .string("restaurant")]),
-                "description": .string("Category of the itinerary item.")
+                "enum": .array([.string("stay"), .string("transport"), .string("activity"), .string("place"), .string("restaurant")]),
+                "description": .string("Category of the itinerary item. Use 'transport' for any way of getting between places (a flight, train, bus, ferry, or car transfer) and set the 'mode' field. Use 'activity' for tours, attractions, and events.")
+            ]),
+            "mode": .object([
+                "type": .string("string"),
+                "enum": .array([.string("flight"), .string("train"), .string("car"), .string("bus"), .string("ferry"), .string("other")]),
+                "description": .string("TRANSPORT ONLY: the mode of transport. Set this whenever kind is 'transport' (a flight -> 'flight', a train -> 'train', a car/taxi/private transfer -> 'car', a coach/bus -> 'bus', a ferry/boat -> 'ferry', anything else -> 'other'). Omit for non-transport kinds.")
             ]),
             "title": .object([
                 "type": .string("string"),
-                "description": .string("Short title (e.g., 'Hotel Roma', 'Vatican tour'). Required.")
+                "description": .string("Short title (e.g., 'Hotel Roma', 'Flight BA123 LHR->FCO', 'Vatican tour'). Required.")
             ]),
             "notes": .object([
                 "type": .string("string"),
@@ -296,7 +301,7 @@ enum ToolDefinitions {
             ]),
             "arrival_time": .object([
                 "type": .string("string"),
-                "description": .string("ACTIVITY ONLY, OPTIONAL: the arrival / landing / end time for a timed transport activity (a flight's landing, a train's arrival) as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T22:35:00+01:00). The DATE portion should match day_date. Set this together with start_time (departure) whenever the booking states an arrival time for a flight/train/bus/ferry/transfer; otherwise omit. Not for stays (use end_time), places, or restaurants.")
+                "description": .string("TRANSPORT / ACTIVITY ONLY, OPTIONAL: the arrival / landing / end time (a flight's landing, a train's arrival) as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T22:35:00+01:00). The DATE portion should match day_date. Set this together with start_time (departure) whenever the booking states an arrival time for a flight/train/bus/ferry/transfer; otherwise omit. Not for stays (use end_time), places, or restaurants.")
             ]),
             "end_date": .object([
                 "type": .string("string"),
@@ -346,7 +351,7 @@ enum ToolDefinitions {
 
     private static let addItineraryItem = AnthropicTool(
         name: "add_itinerary_item",
-        description: "Add one or more day-by-day items (stays, activities, places, restaurants) to an EXISTING trip. The LLM should pick trip_id from the EXISTING TRIPS context block; reject ambiguity by asking which trip the user means rather than guessing. Use this for multi-item adds in a single call.",
+        description: "Add one or more day-by-day items (stays, transport, activities, places, restaurants) to an EXISTING trip. The LLM should pick trip_id from the EXISTING TRIPS context block; reject ambiguity by asking which trip the user means rather than guessing. Use this for multi-item adds in a single call.",
         input_schema: object(
             properties: [
                 "trip_id": string("The UUID of the existing trip to add items to (from EXISTING TRIPS context)."),
@@ -387,11 +392,12 @@ enum ToolDefinitions {
             properties: [
                 "id": string("The UUID of the existing itinerary item to edit (from EXISTING TRIPS context)."),
                 "day_date": string("New day for this item in ISO 8601. Use empty string to keep unchanged."),
-                "kind": string("New kind. Must be one of: stay, activity, place, restaurant. Use empty string to keep unchanged."),
+                "kind": string("New kind. Must be one of: stay, transport, activity, place, restaurant. Use empty string to keep unchanged."),
+                "mode": string("TRANSPORT ONLY: new transport mode, one of flight, train, car, bus, ferry, other. Use empty string to keep unchanged. Ignored for non-transport kinds."),
                 "title": string("New title. Use empty string to keep unchanged."),
                 "notes": string("New notes. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "start_time": string("New start time as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T19:00:00-04:00). The date portion should match day_date. Use empty string to keep unchanged, or the literal \"null\" to clear (make the item untimed)."),
-                "arrival_time": string("ACTIVITY ONLY: new arrival / landing / end time (for a flight or train) as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T22:35:00+01:00). The date portion should match day_date. Set together with start_time. Use empty string to keep unchanged, or the literal \"null\" to clear. Ignored for non-activity kinds."),
+                "arrival_time": string("TRANSPORT / ACTIVITY ONLY: new arrival / landing / end time (for a flight or train) as a full ISO 8601 datetime with timezone (e.g., 2026-06-14T22:35:00+01:00). The date portion should match day_date. Set together with start_time. Use empty string to keep unchanged, or the literal \"null\" to clear. Ignored for other kinds."),
                 "end_date": string("STAY ONLY: new check-out date in ISO 8601 (e.g., 2026-06-17). Must be > day_date. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "end_time": string("STAY ONLY: new check-out time as a full ISO 8601 datetime with timezone (e.g., 2026-06-17T11:00:00-04:00). The date portion should match end_date. Use empty string to keep unchanged, or the literal \"null\" to clear."),
                 "address": string("New postal address / location text for the location (e.g. hotel or restaurant address). The device builds the map link from this automatically. Use empty string to keep unchanged, or the literal \"null\" to clear."),
@@ -414,7 +420,7 @@ enum ToolDefinitions {
 
     /// Log a new expense. SGD is the home currency; the conversion happens
     /// on-device after the tool call lands, so the LLM never needs to know
-    /// FX rates. Category is one of the 12 canonical raw values — the model
+    /// FX rates. Category is one of the 13 canonical raw values — the model
     /// picks based on merchant + description.
     private static let addExpense = AnthropicTool(
         name: "add_expense",
@@ -423,7 +429,7 @@ enum ToolDefinitions {
             properties: [
                 "id": string("UUID string for the new expense. Generate a fresh one for every call (any valid lowercase UUID, e.g., 9b3a8e1c-2f6f-4a3b-9d2c-7e0a1b4c5d6e)."),
                 "date": string("ISO 8601 date the spend happened (e.g., 2026-05-22 or 2026-05-22T18:30:00Z). Use today's date if the user did not specify a date."),
-                "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit based on merchant and description."),
+                "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, rent, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit based on merchant and description (rent/lease payments -> rent)."),
                 "merchant": string("Merchant or vendor name (e.g., \"Starbucks\", \"FairPrice\"). Use empty string if unknown."),
                 "description": string("Short description of the expense (e.g., \"lunch with Sarah\", \"weekly groceries\"). Use empty string if none."),
                 "original_amount": .object([
@@ -461,7 +467,7 @@ enum ToolDefinitions {
                     "description": .string("The monthly charge amount in the original currency. Must be greater than zero.")
                 ]),
                 "currency": string("ISO 4217 currency code (e.g. \"SGD\", \"USD\", \"EUR\"). Default to \"SGD\" if the user did not specify a currency."),
-                "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit (rent/insurance -> bills_and_utilities; streaming/software -> subscriptions)."),
+                "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, rent, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit (rent/lease -> rent; insurance/utilities -> bills_and_utilities; streaming/software -> subscriptions)."),
                 "merchant": string("Merchant or payee name (e.g. \"Landlord\", \"Netflix\"). Use empty string if unknown."),
                 "description": string("Short description of the recurring charge (e.g. \"monthly rent\", \"car insurance\"). Use empty string if none."),
                 "payment_method": string("Optional payment method (e.g. \"GIRO\", \"Visa **1234\"). Use empty string if unknown."),
@@ -486,7 +492,7 @@ enum ToolDefinitions {
             properties: [
                 "after_date": string("OPTIONAL ISO 8601 date (e.g. 2026-06-01). Delete only expenses dated STRICTLY AFTER this day. Omit or use empty string for no lower bound."),
                 "before_date": string("OPTIONAL ISO 8601 date. Delete only expenses dated STRICTLY BEFORE this day. Omit or use empty string for no upper bound."),
-                "category": string("OPTIONAL category to restrict the clear to. One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Omit or use empty string to clear across all categories."),
+                "category": string("OPTIONAL category to restrict the clear to. One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, rent, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Omit or use empty string to clear across all categories."),
                 "confirm_all": bool("Set true ONLY to confirm an unfiltered clear of ALL expenses, and ONLY after the user has explicitly confirmed they want to erase everything. Ignored when any filter is present. Defaults to false.")
             ],
             required: []

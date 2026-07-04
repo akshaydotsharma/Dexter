@@ -114,6 +114,10 @@ enum DataArchive {
         let tripClientUUID: UUID
         let dayDate: Date
         let kind: String
+        /// `TransportMode.rawValue` for a `.transport` item, empty otherwise.
+        /// Optional in the archive so exports written before this field existed
+        /// still decode (missing key -> nil -> "" on import).
+        let transportMode: String?
         let title: String
         let notes: String
         let startTime: Date?

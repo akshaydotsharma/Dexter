@@ -762,7 +762,7 @@ private struct TripTimelineRow: View {
                 .truncationMode(.tail)
 
             HStack(spacing: Space.sm) {
-                TripKindChip(kind: kind)
+                TripKindChip(kind: kind, transportMode: item.transportModeEnum)
                 mapsChip(for: item)
                 Spacer(minLength: 0)
             }
@@ -829,13 +829,27 @@ private struct TripTimelineRow: View {
 /// display-only: surface2 background, accent-tinted icon, soft ink label.
 private struct TripKindChip: View {
     let kind: ItineraryKind
+    /// Set for `.transport` items so the chip shows the per-mode icon/label
+    /// (plane / tram / car …) instead of the generic transport symbol.
+    var transportMode: TransportMode? = nil
+
+    /// For a transport item with a known mode, use the mode's icon/label;
+    /// otherwise fall back to the kind's own icon/label.
+    private var icon: String {
+        if kind == .transport, let mode = transportMode { return mode.icon }
+        return kind.icon
+    }
+    private var label: String {
+        if kind == .transport, let mode = transportMode { return mode.displayName }
+        return kind.displayName
+    }
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: kind.icon)
+            Image(systemName: icon)
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(Tokens.accent(for: .itineraries))
-            Text(kind.displayName.uppercased())
+            Text(label.uppercased())
                 .font(.edEyebrow)
                 .textCase(.uppercase)
                 .tracking(1.4)
@@ -867,6 +881,9 @@ struct ItineraryItemEditorSheet: View {
 
     @State private var title: String = ""
     @State private var kind: ItineraryKind = .activity
+    /// Transport-only: the mode (flight/train/car/…). Only persisted when
+    /// `kind == .transport`; ignored otherwise.
+    @State private var transportMode: TransportMode = .flight
     /// For non-stay kinds: the item's day (with time when `hasTime` is on).
     /// For stay: the check-in date+time.
     @State private var dayDate: Date = Calendar.current.startOfDay(for: Date())
@@ -910,14 +927,18 @@ struct ItineraryItemEditorSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         kindField
+                        if kind == .transport {
+                            modeField
+                        }
                         titleField
                         primaryDateField
                         if kind == .stay {
                             endDateField
                         }
-                        // Arrival is activity-only and only meaningful once a
-                        // departure time is set (no lone arrival with no start).
-                        if kind == .activity && hasTime {
+                        // Arrival is meaningful for a timed activity or transport
+                        // leg (a flight landing, a train arrival) once a departure
+                        // time is set — no lone arrival with no start.
+                        if (kind == .activity || kind == .transport) && hasTime {
                             arrivalTimeField
                         }
                         notesField
@@ -1039,6 +1060,24 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
+    /// Transport-only mode picker (flight / train / car / …). Rendered right
+    /// under Kind when `kind == .transport`. Uses a horizontal scroll because
+    /// there are more modes than fit a single fixed row on a phone.
+    private var modeField: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            Text("Mode").eyebrow()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Space.sm) {
+                    ForEach(TransportMode.allCases) { option in
+                        TransportModePickerChip(mode: option, isSelected: option == transportMode) {
+                            transportMode = option
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private var titleField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Title").eyebrow()
@@ -1131,10 +1170,11 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
-    /// Activity-only arrival-time field. Arrival shares the item's day, so the
-    /// picker shows only the time. A toggle mirrors the "Include time" pattern;
-    /// the picker appears only when arrival is on, so it never surfaces a stray
-    /// 12:00 AM. Gated to `.activity` with a departure present by the caller.
+    /// Arrival-time field for a timed activity or transport leg. Arrival shares
+    /// the item's day, so the picker shows only the time. A toggle mirrors the
+    /// "Include time" pattern; the picker appears only when arrival is on, so it
+    /// never surfaces a stray 12:00 AM. Gated to `.activity`/`.transport` with a
+    /// departure present by the caller.
     private var arrivalTimeField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Arrival time").eyebrow()
@@ -1435,6 +1475,7 @@ struct ItineraryItemEditorSheet: View {
     private func placeholder(for kind: ItineraryKind) -> String {
         switch kind {
         case .stay:       return "e.g. Hanoi Hilton"
+        case .transport:  return "e.g. Flight SQ424 SIN→DXB"
         case .activity:   return "e.g. Halong Bay tour"
         case .place:      return "e.g. Hội An old town"
         case .restaurant: return "e.g. Bún chả Hương Liên"
@@ -1483,6 +1524,7 @@ struct ItineraryItemEditorSheet: View {
             if let existing = try? modelContext.fetch(descriptor).first {
                 title = existing.title
                 kind = existing.kindEnum
+                transportMode = existing.transportModeEnum ?? .flight
                 dayDate = existing.dayDate
                 notes = existing.notes
                 address = existing.address
@@ -1539,11 +1581,14 @@ struct ItineraryItemEditorSheet: View {
         // unambiguous.
         let startTimeValue: Date? = hasTime ? utcWallClock(onDay: dayDate, timeFrom: dayDate) : nil
 
-        // Activity-only arrival time, stored UTC wall-clock on the item's day.
-        // Only when the kind is activity, a departure is set, and arrival is on.
-        let arrivalTimeValue: Date? = (kind == .activity && hasTime && hasArrival)
+        // Arrival time (activity or transport), stored UTC wall-clock on the
+        // item's day. Only when a departure is set and arrival is on.
+        let arrivalTimeValue: Date? = ((kind == .activity || kind == .transport) && hasTime && hasArrival)
             ? utcWallClock(onDay: dayDate, timeFrom: arrivalTime)
             : nil
+
+        // Transport-only mode; every other kind clears it.
+        let transportModeValue: TransportMode? = kind == .transport ? transportMode : nil
 
         // Stay-only end fields. Other kinds clear both.
         let endDateValue: Date? = kind == .stay ? cal.startOfDay(for: endDate) : nil
@@ -1556,6 +1601,7 @@ struct ItineraryItemEditorSheet: View {
                 tripUUID: trip.clientUUID,
                 dayDate: normalisedDay,
                 kind: kind,
+                transportMode: transportModeValue,
                 title: cleanTitle,
                 notes: cleanNotes,
                 startTime: startTimeValue,
@@ -1574,6 +1620,7 @@ struct ItineraryItemEditorSheet: View {
             if let existing = try? modelContext.fetch(descriptor).first {
                 existing.title = cleanTitle
                 existing.kindEnum = kind
+                existing.transportModeEnum = transportModeValue
                 if cal.startOfDay(for: existing.dayDate) != normalisedDay {
                     // Day moved: re-sortOrder so the item lands at the end of
                     // the new day instead of slotting into the old position.
@@ -1685,6 +1732,44 @@ private struct KindPickerChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(kind.displayName)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+// MARK: - Transport mode picker chip (editor sheet)
+
+/// Selectable chip for a transport item's mode, shown in the editor's Mode row
+/// (a horizontal scroll). Sizes to its content — unlike `KindPickerChip`'s
+/// equal-width layout — so a scrollable row of modes reads naturally.
+private struct TransportModePickerChip: View {
+    let mode: TransportMode
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Image(systemName: mode.icon)
+                    .font(.system(size: 12, weight: .regular))
+                Text(mode.displayName)
+                    .font(.edFootnote)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, Space.md)
+            .padding(.vertical, 6)
+            .foregroundStyle(isSelected ? Tokens.accentFg : Tokens.inkSoft)
+            .background(
+                isSelected ? Tokens.accent(for: .itineraries) : Tokens.surface,
+                in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .stroke(isSelected ? Color.clear : Tokens.border, lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(mode.displayName)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

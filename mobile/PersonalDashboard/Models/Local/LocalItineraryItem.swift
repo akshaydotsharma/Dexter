@@ -7,6 +7,7 @@ import SwiftData
 /// added without a schema change.
 enum ItineraryKind: String, CaseIterable, Identifiable, Hashable {
     case stay
+    case transport
     case activity
     case place
     case restaurant
@@ -16,19 +17,62 @@ enum ItineraryKind: String, CaseIterable, Identifiable, Hashable {
     var displayName: String {
         switch self {
         case .stay:       return "Stay"
+        case .transport:  return "Transport"
         case .activity:   return "Activity"
         case .place:      return "Place"
         case .restaurant: return "Restaurant"
         }
     }
 
-    /// SF Symbol used in row icons and the kind picker chips.
+    /// SF Symbol used in row icons and the kind picker chips. For `.transport`
+    /// this is only a generic fallback — the timeline and picker prefer the
+    /// per-mode icon from `TransportMode.icon` when a mode is set on the item.
     var icon: String {
         switch self {
         case .stay:       return "bed.double"
+        case .transport:  return "airplane"
         case .activity:   return "figure.walk"
         case .place:      return "mappin.and.ellipse"
         case .restaurant: return "fork.knife"
+        }
+    }
+}
+
+/// Mode of a `.transport` itinerary item. Stored on
+/// `LocalItineraryItem.transportMode` as the `rawValue` (String) so it needs no
+/// custom-codable migration, mirroring `ItineraryKind`. Only meaningful when
+/// `kind == .transport`; other kinds leave it empty. Drives the per-mode icon
+/// and label shown on the timeline row and the mode picker in the editor.
+enum TransportMode: String, CaseIterable, Identifiable, Hashable {
+    case flight
+    case train
+    case car
+    case bus
+    case ferry
+    case other
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .flight: return "Flight"
+        case .train:  return "Train"
+        case .car:    return "Car"
+        case .bus:    return "Bus"
+        case .ferry:  return "Ferry"
+        case .other:  return "Transport"
+        }
+    }
+
+    /// SF Symbol shown on the timeline row and mode picker chips.
+    var icon: String {
+        switch self {
+        case .flight: return "airplane"
+        case .train:  return "tram.fill"
+        case .car:    return "car.fill"
+        case .bus:    return "bus.fill"
+        case .ferry:  return "ferry.fill"
+        case .other:  return "arrow.left.arrow.right"
         }
     }
 }
@@ -50,6 +94,12 @@ final class LocalItineraryItem {
     /// `ItineraryKind.rawValue`. Stored as a String to keep SwiftData happy.
     /// Read via `kindEnum` for type-safe access.
     var kind: String
+
+    /// `TransportMode.rawValue` for a `.transport` item (flight/train/car/…),
+    /// empty for every other kind. Stored as a String and read via
+    /// `transportModeEnum`. Additive with a "" default so adding it to an
+    /// existing install is a safe lightweight migration; NEVER remove or rename.
+    var transportMode: String = ""
 
     /// Short title (e.g. "Hanoi Hotel", "Halong Bay tour"). Required.
     var title: String
@@ -82,7 +132,8 @@ final class LocalItineraryItem {
     /// `startTime` — the stored `Date`'s UTC hour:minute equals the booking's
     /// stated local time, so the timeline shows "10:35 → 15:35" without drifting
     /// when the device timezone changes. Only meaningful when `startTime` is
-    /// also set. `nil` for untimed items and for kinds other than `.activity`.
+    /// also set. `nil` for untimed items and for kinds other than `.activity`
+    /// or `.transport` (a flight/train arrival is a transport arrival).
     /// Distinct from `endTime`, which is the stay-only check-out time. Additive
     /// with a `nil` default so adding it to an existing install is a safe
     /// lightweight migration (no data loss); NEVER remove or rename it.
@@ -171,6 +222,7 @@ final class LocalItineraryItem {
         tripUUID: UUID,
         dayDate: Date,
         kind: ItineraryKind,
+        transportMode: TransportMode? = nil,
         title: String,
         notes: String = "",
         startTime: Date? = nil,
@@ -194,6 +246,7 @@ final class LocalItineraryItem {
         self.tripUUID = tripUUID
         self.dayDate = dayDate
         self.kind = kind.rawValue
+        self.transportMode = transportMode?.rawValue ?? ""
         self.title = title
         self.notes = notes
         self.startTime = startTime
@@ -220,6 +273,15 @@ final class LocalItineraryItem {
     var kindEnum: ItineraryKind {
         get { ItineraryKind(rawValue: kind) ?? .activity }
         set { kind = newValue.rawValue }
+    }
+
+    /// Type-safe accessor for a `.transport` item's mode, backed by the stored
+    /// raw `transportMode` string. `nil` when unset or unrecognised (e.g. a
+    /// non-transport item, or an older row). The timeline row and picker fall
+    /// back to `kindEnum.icon`/`.displayName` when this is `nil`.
+    var transportModeEnum: TransportMode? {
+        get { TransportMode(rawValue: transportMode) }
+        set { transportMode = newValue?.rawValue ?? "" }
     }
 
     /// `true` when an explicit maps link has been stored. Distinct from

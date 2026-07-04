@@ -61,6 +61,50 @@ final class SwiftDataStore {
         // Runs once at first launch after the UTC-wall-clock change (#168),
         // before any itinerary UI can query. Guarded internally.
         migrateItineraryTimesToUTC()
+        // One-time retag of pre-existing transport-shaped activities to the new
+        // transport kind (#238). Guarded internally.
+        migrateActivitiesToTransport()
+    }
+
+    /// One-time backfill (#238): before the `transport` itinerary kind existed,
+    /// flights and trains were stored as `.activity`. This pass retags the ones
+    /// that carry a transport signal (a decoded boarding pass, a flight number,
+    /// or an origin→destination route — i.e. `TicketMeta.isTransport`) to
+    /// `.transport` with mode `.flight`.
+    ///
+    /// Heuristic by design: the `isTransport` signal is flight-shaped (BCBP /
+    /// flight number / airport route), so backfilled rows default to `.flight`.
+    /// A ticketless car transfer with no route leaves no signal and is left as
+    /// an activity; the user can switch it in the editor. New imports classify
+    /// correctly at the source, so this only touches legacy rows.
+    ///
+    /// Gated by a `UserDefaults` flag so it runs exactly once. Wrapped in
+    /// do/catch — never crashes launch; a failure leaves the flag unset to retry.
+    private func migrateActivitiesToTransport() {
+        let flagKey = "activitiesToTransportMigrated_v1"
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: flagKey) else { return }
+
+        let ctx = container.mainContext
+        do {
+            let items = try ctx.fetch(FetchDescriptor<LocalItineraryItem>())
+            var didChange = false
+            for item in items where item.kindEnum == .activity && (item.ticketMeta?.isTransport ?? false) {
+                item.kindEnum = .transport
+                if item.transportModeEnum == nil {
+                    item.transportModeEnum = .flight
+                }
+                item.updatedAt = Date()
+                didChange = true
+            }
+            if didChange {
+                try ctx.save()
+            }
+            defaults.set(true, forKey: flagKey)
+        } catch {
+            // Leave the flag unset so a future launch can retry. Never crash.
+            NSLog("SwiftDataStore: activities→transport migration failed: %@", String(describing: error))
+        }
     }
 
     /// One-time migration (#168): convert existing itinerary item times from

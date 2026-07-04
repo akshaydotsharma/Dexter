@@ -132,7 +132,13 @@ extension ChatDraft {
             if items.count == 1, let only = items.first?.objectValue {
                 let title = only["title"]?.stringValue ?? "Untitled"
                 let kindRaw = (only["kind"]?.stringValue ?? "").lowercased()
-                let kind = ItineraryKind(rawValue: kindRaw)?.displayName ?? "Item"
+                let kindEnum = ItineraryKind(rawValue: kindRaw)
+                // For transport, prefer the specific mode label (Flight / Train)
+                // over the generic "Transport", matching the timeline chip.
+                let modeLabel = (kindEnum == .transport)
+                    ? TransportMode(rawValue: (only["mode"]?.stringValue ?? "").lowercased())?.displayName
+                    : nil
+                let kind = modeLabel ?? kindEnum?.displayName ?? "Item"
                 // We don't know Day N without the trip context; show date only.
                 let day = (only["day_date"]?.stringValue).flatMap(Self.parseAnyDate)
                 let dayDisplay = day.map { Self.shortDayMonth.string(from: $0) } ?? ""

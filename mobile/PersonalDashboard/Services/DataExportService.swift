@@ -191,6 +191,7 @@ final class DataExportService {
             tripClientUUID: item.tripUUID,
             dayDate: item.dayDate,
             kind: item.kind,
+            transportMode: item.transportMode,
             title: item.title,
             notes: item.notes,
             startTime: item.startTime,
