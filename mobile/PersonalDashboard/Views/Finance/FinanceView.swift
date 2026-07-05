@@ -459,7 +459,7 @@ struct FinanceView: View {
                 )
                 .padding(.horizontal, Space.lg)
 
-                FinanceFilterBar(state: $filterState)
+                FinanceFilterBar(state: $filterState, dateConstrains: dateConstrains)
 
                 // In-flight capture / import jobs (#186). Rendered as a status
                 // banner between the filter chips and the search field — NOT
@@ -637,7 +637,11 @@ struct FinanceView: View {
                 filterState.sources.removeAll()
                 filterState.people.removeAll()
                 filterState.events.removeAll()
+                filterState.importSources.removeAll()
                 filterState.datePreset = .thisMonth
+                // Return to the default This Month landing view (#245): drop the
+                // explicit-date flag so the date goes back to being a soft view.
+                filterState.dateExplicitlySet = false
                 searchText = ""
             }
             .font(.edFootnote)
@@ -655,6 +659,15 @@ struct FinanceView: View {
     private var resolvedFilter: ExpenseFilter {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return filterState.resolvedFilter(searchText: trimmed.isEmpty ? nil : trimmed)
+    }
+
+    /// Whether the date range is actually constraining the list right now (#245),
+    /// factoring in the free-text search that lives on the `.searchable` binding.
+    /// Passed to `FinanceFilterBar` so the chip row de-highlights when the date
+    /// has been soft-dropped in favour of another filter.
+    private var dateConstrains: Bool {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return filterState.dateConstrains(searchText: trimmed.isEmpty ? nil : trimmed)
     }
 
     private var filteredExpenses: [LocalExpense] {
@@ -679,6 +692,11 @@ struct FinanceView: View {
         }
         if let events = filter.events, !events.isEmpty {
             guard let eventUUID = expense.eventUUID, events.contains(eventUUID) else { return false }
+        }
+        // "Imported from" dimension (#245): OR within the selected buckets. Kept
+        // identical to the mirrored copy in `ExpenseService.matches`.
+        if let importSources = filter.importSources, !importSources.isEmpty {
+            if !importSources.contains(where: { $0.matches(expense) }) { return false }
         }
         if let search = filter.searchText?.lowercased(), !search.isEmpty {
             let merchant = expense.merchant?.lowercased() ?? ""
