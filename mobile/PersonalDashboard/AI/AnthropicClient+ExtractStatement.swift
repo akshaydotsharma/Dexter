@@ -20,6 +20,15 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
     let type: LineType?
     let category: String?      // ExpenseCategory.rawValue
 
+    /// Optional itemized / free-text description for the line. The STATEMENT
+    /// prompt never emits it (statement rows have no per-line detail), so it
+    /// stays nil there and statements are unaffected. The PHOTO / receipt
+    /// prompt (#247) uses it to carry the same short line-item summary the
+    /// single-receipt path produces, so a receipt imported via the multi-expense
+    /// path keeps its description. `decodeIfPresent` + a nil default keeps every
+    /// existing decode and call site unchanged.
+    let description: String?
+
     /// The transaction description EXACTLY as printed on the statement,
     /// verbatim (including any trailing location / country tokens and reference
     /// codes), with NO cleanup or reformatting (#208). Used ONLY as the stable
@@ -85,6 +94,7 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
         case type
         case category
         case descriptor
+        case description
     }
 
     /// Lenient decode: an unrecognised `type` string decodes to nil rather than
@@ -100,11 +110,12 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
         type = (try? c.decodeIfPresent(LineType.self, forKey: .type)) ?? nil
         category = try c.decodeIfPresent(String.self, forKey: .category)
         descriptor = try c.decodeIfPresent(String.self, forKey: .descriptor)
+        description = try c.decodeIfPresent(String.self, forKey: .description)
     }
 
-    /// Direct memberwise init for tests. `descriptor` defaults to nil so
-    /// existing call sites that don't exercise the dedup key stay unchanged.
-    init(merchant: String?, date: String?, amount: Double?, currency: String?, type: LineType?, category: String?, descriptor: String? = nil) {
+    /// Direct memberwise init for tests. `descriptor` and `description` default
+    /// to nil so existing call sites that don't exercise them stay unchanged.
+    init(merchant: String?, date: String?, amount: Double?, currency: String?, type: LineType?, category: String?, descriptor: String? = nil, description: String? = nil) {
         self.merchant = merchant
         self.date = date
         self.amount = amount
@@ -112,6 +123,7 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
         self.type = type
         self.category = category
         self.descriptor = descriptor
+        self.description = description
     }
 }
 
@@ -345,7 +357,11 @@ extension AnthropicClient {
 
     // MARK: - Core
 
-    private func runStatementExtraction(
+    /// Internal (not `private`) so the image multi-expense extractor
+    /// (`extractExpenses(imageData:mediaType:)`, #247) can reuse the exact same
+    /// object-wrapper parsing, bare-array fallback, truncated-array recovery,
+    /// 120s timeout, and lenient per-line decode. Behaviour is unchanged.
+    func runStatementExtraction(
         content: [AnthropicJSONValue],
         extraHeaders: [String: String]
     ) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
@@ -456,7 +472,10 @@ extension AnthropicClient {
     /// Enum raw values advertised to the model, so it returns categories that
     /// map straight onto `LocalExpense.category`. Kept in sync with
     /// `ExpenseCategory` the same way the `add_expense` tool schema is.
-    private static var categoryRawList: String {
+    /// Internal (not `private`) so the photo multi-expense prompt in
+    /// `AnthropicClient+ExtractExpense.swift` reuses the same raw-value list
+    /// rather than duplicating it (#247).
+    static var categoryRawList: String {
         ExpenseCategory.allCases
             .map { $0.rawValue }
             .joined(separator: ", ")
