@@ -24,6 +24,38 @@ struct ExpenseTag: Equatable {
     let name: String
 }
 
+/// Provenance bucket an expense was imported from, used by the "Imported from"
+/// filter dimension (#245). Complements — does NOT replace — the raw
+/// `ExpenseSource` (`sources`) filter: this answers "where did this row come
+/// from" at the import-batch level. `manual` and `receipts` are fixed buckets;
+/// statements are dynamic (one token per distinct `statementLabel`), so a
+/// statement selection carries its label as an associated value.
+enum ImportSourceSelection: Hashable {
+    /// Not an import: `source != .receipt` AND `statementLabel` is empty. Covers
+    /// manual / text / voice / photo / recurring, plus any non-statement `.pdf`
+    /// edge case with no attribution label.
+    case manual
+    /// `source == .receipt` — scanned + emailed receipts.
+    case receipts
+    /// A single statement import, matched by its `statementLabel`.
+    case statement(label: String)
+
+    /// Whether `expense` falls into this bucket. The three bucket kinds are
+    /// mutually exclusive by construction, so an expense matches at most one.
+    /// Statement labels are compared trimmed so display and match stay in step.
+    func matches(_ expense: LocalExpense) -> Bool {
+        switch self {
+        case .manual:
+            return expense.source != ExpenseSource.receipt.rawValue
+                && expense.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .receipts:
+            return expense.source == ExpenseSource.receipt.rawValue
+        case .statement(let label):
+            return expense.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines) == label
+        }
+    }
+}
+
 /// Filter criteria applied by `ExpenseService.expenses(filter:)`. All
 /// fields are optional — nil means "no constraint on this dimension".
 /// Backs both the Finance list and the future analytics surface.
@@ -36,6 +68,10 @@ struct ExpenseFilter: Equatable {
     var people: Set<UUID>?
     /// Event tags to include (#183). Same OR-within-dimension semantics.
     var events: Set<UUID>?
+    /// "Imported from" provenance buckets to include (#245). nil / empty = no
+    /// constraint. Tokens OR within this dimension; the dimension ANDs with the
+    /// rest. Complements `sources` rather than replacing it.
+    var importSources: Set<ImportSourceSelection>?
     var searchText: String?
 
     static let none = ExpenseFilter()
@@ -360,6 +396,11 @@ struct ExpenseService {
         }
         if let events = filter.events, !events.isEmpty {
             guard let eventUUID = expense.eventUUID, events.contains(eventUUID) else { return false }
+        }
+        // "Imported from" dimension (#245): OR within the selected buckets. Kept
+        // identical to the mirrored copy in `FinanceView.matches`.
+        if let importSources = filter.importSources, !importSources.isEmpty {
+            if !importSources.contains(where: { $0.matches(expense) }) { return false }
         }
         if let search = filter.searchText?.trimmedNonEmpty?.lowercased(), !search.isEmpty {
             let merchant = expense.merchant?.lowercased() ?? ""

@@ -84,17 +84,46 @@ struct FinanceFilterState: Equatable {
     /// Person / Event tag filters (#183). Empty = no constraint.
     var people: Set<UUID> = []
     var events: Set<UUID> = []
+    /// "Imported from" provenance filter (#245). Empty = no constraint.
+    var importSources: Set<ImportSourceSelection> = []
+    /// True once the user has tapped any date-preset chip (or committed a custom
+    /// range) this session (#245). Until then the default `.thisMonth` window is
+    /// a SOFT view, not a hard filter: it constrains the landing list but is
+    /// dropped the moment another dimension is active, so picking e.g. an older
+    /// "Imported from" statement doesn't get silently ANDed away by "this month".
+    var dateExplicitlySet: Bool = false
+
+    /// Whether any non-date dimension is currently active (incl. free-text
+    /// search, which lives on the view's `.searchable` binding and is threaded
+    /// in here). Drives the soft-date rule.
+    func hasOtherFilters(searchText: String?) -> Bool {
+        if !categories.isEmpty || !sources.isEmpty || !people.isEmpty
+            || !events.isEmpty || !importSources.isEmpty { return true }
+        if let search = searchText?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !search.isEmpty { return true }
+        return false
+    }
+
+    /// The date range constrains results IFF the user explicitly picked a date,
+    /// OR no other filter is active (the landing view). Otherwise the default
+    /// date window is dropped so the other filter searches all-time.
+    func dateConstrains(searchText: String?) -> Bool {
+        dateExplicitlySet || !hasOtherFilters(searchText: searchText)
+    }
 
     /// Materialise the filter into a concrete `ExpenseFilter` honoured by
     /// the service layer. `searchText` is appended separately by the view
     /// because it lives on a `.searchable` binding.
     func resolvedFilter(searchText: String?) -> ExpenseFilter {
         var filter = ExpenseFilter()
-        filter.dateRange = resolvedDateRange()
+        // Soft default date (#245): only constrain by date when the rule says so.
+        // A nil `dateRange` makes both matchers skip the date check entirely.
+        filter.dateRange = dateConstrains(searchText: searchText) ? resolvedDateRange() : nil
         if !categories.isEmpty { filter.categories = categories }
         if !sources.isEmpty { filter.sources = sources }
         if !people.isEmpty { filter.people = people }
         if !events.isEmpty { filter.events = events }
+        if !importSources.isEmpty { filter.importSources = importSources }
         filter.searchText = searchText
         return filter
     }
@@ -160,6 +189,12 @@ struct FinanceFilterState: Equatable {
 /// an accent dot when any of those non-date filters is active.
 struct FinanceFilterBar: View {
     @Binding var state: FinanceFilterState
+    /// Whether the date range is actually constraining right now (#245). Computed
+    /// by the view from the full filter state incl. free-text search. When false
+    /// (date soft-dropped because another filter is active and no date chip was
+    /// tapped) NO date chip is highlighted, so the row doesn't imply a date
+    /// filter that isn't applied.
+    var dateConstrains: Bool
 
     @State private var customDateSheetVisible: Bool = false
     @State private var moreFiltersSheetVisible: Bool = false
@@ -174,8 +209,14 @@ struct FinanceFilterBar: View {
                         chip(
                             label: preset.displayName,
                             icon: nil,
-                            selected: state.datePreset == preset,
-                            action: { state.datePreset = preset }
+                            // Highlight only when the date is actually applied
+                            // (#245): a soft-dropped default shows no selection.
+                            selected: dateConstrains && state.datePreset == preset,
+                            action: {
+                                state.datePreset = preset
+                                // Any tap makes the date an explicit, hard filter.
+                                state.dateExplicitlySet = true
+                            }
                         )
                     }
 
@@ -185,7 +226,7 @@ struct FinanceFilterBar: View {
                     chip(
                         label: customLabel,
                         icon: "calendar",
-                        selected: state.datePreset.isCustomFamily,
+                        selected: dateConstrains && state.datePreset.isCustomFamily,
                         action: { customDateSheetVisible = true }
                     )
                 }
@@ -200,18 +241,27 @@ struct FinanceFilterBar: View {
             CustomDateRangeSheet(
                 start: $state.customStart,
                 end: $state.customEnd,
-                onApplyCustom: { state.datePreset = .custom },
-                onSelectPreset: { state.datePreset = $0 }
+                onApplyCustom: {
+                    state.datePreset = .custom
+                    state.dateExplicitlySet = true
+                },
+                onSelectPreset: {
+                    state.datePreset = $0
+                    state.dateExplicitlySet = true
+                }
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $moreFiltersSheetVisible) {
             MoreFiltersSheet(
+                datePreset: $state.datePreset,
+                dateExplicitlySet: $state.dateExplicitlySet,
                 categories: $state.categories,
                 sources: $state.sources,
                 people: $state.people,
-                events: $state.events
+                events: $state.events,
+                importSources: $state.importSources
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -245,6 +295,7 @@ struct FinanceFilterBar: View {
     private var hasActiveFilters: Bool {
         !state.categories.isEmpty || !state.sources.isEmpty
             || !state.people.isEmpty || !state.events.isEmpty
+            || !state.importSources.isEmpty
     }
 
     /// Label for the Custom chip: the picked span for `.custom`, the quick
@@ -371,10 +422,16 @@ private struct CustomDateRangeSheet: View {
 /// "Clear" resets all four at once.
 private struct MoreFiltersSheet: View {
     @Environment(\.dismiss) private var dismiss
+    // Date bindings so "Clear" can return to the default This Month landing view
+    // (#245): reset the preset AND drop the explicit-date flag so the date goes
+    // back to being a soft default.
+    @Binding var datePreset: FinanceDateRangePreset
+    @Binding var dateExplicitlySet: Bool
     @Binding var categories: Set<ExpenseCategory>
     @Binding var sources: Set<ExpenseSource>
     @Binding var people: Set<UUID>
     @Binding var events: Set<UUID>
+    @Binding var importSources: Set<ImportSourceSelection>
 
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var allPeople: [LocalPerson]
@@ -382,14 +439,58 @@ private struct MoreFiltersSheet: View {
     @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
     private var allEvents: [LocalEvent]
 
+    // Backing data for the "Imported from" dimension (#245): every expense (to
+    // count rows + reconstruct legacy statement labels) and the durable
+    // per-import records (source of truth for statement labels).
+    @Query private var allExpenses: [LocalExpense]
+
+    @Query(sort: [SortDescriptor(\LocalStatementImport.createdAt, order: .reverse)])
+    private var statementImports: [LocalStatementImport]
+
     // Per-dimension expansion state. Collapsed by default (#211).
     @State private var personExpanded = false
     @State private var eventExpanded = false
     @State private var categoryExpanded = false
     @State private var sourceExpanded = false
+    @State private var importSourceExpanded = false
 
     private var hasActiveFilters: Bool {
-        !categories.isEmpty || !sources.isEmpty || !people.isEmpty || !events.isEmpty
+        !categories.isEmpty || !sources.isEmpty || !people.isEmpty
+            || !events.isEmpty || !importSources.isEmpty
+    }
+
+    /// A distinct statement the user can filter by, plus the count of expenses
+    /// currently attributed to it. Built by unioning the durable
+    /// `LocalStatementImport` records with the distinct non-empty
+    /// `statementLabel`s found across expenses — the same legacy-fallback spirit
+    /// as `ParsedFilesView` (statements imported before the batch model existed
+    /// leave no record but still carry a label on their rows).
+    private struct StatementOption: Identifiable {
+        let label: String
+        let count: Int
+        var id: String { label }
+    }
+
+    private var statementOptions: [StatementOption] {
+        // Count expenses per trimmed, non-empty statement label across the
+        // whole current set (reflects the current expenses, per #245).
+        var counts: [String: Int] = [:]
+        for expense in allExpenses {
+            let label = expense.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty else { continue }
+            counts[label, default: 0] += 1
+        }
+        // Seed the label set from the durable records so a statement with a
+        // record still lists even if all its rows were later deleted (count 0),
+        // then fold in any legacy labels found only on expenses.
+        var labels = Set(counts.keys)
+        for record in statementImports {
+            let label = record.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty { labels.insert(label) }
+        }
+        return labels
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            .map { StatementOption(label: $0, count: counts[$0] ?? 0) }
     }
 
     var body: some View {
@@ -475,6 +576,46 @@ private struct MoreFiltersSheet: View {
                     }
                     .tint(Tokens.accentFinance)
                     .listRowBackground(Tokens.surface)
+
+                    // Imported from — provenance buckets (#245). Sits alongside
+                    // Source: Source is the raw capture channel, this is the
+                    // import batch an expense came from (manual / receipts /
+                    // each statement).
+                    DisclosureGroup(isExpanded: $importSourceExpanded) {
+                        toggleRow(selected: importSources.contains(.manual)) {
+                            toggle(.manual, in: &importSources)
+                        } label: {
+                            Image(systemName: "pencil")
+                                .foregroundStyle(Tokens.accentFinance)
+                                .frame(width: 24)
+                            Text("Manually added")
+                                .foregroundStyle(Tokens.ink)
+                        }
+
+                        toggleRow(selected: importSources.contains(.receipts)) {
+                            toggle(.receipts, in: &importSources)
+                        } label: {
+                            Image(systemName: "doc.text.viewfinder")
+                                .foregroundStyle(Tokens.accentFinance)
+                                .frame(width: 24)
+                            Text("Receipts")
+                                .foregroundStyle(Tokens.ink)
+                        }
+
+                        if !statementOptions.isEmpty {
+                            Text("Statements")
+                                .font(.edFootnote)
+                                .foregroundStyle(Tokens.muted)
+                                .listRowBackground(Tokens.surface)
+                            ForEach(statementOptions) { option in
+                                statementRow(option)
+                            }
+                        }
+                    } label: {
+                        dimensionLabel("Imported from", summary: summary(importSources.count))
+                    }
+                    .tint(Tokens.accentFinance)
+                    .listRowBackground(Tokens.surface)
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
@@ -489,6 +630,10 @@ private struct MoreFiltersSheet: View {
                         sources.removeAll()
                         people.removeAll()
                         events.removeAll()
+                        importSources.removeAll()
+                        // Back to the default This Month landing view (#245).
+                        datePreset = .thisMonth
+                        dateExplicitlySet = false
                     }
                     .foregroundStyle(Tokens.muted)
                     .disabled(!hasActiveFilters)
@@ -530,6 +675,43 @@ private struct MoreFiltersSheet: View {
         }
     }
 
+    /// A single statement row for the "Imported from" dimension (#245): icon +
+    /// label, a muted expense count, and a trailing checkmark when selected.
+    /// Styled to match `toggleRow` but carries the per-statement count between
+    /// the label and the checkmark.
+    private func statementRow(_ option: StatementOption) -> some View {
+        let selected = importSources.contains(.statement(label: option.label))
+        return Button {
+            toggle(.statement(label: option.label), in: &importSources)
+        } label: {
+            HStack(spacing: Space.sm) {
+                Image(systemName: "doc.text")
+                    .foregroundStyle(Tokens.accentFinance)
+                    .frame(width: 24)
+                Text(option.label)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: Space.sm)
+                Text("\(option.count)")
+                    .font(.edFootnote)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.muted)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Tokens.accentFinance)
+                }
+            }
+            // Stretch to the full row width and make the whole rect (incl. the
+            // transparent space the Spacer occupies) tappable, not just the
+            // rendered text/icon glyphs (#245 follow-up: tap target bug).
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Tokens.surface)
+    }
+
     /// One selectable row: a leading label (icon/swatch + text) and a trailing
     /// checkmark when selected. Mirrors the old per-sheet row styling.
     private func toggleRow<Label: View>(
@@ -546,6 +728,11 @@ private struct MoreFiltersSheet: View {
                         .foregroundStyle(Tokens.accentFinance)
                 }
             }
+            // Stretch to the full row width and make the whole rect (incl. the
+            // transparent space the Spacer occupies) tappable, not just the
+            // rendered text/icon glyphs (#245 follow-up: tap target bug).
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowBackground(Tokens.surface)
