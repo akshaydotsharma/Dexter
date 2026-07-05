@@ -554,29 +554,55 @@ extension AnthropicClient {
         - "fee": a bank fee (annual fee, late fee, foreign-transaction fee,
           cash-advance fee, account service fee). Money OUT.
         - "interest": an interest / finance CHARGE (money OUT). Note: interest
-          CREDITED into a bank account is money IN — tag that "deposit", not
-          "interest".
-        - "payment": a payment made TO a credit card (a credit that reduces the
-          card balance, e.g. "PAYMENT - THANK YOU", autopay, a GIRO card
-          payment). These are NOT spending — but still return them, tagged
-          "payment", so they can be counted and skipped. This is a CREDIT-CARD
-          concept; do not use it for bank-account deposits.
-        - "refund": a credit / reversal / chargeback / cashback on a prior
-          purchase (money coming back to you). Tag these "refund". They ARE
-          imported — they net against your spending — so give a refund the same
-          accurate merchant, date, amount, and category you'd give the purchase
-          it reverses.
+          CREDITED into a bank account is money IN, not a charge — tag that
+          "refund" (a "+" credit), not "interest".
+        - "payment": a payment that SETTLES A CREDIT CARD. This covers two
+          cases, and both must be tagged "payment" (they are NOT spending —
+          importing them would double-count against the card purchases they pay
+          off, so they are counted and skipped):
+            (1) On a CREDIT-CARD statement: a credit that reduces the card
+                balance, e.g. "PAYMENT - THANK YOU", autopay, a GIRO card
+                payment.
+            (2) On a BANK statement: a money-OUT line that pays a credit-card
+                bill. Recognise it when the description references a CARD: a
+                full 15-16 digit card number or masked PAN, "CARD PAYMENT",
+                "CREDIT CARD", "CCC", or a card-network name (Visa / Mastercard /
+                Amex). Example: "Advice Bill Payment / CCC - 5425503303732696 :
+                I-BANK" is a credit-card bill payment → "payment".
+          Do NOT over-apply case (2): a money-OUT bill payment that is NOT a
+          credit card stays ordinary spend ("purchase"). Utilities, telco,
+          insurance, and TAX (e.g. "GIRO ... IRAS") are real expenses, not
+          "payment". Only a line that clearly settles a CARD gets "payment".
+        - "refund": a "+" CREDIT that should be recorded as money coming back in
+          (it nets against your spending). It is imported with a positive
+          amount. Tag "refund" for BOTH of these:
+            (1) A reversal / chargeback / cashback / credit on a prior purchase
+                (money coming back to you). Give it the merchant, date, amount,
+                and category of the purchase it reverses.
+            (2) On a BANK statement: money RECEIVED from another PERSON or a
+                reimbursement — an incoming PayNow from a named person, a funds
+                transfer from a named person, or an expense reimbursement.
+                Examples: "Funds Transfer IB:KATYAL PARUL", "INCOMING PAYNOW ...
+                FROM: <person>", "SEND BACK FROM PAYLAH!", "EXPENSE REPORT".
+                Use the sender's name as the merchant and a sensible category.
+          A "refund"-type bank line is NOT limited to card reversals — it is any
+          incoming peer money that is not salary.
         - "deposit": money received INTO a bank / savings / current account that
-          is NOT a refund of a prior card purchase — e.g. salary, an incoming
-          transfer, a FAST / GIRO receipt, interest credited to the account.
-          Any bank-account line where money came IN (the deposit / credit column
-          or a balance INCREASE) is a "deposit". On a credit-card statement this
-          type essentially never appears — use "payment" or "refund" there
-          instead.
+          is SALARY or PAYROLL. This is the ONLY money-in that should be a
+          "deposit" (it is skipped and only reported, not imported, because it
+          would swamp the spend view). Example: "DEC PAY CWV1L". A credit that
+          is clearly payroll → "deposit". For ANY OTHER money-in on a bank
+          statement (an incoming transfer from a person, a reimbursement),
+          prefer "refund" (case 2 above) so it is recorded as a "+" credit. When
+          incoming money is ambiguous, default to "refund"; use "deposit" ONLY
+          when it is clearly salary / payroll. On a credit-card statement this
+          type essentially never appears.
         - Mapping summary: bank withdrawal / debit → "purchase" (or "fee" /
-          "interest" when it's plainly a bank fee or an interest charge); bank
-          money-in → "deposit"; credit-card lines keep the
-          purchase / fee / interest / payment / refund meanings above.
+          "interest" for a bank fee or interest charge, or "payment" when it
+          settles a credit-card bill); bank money-in → "refund" for a peer
+          transfer / reimbursement, or "deposit" only for salary / payroll;
+          credit-card lines keep the purchase / fee / interest / payment /
+          refund meanings above.
     - "date" is the transaction date in ISO 8601 (YYYY-MM-DD). Statement lines
       often omit the year (e.g. "07 SEP", "12/09"). Infer the year from the
       statement period / billing cycle shown on the statement. If a line's

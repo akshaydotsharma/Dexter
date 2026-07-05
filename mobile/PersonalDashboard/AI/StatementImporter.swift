@@ -11,10 +11,11 @@ struct StatementImportResult: Sendable {
     /// `LocalExpense` this run. `refunds` (below) is the refund subset, so the
     /// spend-only count is `imported - refunds`.
     let imported: Int
-    /// Subset of `imported` that were refunds/credits, inserted with
-    /// `isRefund: true` so they net against spending totals (#206). Surfaced
-    /// separately in the summary ("including N refunds") so it's clear money
-    /// came back in, not just out.
+    /// Subset of `imported` inserted as "+" credits (`isRefund: true`) so they
+    /// net against spending totals (#206). Covers card reversals/cashback AND
+    /// (on a bank statement) money received from a person or a reimbursement
+    /// (#243). Surfaced in the summary as "including N credits" so it's clear
+    /// money came back in, not just out.
     let refunds: Int
     /// Lines (spend or refund) that matched an existing expense via
     /// `ExpenseDedupe` and were skipped.
@@ -52,8 +53,8 @@ struct StatementImportResult: Sendable {
 
     /// User-facing one-liner for the summary alert. Mentions only the buckets
     /// that have entries so a clean import reads simply. Examples:
-    ///   "Imported 42 (including 3 refunds) · Skipped 8 duplicates · Ignored 5 payments"
-    ///   "Imported 19 · Skipped 9 deposits (SGD 16,559.11), income isn't tracked yet"
+    ///   "Imported 42 (including 3 credits) · Skipped 8 duplicates · Ignored 5 payments"
+    ///   "Imported 26 (including 8 credits) · Ignored 1 payment · Skipped 1 deposit (SGD 14,840.00), income isn't tracked yet"
     ///   "Imported 12"
     ///   "Nothing to import — no transactions found."
     var summaryLine: String {
@@ -62,7 +63,10 @@ struct StatementImportResult: Sendable {
         }
         var head = "Imported \(imported)"
         if refunds > 0 {
-            head += " (including \(refunds) refund\(refunds == 1 ? "" : "s"))"
+            // "credits" not "refunds": this bucket now covers card reversals AND
+            // money received from a person / a reimbursement, all imported as
+            // "+" credits (#243). "credit" reads accurately for both.
+            head += " (including \(refunds) credit\(refunds == 1 ? "" : "s"))"
         }
         var parts: [String] = [head]
         if skippedDuplicates > 0 {
