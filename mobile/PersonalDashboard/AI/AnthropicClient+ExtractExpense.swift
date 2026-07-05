@@ -105,6 +105,37 @@ extension AnthropicClient {
         )
     }
 
+    /// Send a PHOTO to Claude and ask for EVERY distinct expense in it (#247).
+    ///
+    /// A photo can hold several receipts at once, or a printed / handwritten
+    /// list of transactions for different merchants. This returns one
+    /// `ExtractedStatementLine` per distinct expense (a single receipt yields
+    /// exactly one line). It reuses the statement extraction CORE
+    /// (`runStatementExtraction`) — object-wrapper parsing, bare-array fallback,
+    /// truncated-array recovery, lenient per-line decode — with a RECEIPT-specific
+    /// prompt (`expensesFromPhotoPrompt`) instead of the statement prompt. No PDF
+    /// beta header is needed for an image, so `extraHeaders` is empty. Only the
+    /// `.lines` element is returned; there is no statement header for a photo.
+    func extractExpenses(imageData: Data, mediaType: String) async throws -> [ExtractedStatementLine] {
+        let base64 = imageData.base64EncodedString()
+        let content: [AnthropicJSONValue] = [
+            .object([
+                "type": .string("image"),
+                "source": .object([
+                    "type": .string("base64"),
+                    "media_type": .string(mediaType),
+                    "data": .string(base64)
+                ])
+            ]),
+            .object([
+                "type": .string("text"),
+                "text": .string(Self.expensesFromPhotoPrompt)
+            ])
+        ]
+        let (lines, _, _) = try await runStatementExtraction(content: content, extraHeaders: [:])
+        return lines
+    }
+
     // MARK: - Core
 
     private func runExtraction(
@@ -227,6 +258,63 @@ extension AnthropicClient {
     - "items" is a short list of line-item names (at most 6). Skip if not
       visible.
     - Do not invent fields. Do not add commentary outside the JSON fence.
+    """
+
+    /// Prompt for the PHOTO multi-expense path (#247). Unlike `extractionPrompt`
+    /// (one receipt → one object) this asks for one object PER DISTINCT expense,
+    /// and unlike `statementPrompt` it has NO statement header and only the two
+    /// receipt-relevant line types. The output KEEPS the `"lines"` wrapper key so
+    /// the shared `linesArray(in:)` parser matches, but OMITS the `"statement"`
+    /// wrapper (there is no header). `category` uses the RAW enum values (matching
+    /// how `StatementImporter.insert` maps via `ExpenseCategory(rawValue:)`), NOT
+    /// the display name the single-receipt prompt uses.
+    static let expensesFromPhotoPrompt: String = """
+    This is a PHOTO that may contain ONE OR MORE receipts, or a printed /
+    handwritten list of transactions for different merchants. Return one JSON
+    object per DISTINCT expense — one per receipt, or one per transaction line in
+    a list. If the photo is a single receipt, return EXACTLY ONE object.
+
+    Return STRICT JSON inside a ```json fence and nothing else — no prose before
+    or after. Emit a single JSON OBJECT with exactly one key, "lines":
+    {
+      "lines": [
+        {
+          "merchant": "Starbucks",
+          "date": "YYYY-MM-DD",
+          "amount": 12.34,
+          "currency": "SGD",
+          "type": "purchase",
+          "category": "food_and_dining",
+          "description": "Latte, croissant"
+        }
+      ]
+    }
+
+    Rules for each line:
+    - "merchant": the merchant / vendor name for display (e.g. "Starbucks").
+    - "date": the transaction date in ISO 8601 (YYYY-MM-DD). If the receipt shows
+      no year, infer a sensible one; never emit year 0, 0001, or 1970.
+    - "amount": the TOTAL for that receipt / transaction, as a POSITIVE number.
+      Never emit a negative amount — the sign is conveyed by "type".
+    - "currency": an ISO 4217 code (e.g. "SGD", "USD", "GBP"). If you genuinely
+      cannot tell, default to "SGD".
+    - "type": EXACTLY one of "purchase" or "refund".
+        - "purchase": a normal receipt / spend (the common case).
+        - "refund": a credit note or refund (money coming back).
+      Do NOT use "payment", "deposit", "interest", or "fee" — those are
+      statement-only concepts and never apply to a receipt photo.
+    - "category" must be EXACTLY one of these raw values: \(categoryRawList).
+      Pick the best fit from the merchant (a supermarket → groceries, a
+      restaurant → food_and_dining, an airline/hotel → travel, Netflix/Spotify →
+      subscriptions, a utility → bills_and_utilities, a monthly rent/lease → rent).
+      Use "other" only when nothing fits.
+    - "description": a SHORT summary of the line items on that receipt (at most 6,
+      comma-separated), e.g. "Latte, croissant". Omit or set null if not visible.
+    - Do NOT include a "descriptor" field — receipts have no verbatim bank
+      descriptor.
+
+    Never invent lines that aren't in the photo. Do not invent fields or add
+    commentary outside the JSON fence. Return ONLY the fenced JSON.
     """
 
     /// Pull the first ```json``` fenced block out of `text` and return its

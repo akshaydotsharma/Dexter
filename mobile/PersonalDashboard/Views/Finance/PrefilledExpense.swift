@@ -75,6 +75,54 @@ struct PrefilledExpense: Hashable {
         )
     }
 
+    /// Single-line photo import (#247) → seed the review sheet from one
+    /// `ExtractedStatementLine`. Used when a photo yielded EXACTLY ONE expense,
+    /// so the flow matches today's single-receipt behaviour (auto-add one row,
+    /// open the sheet to confirm). Mirrors the field set `fromExtraction`
+    /// produces so `autoAddThenEdit` works unchanged.
+    ///
+    /// `category` maps via `ExpenseCategory(rawValue:)` — the photo prompt emits
+    /// RAW enum values (e.g. "food_and_dining"), NOT the display name — so this
+    /// deliberately does NOT use `ExpenseCategory.matching(displayName:)`.
+    static func from(
+        line: ExtractedStatementLine,
+        receiptImagePath: String,
+        source: ExpenseSource
+    ) -> PrefilledExpense {
+        let parsedDate: Date? = {
+            guard let raw = line.date else { return nil }
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .iso8601)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter.date(from: raw)
+        }()
+
+        let category = (line.category?.trimmingCharacters(in: .whitespacesAndNewlines))
+            .flatMap { ExpenseCategory(rawValue: $0.lowercased()) }
+
+        let descriptionText: String? = {
+            guard let d = line.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !d.isEmpty else { return nil }
+            return d
+        }()
+
+        return PrefilledExpense(
+            receiptImagePath: receiptImagePath,
+            source: source,
+            extractionSucceeded: true,
+            extractionError: nil,
+            confidence: nil,
+            amount: line.amount,
+            currency: line.currency,
+            category: category,
+            date: parsedDate,
+            merchant: line.merchant,
+            descriptionText: descriptionText
+        )
+    }
+
     /// Vision failed → carry only the receipt + the error message.
     static func fromFailure(
         receiptImagePath: String,

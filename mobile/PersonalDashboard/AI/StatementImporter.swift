@@ -187,10 +187,22 @@ struct StatementImporter {
     /// It defaults to an empty header so existing test call sites that only pass
     /// `lines` keep compiling and behave exactly as before (no label, no
     /// payment method).
+    ///
+    /// `source`, `receiptImagePath`, and `recordsImportHistory` (#247) let the
+    /// photo multi-expense path reuse this exact pipeline. They all default to
+    /// the statement behaviour so every existing caller and test compiles
+    /// unchanged: statements tag rows `.pdf`, carry no receipt image, and write
+    /// a `LocalStatementImport` history record. A photo import passes `source:
+    /// .photo` (or `.receipt`), the saved receipt's `receiptImagePath` (shared
+    /// across all rows the photo produced), and `recordsImportHistory: false` so
+    /// photos don't pollute the statement history.
     func insert(
         lines: [ExtractedStatementLine],
         meta: ExtractedStatementMeta = ExtractedStatementMeta(issuer: nil, last4: nil, statementMonth: nil, statementYear: nil),
         fileName: String? = nil,
+        source: ExpenseSource = .pdf,
+        receiptImagePath: String? = nil,
+        recordsImportHistory: Bool = true,
         possiblyTruncated: Bool
     ) async -> StatementImportResult {
         var imported = 0
@@ -227,6 +239,10 @@ struct StatementImporter {
             let merchant: String?
             let category: ExpenseCategory
             let isRefund: Bool
+            /// Optional per-line description. nil for statement lines (the
+            /// statement prompt emits none); carries the receipt's item summary
+            /// for photo imports (#247).
+            let description: String?
             let proposed: ExpenseDedupe.Proposed
             /// Structural class key (dir|merchant|day|amount|currency). Stamped on
             /// the inserted row's `dedupeKey` for continuity with the email path;
@@ -317,6 +333,11 @@ struct StatementImporter {
             let descriptorSource = rawDescriptor.isEmpty ? (merchant ?? "") : rawDescriptor
             let descKey = ExpenseDedupe.normalizeMerchant(descriptorSource)
 
+            // Per-line description: nil for statements (none emitted), the
+            // receipt item summary for photo imports (#247). Trimmed, empty → nil.
+            let trimmedDescription = line.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lineDescription = (trimmedDescription?.isEmpty == false) ? trimmedDescription : nil
+
             candidates.append(Candidate(
                 amount: amount,
                 currency: currency,
@@ -324,6 +345,7 @@ struct StatementImporter {
                 merchant: merchant,
                 category: category,
                 isRefund: isRefund,
+                description: lineDescription,
                 proposed: proposed,
                 classKey: ExpenseDedupe.signature(for: proposed),
                 descKey: descKey
@@ -388,13 +410,13 @@ struct StatementImporter {
                     date: candidate.date,
                     category: candidate.category,
                     merchant: candidate.merchant,
-                    expenseDescription: nil,
+                    expenseDescription: candidate.description,
                     originalAmount: candidate.amount,
                     originalCurrency: candidate.currency,
                     sgdAmount: conversion.sgdAmount,
                     fxRate: conversion.rate,
                     paymentMethod: paymentMethod,
-                    source: .pdf,
+                    source: source,
                     isRefund: candidate.isRefund
                 )
                 // Stamp the structural dedupe signature (kept for continuity with
@@ -407,6 +429,11 @@ struct StatementImporter {
                 // (dir|day|amount|currency) bucket, so the same statement dedups
                 // even when the model paraphrases the merchant differently.
                 row.dedupeDescriptor = candidate.descKey
+                // Receipt image the row came from (#247). nil for statements;
+                // for a photo import every row shares the ONE saved receipt path,
+                // so the reference-aware delete keeps the file until the last of
+                // them is removed.
+                row.receiptImagePath = receiptImagePath
                 // Statement attribution (#189): which statement this came off.
                 // Display-only — deliberately NOT part of the dedupe signature.
                 row.statementLabel = statementLabel
@@ -434,7 +461,12 @@ struct StatementImporter {
         // an empty history entry (and the existing rows already have a record).
         // Additive model, so this never changes the returned result or the
         // summary alert; it's purely a side record.
-        if imported > 0 {
+        //
+        // Gated on `recordsImportHistory` (#247): a photo import passes false so
+        // it never appears in the statement Parsed Files & Imports history —
+        // that history is for statement PDFs, and a photo has no file name to
+        // group under. Statements keep the default (true).
+        if recordsImportHistory, imported > 0 {
             let record = LocalStatementImport(
                 fileName: statementFileName,
                 statementLabel: statementLabel,

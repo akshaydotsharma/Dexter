@@ -122,7 +122,9 @@ struct FinanceView: View {
             handleStatementData(data, fileName: fileName)
         }
         .alert(
-            "Statement import",
+            // Source-agnostic: this summary now backs both statement imports
+            // and multi-expense photo imports (#247).
+            "Import complete",
             isPresented: statementSummaryBinding,
             presenting: statementImportSummary
         ) { _ in
@@ -293,27 +295,40 @@ struct FinanceView: View {
 
         // 3. Run Vision in the background; the processing row is already visible.
         do {
-            let extracted: ExtractedExpense
             switch captureSource {
             case .camera, .photoLibrary:
-                extracted = try await client.extractExpense(
+                // A photo can hold MULTIPLE expenses — several receipts in one
+                // shot, or a printed/handwritten list of transactions for
+                // different merchants (#247). Extract them ALL, then route on
+                // count: 0 → failure fallback, 1 → today's single-receipt
+                // behaviour, 2+ → batch auto-import (like a statement).
+                let lines = try await client.extractExpenses(
                     imageData: visionImageData ?? data,
                     mediaType: "image/jpeg"
                 )
+                await handleExtractedPhotoLines(
+                    lines,
+                    receiptImagePath: relativePath,
+                    source: expenseSource
+                )
             case .pdf:
-                extracted = try await client.extractExpense(pdfData: data)
+                // PDF stays on the single-expense path, unchanged.
+                let extracted = try await client.extractExpense(pdfData: data)
+                let prefill = PrefilledExpense.fromExtraction(
+                    extracted,
+                    receiptImagePath: relativePath,
+                    source: expenseSource
+                )
+                await autoAddThenEdit(prefill: prefill)
             }
-            let prefill = PrefilledExpense.fromExtraction(
-                extracted,
-                receiptImagePath: relativePath,
-                source: expenseSource
-            )
-            await autoAddThenEdit(prefill: prefill)
         } catch {
             // Save the receipt regardless; open the form with a banner. No row
             // was created, so `.prefilled` inserting on save is correct here.
             let message: String = {
                 if let typed = error as? ReceiptExtractionError {
+                    return typed.localizedDescription
+                }
+                if let typed = error as? StatementExtractionError {
                     return typed.localizedDescription
                 }
                 return "We saved your receipt but couldn't read it. Fill in the details below."
@@ -324,6 +339,54 @@ struct FinanceView: View {
                 message: message
             )
             editingTarget = .prefilled(prefill)
+        }
+    }
+
+    /// Route the expenses extracted from ONE photo (#247). Called only for the
+    /// image path (camera / library); PDFs never reach here.
+    ///   - 0 lines: extraction returned nothing usable. Receipt is already
+    ///     saved, so fall back to the review sheet with a banner (same as a
+    ///     thrown extraction error).
+    ///   - 1 line: today's behaviour. Prefill from the single line and
+    ///     auto-add + open the sheet to confirm — exactly one row inserted.
+    ///   - 2+ lines: auto-import all of them through the SAME batch pipeline the
+    ///     statement path uses (dedupe + FX + insert), sharing the one saved
+    ///     receipt image across every row, and surface the count summary. No
+    ///     per-row review sheet in this case.
+    private func handleExtractedPhotoLines(
+        _ lines: [ExtractedStatementLine],
+        receiptImagePath: String,
+        source: ExpenseSource
+    ) async {
+        switch lines.count {
+        case 0:
+            let prefill = PrefilledExpense.fromFailure(
+                receiptImagePath: receiptImagePath,
+                source: source,
+                message: "We saved your photo but couldn't read any expenses. Fill in the details below."
+            )
+            editingTarget = .prefilled(prefill)
+        case 1:
+            let prefill = PrefilledExpense.from(
+                line: lines[0],
+                receiptImagePath: receiptImagePath,
+                source: source
+            )
+            await autoAddThenEdit(prefill: prefill)
+        default:
+            // Reuse the statement batch importer. Empty meta + nil fileName so
+            // nothing masquerades as a statement (no attribution label, no
+            // payment method, no statement history entry). `possiblyTruncated`
+            // is false — a photo is a single non-chunked request.
+            let result = await StatementImporter.default().insert(
+                lines: lines,
+                fileName: nil,
+                source: source,
+                receiptImagePath: receiptImagePath,
+                recordsImportHistory: false,
+                possiblyTruncated: false
+            )
+            statementImportSummary = result.summaryLine
         }
     }
 
@@ -830,8 +893,18 @@ struct FinanceView: View {
         // if the file delete fails (read-only volume, etc.) we still
         // proceed with the SwiftData delete; the orphaned file is a
         // bytes-wasted nuisance, not a correctness bug.
+        //
+        // A multi-expense photo import (#247) feeds ONE receipt image to N
+        // rows, all sharing the same `receiptImagePath`. Only delete the file
+        // once NO OTHER expense still references it — otherwise deleting one of
+        // the sibling rows would orphan the receipt the others still show.
         if let path = expense.receiptImagePath {
-            try? ReceiptStorage.shared.delete(relativePath: path)
+            let stillReferenced = allExpenses.contains {
+                $0.clientUUID != expense.clientUUID && $0.receiptImagePath == path
+            }
+            if !stillReferenced {
+                try? ReceiptStorage.shared.delete(relativePath: path)
+            }
         }
         modelContext.delete(expense)
         try? modelContext.save()
