@@ -30,6 +30,12 @@ final class LocalStatementImport {
     var failed: Int
     var refunds: Int
 
+    /// Bank-statement deposit lines (money received) counted this import but
+    /// never stored as expenses (income isn't tracked yet, #243). Additive
+    /// field with a default so the SwiftData migration stays lightweight on
+    /// existing installs (ADD only, never remove).
+    var deposits: Int = 0
+
     /// True when the model likely ran out of output budget on a very large
     /// statement, so some tail rows may be missing.
     var possiblyTruncated: Bool
@@ -53,6 +59,7 @@ final class LocalStatementImport {
         refunds: Int,
         possiblyTruncated: Bool,
         importedExpenseUUIDs: [UUID] = [],
+        deposits: Int = 0,
         createdAt: Date = Date()
     ) {
         self.clientUUID = clientUUID
@@ -63,6 +70,7 @@ final class LocalStatementImport {
         self.ignoredNonSpend = ignoredNonSpend
         self.failed = failed
         self.refunds = refunds
+        self.deposits = deposits
         self.possiblyTruncated = possiblyTruncated
         self.importedExpenseUUIDs = importedExpenseUUIDs
             .map { $0.uuidString.lowercased() }

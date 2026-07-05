@@ -408,19 +408,20 @@ struct ParsedFilesView: View {
     // MARK: - Copy helpers
 
     /// Compact count breakdown for a statement row, e.g.
-    /// "12 imported (2 refunds) · 8 skipped · 5 ignored". Zero buckets are
+    /// "12 imported (2 credits) · 8 skipped · 5 ignored". Zero buckets are
     /// omitted so a clean import reads simply. No em dashes.
     private func statementSubtitle(for record: LocalStatementImport) -> String {
         var parts: [String] = []
         if record.imported > 0 {
             var head = "\(record.imported) imported"
             if record.refunds > 0 {
-                head += " (\(record.refunds) refund\(record.refunds == 1 ? "" : "s"))"
+                head += " (\(record.refunds) credit\(record.refunds == 1 ? "" : "s"))"
             }
             parts.append(head)
         }
         if record.skippedDuplicates > 0 { parts.append("\(record.skippedDuplicates) skipped") }
         if record.ignoredNonSpend > 0 { parts.append("\(record.ignoredNonSpend) ignored") }
+        if record.deposits > 0 { parts.append("\(record.deposits) deposit\(record.deposits == 1 ? "" : "s") skipped") }
         if record.failed > 0 { parts.append("\(record.failed) failed") }
         var line = parts.isEmpty ? "No transactions imported" : parts.joined(separator: " · ")
         if record.possiblyTruncated {
