@@ -271,6 +271,89 @@ final class StatementDedupeReconciliationTests: XCTestCase {
         XCTAssertEqual(try storedCount(), 3)
     }
 
+    // MARK: - (j) Bank deposit is counted + totalled, never imported (#243)
+
+    func test_bankDeposit_countedAndTotalled_notImported() async throws {
+        let result = await importer.insert(
+            lines: [
+                line("Salary", 5000, type: .deposit),
+                line("Kopitiam", 4.5, type: .purchase)
+            ],
+            possiblyTruncated: false
+        )
+
+        XCTAssertEqual(result.imported, 1, "only the withdrawal imports as spend")
+        XCTAssertEqual(result.deposits, 1, "the deposit is counted")
+        XCTAssertEqual(result.depositsTotalSGD, 5000, accuracy: 0.001, "the deposit is summed in SGD")
+        XCTAssertEqual(result.ignoredNonSpend, 0, "a deposit is NOT a card payment")
+        XCTAssertEqual(result.refunds, 0, "a deposit is NOT a refund")
+        // The deposit must never become a LocalExpense (not as spend, not as a credit).
+        XCTAssertEqual(try storedCount(), 1, "only the withdrawal is stored")
+    }
+
+    // MARK: - (k) A money-out "collection" (mislabel trap) imports as spend
+
+    func test_moneyOutCollection_importsAsSpend() async throws {
+        // A DBS "FAST Collection" whose balance dropped is money OUT. The
+        // extractor is instructed to classify it by column/balance as a
+        // `purchase`, so the importer must treat it as ordinary spend.
+        let result = await importer.insert(
+            lines: [line("FAST Collection", 120.0, type: .purchase, descriptor: "ADVICE FAST COLLECTION SG")],
+            possiblyTruncated: false
+        )
+
+        XCTAssertEqual(result.imported, 1, "a money-out collection imports as spend")
+        XCTAssertEqual(result.deposits, 0)
+        XCTAssertEqual(result.ignoredNonSpend, 0)
+        XCTAssertEqual(try storedCount(), 1)
+    }
+
+    // MARK: - (l) summaryLine reports skipped deposits with a total
+
+    func test_summaryLine_includesDepositClause() async throws {
+        let result = await importer.insert(
+            lines: [
+                line("Coffee", 3.5, type: .purchase),
+                line("Transfer in", 16559.11, type: .deposit)
+            ],
+            possiblyTruncated: false
+        )
+
+        XCTAssertEqual(result.deposits, 1)
+        let summary = result.summaryLine
+        XCTAssertTrue(summary.contains("Skipped 1 deposit (SGD 16,559.11)"), "summary must state the deposit count and SGD total, got: \(summary)")
+        XCTAssertTrue(summary.contains("income isn't tracked yet"), "summary must explain deposits aren't tracked, got: \(summary)")
+        XCTAssertFalse(summary.contains("—"), "no em dash allowed in user-facing summary, got: \(summary)")
+        XCTAssertTrue(summary.contains("Imported 1"))
+    }
+
+    // MARK: - (m) totalParsed invariant now includes deposits
+
+    func test_totalParsed_includesDeposits() async throws {
+        let result = await importer.insert(
+            lines: [
+                line("Kopitiam", 4.5, type: .purchase),   // imported
+                line("Salary", 5000, type: .deposit),      // deposit
+                line("Bonus", 1000, type: .deposit),       // deposit
+                line("Autopay", 200, type: .payment),      // ignoredNonSpend
+                line("Broken", nil)                        // failed (no amount)
+            ],
+            possiblyTruncated: false
+        )
+
+        XCTAssertEqual(result.imported, 1)
+        XCTAssertEqual(result.deposits, 2)
+        XCTAssertEqual(result.ignoredNonSpend, 1)
+        XCTAssertEqual(result.failed, 1)
+        XCTAssertEqual(result.skippedDuplicates, 0)
+        XCTAssertEqual(
+            result.imported + result.skippedDuplicates + result.ignoredNonSpend + result.deposits + result.failed,
+            result.totalParsed,
+            "the accounting invariant now includes deposits"
+        )
+        XCTAssertEqual(result.totalParsed, 5)
+    }
+
     // MARK: - existingCount helper counts multiplicity, not existence
 
     func test_existingCount_reflectsMultiplicity() async throws {

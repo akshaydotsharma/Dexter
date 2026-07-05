@@ -1,9 +1,10 @@
 import Foundation
 import SwiftData
 
-/// Result of running one credit-card statement PDF through the batch-import
-/// pipeline (#184). Every parsed line lands in exactly one of these buckets, so
-/// `imported + skippedDuplicates + ignoredNonSpend + failed == total parsed`.
+/// Result of running one credit-card or bank statement PDF through the
+/// batch-import pipeline (#184, bank support #243). Every parsed line lands in
+/// exactly one of these buckets, so
+/// `imported + skippedDuplicates + ignoredNonSpend + deposits + failed == total parsed`.
 struct StatementImportResult: Sendable {
     /// Lines that deduped clean and were inserted. Counts BOTH spend
     /// (purchase/fee/interest) and refund rows — every row that produced a
@@ -34,13 +35,25 @@ struct StatementImportResult: Sendable {
     /// the email path's `addedExpenseUUIDs`; the UI doesn't offer undo yet).
     let importedUUIDs: [UUID]
 
+    /// Bank-statement deposit lines (money received into the account) — counted,
+    /// never inserted, because income isn't tracked yet (#243). Kept distinct
+    /// from `ignoredNonSpend` (card payments) so the summary can report deposits
+    /// with their own total. Defaults to 0 so credit-card imports and older test
+    /// call sites are unaffected.
+    var deposits: Int = 0
+    /// SGD sum of the deposits this run could FX-convert. A deposit whose FX
+    /// lookup failed is still counted in `deposits` but omitted here, so this is
+    /// a lower bound on money received. Defaults to 0.
+    var depositsTotalSGD: Double = 0
+
     var totalParsed: Int {
-        imported + skippedDuplicates + ignoredNonSpend + failed
+        imported + skippedDuplicates + ignoredNonSpend + deposits + failed
     }
 
     /// User-facing one-liner for the summary alert. Mentions only the buckets
     /// that have entries so a clean import reads simply. Examples:
     ///   "Imported 42 (including 3 refunds) · Skipped 8 duplicates · Ignored 5 payments"
+    ///   "Imported 19 · Skipped 9 deposits (SGD 16,559.11), income isn't tracked yet"
     ///   "Imported 12"
     ///   "Nothing to import — no transactions found."
     var summaryLine: String {
@@ -57,6 +70,14 @@ struct StatementImportResult: Sendable {
         }
         if ignoredNonSpend > 0 {
             parts.append("Ignored \(ignoredNonSpend) payment\(ignoredNonSpend == 1 ? "" : "s")")
+        }
+        if deposits > 0 {
+            // Bank deposits are money received. We classify and report them but
+            // don't store them (no income model yet, #243). State the total so
+            // it's clear money came in that isn't in the expense figures. No
+            // em dash in this user-facing string (project no-em-dash rule).
+            let depositWord = deposits == 1 ? "deposit" : "deposits"
+            parts.append("Skipped \(deposits) \(depositWord) (SGD \(Self.formatSGD(depositsTotalSGD))), income isn't tracked yet")
         }
         if failed > 0 {
             parts.append("\(failed) couldn't be added")
@@ -77,6 +98,26 @@ struct StatementImportResult: Sendable {
         statement to try again, or add any missing transactions manually.
         """
     }
+
+    /// Format an SGD magnitude with grouping and two decimals ("16,559.11").
+    /// POSIX locale so grouping / decimal separators are stable regardless of
+    /// device locale, matching how the rest of Finance renders amounts.
+    static func formatSGD(_ amount: Double) -> String {
+        Self.sgdFormatter.string(from: NSNumber(value: amount))
+            ?? String(format: "%.2f", amount)
+    }
+
+    private static let sgdFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = true
+        f.groupingSeparator = ","
+        f.decimalSeparator = "."
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        return f
+    }()
 }
 
 /// Batch statement-import orchestrator (#184).
@@ -153,6 +194,11 @@ struct StatementImporter {
         var skippedDuplicates = 0
         var ignoredNonSpend = 0
         var failed = 0
+        // Bank-statement deposits (money received) — counted and reported, never
+        // stored, because income isn't tracked yet (#243). `deposits` is the
+        // count; `depositsTotalSGD` is the SGD sum of those we could FX-convert.
+        var deposits = 0
+        var depositsTotalSGD = 0.0
         var importedUUIDs: [UUID] = []
 
         let fx = FXService(store: store)
@@ -199,10 +245,32 @@ struct StatementImporter {
             // more likely a normal purchase than a credit.
             let type = line.type ?? .purchase
             guard type.shouldImport else {
-                // Card payments only — they settle the balance and must never be
-                // imported (they'd double-count against the purchases they paid
-                // off). Refunds fall through and import as credits.
-                ignoredNonSpend += 1
+                // Non-importable credits. Two distinct kinds, counted separately:
+                //   - `.deposit` (bank money-in): tallied and, where FX allows,
+                //     summed for the import summary. Income isn't tracked yet, so
+                //     it's never stored (#243).
+                //   - `.payment` (card transfer): settles the card balance and
+                //     must never be imported (it'd double-count against the
+                //     purchases it paid off).
+                // Refunds have `shouldImport == true` and fall through to import
+                // as credits.
+                if type == .deposit {
+                    deposits += 1
+                    // Sum the deposit in SGD (same conversion path as spend).
+                    // A deposit with no readable positive amount, or one whose FX
+                    // lookup fails, is still COUNTED but omitted from the total —
+                    // the count must never silently drop.
+                    if let amount = line.amount, amount > 0 {
+                        let currency = Self.normalizeCurrency(line.currency)
+                        if let conversion = try? await fx.convert(amount, from: currency) {
+                            depositsTotalSGD += conversion.sgdAmount
+                        } else {
+                            NSLog("StatementImporter: FX convert failed for deposit in %@ — counted, excluded from total", currency)
+                        }
+                    }
+                } else {
+                    ignoredNonSpend += 1
+                }
                 continue
             }
             // A refund imports as a credit: positive magnitude, `isRefund: true`
@@ -372,7 +440,8 @@ struct StatementImporter {
                 failed: failed,
                 refunds: refunds,
                 possiblyTruncated: possiblyTruncated,
-                importedExpenseUUIDs: importedUUIDs
+                importedExpenseUUIDs: importedUUIDs,
+                deposits: deposits
             )
             store.context.insert(record)
             try? store.context.save()
@@ -385,7 +454,9 @@ struct StatementImporter {
             ignoredNonSpend: ignoredNonSpend,
             failed: failed,
             possiblyTruncated: possiblyTruncated,
-            importedUUIDs: importedUUIDs
+            importedUUIDs: importedUUIDs,
+            deposits: deposits,
+            depositsTotalSGD: depositsTotalSGD
         )
     }
 

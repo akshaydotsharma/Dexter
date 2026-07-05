@@ -32,22 +32,32 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
     let descriptor: String?
 
     /// Statement line classification. Purchases, fees, and interest become
-    /// expenses; payments (transfers to the card) and refunds/credits are
-    /// tallied and skipped because `LocalExpense` stores only positive spend.
+    /// expenses; payments (transfers to the card), refunds/credits, and bank
+    /// deposits are tallied and skipped because `LocalExpense` stores only
+    /// positive spend.
+    ///
+    /// `deposit` is the bank-statement addition (#243): money received INTO a
+    /// bank / savings / current account (salary, an incoming transfer, an
+    /// interest credit) that is NOT a refund of a prior card purchase. It is
+    /// kept DISTINCT from `payment` so the importer can count and REPORT
+    /// deposits separately (with a total) rather than folding them into the card
+    /// "payment" bucket. On a credit-card statement this type essentially never
+    /// appears.
     enum LineType: String, Decodable, Sendable {
         case purchase
         case fee
         case interest
         case payment
         case refund
+        case deposit
 
-        /// True when this line represents money spent (a debit). Payments and
-        /// refunds are NOT spend. Kept for callers that need the strict
-        /// spend/credit distinction; import routing uses `shouldImport`.
+        /// True when this line represents money spent (a debit). Payments,
+        /// refunds, and deposits are NOT spend. Kept for callers that need the
+        /// strict spend/credit distinction; import routing uses `shouldImport`.
         var isSpend: Bool {
             switch self {
-            case .purchase, .fee, .interest: return true
-            case .payment, .refund:          return false
+            case .purchase, .fee, .interest:   return true
+            case .payment, .refund, .deposit:  return false
             }
         }
 
@@ -56,11 +66,13 @@ struct ExtractedStatementLine: Decodable, Sendable, Equatable {
         /// credit (`isRefund: true`) that nets against totals. A `payment` (a
         /// transfer TO the card that reduces the balance) is NEVER imported —
         /// it's counted and skipped, because it isn't spending and double-counts
-        /// against the purchases it paid off.
+        /// against the purchases it paid off. A `deposit` (money into a bank
+        /// account) is likewise never imported: income isn't tracked yet, so it
+        /// is counted and reported, never stored (#243).
         var shouldImport: Bool {
             switch self {
             case .purchase, .fee, .interest, .refund: return true
-            case .payment:                            return false
+            case .payment, .deposit:                  return false
             }
         }
     }
@@ -451,9 +463,12 @@ extension AnthropicClient {
     }
 
     static let statementPrompt: String = """
-    This is a credit-card statement PDF. Extract the statement HEADER plus EVERY
-    transaction line item. Return STRICT JSON inside a ```json fence and nothing
-    else — no prose before or after.
+    This is a financial statement PDF. It may be a CREDIT-CARD statement OR a
+    BANK / SAVINGS / CURRENT account statement (e.g. a DBS Multiplier account).
+    First determine which kind it is, because they encode the direction of money
+    differently (see the direction rules below). Then extract the statement
+    HEADER plus EVERY transaction line item. Return STRICT JSON inside a ```json
+    fence and nothing else — no prose before or after.
 
     Return a single JSON OBJECT with exactly two keys, in this order:
     {
@@ -495,7 +510,8 @@ extension AnthropicClient {
 
     Transaction line rules ("lines" array):
     - Return one element per transaction line on the statement. Include ALL of
-      them: purchases, fees, interest charges, card payments, and refunds.
+      them: purchases, fees, interest charges, card payments, refunds, and
+      (on a bank account) deposits.
     - "merchant" is the clean, human-readable merchant / vendor name for display
       (e.g. "Starbucks", "Shopee"). Tidy it up as you normally would.
     - "descriptor" is the transaction description EXACTLY as printed on the
@@ -510,21 +526,57 @@ extension AnthropicClient {
       all, set it to the same value as "merchant".
     - "amount" is always a POSITIVE number (the magnitude of the line). Never
       emit a negative amount; the sign is conveyed by "type" instead.
+
+    - DIRECTION — how to tell money OUT from money IN (read this before typing
+      any line):
+        - CREDIT-CARD statement: classify each line from its description /
+          section as usual (purchases and fees increase the balance owed;
+          payments and refunds decrease it).
+        - BANK / SAVINGS / CURRENT account statement: the direction is set by
+          the COLUMN the amount sits in, NOT by the description wording. A
+          "Withdrawal" / "Debit" / "Money Out" / "Paid Out" column = money OUT
+          (spend). A "Deposit" / "Credit" / "Money In" / "Paid In" column =
+          money IN. If the columns are ambiguous or merged, use the running
+          BALANCE delta: if the balance DECREASED on that line, money went OUT;
+          if it INCREASED, money came IN.
+        - Do NOT infer direction from words like "Collection", "Payment",
+          "Receipt", "Transfer", "FAST", or "GIRO" — on a bank statement these
+          appear on BOTH directions and are unreliable. For example a DBS
+          "Advice FAST Payment / Receipt" or a "FAST Collection" line can be
+          money OUT even though it reads like incoming money: trust the column /
+          balance drop, not the label. The TO: / FROM: text can help
+          disambiguate a genuine tie, but the column / balance is authoritative.
+
     - "type" is EXACTLY one of: "purchase", "fee", "interest", "payment",
-      "refund".
-        - "purchase": a normal card purchase / spend.
+      "refund", "deposit".
+        - "purchase": a normal card purchase / spend, OR any bank-account
+          WITHDRAWAL / debit (money OUT) that isn't plainly a fee or interest.
         - "fee": a bank fee (annual fee, late fee, foreign-transaction fee,
-          cash-advance fee).
-        - "interest": an interest / finance charge.
-        - "payment": a payment made TO the card (a credit that reduces the
-          balance, e.g. "PAYMENT - THANK YOU", a bank transfer, autopay,
-          GIRO). These are NOT spending — but still return them, tagged
-          "payment", so they can be counted and skipped.
-        - "refund": a credit / reversal / chargeback / cashback on a purchase
-          (money coming back to you). Tag these "refund". They ARE imported —
-          they net against your spending — so give a refund the same accurate
-          merchant, date, amount, and category you'd give the purchase it
-          reverses.
+          cash-advance fee, account service fee). Money OUT.
+        - "interest": an interest / finance CHARGE (money OUT). Note: interest
+          CREDITED into a bank account is money IN — tag that "deposit", not
+          "interest".
+        - "payment": a payment made TO a credit card (a credit that reduces the
+          card balance, e.g. "PAYMENT - THANK YOU", autopay, a GIRO card
+          payment). These are NOT spending — but still return them, tagged
+          "payment", so they can be counted and skipped. This is a CREDIT-CARD
+          concept; do not use it for bank-account deposits.
+        - "refund": a credit / reversal / chargeback / cashback on a prior
+          purchase (money coming back to you). Tag these "refund". They ARE
+          imported — they net against your spending — so give a refund the same
+          accurate merchant, date, amount, and category you'd give the purchase
+          it reverses.
+        - "deposit": money received INTO a bank / savings / current account that
+          is NOT a refund of a prior card purchase — e.g. salary, an incoming
+          transfer, a FAST / GIRO receipt, interest credited to the account.
+          Any bank-account line where money came IN (the deposit / credit column
+          or a balance INCREASE) is a "deposit". On a credit-card statement this
+          type essentially never appears — use "payment" or "refund" there
+          instead.
+        - Mapping summary: bank withdrawal / debit → "purchase" (or "fee" /
+          "interest" when it's plainly a bank fee or an interest charge); bank
+          money-in → "deposit"; credit-card lines keep the
+          purchase / fee / interest / payment / refund meanings above.
     - "date" is the transaction date in ISO 8601 (YYYY-MM-DD). Statement lines
       often omit the year (e.g. "07 SEP", "12/09"). Infer the year from the
       statement period / billing cycle shown on the statement. If a line's
@@ -545,8 +597,8 @@ extension AnthropicClient {
       payment → rent). For fees and interest use "bills_and_utilities". Use
       "other" only when nothing fits. A refund
       is imported, so give it the category of the purchase it reverses (a
-      grocery refund → groceries). For a payment, still pick a plausible
-      category (a payment is skipped, so its category is ignored).
+      grocery refund → groceries). For a payment or a deposit, still pick a
+      plausible category (both are skipped, so the category is ignored).
     - Do NOT include summary rows, balances, "total", "opening/closing
       balance", minimum-payment lines, or reward-point lines — only real
       transaction lines.

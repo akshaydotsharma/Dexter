@@ -421,6 +421,7 @@ struct ParsedFilesView: View {
         }
         if record.skippedDuplicates > 0 { parts.append("\(record.skippedDuplicates) skipped") }
         if record.ignoredNonSpend > 0 { parts.append("\(record.ignoredNonSpend) ignored") }
+        if record.deposits > 0 { parts.append("\(record.deposits) deposit\(record.deposits == 1 ? "" : "s") skipped") }
         if record.failed > 0 { parts.append("\(record.failed) failed") }
         var line = parts.isEmpty ? "No transactions imported" : parts.joined(separator: " · ")
         if record.possiblyTruncated {
