@@ -437,6 +437,11 @@ enum TimelineLayout {
     /// Equals `railLeading + markerRadius + gutter` (~11pt gutter past the
     /// marker outer edge).
     static let cardLeading: CGFloat = 32
+    /// Width of the leading agenda-style time column inside each card. Sized to
+    /// fit a 12-hour "12:00 AM" (Inter medium 13, tabular digits) without
+    /// clipping; 24-hour "10:35" sits comfortably. Tune on device if a locale's
+    /// AM/PM string runs wider.
+    static let timeColumnWidth: CGFloat = 56
     /// Diameter of each item's marker dot.
     static let markerDiameter: CGFloat = 10
     /// Diameter of the day eyebrow's leading dot.
@@ -544,6 +549,45 @@ enum TimelineEntry: Identifiable {
         case .stayCheckOut(let item):
             if let t = item.endTime { return "Check-out · \(timeFormat(t))" }
             return "Check-out"
+        }
+    }
+
+    /// The individual pieces the leading agenda-style time column renders,
+    /// kept separate (not the combined `dateTimeLine` string) so the column can
+    /// style the primary time, a secondary time, and a descriptor
+    /// independently. `primary == nil` marks an untimed entry (the column shows
+    /// a quiet "Anytime"). All times go through the shared UTC-pinned formatter.
+    struct TimeColumnParts {
+        var primary: String?
+        var secondary: String?
+        var descriptor: String?
+    }
+
+    var timeColumn: TimeColumnParts {
+        let fmt: (Date) -> String = { TimelineEntry.itineraryTimeFormatter.string(from: $0) }
+        switch self {
+        case .single(let item):
+            // Departure up top; arrival (when set) beneath it as a secondary
+            // line, mirroring the "10:35 → 15:35" pairing of `dateTimeLine`.
+            return TimeColumnParts(
+                primary: item.startTime.map(fmt),
+                secondary: item.arrivalTime.map(fmt),
+                descriptor: nil
+            )
+        case .stayCheckIn(let item):
+            // The clock now lives in the column; the "Check-in" descriptor
+            // moves onto the card body (see `TripTimelineRow.card`).
+            return TimeColumnParts(
+                primary: item.startTime.map(fmt),
+                secondary: nil,
+                descriptor: "Check-in"
+            )
+        case .stayCheckOut(let item):
+            return TimeColumnParts(
+                primary: item.endTime.map(fmt),
+                secondary: nil,
+                descriptor: "Check-out"
+            )
         }
     }
 }
@@ -753,43 +797,87 @@ private struct TripTimelineRow: View {
     private var card: some View {
         let item = entry.item
         let kind = item.kindEnum
+        let time = entry.timeColumn
 
-        return VStack(alignment: .leading, spacing: Space.xs) {
-            Text(item.title)
-                .font(.edBodyMedium)
-                .foregroundStyle(Tokens.ink)
-                .lineLimit(1)
-                .truncationMode(.tail)
+        // Leading time column | content column. `.firstTextBaseline` pins the
+        // primary time's baseline to the title's first line, so the clock reads
+        // as the row's anchor (echoing the marker's title-line alignment).
+        return HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            timeColumnView(time)
 
-            HStack(spacing: Space.sm) {
-                TripKindChip(kind: kind, transportMode: item.transportModeEnum)
-                mapsChip(for: item)
-                Spacer(minLength: 0)
-            }
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text(item.title)
+                    .font(.edBodyMedium)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-            if !item.address.isEmpty {
-                HStack(alignment: .top, spacing: 4) {
-                    Image(systemName: "mappin.and.ellipse")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(Tokens.muted)
-                    Text(item.address)
+                HStack(spacing: Space.sm) {
+                    TripKindChip(kind: kind, transportMode: item.transportModeEnum)
+                    mapsChip(for: item)
+                    Spacer(minLength: 0)
+                }
+
+                // Stays surface their "Check-in" / "Check-out" descriptor here
+                // now that the clock itself lives in the leading column.
+                if let descriptor = time.descriptor {
+                    Text(descriptor)
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
+                        .lineLimit(1)
+                }
+
+                if !item.address.isEmpty {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(Tokens.muted)
+                        Text(item.address)
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                    }
                 }
             }
-
-            Text(entry.dateTimeLine)
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(Space.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
+    /// The leading agenda-style time column: prominent primary time in ink with
+    /// tabular digits so times align vertically down the timeline; a quieter
+    /// arrival time beneath it when present; a muted "Anytime" for untimed rows
+    /// so timed rows pop.
+    @ViewBuilder
+    private func timeColumnView(_ parts: TimelineEntry.TimeColumnParts) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let primary = parts.primary {
+                Text(primary)
+                    .font(.edFootnote)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let secondary = parts.secondary {
+                    Text(secondary)
+                        .font(.edCaption)
+                        .monospacedDigit()
+                        .foregroundStyle(Tokens.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            } else {
+                Text("Anytime")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: TimelineLayout.timeColumnWidth, alignment: .leading)
     }
 
     /// Maps affordance on the card: a labeled "MAP" pill sitting right after
