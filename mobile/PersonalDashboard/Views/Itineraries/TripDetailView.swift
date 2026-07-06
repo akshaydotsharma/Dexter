@@ -626,13 +626,23 @@ private struct TripDayCluster: View {
                 .fill(withinTrip ? Tokens.accent(for: .itineraries) : Tokens.muted)
                 .frame(width: TimelineLayout.dayDotDiameter, height: TimelineLayout.dayDotDiameter)
                 .railNode()
-            // Single-line prominent date header: "Day 1: Wed, 14 May" in one
-            // consistent size, no eyebrow/date split, no line break.
-            Text(withinTrip ? "Day \(dayNumber): \(weekdayDate)" : weekdayDate)
-                .font(.edHeading)
-                .foregroundStyle(Tokens.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            // Single-line prominent date header, one consistent size, no line
+            // break. The "Day n" prefix is highlighted in the accent colour to
+            // set it apart from the ink date (e.g. "Day 1: Wed, 14 May").
+            Group {
+                if withinTrip {
+                    Text("Day \(dayNumber)")
+                        .foregroundStyle(Tokens.accent(for: .itineraries))
+                    + Text(": \(weekdayDate)")
+                        .foregroundStyle(Tokens.ink)
+                } else {
+                    Text(weekdayDate)
+                        .foregroundStyle(Tokens.ink)
+                }
+            }
+            .font(.edHeading)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
         }
         // Indent so the dot's centerline sits at `railLeading`, lined up
