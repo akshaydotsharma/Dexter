@@ -616,44 +616,38 @@ private struct TripDayCluster: View {
         let tripEnd = cal.startOfDay(for: trip.endDate)
         let withinTrip = day >= tripStart && day <= tripEnd
         let dayNumber = cal.dateComponents([.day], from: tripStart, to: day).day.map { $0 + 1 } ?? 0
+        // The date is now the section header, so it drops the uppercase/tracked
+        // eyebrow treatment for a readable title case (e.g. "Wed, 14 May").
         let weekdayDate = day
             .formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-            .uppercased()
 
-        return HStack(spacing: Space.sm) {
+        return HStack(alignment: .center, spacing: Space.sm) {
             Circle()
-                .fill(Tokens.accent(for: .itineraries))
+                .fill(withinTrip ? Tokens.accent(for: .itineraries) : Tokens.muted)
                 .frame(width: TimelineLayout.dayDotDiameter, height: TimelineLayout.dayDotDiameter)
                 .railNode()
-            HStack(spacing: 0) {
+            // Single-line prominent date header, one consistent size, no line
+            // break. The "Day n" prefix is highlighted in the accent colour to
+            // set it apart from the ink date (e.g. "Day 1: Wed, 14 May").
+            Group {
                 if withinTrip {
-                    Text("DAY \(dayNumber)")
-                        .font(.edEyebrow)
-                        .textCase(.uppercase)
-                        .tracking(1.4)
+                    Text("Day \(dayNumber)")
                         .foregroundStyle(Tokens.accent(for: .itineraries))
+                    + Text(": \(weekdayDate)")
+                        .foregroundStyle(Tokens.ink)
                 } else {
-                    Text("OUTSIDE TRIP")
-                        .font(.edEyebrow)
-                        .textCase(.uppercase)
-                        .tracking(1.4)
-                        .foregroundStyle(Tokens.muted)
+                    Text(weekdayDate)
+                        .foregroundStyle(Tokens.ink)
                 }
-                Text(" · ")
-                    .font(.edEyebrow)
-                    .foregroundStyle(Tokens.mutedSoft)
-                Text(weekdayDate)
-                    .font(.edEyebrow)
-                    .textCase(.uppercase)
-                    .tracking(1.4)
-                    .foregroundStyle(Tokens.muted)
             }
+            .font(.edHeading)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
         }
         // Indent so the dot's centerline sits at `railLeading`, lined up
         // with every item marker below it.
         .padding(.leading, TimelineLayout.railLeading - TimelineLayout.dayDotDiameter / 2)
-        .frame(height: 36)
     }
 
     // MARK: Items + rail
@@ -753,8 +747,19 @@ private struct TripTimelineRow: View {
     private var card: some View {
         let item = entry.item
         let kind = item.kindEnum
+        let isTimed = entry.effectiveTime != nil
 
         return VStack(alignment: .leading, spacing: Space.xs) {
+            // Time reads first: bold, accent-coloured, tabular-digit line at the
+            // very top of the tile. An untimed "Anytime" stays the same
+            // treatment but softens to muted so timed rows carry the emphasis.
+            Text(entry.dateTimeLine)
+                .font(.edFootnoteStrong)
+                .monospacedDigit()
+                .foregroundStyle(isTimed ? Tokens.accent(for: .itineraries) : Tokens.muted)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
             Text(item.title)
                 .font(.edBodyMedium)
                 .foregroundStyle(Tokens.ink)
@@ -779,12 +784,6 @@ private struct TripTimelineRow: View {
                         .truncationMode(.tail)
                 }
             }
-
-            Text(entry.dateTimeLine)
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .lineLimit(1)
-                .truncationMode(.tail)
         }
         .padding(Space.md)
         .frame(maxWidth: .infinity, alignment: .leading)

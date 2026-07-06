@@ -124,7 +124,7 @@ struct TicketCardView: View {
             routeEndpoint(
                 code: meta?.originCode,
                 city: meta?.originCity,
-                time: departureTime,
+                time: departureTimeText,
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,7 +135,7 @@ struct TicketCardView: View {
             routeEndpoint(
                 code: meta?.destinationCode,
                 city: meta?.destinationCity,
-                time: nil,
+                time: arrivalTimeText,
                 alignment: .trailing
             )
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -180,19 +180,39 @@ struct TicketCardView: View {
                     .lineLimit(1)
             }
             if let time, !time.isEmpty {
+                // Time reads as a real detail on the pass, not a footnote:
+                // bumped to body-medium ink, still subordinate to the display
+                // airport code above it.
                 Text(time)
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.inkSoft)
+                    .font(.edBodyMedium)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
         .multilineTextAlignment(alignment == .leading ? .leading : .trailing)
     }
 
     /// The departure time from the timeline's own time treatment, unless untimed.
+    /// Used by the event layout (a single moment) where `timeText` is one time.
     private var departureTime: String? {
         guard let t = timeText, !t.isEmpty, t != "Anytime" else { return nil }
         return t
+    }
+
+    /// Departure / arrival times for the boarding-pass hero, derived straight
+    /// from the item so each endpoint shows its own clock (the combined
+    /// `timeText` pairs both with an arrow, which we don't want per-endpoint).
+    /// Both go through the shared UTC-pinned formatter.
+    private var departureTimeText: String? {
+        guard let t = item.startTime else { return nil }
+        return TimelineEntry.itineraryTimeFormatter.string(from: t)
+    }
+
+    private var arrivalTimeText: String? {
+        guard let t = item.arrivalTime else { return nil }
+        return TimelineEntry.itineraryTimeFormatter.string(from: t)
     }
 
     /// "IndiGo · 6E681" for the label bar, from whatever of the two is present.
@@ -227,6 +247,22 @@ struct TicketCardView: View {
                     Text(item.venue)
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
+                        .lineLimit(1)
+                }
+            }
+
+            // Time is the event's primary "when": promoted out of the equal-
+            // weight facts strip into a prominent accent-led line under the
+            // venue, so it reads first among the details.
+            if let time = departureTime {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Tokens.accent(for: .itineraries))
+                    Text(time)
+                        .font(.edBodyMedium)
+                        .monospacedDigit()
+                        .foregroundStyle(Tokens.ink)
                         .lineLimit(1)
                 }
             }
@@ -450,13 +486,13 @@ struct TicketCardView: View {
     }
 
     /// Event facts: only the slots that carry a real value, so a sparse ticket
-    /// doesn't show empty columns.
+    /// doesn't show empty columns. Time is deliberately excluded here: it's
+    /// promoted to its own prominent line above the facts strip (see `eventTop`).
     private var eventFacts: [TicketFact] {
         [
             TicketFact(label: "Section", value: meta?.section),
             TicketFact(label: "Row",     value: meta?.row),
-            TicketFact(label: "Seat",    value: item.seat.isEmpty ? nil : item.seat),
-            TicketFact(label: "Time",    value: departureTime)
+            TicketFact(label: "Seat",    value: item.seat.isEmpty ? nil : item.seat)
         ].filter { $0.value != nil }
     }
 
