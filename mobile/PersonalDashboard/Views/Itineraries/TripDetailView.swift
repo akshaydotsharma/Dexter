@@ -626,20 +626,13 @@ private struct TripDayCluster: View {
                 .fill(withinTrip ? Tokens.accent(for: .itineraries) : Tokens.muted)
                 .frame(width: TimelineLayout.dayDotDiameter, height: TimelineLayout.dayDotDiameter)
                 .railNode()
-            // Eyebrow context ("DAY n") stacked over the prominent date header,
-            // so the date reads as the clear divider between days.
-            VStack(alignment: .leading, spacing: 1) {
-                Text(withinTrip ? "DAY \(dayNumber)" : "OUTSIDE TRIP")
-                    .font(.edEyebrow)
-                    .textCase(.uppercase)
-                    .tracking(1.4)
-                    .foregroundStyle(withinTrip ? Tokens.accent(for: .itineraries) : Tokens.muted)
-                Text(weekdayDate)
-                    .font(.edHeading)
-                    .foregroundStyle(Tokens.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
+            // Single-line prominent date header: "Day 1: Wed, 14 May" in one
+            // consistent size, no eyebrow/date split, no line break.
+            Text(withinTrip ? "Day \(dayNumber): \(weekdayDate)" : weekdayDate)
+                .font(.edHeading)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
         }
         // Indent so the dot's centerline sits at `railLeading`, lined up
