@@ -34,6 +34,7 @@ extension Font {
     static let edBodyMedium  = inter(16, weight: .medium, relativeTo: .body)
     static let edSubheadline = inter(15, relativeTo: .subheadline)
     static let edFootnote    = inter(13, weight: .medium, relativeTo: .footnote)
+    static let edFootnoteStrong = inter(13, weight: .semibold, relativeTo: .footnote) // bold footnote, e.g. the prominent time line on itinerary tiles
     static let edCaption     = inter(12, relativeTo: .caption)
     static let edEyebrow     = inter(11, weight: .semibold, relativeTo: .caption2) // pair with .textCase(.uppercase) and .tracking(1.4)
     static let edMono        = jbMono(13, relativeTo: .footnote)
