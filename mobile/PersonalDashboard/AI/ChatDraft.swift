@@ -192,9 +192,10 @@ extension ChatDraft {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         let category = categoryRaw.isEmpty ? nil : ExpenseCategory(rawValue: categoryRaw)
+        let source = (dict["source"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let confirmAll = dict["confirm_all"]?.boolValue ?? false
 
-        let hasFilter = after != nil || before != nil || !categoryRaw.isEmpty
+        let hasFilter = after != nil || before != nil || !categoryRaw.isEmpty || !source.isEmpty
         if !hasFilter {
             return confirmAll ? "Clear ALL expenses" : "Clear ALL expenses — needs confirmation"
         }
@@ -206,6 +207,10 @@ extension ChatDraft {
             parts.append(categoryRaw)
         }
         var scope = "Clear \(parts.isEmpty ? "" : parts.joined() + " ")expenses"
+        // Name the import source (#251), e.g. "Clear expenses imported from DBS".
+        if !source.isEmpty {
+            scope += " imported from \(source)"
+        }
         if let after, let before {
             scope += " between \(shortDayMonth.string(from: after)) and \(shortDayMonth.string(from: before))"
         } else if let after {

@@ -342,10 +342,18 @@ struct ExecuteDraftAction {
         let categoryRaw = (trimmedString(input["category"]) ?? "").lowercased()
         let category = categoryRaw.isEmpty ? nil : ExpenseCategory(rawValue: categoryRaw)
 
+        // Free-text import-source needle (#251): a bank / statement name like
+        // "DBS" the user asked to clear. Matched as a case-insensitive substring
+        // of statementLabel / statementFileName inside the service. Kept as the
+        // raw (trimmed) string here so the outcome title can echo it verbatim.
+        let source = trimmedString(input["source"]) ?? ""
+
         // A filter is "present" whenever the model supplied any dimension —
         // including a category string we don't recognise (handled just below),
-        // so an unknown category never silently degrades into a full wipe.
-        let hasFilter = (after != nil) || (before != nil) || !categoryRaw.isEmpty
+        // so an unknown category never silently degrades into a full wipe. A
+        // source needle counts too, so a targeted "clear everything from DBS"
+        // never needs confirm_all.
+        let hasFilter = (after != nil) || (before != nil) || !categoryRaw.isEmpty || !source.isEmpty
         let confirmAll = input["confirm_all"]?.boolValue ?? false
 
         let service = ExpenseService(store: store)
@@ -381,7 +389,12 @@ struct ExecuteDraftAction {
 
         let deleted: Int
         do {
-            deleted = try service.deleteExpenses(after: after, before: before, category: category)
+            deleted = try service.deleteExpenses(
+                after: after,
+                before: before,
+                category: category,
+                source: source.isEmpty ? nil : source
+            )
         } catch {
             throw DraftExecutionError.persistence(error)
         }
@@ -390,7 +403,7 @@ struct ExecuteDraftAction {
             type: "expense",
             action: ActionString.cleared,
             id: "",
-            title: Self.clearedExpensesTitle(deleted: deleted, after: after, before: before, category: category),
+            title: Self.clearedExpensesTitle(deleted: deleted, after: after, before: before, category: category, source: source),
             dueDate: nil,
             addedNames: nil
         )
@@ -403,9 +416,10 @@ struct ExecuteDraftAction {
         deleted: Int,
         after: Date?,
         before: Date?,
-        category: ExpenseCategory?
+        category: ExpenseCategory?,
+        source: String
     ) -> String {
-        let scope = clearScopeSuffix(after: after, before: before, category: category)
+        let scope = clearScopeSuffix(after: after, before: before, category: category, source: source)
         guard deleted > 0 else {
             return "No expenses matched\(scope)."
         }
@@ -413,10 +427,15 @@ struct ExecuteDraftAction {
         return "Cleared \(deleted) \(noun)\(scope)."
     }
 
-    private static func clearScopeSuffix(after: Date?, before: Date?, category: ExpenseCategory?) -> String {
+    private static func clearScopeSuffix(after: Date?, before: Date?, category: ExpenseCategory?, source: String) -> String {
         var parts: [String] = []
         if let category {
             parts.append("in \(category.displayName)")
+        }
+        // Echo the source verbatim so "Cleared 4 expenses imported from DBS"
+        // reads back the exact bank name the user gave (#251).
+        if !source.isEmpty {
+            parts.append("imported from \(source)")
         }
         if let after, let before {
             parts.append("between \(clearDateFormatter.string(from: after)) and \(clearDateFormatter.string(from: before))")
