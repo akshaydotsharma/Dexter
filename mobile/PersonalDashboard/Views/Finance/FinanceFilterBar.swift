@@ -439,13 +439,11 @@ private struct MoreFiltersSheet: View {
     @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
     private var allEvents: [LocalEvent]
 
-    // Backing data for the "Imported from" dimension (#245): every expense (to
-    // count rows + reconstruct legacy statement labels) and the durable
-    // per-import records (source of truth for statement labels).
+    // Backing data for the "Imported from" dimension (#245): every expense,
+    // used to count rows per bucket. A bucket only appears when it currently
+    // holds at least one expense (#251) — deleting a statement's rows (via the
+    // Finance list or the AI `clear_expenses` tool) drops it from the filter.
     @Query private var allExpenses: [LocalExpense]
-
-    @Query(sort: [SortDescriptor(\LocalStatementImport.createdAt, order: .reverse)])
-    private var statementImports: [LocalStatementImport]
 
     // Per-dimension expansion state. Collapsed by default (#211).
     @State private var personExpanded = false
@@ -460,11 +458,10 @@ private struct MoreFiltersSheet: View {
     }
 
     /// A distinct statement the user can filter by, plus the count of expenses
-    /// currently attributed to it. Built by unioning the durable
-    /// `LocalStatementImport` records with the distinct non-empty
-    /// `statementLabel`s found across expenses — the same legacy-fallback spirit
-    /// as `ParsedFilesView` (statements imported before the batch model existed
-    /// leave no record but still carry a label on their rows).
+    /// currently attributed to it. Derived purely from the live expenses: a
+    /// statement lists only while it still has rows (#251). Labels found on
+    /// expenses cover both current and legacy imports (statements predating the
+    /// batch model still carry a `statementLabel` on their rows).
     private struct StatementOption: Identifiable {
         let label: String
         let count: Int
@@ -473,24 +470,30 @@ private struct MoreFiltersSheet: View {
 
     private var statementOptions: [StatementOption] {
         // Count expenses per trimmed, non-empty statement label across the
-        // whole current set (reflects the current expenses, per #245).
+        // current set. Only labels with a live count survive (#251), so a
+        // statement whose rows were all deleted no longer appears.
         var counts: [String: Int] = [:]
         for expense in allExpenses {
             let label = expense.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !label.isEmpty else { continue }
             counts[label, default: 0] += 1
         }
-        // Seed the label set from the durable records so a statement with a
-        // record still lists even if all its rows were later deleted (count 0),
-        // then fold in any legacy labels found only on expenses.
-        var labels = Set(counts.keys)
-        for record in statementImports {
-            let label = record.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !label.isEmpty { labels.insert(label) }
-        }
-        return labels
+        return counts.keys
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
             .map { StatementOption(label: $0, count: counts[$0] ?? 0) }
+    }
+
+    /// Number of expenses currently in the fixed "Manually added" bucket
+    /// (anything that isn't a receipt and carries no statement label). Drives
+    /// whether the row shows (#251).
+    private var manualImportCount: Int {
+        allExpenses.filter { ImportSourceSelection.manual.matches($0) }.count
+    }
+
+    /// Number of expenses currently in the "Receipts" bucket. Drives whether
+    /// the row shows (#251).
+    private var receiptsImportCount: Int {
+        allExpenses.filter { ImportSourceSelection.receipts.matches($0) }.count
     }
 
     var body: some View {
@@ -580,42 +583,50 @@ private struct MoreFiltersSheet: View {
                     // Imported from — provenance buckets (#245). Sits alongside
                     // Source: Source is the raw capture channel, this is the
                     // import batch an expense came from (manual / receipts /
-                    // each statement).
-                    DisclosureGroup(isExpanded: $importSourceExpanded) {
-                        toggleRow(selected: importSources.contains(.manual)) {
-                            toggle(.manual, in: &importSources)
-                        } label: {
-                            Image(systemName: "pencil")
-                                .foregroundStyle(Tokens.accentFinance)
-                                .frame(width: 24)
-                            Text("Manually added")
-                                .foregroundStyle(Tokens.ink)
-                        }
-
-                        toggleRow(selected: importSources.contains(.receipts)) {
-                            toggle(.receipts, in: &importSources)
-                        } label: {
-                            Image(systemName: "doc.text.viewfinder")
-                                .foregroundStyle(Tokens.accentFinance)
-                                .frame(width: 24)
-                            Text("Receipts")
-                                .foregroundStyle(Tokens.ink)
-                        }
-
-                        if !statementOptions.isEmpty {
-                            Text("Statements")
-                                .font(.edFootnote)
-                                .foregroundStyle(Tokens.muted)
-                                .listRowBackground(Tokens.surface)
-                            ForEach(statementOptions) { option in
-                                statementRow(option)
+                    // each statement). Each bucket shows only while it holds a
+                    // live expense, and the whole dimension hides when empty
+                    // (#251) — mirrors the Person/Event dimensions above.
+                    if manualImportCount > 0 || receiptsImportCount > 0 || !statementOptions.isEmpty {
+                        DisclosureGroup(isExpanded: $importSourceExpanded) {
+                            if manualImportCount > 0 {
+                                toggleRow(selected: importSources.contains(.manual)) {
+                                    toggle(.manual, in: &importSources)
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .foregroundStyle(Tokens.accentFinance)
+                                        .frame(width: 24)
+                                    Text("Manually added")
+                                        .foregroundStyle(Tokens.ink)
+                                }
                             }
+
+                            if receiptsImportCount > 0 {
+                                toggleRow(selected: importSources.contains(.receipts)) {
+                                    toggle(.receipts, in: &importSources)
+                                } label: {
+                                    Image(systemName: "doc.text.viewfinder")
+                                        .foregroundStyle(Tokens.accentFinance)
+                                        .frame(width: 24)
+                                    Text("Receipts")
+                                        .foregroundStyle(Tokens.ink)
+                                }
+                            }
+
+                            if !statementOptions.isEmpty {
+                                Text("Statements")
+                                    .font(.edFootnote)
+                                    .foregroundStyle(Tokens.muted)
+                                    .listRowBackground(Tokens.surface)
+                                ForEach(statementOptions) { option in
+                                    statementRow(option)
+                                }
+                            }
+                        } label: {
+                            dimensionLabel("Imported from", summary: summary(importSources.count))
                         }
-                    } label: {
-                        dimensionLabel("Imported from", summary: summary(importSources.count))
+                        .tint(Tokens.accentFinance)
+                        .listRowBackground(Tokens.surface)
                     }
-                    .tint(Tokens.accentFinance)
-                    .listRowBackground(Tokens.surface)
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
