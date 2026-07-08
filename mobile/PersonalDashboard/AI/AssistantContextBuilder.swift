@@ -271,6 +271,29 @@ struct AssistantContextBuilder {
             }
         }
 
+        // Import sources (#251): the distinct statement labels expenses were
+        // imported from (e.g. "May 2026 Citi - 1234"), so clear_expenses with a
+        // `source` filter can target a real bank / statement and the assistant
+        // can say "you have nothing imported from DBS" instead of silently
+        // deleting zero rows. Scans all expenses (personal-scale), dedupes by
+        // trimmed label, and caps the list to keep the prompt lean.
+        if let allExpenses = try? context.fetch(FetchDescriptor<LocalExpense>()) {
+            var seen = Set<String>()
+            var labels: [String] = []
+            for row in allExpenses {
+                let label = row.statementLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !label.isEmpty, seen.insert(label.lowercased()).inserted else { continue }
+                labels.append(label)
+                if labels.count >= 20 { break }
+            }
+            if !labels.isEmpty {
+                out += "\n\nIMPORT SOURCES (statements expenses were imported from; use one of these bank/statement names for clear_expenses `source`):"
+                for label in labels {
+                    out += "\n  - \(Self.safe(label, maxLen: 120))"
+                }
+            }
+        }
+
         // Personal vocabulary: words the user has explicitly taught the
         // assistant so the model can prefer them over close-sounding
         // mistranscriptions ("envisso" vs. "in visa", "Dexter" vs. "Dexter
