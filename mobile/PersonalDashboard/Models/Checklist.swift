@@ -73,6 +73,11 @@ struct Checklist: Codable, Identifiable, Hashable, Sendable {
     var title: String
     var items: [ChecklistItem]
     var position: Int?
+    /// Per-list visual identity (#253). `iconName` is an SF Symbol name,
+    /// `colorHex` a palette key. Both optional; nil falls back to the default
+    /// checklist symbol + teal via `ListAppearance`.
+    var iconName: String?
+    var colorHex: String?
     let version: Int64
     let createdAt: Date
     let updatedAt: Date
@@ -83,6 +88,8 @@ struct Checklist: Codable, Identifiable, Hashable, Sendable {
         case title
         case items
         case position
+        case iconName
+        case colorHex
         case version
         case createdAt
         case updatedAt
@@ -93,9 +100,13 @@ struct Checklist: Codable, Identifiable, Hashable, Sendable {
 struct ChecklistCreateRequest {
     let title: String
     let items: [ChecklistItem]
+    var iconName: String? = nil
+    var colorHex: String? = nil
 }
 
 struct ChecklistUpdateRequest {
     let title: String
     let items: [ChecklistItem]
+    var iconName: String? = nil
+    var colorHex: String? = nil
 }

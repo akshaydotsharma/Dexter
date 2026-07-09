@@ -10,6 +10,14 @@ final class LocalList {
     /// `[ChecklistItem]` array is reconstructed on demand via toDTO().
     var itemsData: Data
     var position: Int?
+    /// Per-list visual identity (#253). Both OPTIONAL with no non-nil default so
+    /// the SwiftData lightweight migration on existing installs can't fail —
+    /// adding nullable fields is the safe path (project rule: only ADD fields).
+    /// `iconName` is an SF Symbol name, `colorHex` a palette key (the light-mode
+    /// hex). Nil on every pre-existing list → the row renders with the default
+    /// checklist symbol + teal via `ListAppearance` at read time.
+    var iconName: String?
+    var colorHex: String?
     var version: Int64
     var createdAt: Date
     var updatedAt: Date
@@ -21,6 +29,8 @@ final class LocalList {
         title: String,
         items: [ChecklistItem] = [],
         position: Int? = nil,
+        iconName: String? = nil,
+        colorHex: String? = nil,
         version: Int64 = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -31,6 +41,8 @@ final class LocalList {
         self.title = title
         self.itemsData = LocalList.encode(items)
         self.position = position
+        self.iconName = iconName
+        self.colorHex = colorHex
         self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -52,6 +64,8 @@ final class LocalList {
             title: title,
             items: items,
             position: position,
+            iconName: iconName,
+            colorHex: colorHex,
             version: version,
             createdAt: createdAt,
             updatedAt: updatedAt,

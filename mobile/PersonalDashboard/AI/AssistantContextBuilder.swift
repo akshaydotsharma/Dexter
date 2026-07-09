@@ -97,6 +97,10 @@ struct AssistantContextBuilder {
                 let id = Self.uuidString(list.clientUUID)
                 let items = list.items
                 var line = "- List ID:\(id) \"\(Self.safe(list.title, maxLen: 200))\" (\(items.count) items)"
+                // Current visual identity so edit_list recolor/re-icon requests
+                // ("make the groceries list green") have the existing values.
+                if let icon = list.iconName, !icon.isEmpty { line += " icon:\(icon)" }
+                if let color = list.colorHex, !color.isEmpty { line += " color:\(color)" }
                 if !items.isEmpty {
                     line += "\n  Items:"
                     for (idx, item) in items.enumerated() {

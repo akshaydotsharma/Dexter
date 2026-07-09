@@ -512,10 +512,21 @@ struct ExecuteDraftAction {
         }
         let items = parseChecklistItems(input["items"])
 
+        // Resolve icon + color from the tool input, validating against the
+        // curated set. When the model omits or supplies an unknown value, fall
+        // back to the local keyword mapper so the tile is never blank (#253).
+        let inferred = ListAppearance.infer(from: title)
+        let rawIcon = trimmedString(input["icon"])
+        let icon = ListAppearance.isValidSymbol(rawIcon) ? rawIcon! : inferred.icon
+        let colorHex = ListAppearance.matchedPaletteColor(trimmedString(input["color"]))?.id
+            ?? inferred.colorHex
+
         let now = Date()
         let row = LocalList(
             title: title,
             items: items,
+            iconName: icon,
+            colorHex: colorHex,
             createdAt: now,
             updatedAt: now,
             needsSync: false
@@ -808,6 +819,15 @@ struct ExecuteDraftAction {
         if let arr = input["items"]?.arrayValue, !arr.isEmpty {
             row.items = parseChecklistItems(input["items"])
             changed = true
+        }
+        // Icon / color: empty string keeps current; a valid value sets it. An
+        // unknown SF Symbol or color name is ignored (leaves the list as-is)
+        // rather than clearing to a blank tile.
+        if let rawIcon = trimmedString(input["icon"]), ListAppearance.isValidSymbol(rawIcon) {
+            row.iconName = rawIcon; changed = true
+        }
+        if let matched = ListAppearance.matchedPaletteColor(trimmedString(input["color"])) {
+            row.colorHex = matched.id; changed = true
         }
         guard changed else {
             throw DraftExecutionError.invalidArgument(field: "list", reason: "no changes provided")

@@ -372,7 +372,10 @@ private struct TodayListRow: View {
         let total = list.items.count
         let done = list.items.filter(\.checked).count
 
+        let accent = list.resolvedColor
         HStack(spacing: Space.md) {
+            ListIconChip(icon: list.resolvedIcon, color: accent, size: 30, corner: 8)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(list.title)
                     .font(.edBodyMedium)
@@ -385,7 +388,7 @@ private struct TodayListRow: View {
 
             Spacer()
 
-            ProgressBar(done: done, total: total)
+            ProgressBar(done: done, total: total, color: accent)
                 .frame(width: 80, height: 4)
         }
         .padding(.horizontal, Space.lg)
@@ -396,6 +399,7 @@ private struct TodayListRow: View {
 private struct ProgressBar: View {
     let done: Int
     let total: Int
+    var color: Color = Tokens.accentLists
 
     var body: some View {
         GeometryReader { geo in
@@ -403,7 +407,7 @@ private struct ProgressBar: View {
                 Capsule(style: .continuous)
                     .fill(Tokens.paper2)
                 Capsule(style: .continuous)
-                    .fill(Tokens.accentLists)
+                    .fill(color)
                     .frame(width: geo.size.width * progress)
             }
         }

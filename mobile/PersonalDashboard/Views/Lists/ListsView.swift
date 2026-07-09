@@ -4,6 +4,7 @@ import Combine
 struct ListsView: View {
     @State private var viewModel = ListsViewModel()
     @State private var showingNewList = false
+    @State private var showingProperties = false
     @State private var selectedListId: UUID? = {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_LIST_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
@@ -30,9 +31,13 @@ struct ListsView: View {
                                 await viewModel.delete(list)
                                 selectedListId = nil
                             }
-                        }
+                        },
+                        onProperties: { showingProperties = true }
                     )
                     ListDetailContent(viewModel: viewModel, listId: id)
+                        .sheet(isPresented: $showingProperties) {
+                            ListPropertiesSheet(viewModel: viewModel, list: list)
+                        }
                 } else {
                     TopBar(
                         title: "Lists",
@@ -159,6 +164,9 @@ private struct ListDetailHeader: View {
     let onBack: () -> Void
     let onRename: (String) -> Void
     let onDelete: () -> Void
+    /// Opens the list properties sheet (name + icon + color). Tap-to-rename on
+    /// the title stays as-is; this is the entry point for icon/color editing.
+    let onProperties: () -> Void
 
     @State private var isEditing = false
     @State private var draft = ""
@@ -203,6 +211,12 @@ private struct ListDetailHeader: View {
                     .accessibilityLabel("List title, tap to rename")
             }
             Spacer()
+            Button(action: onProperties) {
+                Image(systemName: "slider.horizontal.3")
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(Tokens.muted)
+            }
+            .accessibilityLabel("List appearance")
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .frame(width: 44, height: 44)
@@ -234,36 +248,42 @@ private struct ListSummaryRow: View {
     var body: some View {
         let total = list.items.count
         let completed = list.items.filter(\.checked).count
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack {
-                Text(list.title)
-                    .font(.edBodyMedium)
-                    .foregroundStyle(Tokens.ink)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Tokens.mutedSoft)
-            }
-            if total > 0 {
-                HStack(spacing: Space.xs) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Tokens.paper2).frame(height: 4)
-                            Capsule()
-                                .fill(Tokens.accentLists)
-                                .frame(width: geo.size.width * (Double(completed) / Double(max(total, 1))), height: 4)
+        let accent = list.resolvedColor
+        HStack(spacing: Space.md) {
+            // Per-list identity chip: colored square + SF Symbol in the left slot.
+            ListIconChip(icon: list.resolvedIcon, color: accent, size: 40)
+
+            VStack(alignment: .leading, spacing: Space.sm) {
+                HStack {
+                    Text(list.title)
+                        .font(.edBodyMedium)
+                        .foregroundStyle(Tokens.ink)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+                if total > 0 {
+                    HStack(spacing: Space.xs) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Tokens.paper2).frame(height: 4)
+                                Capsule()
+                                    .fill(accent)
+                                    .frame(width: geo.size.width * (Double(completed) / Double(max(total, 1))), height: 4)
+                            }
                         }
+                        .frame(height: 4)
+                        Text("\(completed)/\(total)")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                            .monospacedDigit()
                     }
-                    .frame(height: 4)
-                    Text("\(completed)/\(total)")
+                } else {
+                    Text("Empty")
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
-                        .monospacedDigit()
                 }
-            } else {
-                Text("Empty")
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
             }
         }
         .padding(.horizontal, Space.md)
@@ -916,22 +936,42 @@ private struct NewListSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
 
+    /// Live inferred appearance from the title so the user sees the identity the
+    /// keyword mapper will assign. If they never open the picker, this is what
+    /// gets saved (create() defaults to the same inference).
+    private var inferred: (icon: String, colorHex: String) {
+        ListAppearance.infer(from: title.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Tokens.paper.ignoresSafeArea()
                 VStack(alignment: .leading, spacing: Space.lg) {
-                    Text("Title").eyebrow()
-                    TextField("List title", text: $title)
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.ink)
-                        .padding(Space.md)
-                        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                        .paperBorder(Tokens.border, radius: Radius.md)
+                    HStack(spacing: Space.md) {
+                        ListIconChip(
+                            icon: ListAppearance.resolvedIconName(inferred.icon),
+                            color: ListAppearance.color(forHex: inferred.colorHex),
+                            size: 44
+                        )
+                        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                            Text("Title").eyebrow()
+                            TextField("List title", text: $title)
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.ink)
+                                .padding(Space.md)
+                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                .paperBorder(Tokens.border, radius: Radius.md)
+                        }
+                    }
+                    Text("An icon and color are picked automatically from the title. You can change them later from the list.")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
                     Spacer()
                 }
                 .padding(Space.lg)
             }
+            .animation(.easeOut(duration: 0.2), value: inferred.colorHex)
             .navigationTitle("New list")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -950,5 +990,153 @@ private struct NewListSheet: View {
                 }
             }
         }
+    }
+}
+
+/// Edit a list's name, icon, and color. Reached from the header's appearance
+/// button. Applying routes through `updateAppearance`, so the tile + Today row
+/// reflect the change immediately.
+private struct ListPropertiesSheet: View {
+    let viewModel: ListsViewModel
+    let list: Checklist
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String = ""
+    @State private var selectedIcon: String = ListAppearance.defaultIcon
+    @State private var selectedColorHex: String = ListAppearance.defaultColorHex
+
+    private let iconColumns = Array(repeating: GridItem(.flexible(), spacing: Space.sm), count: 6)
+
+    private var accent: Color { ListAppearance.color(forHex: selectedColorHex) }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.lg) {
+                        // Live preview + name field.
+                        HStack(spacing: Space.md) {
+                            ListIconChip(icon: selectedIcon, color: accent, size: 48)
+                            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                                Text("Name").eyebrow()
+                                TextField("List name", text: $name)
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.ink)
+                                    .padding(Space.md)
+                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                    .paperBorder(Tokens.border, radius: Radius.md)
+                            }
+                        }
+
+                        // Color swatches.
+                        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                            Text("Color").eyebrow()
+                            HStack(spacing: Space.sm) {
+                                ForEach(ListAppearance.palette) { swatch in
+                                    let isSelected = swatch.id == selectedColorHex
+                                    Circle()
+                                        .fill(swatch.color)
+                                        .frame(width: 34, height: 34)
+                                        .overlay(
+                                            Circle()
+                                                .stroke(Tokens.ink, lineWidth: isSelected ? 2 : 0)
+                                                .padding(-3)
+                                        )
+                                        .overlay {
+                                            if isSelected {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 13, weight: .bold))
+                                                    .foregroundStyle(.white)
+                                            }
+                                        }
+                                        .contentShape(Circle())
+                                        .onTapGesture {
+                                            Haptics.tick()
+                                            withAnimation(.easeOut(duration: 0.15)) { selectedColorHex = swatch.id }
+                                        }
+                                        .accessibilityLabel(swatch.name)
+                                        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+                                }
+                                Spacer(minLength: 0)
+                            }
+                        }
+
+                        // Icon grid, grouped by theme.
+                        VStack(alignment: .leading, spacing: Space.md) {
+                            Text("Icon").eyebrow()
+                            ForEach(ListAppearance.iconGroups) { group in
+                                VStack(alignment: .leading, spacing: Space.sm) {
+                                    Text(group.id)
+                                        .font(.edCaption)
+                                        .foregroundStyle(Tokens.muted)
+                                    LazyVGrid(columns: iconColumns, spacing: Space.sm) {
+                                        ForEach(group.symbols, id: \.self) { symbol in
+                                            iconCell(symbol)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(Space.lg)
+                }
+                .scrollDismissesKeyboard(.interactively)
+            }
+            .navigationTitle("List appearance")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        Task {
+                            await viewModel.updateAppearance(
+                                list,
+                                iconName: selectedIcon,
+                                colorHex: selectedColorHex,
+                                title: trimmed.isEmpty ? nil : trimmed
+                            )
+                        }
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .foregroundStyle(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Tokens.muted : Tokens.ink)
+                }
+            }
+            .onAppear {
+                name = list.title
+                selectedIcon = list.resolvedIcon
+                // Resolve to a palette key so the matching swatch highlights even
+                // when the stored value is a name or unknown hex.
+                selectedColorHex = ListAppearance.matchedPaletteColor(list.colorHex)?.id
+                    ?? ListAppearance.defaultColorHex
+            }
+        }
+    }
+
+    private func iconCell(_ symbol: String) -> some View {
+        let isSelected = symbol == selectedIcon
+        return RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+            .fill(isSelected ? accent.opacity(0.16) : Tokens.surface)
+            .frame(height: 46)
+            .overlay(
+                Image(systemName: symbol)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(isSelected ? accent : Tokens.inkSoft)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .stroke(isSelected ? accent : Tokens.border, lineWidth: isSelected ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                Haptics.tick()
+                withAnimation(.easeOut(duration: 0.12)) { selectedIcon = symbol }
+            }
+            .accessibilityLabel(symbol)
+            .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }

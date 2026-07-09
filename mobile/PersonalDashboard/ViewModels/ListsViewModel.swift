@@ -34,9 +34,23 @@ final class ListsViewModel {
         isLoading = false
     }
 
-    func create(title: String, items: [ChecklistItem] = []) async {
+    func create(
+        title: String,
+        items: [ChecklistItem] = [],
+        iconName: String? = nil,
+        colorHex: String? = nil
+    ) async {
         do {
-            let request = ChecklistCreateRequest(title: title, items: items)
+            // When the caller doesn't specify an appearance, derive one from the
+            // title via the local keyword mapper (no API call) so every new list
+            // gets an identity immediately (#253).
+            let inferred = ListAppearance.infer(from: title)
+            let request = ChecklistCreateRequest(
+                title: title,
+                items: items,
+                iconName: iconName ?? inferred.icon,
+                colorHex: colorHex ?? inferred.colorHex
+            )
             let new = try await service.create(request)
             lists.insert(new, at: 0)
         } catch {
@@ -46,7 +60,14 @@ final class ListsViewModel {
 
     func update(_ list: Checklist) async {
         do {
-            let request = ChecklistUpdateRequest(title: list.title, items: list.items)
+            // Carry the appearance fields through so item toggles / renames don't
+            // wipe the list's icon + color (the request is a full row overwrite).
+            let request = ChecklistUpdateRequest(
+                title: list.title,
+                items: list.items,
+                iconName: list.iconName,
+                colorHex: list.colorHex
+            )
             let updated = try await service.update(list, request)
             if let index = lists.firstIndex(where: { $0.id == list.id }) {
                 lists[index] = updated
@@ -63,6 +84,26 @@ final class ListsViewModel {
               lists[listIndex].title != trimmed else { return }
         var snapshot = lists[listIndex]
         snapshot.title = trimmed
+        lists[listIndex] = snapshot
+        await update(snapshot)
+    }
+
+    /// Apply a new icon/color (and optionally a new title) from the properties
+    /// sheet. Mutates the in-memory DTO first so the tile + Today row update
+    /// immediately, then persists the whole row.
+    func updateAppearance(
+        _ list: Checklist,
+        iconName: String?,
+        colorHex: String?,
+        title: String? = nil
+    ) async {
+        guard let listIndex = lists.firstIndex(where: { $0.id == list.id }) else { return }
+        var snapshot = lists[listIndex]
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            snapshot.title = title
+        }
+        snapshot.iconName = iconName
+        snapshot.colorHex = colorHex
         lists[listIndex] = snapshot
         await update(snapshot)
     }
