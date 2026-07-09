@@ -25,6 +25,8 @@ struct ChecklistService {
         let row = LocalList(
             title: request.title,
             items: request.items,
+            iconName: request.iconName,
+            colorHex: request.colorHex,
             createdAt: now,
             updatedAt: now
         )
@@ -37,6 +39,8 @@ struct ChecklistService {
         let row = try fetchLocal(uuid: list.id)
         row.title = request.title
         row.items = request.items
+        row.iconName = request.iconName
+        row.colorHex = request.colorHex
         row.updatedAt = Date()
         try store.context.save()
         return row.toDTO()

@@ -98,15 +98,22 @@ enum ToolDefinitions {
         )
     )
 
+    /// Description of the curated icon + color choices, shared by draft_list and
+    /// edit_list so the model always picks from the same on-brand set.
+    private static let listIconGuidance = "An SF Symbol name giving the list a visual identity. ALWAYS set this — pick the symbol that best fits the list's topic. Good choices: checklist, list.bullet, cart, bag, gift, creditcard, airplane, suitcase, map, car, briefcase, calendar, chart.bar, folder, figure.run, dumbbell, heart, leaf, house, fork.knife, cup.and.saucer, book, graduationcap, lightbulb, gamecontroller, music.note, film, camera, star, flag. Use a valid SF Symbol name; if unsure, use \"checklist\"."
+    private static let listColorGuidance = "A color for the list. ALWAYS set this. Use one of these names (or its hex): Teal (0F766E), Indigo (4338CA), Purple (6D28D9), Red (B91C1C), Amber (B45309), Green (047857), Pink (7C3F58), Slate (475569). Pick a color that fits the topic (e.g. travel -> Indigo, groceries/money -> Green, fitness/health -> Red, work -> Slate)."
+
     private static let draftList = AnthropicTool(
         name: "draft_list",
-        description: "Create a NEW list with items. Use this when the user wants to create a new checklist, shopping list, or any new list of items.",
+        description: "Create a NEW list with items. Use this when the user wants to create a new checklist, shopping list, or any new list of items. ALWAYS set an appropriate icon and color so the list has a clear visual identity (e.g. a \"Japan trip\" list gets airplane + Indigo, a grocery list gets cart + Green).",
         input_schema: object(
             properties: [
                 "title": string("The title of the list"),
-                "items": arrayOf(listItemSchema, description: "Array of list items with text and checked status")
+                "items": arrayOf(listItemSchema, description: "Array of list items with text and checked status"),
+                "icon": string(listIconGuidance),
+                "color": string(listColorGuidance)
             ],
-            required: ["title", "items"]
+            required: ["title", "items", "icon", "color"]
         )
     )
 
@@ -155,12 +162,14 @@ enum ToolDefinitions {
 
     private static let editList = AnthropicTool(
         name: "edit_list",
-        description: "Edit an EXISTING list. Use when user wants to rename a list or replace all its items. Requires the list UUID. IMPORTANT: At least one of title or items must have a non-empty value. If user does not specify what to change, ask for clarification instead of calling this tool.",
+        description: "Edit an EXISTING list. Use when user wants to rename a list, replace all its items, or change its icon / color. Requires the list UUID. IMPORTANT: At least one of title, items, icon, or color must have a non-empty value. If user does not specify what to change, ask for clarification instead of calling this tool.",
         input_schema: object(
             properties: [
                 "id": string("The UUID of the existing list to edit (from EXISTING LISTS context)"),
-                "title": string("New title for the list. Use empty string ONLY to keep current title unchanged (items must have values then)."),
-                "items": arrayOf(listItemSchema, description: "Complete new items array (replaces existing items). Use empty array ONLY to keep unchanged (title must have value then).")
+                "title": string("New title for the list. Use empty string ONLY to keep current title unchanged (another field must have a value then)."),
+                "items": arrayOf(listItemSchema, description: "Complete new items array (replaces existing items). Use empty array to keep unchanged (another field must have a value then)."),
+                "icon": string("New SF Symbol icon for the list. Set when the user wants a different icon. Use empty string to keep unchanged. " + listIconGuidance),
+                "color": string("New color for the list. Set when the user wants to recolor it. Use empty string to keep unchanged. " + listColorGuidance)
             ],
             required: ["id", "title", "items"]
         )
