@@ -153,6 +153,28 @@ SHORT_VERSION="${MAJOR_MINOR}.${PATCH}"
 BUNDLE_VERSION="${BUILD_NUMBER}"
 echo "-> versioning: v${SHORT_VERSION} (${BUNDLE_VERSION})"
 
+# ---- Pre-authorize codesign (silence the keychain password prompt) ----
+# The free personal-team signing cert regenerates ~weekly; each new private key
+# lands in the login keychain with a fresh ACL, so codesign prompts for the
+# keychain (login) password on the next archive. Re-applying the partition list
+# on every ship authorizes codesign for ALL current signing keys, silently.
+#
+# The login password is read here only by /usr/bin/security, from the keychain
+# item created by `bash mobile/ota/setup-signing-noprompt.sh`. If that setup
+# hasn't been run, we skip quietly — the old GUI prompt just appears as before.
+LOGIN_KC="${HOME}/Library/Keychains/login.keychain-db"
+SIGNING_PW="$(security find-generic-password -a "${USER}" -s dexter-signing-login-pw -w 2>/dev/null || true)"
+if [ -n "${SIGNING_PW}" ]; then
+    if security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${SIGNING_PW}" "${LOGIN_KC}" >/dev/null 2>&1; then
+        echo "-> codesign authorized via keychain (no password prompt expected)"
+    else
+        echo "-> WARNING: could not pre-authorize codesign; a keychain prompt may appear"
+    fi
+    unset SIGNING_PW
+else
+    echo "-> tip: run 'bash mobile/ota/setup-signing-noprompt.sh' once to stop the keychain password prompt"
+fi
+
 # ---- Archive (Release, dev signing) ----
 ARCHIVE_PATH="${OTA_DIR}/PersonalDashboard.xcarchive"
 echo "-> archiving (1-2 min)"
