@@ -8,6 +8,9 @@ struct FinanceDashboardStats {
     let previousMonthTotal: Double
     let topCategories: [(category: ExpenseCategory, total: Double)]
     let dailyTotals: [(date: Date, total: Double)]
+    /// Period total normalised to a 30.44-day month (#255), so "This year"
+    /// or a custom range both read as a comparable monthly run-rate.
+    let averagePerMonth: Double
 
     var deltaPercent: Double? {
         guard previousMonthTotal > 0 else { return nil }
@@ -41,6 +44,11 @@ struct FinanceDashboardBand: View {
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
                 .tracking(-0.6)
+
+            Text("\(Self.formatMoneyRounded(stats.averagePerMonth)) / month")
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.muted)
+                .monospacedDigit()
 
             if !stats.topCategories.isEmpty {
                 categoryBars
@@ -234,6 +242,38 @@ struct FinanceDashboardBand: View {
         // matches the SGD styling (e.g. "USD 927.31", "EUR 812.40").
         formatter.currencySymbol = "\(code) "
         return formatter.string(from: NSNumber(value: displayValue)) ?? "\(code) 0.00"
+    }
+
+    /// Same conversion as `formatMoney` but with 0 fraction digits (e.g.
+    /// "SGD 5,293"), used for the secondary "average / month" line (#255)
+    /// where cents are noise.
+    static func formatMoneyRounded(_ sgdValue: Double) -> String {
+        let code = FinanceSettings.displayCurrencyCode.uppercased()
+        let factor = FinanceSettings.displayRateToSGD
+
+        guard code != "SGD", factor.isFinite, factor > 0 else {
+            return formatSGDRounded(sgdValue)
+        }
+
+        let displayValue = sgdValue / factor
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code
+        formatter.maximumFractionDigits = 0
+        formatter.minimumFractionDigits = 0
+        formatter.currencySymbol = "\(code) "
+        return formatter.string(from: NSNumber(value: displayValue)) ?? "\(code) 0"
+    }
+
+    /// SGD-only, 0-fraction-digit variant of `formatSGD`.
+    private static func formatSGDRounded(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "SGD"
+        formatter.maximumFractionDigits = 0
+        formatter.minimumFractionDigits = 0
+        formatter.currencySymbol = "SGD "
+        return formatter.string(from: NSNumber(value: value)) ?? "SGD 0"
     }
 
     /// SGD-only formatter (the base-currency fast path used by `formatMoney`).

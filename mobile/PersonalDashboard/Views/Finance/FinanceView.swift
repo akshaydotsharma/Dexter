@@ -808,6 +808,15 @@ struct FinanceView: View {
         // the delta comparison, the category bars, and the sparkline.
         let rangeTotal = rangeRows.reduce(0) { $0 + $1.signedSGD }
 
+        // Average monthly spend: normalise the period total to a 30.44-day month,
+        // using elapsed time (range start -> earlier of range end and now) so
+        // ongoing periods like "This year" divide by months so far, not a full 12.
+        let now = Date()
+        let effectiveEnd = min(range.upperBound, now)
+        let elapsedDays = max(1.0, effectiveEnd.timeIntervalSince(range.lowerBound) / 86_400.0)
+        let monthsElapsed = max(1.0, elapsedDays / 30.437)   // avg Gregorian month length
+        let averagePerMonth = rangeTotal / monthsElapsed
+
         // Preceding comparison window. Calendar-month presets compare against
         // the previous CALENDAR month (so month-length differences don't skew
         // the delta and "This month" keeps its exact prior behaviour); rolling
@@ -866,7 +875,8 @@ struct FinanceView: View {
             monthTotal: rangeTotal,
             previousMonthTotal: prevTotal,
             topCategories: topCategories,
-            dailyTotals: dailyTotals
+            dailyTotals: dailyTotals,
+            averagePerMonth: averagePerMonth
         )
     }
 
