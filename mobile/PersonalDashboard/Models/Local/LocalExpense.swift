@@ -162,6 +162,26 @@ final class LocalExpense {
     // pre-fix data is never re-duplicated on a future re-import.
     var dedupeDescriptor: String = ""
 
+    // MARK: - Trip split / settle-up (#258)
+    //
+    // Full settle-up for trip expenses. Distinct from the #188 `numberOfShares`
+    // model (which stores the user's per-share amount and leaves `sgdAmount`
+    // already divided): when a trip split is set, `originalAmount` / `sgdAmount`
+    // hold the FULL bill and the per-person breakdown lives in `splitsData`, so
+    // the settle-up math can net who paid against who owes. `myShareSGD` below
+    // reconciles the two conventions for personal totals.
+    //
+    // - `paidByPersonUUID`: who fronted the money. nil = the user ("me") paid.
+    // - `splitsData`: JSON-encoded `[ExpenseSplitEntry]` (personUUID + shares).
+    //   A nil personUUID entry is the user's own slice. nil / empty = an
+    //   UNSPLIT expense (today's behaviour) — counts fully in personal totals.
+    //
+    // Both additive with nil defaults so the SwiftData lightweight migration on
+    // existing installs stays safe (add-with-default, never remove) and every
+    // existing call site / row is unaffected (no payer, no splits).
+    var paidByPersonUUID: UUID? = nil
+    var splitsData: Data? = nil
+
     // MARK: - Dead-field parity with other LocalModels
     //
     // These are intentionally unused on Phase A. Kept so that the SwiftData
@@ -196,6 +216,8 @@ final class LocalExpense {
         numberOfShares: Int = 1,
         isRefund: Bool = false,
         dedupeDescriptor: String = "",
+        paidByPersonUUID: UUID? = nil,
+        splitsData: Data? = nil,
         needsSync: Bool = false,
         version: Int = 0
     ) {
@@ -224,6 +246,8 @@ final class LocalExpense {
         self.numberOfShares = numberOfShares
         self.isRefund = isRefund
         self.dedupeDescriptor = dedupeDescriptor
+        self.paidByPersonUUID = paidByPersonUUID
+        self.splitsData = splitsData
         self.needsSync = needsSync
         self.version = version
     }
@@ -268,5 +292,45 @@ final class LocalExpense {
     /// the home-currency figures elsewhere on the row.
     var receiptTotalSGD: Double {
         sgdAmount * Double(max(numberOfShares, 1))
+    }
+
+    // MARK: - Trip split helpers (#258)
+
+    /// Decoded per-person split entries. Empty when the expense is unsplit
+    /// (`splitsData` nil / empty). Read/write: setting an empty array clears
+    /// `splitsData` back to nil so an unsplit expense stores nothing.
+    var splits: [ExpenseSplitEntry] {
+        get {
+            guard let splitsData, !splitsData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([ExpenseSplitEntry].self, from: splitsData)) ?? []
+        }
+        set {
+            splitsData = newValue.isEmpty ? nil : (try? JSONEncoder().encode(newValue))
+        }
+    }
+
+    /// Whether this expense is split across people via the full settle-up model
+    /// (#258). Distinct from the #188 `isSplit` (equal N-way per-share model).
+    var isGroupSplit: Bool {
+        !splits.isEmpty
+    }
+
+    /// The user's own signed home-currency contribution to personal totals.
+    ///
+    /// - Unsplit expense: the whole signed amount (identical to `signedSGD`),
+    ///   so existing data and non-trip expenses count exactly as before.
+    /// - Group split: `signedSGD * (myShares / totalShares)`, where "me" is the
+    ///   nil-personUUID entry. Zero when the user isn't in the split. Falls back
+    ///   to the full amount if the shares are degenerate (total <= 0), so a
+    ///   malformed split never silently drops a real expense from totals.
+    var myShareSGD: Double {
+        let entries = splits
+        guard !entries.isEmpty else { return signedSGD }
+        let totalShares = entries.reduce(0) { $0 + max($1.shares, 0) }
+        guard totalShares > 0 else { return signedSGD }
+        let myShares = entries
+            .filter { $0.personUUID == nil }
+            .reduce(0) { $0 + max($1.shares, 0) }
+        return signedSGD * (Double(myShares) / Double(totalShares))
     }
 }

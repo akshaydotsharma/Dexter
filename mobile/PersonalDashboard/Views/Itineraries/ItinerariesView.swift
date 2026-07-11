@@ -377,6 +377,17 @@ private struct TripEditorSheet: View {
     @State private var loaded: Bool = false
     @FocusState private var nameFocused: Bool
 
+    /// Trip participants for expense splitting (#258). Held as an ordered list
+    /// of `LocalPerson.clientUUID`s; encoded to `participantsData` on save.
+    @State private var participantUUIDs: [UUID] = []
+    /// Selection binding for the reused `PersonPickerSheet` (find-or-create).
+    @State private var pickedParticipant: ExpenseTag?
+    @State private var showingParticipantPicker: Bool = false
+
+    /// All people, so the stored participant UUIDs resolve to names + colours.
+    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    private var allPeople: [LocalPerson]
+
     private let nameMaxLength = 64
     private let notesMaxLength = 1000
 
@@ -389,6 +400,7 @@ private struct TripEditorSheet: View {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         nameField
                         dateFields
+                        participantsField
                         notesField
                     }
                     .padding(Space.lg)
@@ -466,6 +478,92 @@ private struct TripEditorSheet: View {
         }
     }
 
+    /// Participants for expense splitting (#258). Colcoured person chips with a
+    /// remove affordance, plus an "Add" chip that opens the reused
+    /// `PersonPickerSheet` (find-or-create by name). Horizontally scrollable so
+    /// a large group never blows out the sheet width.
+    private var participantsField: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack {
+                Text("Participants").eyebrow()
+                Spacer()
+                Text("For splitting expenses")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Space.sm) {
+                    ForEach(participantPeople, id: \.clientUUID) { person in
+                        participantChip(person)
+                    }
+                    addParticipantChip
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .sheet(isPresented: $showingParticipantPicker) {
+            PersonPickerSheet(selection: $pickedParticipant)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .onChange(of: pickedParticipant) { _, newValue in
+            if let tag = newValue, !participantUUIDs.contains(tag.uuid) {
+                participantUUIDs.append(tag.uuid)
+            }
+            // Reset so picking the same person twice in a row still fires.
+            pickedParticipant = nil
+        }
+    }
+
+    /// Resolved participant records, preserving the stored order.
+    private var participantPeople: [LocalPerson] {
+        participantUUIDs.compactMap { id in allPeople.first { $0.clientUUID == id } }
+    }
+
+    private func participantChip(_ person: LocalPerson) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(personHex: person.colorHex))
+                .frame(width: 8, height: 8)
+            Text(person.name)
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
+            Button {
+                participantUUIDs.removeAll { $0 == person.clientUUID }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(person.name)")
+        }
+        .padding(.leading, Space.sm)
+        .padding(.trailing, Space.xs + 2)
+        .padding(.vertical, 6)
+        .background(Tokens.surface2, in: Capsule())
+    }
+
+    private var addParticipantChip: some View {
+        Button {
+            showingParticipantPicker = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Add")
+                    .font(.edFootnote)
+            }
+            .foregroundStyle(Tokens.accent(for: .itineraries))
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, 6)
+            .background(Tokens.accent(for: .itineraries).opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add participant")
+    }
+
     private var notesField: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             HStack {
@@ -531,6 +629,7 @@ private struct TripEditorSheet: View {
                 startDate = existing.startDate
                 endDate = existing.endDate
                 notes = existing.notes
+                participantUUIDs = existing.participantPersonUUIDs
             }
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -555,6 +654,7 @@ private struct TripEditorSheet: View {
                 endDate: normalisedEnd,
                 notes: cleanNotes
             )
+            trip.participantPersonUUIDs = participantUUIDs
             modelContext.insert(trip)
         case .existing(let uuid):
             let descriptor = FetchDescriptor<LocalTrip>(
@@ -565,6 +665,7 @@ private struct TripEditorSheet: View {
                 existing.startDate = normalisedStart
                 existing.endDate = normalisedEnd
                 existing.notes = cleanNotes
+                existing.participantPersonUUIDs = participantUUIDs
                 existing.updatedAt = Date()
             } else {
                 let trip = LocalTrip(
@@ -573,6 +674,7 @@ private struct TripEditorSheet: View {
                     endDate: normalisedEnd,
                     notes: cleanNotes
                 )
+                trip.participantPersonUUIDs = participantUUIDs
                 modelContext.insert(trip)
             }
         }

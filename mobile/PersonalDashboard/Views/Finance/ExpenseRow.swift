@@ -95,7 +95,7 @@ struct ExpenseRow: View {
     /// Whether any badge (person, event, or split) should render on the
     /// secondary badge row.
     private var hasBadges: Bool {
-        hasTags || expense.isSplit
+        hasTags || expense.isSplit || expense.isGroupSplit
     }
 
     /// Split badge label, e.g. "1/3 of SGD 90.00" (#188). Shows the user's
@@ -131,7 +131,35 @@ struct ExpenseRow: View {
             if expense.isSplit {
                 splitBadge
             }
+            if expense.isGroupSplit {
+                groupSplitBadge
+            }
         }
+    }
+
+    /// Group-split badge (#258). The row's primary amount shows the FULL bill
+    /// (that's how trip splits store `sgdAmount`), so this badge surfaces the
+    /// user's own share alongside it — "your S$45.00 of S$135.00" — mirroring
+    /// how the finance dashboard now counts only the user's share. Renders only
+    /// for the full settle-up model (`splitsData` set), never for existing rows.
+    private var groupSplitBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.2.fill")
+                .font(.system(size: 9, weight: .semibold))
+            Text(groupSplitLabel)
+                .font(.edCaption)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .foregroundStyle(Tokens.muted)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Tokens.muted.opacity(0.12), in: Capsule())
+        .accessibilityLabel("Split expense, \(groupSplitLabel)")
+    }
+
+    private var groupSplitLabel: String {
+        "your \(FinanceDashboardBand.formatMoney(abs(expense.myShareSGD))) of \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
     }
 
     /// Split badge (#188). Same capsule shape as `PersonEventBadge` but muted
