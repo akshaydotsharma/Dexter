@@ -38,8 +38,6 @@ struct TripDetailView: View {
 
     // MARK: Ticket upload / scan state (#222)
     @State private var showingTicketCamera: Bool = false
-    @State private var showingTicketPhotoLibrary: Bool = false
-    @State private var showingTicketPDFPicker: Bool = false
     /// Blocks the FAB and shows a lightweight "Reading ticket…" overlay while
     /// the decode + extraction pipeline runs.
     @State private var isProcessingTicket: Bool = false
@@ -53,15 +51,9 @@ struct TripDetailView: View {
     @State private var ticketError: String?
 
     // MARK: Expense upload / import state (#258)
-    /// Receipt-capture pickers for the Expenses tab. Kept distinct from the
-    /// ticket pickers above so the two upload flows don't share presentation
-    /// state. Mirrors FinanceView's capture menu, but scoped to this trip.
+    /// Camera cover for the Expenses tab, distinct from the ticket camera so
+    /// the two capture flows keep separate handlers.
     @State private var showingExpenseCamera: Bool = false
-    @State private var showingExpensePhotoLibrary: Bool = false
-    @State private var showingExpensePDFPicker: Bool = false
-    /// Separate flag for the batch statement import (distinct from the
-    /// single-receipt PDF picker above).
-    @State private var showingStatementPicker: Bool = false
     /// Blocks the expense FAB and shows a lightweight overlay while a receipt /
     /// statement upload extracts + imports in the background.
     @State private var isProcessingExpenseUpload: Bool = false
@@ -69,6 +61,27 @@ struct TripDetailView: View {
     @State private var statementImportSummary: String?
     /// Hard-failure alert when an upload couldn't be processed at all.
     @State private var expenseCaptureError: String?
+
+    // MARK: Shared pickers (#261)
+    /// SwiftUI honours only one `.fileImporter` (and one `.photosPicker`) per
+    /// view — stacking a second silently breaks presentation — so the ticket
+    /// and expense flows share one picker of each kind and dispatch on a
+    /// purpose set by the menu button that opened it.
+    @State private var showingPDFPicker: Bool = false
+    @State private var pdfPickPurpose: PDFPickPurpose = .ticket
+    @State private var showingPhotoLibrary: Bool = false
+    @State private var photoPickPurpose: PhotoPickPurpose = .ticket
+
+    private enum PDFPickPurpose {
+        case ticket
+        case expenseReceipt
+        case statement
+    }
+
+    private enum PhotoPickPurpose {
+        case ticket
+        case expense
+    }
 
     init(trip: LocalTrip) {
         self.trip = trip
@@ -149,11 +162,18 @@ struct TripDetailView: View {
             }
             .ignoresSafeArea()
         }
-        .photoLibraryPicker(isPresented: $showingTicketPhotoLibrary) { data in
-            handleTicketData(data, isPDF: false)
+        .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
+            switch photoPickPurpose {
+            case .ticket:  handleTicketData(data, isPDF: false)
+            case .expense: handleExpenseCaptureData(data, source: .photoLibrary)
+            }
         }
-        .pdfPicker(isPresented: $showingTicketPDFPicker) { data, _ in
-            handleTicketData(data, isPDF: true)
+        .pdfPicker(isPresented: $showingPDFPicker) { data, fileName in
+            switch pdfPickPurpose {
+            case .ticket:         handleTicketData(data, isPDF: true)
+            case .expenseReceipt: handleExpenseCaptureData(data, source: .pdf)
+            case .statement:      handleStatementData(data, fileName: fileName)
+            }
         }
         // Full-screen scan surface for a ticket card tap (or right after a
         // successful upload).
@@ -192,8 +212,9 @@ struct TripDetailView: View {
         } message: {
             Text(ticketError ?? "")
         }
-        // Expense-upload pickers (#258). Receipt/photo/PDF flow into the review
-        // sheet (which already carries this trip's context); a statement PDF
+        // Expense camera (#258). Photo / PDF / statement uploads go through the
+        // shared pickers above (#261); receipt results flow into the review
+        // sheet (which already carries this trip's context), a statement PDF
         // batch-imports every line, linked to the trip.
         .fullScreenCover(isPresented: $showingExpenseCamera) {
             CameraPicker { data in
@@ -201,15 +222,6 @@ struct TripDetailView: View {
                 handleExpenseCaptureData(data, source: .camera)
             }
             .ignoresSafeArea()
-        }
-        .photoLibraryPicker(isPresented: $showingExpensePhotoLibrary) { data in
-            handleExpenseCaptureData(data, source: .photoLibrary)
-        }
-        .pdfPicker(isPresented: $showingExpensePDFPicker) { data, _ in
-            handleExpenseCaptureData(data, source: .pdf)
-        }
-        .pdfPicker(isPresented: $showingStatementPicker) { data, fileName in
-            handleStatementData(data, fileName: fileName)
         }
         .alert(
             "Import complete",
@@ -446,12 +458,14 @@ struct TripDetailView: View {
                 }
             }
             Button {
-                showingTicketPhotoLibrary = true
+                photoPickPurpose = .ticket
+                showingPhotoLibrary = true
             } label: {
                 Label("Ticket from Photos", systemImage: "photo")
             }
             Button {
-                showingTicketPDFPicker = true
+                pdfPickPurpose = .ticket
+                showingPDFPicker = true
             } label: {
                 Label("Ticket from PDF", systemImage: "doc.text")
             }
@@ -477,17 +491,20 @@ struct TripDetailView: View {
                 }
             }
             Button {
-                showingExpensePhotoLibrary = true
+                photoPickPurpose = .expense
+                showingPhotoLibrary = true
             } label: {
                 Label("Photo from library", systemImage: "photo.on.rectangle")
             }
             Button {
-                showingExpensePDFPicker = true
+                pdfPickPurpose = .expenseReceipt
+                showingPDFPicker = true
             } label: {
                 Label("PDF from Files", systemImage: "doc.text")
             }
             Button {
-                showingStatementPicker = true
+                pdfPickPurpose = .statement
+                showingPDFPicker = true
             } label: {
                 Label("Import statement", systemImage: "doc.text.magnifyingglass")
             }

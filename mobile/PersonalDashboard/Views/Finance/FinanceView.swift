@@ -49,10 +49,16 @@ struct FinanceView: View {
     @State private var showingPhotoLibrary: Bool = false
     @State private var showingPDFPicker: Bool = false
 
-    /// Separate file-picker flag for the batch statement import (#184). Kept
-    /// distinct from `showingPDFPicker` (the single-receipt path) so the two
-    /// PDF flows don't share presentation state.
-    @State private var showingStatementPicker: Bool = false
+    /// Which flow the PDF picker serves. SwiftUI honours only one
+    /// `.fileImporter` per view — stacking a second silently breaks both — so
+    /// the single-receipt and statement paths share one picker and dispatch
+    /// on this purpose (#261).
+    @State private var pdfPickPurpose: PDFPickPurpose = .receipt
+
+    private enum PDFPickPurpose {
+        case receipt
+        case statement
+    }
 
     /// Presents the recurring-expense management sheet (#236).
     @State private var showingRecurring: Bool = false
@@ -115,11 +121,11 @@ struct FinanceView: View {
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
             handleCaptureData(data, source: .photoLibrary)
         }
-        .pdfPicker(isPresented: $showingPDFPicker) { data, _ in
-            handleCaptureData(data, source: .pdf)
-        }
-        .pdfPicker(isPresented: $showingStatementPicker) { data, fileName in
-            handleStatementData(data, fileName: fileName)
+        .pdfPicker(isPresented: $showingPDFPicker) { data, fileName in
+            switch pdfPickPurpose {
+            case .receipt:   handleCaptureData(data, source: .pdf)
+            case .statement: handleStatementData(data, fileName: fileName)
+            }
         }
         .alert(
             // Source-agnostic: this summary now backs both statement imports
@@ -186,7 +192,8 @@ struct FinanceView: View {
                 Label("PDF from Files", systemImage: "doc.text")
             }
             Button {
-                showingStatementPicker = true
+                pdfPickPurpose = .statement
+                showingPDFPicker = true
             } label: {
                 Label("Import statement", systemImage: "doc.text.magnifyingglass")
             }
@@ -217,7 +224,9 @@ struct FinanceView: View {
         switch source {
         case .camera:        showingCamera = true
         case .photoLibrary:  showingPhotoLibrary = true
-        case .pdf:           showingPDFPicker = true
+        case .pdf:
+            pdfPickPurpose = .receipt
+            showingPDFPicker = true
         }
     }
 
