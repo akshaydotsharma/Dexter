@@ -170,7 +170,11 @@ struct AddExpenseSheet: View {
                         if let statement = statementLabel.trimmedNonEmpty {
                             statementAttribution(statement)
                         }
-                        personField
+                        // The "for/with person" tag (#183) is redundant on a
+                        // trip expense — "Split between" carries who it's for.
+                        if tripContext == nil {
+                            personField
+                        }
                         eventField
                         // Trip context with participants → full settle-up split
                         // UI (payer + per-person shares). Otherwise the existing
@@ -708,15 +712,57 @@ struct AddExpenseSheet: View {
                     .font(.edCaption)
                     .monospacedDigit()
                     .foregroundStyle(Tokens.muted)
-                Stepper("", value: draft.shares, in: 1...20)
-                    .labelsHidden()
-                    .tint(Tokens.accentFinance)
-                    .fixedSize()
-                    .accessibilityLabel("\(d.name) shares: \(d.shares)")
+                shareControl(draft)
             }
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
+    }
+
+    /// Custom −/n/+ share control: unlike a bare `Stepper`, the current share
+    /// count sits visibly between the buttons. Minusing below 1 removes the
+    /// person from the split (same as unticking them); shares reset to 1 so
+    /// re-including starts clean.
+    private func shareControl(_ draft: Binding<SplitDraft>) -> some View {
+        HStack(spacing: 0) {
+            Button {
+                if draft.wrappedValue.shares <= 1 {
+                    draft.wrappedValue.included = false
+                    draft.wrappedValue.shares = 1
+                } else {
+                    draft.wrappedValue.shares -= 1
+                }
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Tokens.ink)
+                    .frame(width: 30, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Fewer shares for \(draft.wrappedValue.name)")
+
+            Text("\(draft.wrappedValue.shares)")
+                .font(.edFootnoteStrong)
+                .monospacedDigit()
+                .foregroundStyle(Tokens.ink)
+                .frame(minWidth: 20)
+
+            Button {
+                draft.wrappedValue.shares = min(draft.wrappedValue.shares + 1, 20)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Tokens.ink)
+                    .frame(width: 30, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("More shares for \(draft.wrappedValue.name)")
+        }
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.sm))
+        .accessibilityElement(children: .contain)
+        .accessibilityValue("\(draft.wrappedValue.name) shares: \(draft.wrappedValue.shares)")
     }
 
     /// "Your share: CUR X of CUR Y" line, shown when the bill is shared.

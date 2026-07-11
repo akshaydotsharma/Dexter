@@ -173,9 +173,14 @@ struct StatementImporter {
     /// (`StatementExtractionError`); per-line insert failures are caught and
     /// counted in the result, never propagated, so one bad row can't sink the
     /// whole import.
-    func importStatement(pdfData: Data, fileName: String? = nil) async throws -> StatementImportResult {
+    /// `trip` (#258): when non-nil, every inserted row is linked to that trip and
+    /// — if the trip has participants — seeded with an equal split (everyone at
+    /// one share, the user as payer). nil keeps today's Finance behaviour (no
+    /// trip, no split). Dedup is unaffected: trip linkage is stamped AFTER the
+    /// dedup decisions, which never consider it.
+    func importStatement(pdfData: Data, fileName: String? = nil, trip: LocalTrip? = nil) async throws -> StatementImportResult {
         let (lines, meta, truncated) = try await anthropic.extractStatement(pdfData: pdfData)
-        return await insert(lines: lines, meta: meta, fileName: fileName, possiblyTruncated: truncated)
+        return await insert(lines: lines, meta: meta, fileName: fileName, possiblyTruncated: truncated, trip: trip)
     }
 
     /// Bucket + insert already-parsed lines. Split out from `importStatement`
@@ -203,7 +208,8 @@ struct StatementImporter {
         source: ExpenseSource = .pdf,
         receiptImagePath: String? = nil,
         recordsImportHistory: Bool = true,
-        possiblyTruncated: Bool
+        possiblyTruncated: Bool,
+        trip: LocalTrip? = nil
     ) async -> StatementImportResult {
         var imported = 0
         var refunds = 0
@@ -227,6 +233,14 @@ struct StatementImporter {
         let statementFileName = (fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let cardLabel = meta.cardLabel
         let paymentMethod = cardLabel.isEmpty ? nil : cardLabel
+
+        // Trip linkage + default split (#258), resolved once. When importing
+        // from a trip, every inserted row is stamped with the trip FK; if the
+        // trip has participants, it also gets an equal split (everyone at one
+        // share, the user as payer) under the full-bill convention
+        // (`numberOfShares` stays 1). nil trip → no linkage, no split.
+        let tripUUID = trip?.clientUUID
+        let tripParticipants = trip?.participantPersonUUIDs ?? []
 
         // One statement line reduced to everything the insert step needs, plus
         // its structural class key. Built in the classification pass below so the
@@ -441,6 +455,18 @@ struct StatementImporter {
                 // statement into a single Activity row titled by its file name,
                 // even when the header couldn't be parsed (empty statementLabel).
                 row.statementFileName = statementFileName
+                // Trip linkage + default split (#258). Stamped after the row is
+                // built; dedup already ran and never considered the trip, so a
+                // re-import stays idempotent regardless of trip linkage.
+                if let tripUUID {
+                    row.tripUUID = tripUUID
+                    if !tripParticipants.isEmpty {
+                        var entries: [ExpenseSplitEntry] = [ExpenseSplitEntry(person: nil, shares: 1)]
+                        entries.append(contentsOf: tripParticipants.map { ExpenseSplitEntry(person: $0, shares: 1) })
+                        row.splits = entries
+                        row.paidByPersonUUID = nil
+                    }
+                }
                 try? store.context.save()
 
                 imported += 1

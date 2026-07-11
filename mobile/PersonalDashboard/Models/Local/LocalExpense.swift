@@ -333,4 +333,23 @@ final class LocalExpense {
             .reduce(0) { $0 + max($1.shares, 0) }
         return signedSGD * (Double(myShares) / Double(totalShares))
     }
+
+    /// Signed amount in the currency the expense was captured in: negative for
+    /// refunds, mirroring `signedSGD`.
+    var signedOriginal: Double {
+        isRefund ? -originalAmount : originalAmount
+    }
+
+    /// `myShareSGD`'s twin in the captured currency, for surfaces that display
+    /// amounts as-added rather than converted (#258). Same shares math.
+    var myShareOriginal: Double {
+        let entries = splits
+        guard !entries.isEmpty else { return signedOriginal }
+        let totalShares = entries.reduce(0) { $0 + max($1.shares, 0) }
+        guard totalShares > 0 else { return signedOriginal }
+        let myShares = entries
+            .filter { $0.personUUID == nil }
+            .reduce(0) { $0 + max($1.shares, 0) }
+        return signedOriginal * (Double(myShares) / Double(totalShares))
+    }
 }

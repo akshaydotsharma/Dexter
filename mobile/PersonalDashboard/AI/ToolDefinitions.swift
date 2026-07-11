@@ -431,34 +431,70 @@ enum ToolDefinitions {
     /// on-device after the tool call lands, so the LLM never needs to know
     /// FX rates. Category is one of the 13 canonical raw values — the model
     /// picks based on merchant + description.
-    private static let addExpense = AnthropicTool(
-        name: "add_expense",
-        description: "Log a NEW expense. Use this when the user says they spent money (e.g., \"I spent $20 on lunch at Starbucks\", \"add a 67 SGD grocery run yesterday\"). Pick the best-fitting category from the enum. If currency isn't specified, default to SGD. Date defaults to today if the user doesn't say. If the user names a person the expense is for/with (\"dinner with Sarah\") set person_name, and if they name an occasion or trip it belongs to (\"for the Bali trip\") set event_name — reuse the EXACT existing names from the PEOPLE / EVENTS context when they refer to one already there, so you don't create near-duplicates. If the user says the bill was split among several people (e.g., \"split 3 ways\", \"between the 4 of us\"), set number_of_shares to that count and pass the FULL receipt total in original_amount — the app records only the user's share.",
-        input_schema: object(
-            properties: [
-                "id": string("UUID string for the new expense. Generate a fresh one for every call (any valid lowercase UUID, e.g., 9b3a8e1c-2f6f-4a3b-9d2c-7e0a1b4c5d6e)."),
-                "date": string("ISO 8601 date the spend happened (e.g., 2026-05-22 or 2026-05-22T18:30:00Z). Use today's date if the user did not specify a date."),
-                "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, rent, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit based on merchant and description (rent/lease payments -> rent)."),
-                "merchant": string("Merchant or vendor name (e.g., \"Starbucks\", \"FairPrice\"). Use empty string if unknown."),
-                "description": string("Short description of the expense (e.g., \"lunch with Sarah\", \"weekly groceries\"). Use empty string if none."),
-                "original_amount": .object([
-                    "type": .string("number"),
-                    "description": .string("Amount paid in the original currency. Must be greater than zero.")
-                ]),
-                "original_currency": string("ISO 4217 currency code (e.g., \"SGD\", \"USD\", \"EUR\"). Default to \"SGD\" if the user did not specify a currency."),
-                "payment_method": string("Optional payment method (e.g., \"Cash\", \"Visa **1234\"). Use empty string if unknown."),
-                "source": string("How this expense was captured. Use \"receipt\" ONLY when logging from a forwarded purchase/receipt email; leave empty otherwise. Allowed values: manual, text, voice, photo, receipt, pdf, recurring."),
-                "trip_id": string("UUID of the EXISTING trip this expense belongs to, when (and only when) it is a travel fare for a trip in the EXISTING TRIPS context (e.g., a flight or hotel charge). Use empty string for any non-travel purchase."),
-                "person_name": string("Name of the person this expense is for or with (e.g., \"Sarah\"), when the user names one. Reuse the exact name from the PEOPLE context if it already exists. Use empty string if none."),
-                "event_name": string("Name of the occasion, group, or trip this expense belongs to (e.g., \"Bali trip\", \"Diwali gifts\"), when the user names one. Reuse the exact name from the EVENTS context if it already exists. Use empty string if none."),
-                "number_of_shares": .object([
-                    "type": .string("integer"),
-                    "description": .string("How many people the bill was split among, when the user says it was shared (e.g. \"split 3 ways\" => 3). When set, original_amount MUST be the FULL receipt total — the app stores only the user's equal share (total / number_of_shares). Omit or use 1 for a normal unshared expense.")
-                ])
-            ],
-            required: ["id", "date", "category", "merchant", "description", "original_amount", "original_currency", "payment_method"]
+    ///
+    /// `includeSplitParams` gates the trip-settle-up params (`paid_by`,
+    /// `split_with`, #258). They ship on the chat / capture surface but are
+    /// deliberately withheld from the email path (`addExpenseEmailSafe`), whose
+    /// content is untrusted — the email path defaults trip splits in Swift
+    /// instead of letting the model emit split data.
+    private static func makeAddExpense(includeSplitParams: Bool) -> AnthropicTool {
+        var properties: [String: AnthropicJSONValue] = [
+            "id": string("UUID string for the new expense. Generate a fresh one for every call (any valid lowercase UUID, e.g., 9b3a8e1c-2f6f-4a3b-9d2c-7e0a1b4c5d6e)."),
+            "date": string("ISO 8601 date the spend happened (e.g., 2026-05-22 or 2026-05-22T18:30:00Z). Use today's date if the user did not specify a date."),
+            "category": string("One of: food_and_dining, groceries, transport, shopping, entertainment, bills_and_utilities, rent, health_and_wellness, travel, subscriptions, personal_care, gifts_and_donations, other. Pick the best fit based on merchant and description (rent/lease payments -> rent)."),
+            "merchant": string("Merchant or vendor name (e.g., \"Starbucks\", \"FairPrice\"). Use empty string if unknown."),
+            "description": string("Short description of the expense (e.g., \"lunch with Sarah\", \"weekly groceries\"). Use empty string if none."),
+            "original_amount": .object([
+                "type": .string("number"),
+                "description": .string("Amount paid in the original currency. Must be greater than zero.")
+            ]),
+            "original_currency": string("ISO 4217 currency code (e.g., \"SGD\", \"USD\", \"EUR\"). Default to \"SGD\" if the user did not specify a currency."),
+            "payment_method": string("Optional payment method (e.g., \"Cash\", \"Visa **1234\"). Use empty string if unknown."),
+            "source": string("How this expense was captured. Use \"receipt\" ONLY when logging from a forwarded purchase/receipt email; leave empty otherwise. Allowed values: manual, text, voice, photo, receipt, pdf, recurring."),
+            "trip_id": string("UUID of the EXISTING trip this expense belongs to, when (and only when) it is a travel fare for a trip in the EXISTING TRIPS context (e.g., a flight or hotel charge). Use empty string for any non-travel purchase."),
+            "person_name": string("Name of the person this expense is for or with (e.g., \"Sarah\"), when the user names one. Reuse the exact name from the PEOPLE context if it already exists. Use empty string if none."),
+            "event_name": string("Name of the occasion, group, or trip this expense belongs to (e.g., \"Bali trip\", \"Diwali gifts\"), when the user names one. Reuse the exact name from the EVENTS context if it already exists. Use empty string if none."),
+            "number_of_shares": .object([
+                "type": .string("integer"),
+                "description": .string("How many people the bill was split among, when the user says it was shared (e.g. \"split 3 ways\" => 3). When set, original_amount MUST be the FULL receipt total — the app stores only the user's equal share (total / number_of_shares). Omit or use 1 for a normal unshared expense. Prefer split_with (named people) over this when you know who was involved.")
+            ])
+        ]
+
+        // Trip settle-up params (#258). Optional; only meaningful for a trip
+        // expense (trip_id set) or when the user explicitly names who paid or
+        // who a bill is split between. When set, pass the FULL bill in
+        // original_amount and leave number_of_shares at 1 — the app records the
+        // per-person breakdown from split_with and nets it in settle-up.
+        if includeSplitParams {
+            properties["paid_by"] = string("OPTIONAL. Who fronted the money: a person's name, or \"me\" for the user. Only set when this is a trip expense (trip_id set) or the user says who paid (e.g. \"Sam paid\"). Reuse the exact name from the trip's participants / the PEOPLE context. Omit or use empty string when the user paid a normal solo expense.")
+            properties["split_with"] = arrayOf(
+                .object(["type": .string("string")]),
+                description: "OPTIONAL. The people the bill is split among, by name; include \"me\" for the user when their share is part of it. Equal split (one share each in v1). Only set when the user is splitting a bill — usually a trip expense (e.g. \"split between all of us\", \"me and Sam\"). Reuse the exact names from the trip's participants / the PEOPLE context. When set, pass the FULL bill in original_amount and leave number_of_shares at 1. Omit for a normal solo expense."
+            )
+        }
+
+        let description = "Log a NEW expense. Use this when the user says they spent money (e.g., \"I spent $20 on lunch at Starbucks\", \"add a 67 SGD grocery run yesterday\"). Pick the best-fitting category from the enum. If currency isn't specified, default to SGD. Date defaults to today if the user doesn't say. If the user names a person the expense is for/with (\"dinner with Sarah\") set person_name, and if they name an occasion or trip it belongs to (\"for the Bali trip\") set event_name — reuse the EXACT existing names from the PEOPLE / EVENTS context when they refer to one already there, so you don't create near-duplicates. If the user says the bill was split among several people (e.g., \"split 3 ways\", \"between the 4 of us\"), set number_of_shares to that count and pass the FULL receipt total in original_amount — the app records only the user's share."
+            + (includeSplitParams
+               ? " For a TRIP expense, or whenever the user names who paid or who a bill is shared with, set paid_by and/or split_with with the exact person names (use \"me\" for the user) instead of number_of_shares — these drive the trip settle-up. Only set them when a split/payer is actually implied."
+               : "")
+
+        return AnthropicTool(
+            name: "add_expense",
+            description: description,
+            input_schema: object(
+                properties: properties,
+                required: ["id", "date", "category", "merchant", "description", "original_amount", "original_currency", "payment_method"]
+            )
         )
-    )
+    }
+
+    /// Chat / capture add_expense — carries the trip settle-up params (#258).
+    private static let addExpense = makeAddExpense(includeSplitParams: true)
+
+    /// Email-path add_expense — WITHOUT the settle-up params (#258). The email
+    /// content is untrusted, so the model is never offered `paid_by` /
+    /// `split_with` there; the email path defaults trip splits in Swift.
+    static let addExpenseEmailSafe = makeAddExpense(includeSplitParams: false)
 
     /// Create a recurring monthly expense TEMPLATE (#236). Does NOT log an
     /// expense immediately — it defines a fixed monthly charge that the app

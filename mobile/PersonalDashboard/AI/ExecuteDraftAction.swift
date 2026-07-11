@@ -133,11 +133,20 @@ struct ExecuteDraftAction {
         let personName = trimmedString(input["person_name"])
         let eventName = trimmedString(input["event_name"])
 
+        // Trip / group settle-up params (#258). When the model supplies
+        // `split_with` and/or `paid_by`, the row stores the FULL bill and the
+        // per-person breakdown lives in `splitsData` (applied after insert via
+        // `applyChatSplit`), so the #188 per-share division must be OFF —
+        // `numberOfShares` is forced to 1 here so `shareAmount` stays the full
+        // amount. Otherwise the #188 model applies as before.
+        let hasSplitParams = (input["split_with"]?.arrayValue?.isEmpty == false)
+            || (trimmedString(input["paid_by"]) != nil)
+
         // Optional split shares (#188). The model emits the FULL receipt total
         // in `original_amount` plus a share count; we store the user's equal
         // share (total / shares). Tolerate a JSON int, double, or numeric
         // string; clamp to >= 1 so a missing / bogus value behaves as unsplit.
-        let numberOfShares = max(
+        let numberOfShares = hasSplitParams ? 1 : max(
             input["number_of_shares"]?.intValue
                 ?? Int(input["number_of_shares"]?.stringValue ?? "")
                 ?? 1,
@@ -219,6 +228,13 @@ struct ExecuteDraftAction {
             tagged = true
         }
         if tagged {
+            try? save()
+        }
+
+        // Trip / group settle-up split (#258). Resolve `paid_by` + `split_with`
+        // names into a stored split (full-bill convention, `numberOfShares`
+        // already forced to 1 above). No-op when neither param is present.
+        if try applyChatSplit(input, to: row) {
             try? save()
         }
 
@@ -453,6 +469,82 @@ struct ExecuteDraftAction {
         f.dateFormat = "d MMM yyyy"
         return f
     }()
+
+    // MARK: - Trip / group split (#258)
+
+    /// Resolve the `paid_by` + `split_with` params on an `add_expense` call into
+    /// a stored settle-up split on `row`. Returns true when a split was
+    /// persisted (so the caller re-saves), false when the params imply a plain
+    /// personal expense (or are absent).
+    ///
+    /// Name mapping mirrors the existing `person_name` handling: each name is
+    /// find-or-created (case-insensitive) via `PersonService`, and the literal
+    /// "me"/"myself"/"I"/"you" maps to the user's own slice (nil personUUID).
+    /// The LLM decides who belongs in the list; this code only maps names — the
+    /// user is included only when the list names them (or when a person paid but
+    /// no split list was given, in which case the whole bill is the user's to
+    /// settle with that payer). Equal split (one share each) in v1.
+    ///
+    /// A split is persisted ONLY when someone other than the user is involved
+    /// (as payer or split party); "the user paid, only the user shares" stays an
+    /// ordinary personal expense so it counts fully in personal totals.
+    private func applyChatSplit(_ input: [String: AnthropicJSONValue], to row: LocalExpense) throws -> Bool {
+        let splitNames = input["split_with"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+        let payerRaw = trimmedString(input["paid_by"])
+        guard !splitNames.isEmpty || payerRaw != nil else { return false }
+
+        let personService = PersonService(store: store)
+
+        // Payer: a named person, or the user ("me" / empty).
+        var payerUUID: UUID? = nil
+        var payerIsPerson = false
+        if let payerRaw, !Self.isMeToken(payerRaw) {
+            let person = try personService.findOrCreate(name: payerRaw)
+            payerUUID = person.clientUUID
+            payerIsPerson = true
+        }
+
+        // Split parties, in the order the model listed them, deduped. The user
+        // is included only when "me" appears in the list.
+        var entries: [ExpenseSplitEntry] = []
+        var seenPersons = Set<UUID>()
+        var includedMe = false
+        for name in splitNames {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if Self.isMeToken(trimmed) {
+                if !includedMe {
+                    entries.append(ExpenseSplitEntry(person: nil, shares: 1))
+                    includedMe = true
+                }
+            } else {
+                let person = try personService.findOrCreate(name: trimmed)
+                if seenPersons.insert(person.clientUUID).inserted {
+                    entries.append(ExpenseSplitEntry(person: person.clientUUID, shares: 1))
+                }
+            }
+        }
+
+        // A named payer with no split list → the whole bill is the user's to
+        // settle with that payer (the user owes the full amount).
+        if entries.isEmpty, payerIsPerson {
+            entries.append(ExpenseSplitEntry(person: nil, shares: 1))
+        }
+
+        // Only persist when someone other than the user is involved.
+        let hasOtherParty = payerIsPerson || entries.contains { $0.personUUID != nil }
+        guard hasOtherParty, !entries.isEmpty else { return false }
+
+        row.splits = entries
+        row.paidByPersonUUID = payerUUID
+        return true
+    }
+
+    /// True when a split name refers to the user rather than another person.
+    private static func isMeToken(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["me", "myself", "i", "you", "self"].contains(t)
+    }
 
     // MARK: - CREATE
 

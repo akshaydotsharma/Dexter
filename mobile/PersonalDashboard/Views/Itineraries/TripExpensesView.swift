@@ -9,6 +9,12 @@ import SwiftData
 /// count), netted settle-up balances ("Rohan is owed S$140"), and the expense
 /// list itself. Adding / editing goes through `AddExpenseSheet` with a trip
 /// context, driven by the parent `TripDetailView` (which owns the sheet + FAB).
+/// Participants are managed in the trip editor (Edit trip on the Itineraries
+/// list), not here.
+///
+/// Amounts default to the currency each expense was CAPTURED in — a trip's
+/// spend reads naturally in euros on a Europe trip. A toggle on the stats card
+/// converts the whole tab to the chosen display currency on demand.
 struct TripExpensesView: View {
     let trip: LocalTrip
 
@@ -22,6 +28,17 @@ struct TripExpensesView: View {
     /// People, so participant names / colours resolve for the settle-up rows.
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var people: [LocalPerson]
+
+    /// Whose numbers the summary card shows (and, for non-default selections,
+    /// which expenses the list narrows to). Multi-select; never empty.
+    /// Defaults to just the user — the tab's core question is "how much have
+    /// I spent on this trip".
+    @State private var filterParties: Set<SplitPartyID> = [.me]
+    /// Currency the summary card renders in. `nil` = the Settings display
+    /// currency; otherwise one of the currencies captured on this trip
+    /// (converted through the trip's own frozen FX observations).
+    @State private var filterCurrency: String? = nil
+    @State private var showingFilter: Bool = false
 
     init(trip: LocalTrip, onEditExpense: @escaping (String) -> Void) {
         self.trip = trip
@@ -52,6 +69,7 @@ struct TripExpensesView: View {
         ScrollView {
             VStack(spacing: Space.lg) {
                 statsCard
+                personSummaryCard
                 if !balances.isEmpty {
                     settleUpCard
                 }
@@ -62,28 +80,231 @@ struct TripExpensesView: View {
             .padding(.top, Space.lg)
         }
         .scrollDismissesKeyboard(.interactively)
+        .sheet(isPresented: $showingFilter) {
+            TripExpenseFilterSheet(
+                participants: participantPeople,
+                currencyOptions: filterCurrencyOptions,
+                displayCode: displayCurrencyCode,
+                parties: $filterParties,
+                currency: $filterCurrency
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
-    // MARK: - Stats card
-
-    private var groupTotal: Double {
-        expenses.reduce(0) { $0 + $1.signedSGD }
+    /// Trip participants resolved to live person records, preserving order.
+    private var participantPeople: [LocalPerson] {
+        trip.participantPersonUUIDs.compactMap { id in
+            people.first { $0.clientUUID == id }
+        }
     }
 
-    private var yourShare: Double {
-        expenses.reduce(0) { $0 + $1.myShareSGD }
+    // MARK: - Person summary (filterable)
+
+    /// Currencies the summary can render in: every capture currency on the
+    /// trip. The Settings display currency is the `nil` option and always
+    /// offered first by the sheet.
+    private var filterCurrencyOptions: [String] {
+        totalsByCurrency.map { $0.code }.filter { $0 != displayCurrencyCode }
     }
 
-    private var statsCard: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            Text("Group total").eyebrow()
-            Text(FinanceDashboardBand.formatMoney(groupTotal))
+    /// Aggregate conversion rate (code → SGD) observed on this trip's own
+    /// expenses: total frozen SGD over total captured amount. Weighted by
+    /// spend, stable across extraction noise, and works offline. Nil when the
+    /// trip has no usable observation for the code.
+    private func tripRateToSGD(for code: String) -> Double? {
+        let matching = expenses.filter { $0.originalCurrency.uppercased() == code }
+        let original = matching.reduce(0) { $0 + $1.originalAmount }
+        let sgd = matching.reduce(0) { $0 + $1.sgdAmount }
+        guard original > 0, sgd > 0 else { return nil }
+        return sgd / original
+    }
+
+    /// Format a home-currency (SGD) value in the summary's selected currency.
+    private func formatFiltered(_ sgdValue: Double) -> String {
+        guard let code = filterCurrency, code != displayCurrencyCode else {
+            return FinanceDashboardBand.formatMoney(sgdValue)
+        }
+        if code == "SGD" {
+            return Self.formatOriginal(sgdValue, code: code)
+        }
+        guard let rate = tripRateToSGD(for: code) else {
+            return FinanceDashboardBand.formatMoney(sgdValue)
+        }
+        return Self.formatOriginal(sgdValue / rate, code: code)
+    }
+
+    /// Selected party names in stable order: You first, then trip-participant
+    /// order.
+    private var selectedPartyNames: [String] {
+        var names: [String] = []
+        if filterParties.contains(.me) { names.append("You") }
+        for person in participantPeople where filterParties.contains(.person(person.clientUUID)) {
+            names.append(person.name)
+        }
+        return names
+    }
+
+    /// "Your spend" / "Rohan's spend" / "You + Rohan" / "3 people".
+    private var summaryTitle: String {
+        let names = selectedPartyNames
+        if filterParties == [.me] { return "Your spend" }
+        if names.count == 1 { return names[0] == "You" ? "Your spend" : "\(names[0])'s spend" }
+        if names.count == 2 { return "\(names[0]) + \(names[1])" }
+        return "\(names.count) people"
+    }
+
+    /// Short list-header suffix for the active selection.
+    private var selectionShortLabel: String {
+        let names = selectedPartyNames
+        if names.count <= 2 { return names.joined(separator: " + ") }
+        return "\(names.count) people"
+    }
+
+    /// The card that answers "how much have I spent on this trip" — and the
+    /// same for any set of participants via the filter. Spent = their combined
+    /// consumed share across the bills; Paid = what they fronted; the net line
+    /// is their combined settle-up position.
+    private var personSummaryCard: some View {
+        let allTotals = TripSettlement.totals(expenses: expenses)
+        let paid = filterParties.reduce(0) { $0 + (allTotals[$1]?.paid ?? 0) }
+        let owed = filterParties.reduce(0) { $0 + (allTotals[$1]?.owed ?? 0) }
+        let net = paid - owed
+        let meOnly = filterParties == [.me]
+        let single = filterParties.count == 1
+        let owedLabel: String = {
+            if meOnly { return net >= 0 ? "You are owed" : "You owe" }
+            if single { return net >= 0 ? "Is owed" : "Owes" }
+            return net >= 0 ? "Owed" : "Owe"
+        }()
+        return VStack(alignment: .leading, spacing: Space.md) {
+            HStack {
+                Text(summaryTitle).eyebrow()
+                Spacer()
+                filterButton
+            }
+
+            Text(formatFiltered(owed))
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
                 .tracking(-0.6)
 
             HStack(spacing: Space.lg) {
-                statTile(label: "Your share", value: FinanceDashboardBand.formatMoney(yourShare))
+                statTile(label: "Paid", value: formatFiltered(paid))
+                statTile(label: owedLabel, value: formatFiltered(abs(net)))
+            }
+            .padding(.top, Space.xs)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Space.lg)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.lg)
+    }
+
+    private var filterButton: some View {
+        Button {
+            showingFilter = true
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(Tokens.accentFinance)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Filter by people and currency")
+    }
+
+    // MARK: - Currency mode
+
+    /// Per-currency signed totals in capture currency, largest spend first.
+    private var totalsByCurrency: [(code: String, total: Double, myShare: Double)] {
+        var totals: [String: (total: Double, myShare: Double)] = [:]
+        for expense in expenses {
+            let code = expense.originalCurrency.uppercased()
+            var entry = totals[code] ?? (0, 0)
+            entry.total += expense.signedOriginal
+            entry.myShare += expense.myShareOriginal
+            totals[code] = entry
+        }
+        return totals
+            .map { (code: $0.key, total: $0.value.total, myShare: $0.value.myShare) }
+            .sorted { abs($0.total) > abs($1.total) }
+    }
+
+    /// Non-nil when every expense was captured in the same currency — the only
+    /// case where settle-up can run natively in the capture currency.
+    private var singleCurrencyCode: String? {
+        let codes = Set(expenses.map { $0.originalCurrency.uppercased() })
+        return codes.count == 1 ? codes.first : nil
+    }
+
+    /// "EUR 1,240.50", signed. Capture-currency counterpart of
+    /// `FinanceDashboardBand.formatMoney` (which converts to the display
+    /// currency and uses its symbol).
+    static func formatOriginal(_ value: Double, code: String) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        let amount = formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+        return "\(code) \(amount)"
+    }
+
+    private var displayCurrencyCode: String {
+        FinanceSettings.displayCurrencyCode.uppercased()
+    }
+
+    // MARK: - Stats card
+
+    private var groupTotalSGD: Double {
+        expenses.reduce(0) { $0 + $1.signedSGD }
+    }
+
+    private var yourShareSGD: Double {
+        expenses.reduce(0) { $0 + $1.myShareSGD }
+    }
+
+    /// Whether the per-currency breakdown adds information: hidden when the
+    /// trip has a single currency that IS the display currency (the Total row
+    /// would just repeat it).
+    private var showsCurrencyBreakdown: Bool {
+        let totals = totalsByCurrency
+        if totals.count == 1, totals[0].code == displayCurrencyCode { return false }
+        return !totals.isEmpty
+    }
+
+    private var statsCard: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            Text("Group total").eyebrow()
+
+            VStack(alignment: .leading, spacing: Space.xs) {
+                // As-added spend, one same-weight line per capture currency.
+                if showsCurrencyBreakdown {
+                    ForEach(totalsByCurrency, id: \.code) { entry in
+                        Text(Self.formatOriginal(entry.total, code: entry.code))
+                            .font(.edBodyMedium)
+                            .monospacedDigit()
+                            .foregroundStyle(Tokens.inkSoft)
+                    }
+                    Divider().background(Tokens.divider)
+                }
+                // The one number that sums the whole trip: converted into the
+                // display currency chosen in Settings.
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Total")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.mutedSoft)
+                    Spacer()
+                    Text(FinanceDashboardBand.formatMoney(groupTotalSGD))
+                        .font(.edDisplay)
+                        .foregroundStyle(Tokens.ink)
+                        .tracking(-0.6)
+                }
+            }
+
+            HStack(spacing: Space.lg) {
+                statTile(label: "Your share", value: FinanceDashboardBand.formatMoney(yourShareSGD))
                 statTile(label: "Expenses", value: "\(expenses.count)")
             }
             .padding(.top, Space.xs)
@@ -108,15 +329,41 @@ struct TripExpensesView: View {
 
     // MARK: - Settle up
 
+    /// True when the settle-up card can run natively in the capture currency:
+    /// the whole trip shares one currency. A mixed-currency trip has no
+    /// meaningful "as added" net, so it falls back to the display currency
+    /// (flagged in the card).
+    private var settlesInCaptureCurrency: Bool {
+        singleCurrencyCode != nil
+    }
+
     /// Netted per-party balances, sorted with the user first, then the people
     /// who are owed the most. Only parties whose net is more than a cent show.
     private var balances: [TripSettlement.Balance] {
-        TripSettlement.compute(expenses: expenses)
+        if settlesInCaptureCurrency {
+            return TripSettlement.compute(expenses: expenses) { $0.signedOriginal }
+        }
+        return TripSettlement.compute(expenses: expenses)
+    }
+
+    private func settleAmount(_ value: Double) -> String {
+        if settlesInCaptureCurrency, let code = singleCurrencyCode {
+            return Self.formatOriginal(value, code: code)
+        }
+        return FinanceDashboardBand.formatMoney(value)
     }
 
     private var settleUpCard: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            Text("Settle up").eyebrow()
+            HStack {
+                Text("Settle up").eyebrow()
+                if singleCurrencyCode == nil {
+                    Spacer()
+                    Text("in \(displayCurrencyCode) · mixed currencies")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+            }
             VStack(spacing: Space.sm) {
                 ForEach(balances) { balance in
                     settleRow(balance)
@@ -142,13 +389,13 @@ struct TripExpensesView: View {
                 .foregroundStyle(Tokens.inkSoft)
                 .lineLimit(1)
             Spacer(minLength: Space.sm)
-            Text(FinanceDashboardBand.formatMoney(abs(balance.net)))
+            Text(settleAmount(abs(balance.net)))
                 .font(.edFootnoteStrong)
                 .monospacedDigit()
                 .foregroundStyle(owed ? Tokens.success : Tokens.ink)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(phrase(for: balance)) \(FinanceDashboardBand.formatMoney(abs(balance.net)))")
+        .accessibilityLabel("\(phrase(for: balance)) \(settleAmount(abs(balance.net)))")
     }
 
     /// "You are owed" / "You owe" / "Rohan is owed" / "Sam owes".
@@ -181,15 +428,42 @@ struct TripExpensesView: View {
 
     // MARK: - Expense list
 
+    /// Whether an expense involves the given party — they paid it, or they
+    /// hold a positive share of the split.
+    private func involves(_ expense: LocalExpense, party: SplitPartyID) -> Bool {
+        let payer: SplitPartyID = expense.paidByPersonUUID.map { .person($0) } ?? .me
+        if payer == party { return true }
+        return expense.splits.contains { entry in
+            guard entry.shares > 0 else { return false }
+            let entryParty: SplitPartyID = entry.personID.map { .person($0) } ?? .me
+            return entryParty == party
+        }
+    }
+
+    /// The list narrows to expenses involving ANY selected participant; the
+    /// default You-only selection keeps the full list (the summary card
+    /// already answers the "my spend" question without hiding group context).
+    private var visibleExpenses: [LocalExpense] {
+        guard filterParties != [.me] else { return Array(expenses) }
+        return expenses.filter { expense in
+            filterParties.contains { involves(expense, party: $0) }
+        }
+    }
+
     private var expenseList: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            Text("Expenses").eyebrow()
+            Text(filterParties == [.me] ? "Expenses" : "Expenses · \(selectionShortLabel)").eyebrow()
             VStack(spacing: Space.xs) {
-                ForEach(expenses) { expense in
-                    ExpenseRow(expense: expense) {
+                ForEach(visibleExpenses) { expense in
+                    ExpenseRow(expense: expense, showsOriginalFirst: true) {
                         onEditExpense(expense.clientUUID)
                     }
                 }
+            }
+            if filterParties != [.me] && visibleExpenses.isEmpty {
+                Text("No expenses involve this selection yet.")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
             }
         }
     }
@@ -210,7 +484,7 @@ struct TripExpensesView: View {
                     .multilineTextAlignment(.center)
                 Spacer().frame(height: Space.xs)
                 Text(trip.participantPersonUUIDs.isEmpty
-                     ? "Tap + to log a trip expense. Add participants in Edit trip to split the bill."
+                     ? "Tap + to log a trip expense. Add people in Edit trip to split the bill."
                      : "Tap + to log a trip expense and split it with your group.")
                     .font(.edSubheadline)
                     .foregroundStyle(Tokens.muted)
@@ -224,14 +498,135 @@ struct TripExpensesView: View {
     }
 }
 
+// MARK: - Filter sheet
+
+/// People + currency filter for the trip expenses summary (#258). People are
+/// multi-select — the summary card shows the combined spend/paid/net of the
+/// selection and the list narrows to expenses involving any of them. Currency
+/// picks what the summary renders in — the Settings display currency, or any
+/// currency captured on the trip.
+private struct TripExpenseFilterSheet: View {
+    let participants: [LocalPerson]
+    /// Trip capture currencies, excluding the display currency.
+    let currencyOptions: [String]
+    let displayCode: String
+    @Binding var parties: Set<SplitPartyID>
+    @Binding var currency: String?
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.xl) {
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        Text("Show spend for").eyebrow()
+                        VStack(spacing: 0) {
+                            partyRow(.me, name: "You", colorHex: nil)
+                            ForEach(participants, id: \.clientUUID) { person in
+                                Divider().background(Tokens.divider)
+                                partyRow(.person(person.clientUUID), name: person.name, colorHex: person.colorHex)
+                            }
+                        }
+                        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                        .paperBorder(Tokens.border, radius: Radius.md)
+                    }
+
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        Text("Currency").eyebrow()
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: Space.sm) {
+                                currencyChip(nil, label: displayCode)
+                                ForEach(currencyOptions, id: \.self) { code in
+                                    currencyChip(code, label: code)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        Text("Converted with the rates frozen on this trip's expenses.")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.mutedSoft)
+                    }
+                }
+                .padding(Space.lg)
+            }
+            .background(Tokens.paper)
+            .navigationTitle("Filter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    /// Toggle a party in the multi-select. The selection can never go empty —
+    /// removing the last member snaps back to You.
+    private func toggle(_ rowParty: SplitPartyID) {
+        if parties.contains(rowParty) {
+            parties.remove(rowParty)
+            if parties.isEmpty { parties = [.me] }
+        } else {
+            parties.insert(rowParty)
+        }
+    }
+
+    private func partyRow(_ rowParty: SplitPartyID, name: String, colorHex: String?) -> some View {
+        let selected = parties.contains(rowParty)
+        return Button {
+            toggle(rowParty)
+        } label: {
+            HStack(spacing: Space.sm) {
+                Circle()
+                    .fill(colorHex.map { Color(personHex: $0) } ?? Tokens.accentFinance)
+                    .frame(width: 10, height: 10)
+                Text(name)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                Spacer()
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(selected ? Tokens.accentFinance : Tokens.mutedSoft)
+            }
+            .padding(.horizontal, Space.md)
+            .padding(.vertical, Space.sm + 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(selected ? "\(name), selected" : name)
+    }
+
+    private func currencyChip(_ code: String?, label: String) -> some View {
+        let selected = currency == code
+        return Button {
+            currency = code
+        } label: {
+            Text(label)
+                .font(.edFootnote)
+                .foregroundStyle(selected ? Tokens.accentFg : Tokens.ink)
+                .padding(.horizontal, Space.md)
+                .padding(.vertical, 6)
+                .background(
+                    selected ? Tokens.accentFinance : Tokens.surface2,
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(selected ? "\(label), selected" : label)
+    }
+}
+
 // MARK: - Settlement math
 
 /// Pure settle-up computation over a trip's expenses (#258).
 ///
-/// Runs entirely on the frozen home-currency amounts (`signedSGD`) so a
-/// mixed-currency trip nets correctly and refunds subtract. For each party the
-/// net position is `totalPaid - totalOwedShare`: positive means the party is
-/// owed money by the group, negative means they owe. The group nets to zero.
+/// Runs on a caller-supplied signed amount per expense — the frozen
+/// home-currency `signedSGD` by default (correct for mixed-currency trips),
+/// or `signedOriginal` when the whole trip shares one capture currency. For
+/// each party the net position is `totalPaid - totalOwedShare`: positive means
+/// the party is owed money by the group, negative means they owe. The group
+/// nets to zero.
 ///
 /// An UNSPLIT expense is owed entirely by whoever paid it, so it nets to zero
 /// for that party and never creates a balance — exactly right for a personal
@@ -239,7 +634,7 @@ struct TripExpensesView: View {
 enum TripSettlement {
     struct Balance: Identifiable {
         let party: SplitPartyID
-        /// Home-currency net. > 0 owed money, < 0 owes.
+        /// Signed net in the caller's amount basis. > 0 owed money, < 0 owes.
         let net: Double
         var id: SplitPartyID { party }
     }
@@ -248,37 +643,45 @@ enum TripSettlement {
     /// dropped from the list.
     private static let epsilon = 0.005
 
-    static func compute(expenses: [LocalExpense]) -> [Balance] {
-        var paid: [SplitPartyID: Double] = [:]
-        var owed: [SplitPartyID: Double] = [:]
+    /// Per-party (paid, owed) totals in the caller's amount basis. `paid` is
+    /// what the party fronted; `owed` is their consumed share of the bills.
+    /// The building block behind both the netted balances and the per-person
+    /// summary card ("spent" = owed, "is owed" = paid - owed).
+    static func totals(
+        expenses: [LocalExpense],
+        amount: (LocalExpense) -> Double = { $0.signedSGD }
+    ) -> [SplitPartyID: (paid: Double, owed: Double)] {
+        var totals: [SplitPartyID: (paid: Double, owed: Double)] = [:]
 
         for expense in expenses {
-            let amount = expense.signedSGD
+            let value = amount(expense)
             let payer: SplitPartyID = expense.paidByPersonUUID.map { .person($0) } ?? .me
-            paid[payer, default: 0] += amount
+            totals[payer, default: (0, 0)].paid += value
 
             let splits = expense.splits
-            if splits.isEmpty {
-                // Unsplit: the payer bears the whole cost (nets to zero).
-                owed[payer, default: 0] += amount
-                continue
-            }
             let totalShares = splits.reduce(0) { $0 + max($1.shares, 0) }
-            guard totalShares > 0 else {
-                owed[payer, default: 0] += amount
+            guard !splits.isEmpty, totalShares > 0 else {
+                // Unsplit (or degenerate): the payer bears the whole cost.
+                totals[payer, default: (0, 0)].owed += value
                 continue
             }
             for entry in splits {
                 let shares = max(entry.shares, 0)
                 guard shares > 0 else { continue }
                 let party: SplitPartyID = entry.personID.map { .person($0) } ?? .me
-                owed[party, default: 0] += amount * Double(shares) / Double(totalShares)
+                totals[party, default: (0, 0)].owed += value * Double(shares) / Double(totalShares)
             }
         }
+        return totals
+    }
 
-        let parties = Set(paid.keys).union(owed.keys)
-        var balances: [Balance] = parties.map { party in
-            Balance(party: party, net: (paid[party] ?? 0) - (owed[party] ?? 0))
+    static func compute(
+        expenses: [LocalExpense],
+        amount: (LocalExpense) -> Double = { $0.signedSGD }
+    ) -> [Balance] {
+        let totals = totals(expenses: expenses, amount: amount)
+        var balances: [Balance] = totals.map { party, entry in
+            Balance(party: party, net: entry.paid - entry.owed)
         }
         balances.removeAll { abs($0.net) < epsilon }
 

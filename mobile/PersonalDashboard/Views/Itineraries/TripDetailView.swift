@@ -38,8 +38,6 @@ struct TripDetailView: View {
 
     // MARK: Ticket upload / scan state (#222)
     @State private var showingTicketCamera: Bool = false
-    @State private var showingTicketPhotoLibrary: Bool = false
-    @State private var showingTicketPDFPicker: Bool = false
     /// Blocks the FAB and shows a lightweight "Reading ticket…" overlay while
     /// the decode + extraction pipeline runs.
     @State private var isProcessingTicket: Bool = false
@@ -51,6 +49,39 @@ struct TripDetailView: View {
     /// Hard-failure banner (only when the upload couldn't be saved at all — the
     /// happy and degraded paths always produce a card instead).
     @State private var ticketError: String?
+
+    // MARK: Expense upload / import state (#258)
+    /// Camera cover for the Expenses tab, distinct from the ticket camera so
+    /// the two capture flows keep separate handlers.
+    @State private var showingExpenseCamera: Bool = false
+    /// Blocks the expense FAB and shows a lightweight overlay while a receipt /
+    /// statement upload extracts + imports in the background.
+    @State private var isProcessingExpenseUpload: Bool = false
+    /// Summary shown after a statement / multi-expense photo import completes.
+    @State private var statementImportSummary: String?
+    /// Hard-failure alert when an upload couldn't be processed at all.
+    @State private var expenseCaptureError: String?
+
+    // MARK: Shared pickers (#261)
+    /// SwiftUI honours only one `.fileImporter` (and one `.photosPicker`) per
+    /// view — stacking a second silently breaks presentation — so the ticket
+    /// and expense flows share one picker of each kind and dispatch on a
+    /// purpose set by the menu button that opened it.
+    @State private var showingPDFPicker: Bool = false
+    @State private var pdfPickPurpose: PDFPickPurpose = .ticket
+    @State private var showingPhotoLibrary: Bool = false
+    @State private var photoPickPurpose: PhotoPickPurpose = .ticket
+
+    private enum PDFPickPurpose {
+        case ticket
+        case expenseReceipt
+        case statement
+    }
+
+    private enum PhotoPickPurpose {
+        case ticket
+        case expense
+    }
 
     init(trip: LocalTrip) {
         self.trip = trip
@@ -107,6 +138,10 @@ struct TripDetailView: View {
             if isProcessingTicket {
                 ticketProcessingOverlay
             }
+
+            if isProcessingExpenseUpload {
+                expenseProcessingOverlay
+            }
         }
         .sheet(item: $expenseEditorTarget) { target in
             AddExpenseSheet(target: target, tripContext: tripExpenseContext)
@@ -127,11 +162,18 @@ struct TripDetailView: View {
             }
             .ignoresSafeArea()
         }
-        .photoLibraryPicker(isPresented: $showingTicketPhotoLibrary) { data in
-            handleTicketData(data, isPDF: false)
+        .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
+            switch photoPickPurpose {
+            case .ticket:  handleTicketData(data, isPDF: false)
+            case .expense: handleExpenseCaptureData(data, source: .photoLibrary)
+            }
         }
-        .pdfPicker(isPresented: $showingTicketPDFPicker) { data, _ in
-            handleTicketData(data, isPDF: true)
+        .pdfPicker(isPresented: $showingPDFPicker) { data, fileName in
+            switch pdfPickPurpose {
+            case .ticket:         handleTicketData(data, isPDF: true)
+            case .expenseReceipt: handleExpenseCaptureData(data, source: .pdf)
+            case .statement:      handleStatementData(data, fileName: fileName)
+            }
         }
         // Full-screen scan surface for a ticket card tap (or right after a
         // successful upload).
@@ -170,6 +212,41 @@ struct TripDetailView: View {
         } message: {
             Text(ticketError ?? "")
         }
+        // Expense camera (#258). Photo / PDF / statement uploads go through the
+        // shared pickers above (#261); receipt results flow into the review
+        // sheet (which already carries this trip's context), a statement PDF
+        // batch-imports every line, linked to the trip.
+        .fullScreenCover(isPresented: $showingExpenseCamera) {
+            CameraPicker { data in
+                showingExpenseCamera = false
+                handleExpenseCaptureData(data, source: .camera)
+            }
+            .ignoresSafeArea()
+        }
+        .alert(
+            "Import complete",
+            isPresented: Binding(
+                get: { statementImportSummary != nil },
+                set: { if !$0 { statementImportSummary = nil } }
+            ),
+            presenting: statementImportSummary
+        ) { _ in
+            Button("OK", role: .cancel) { statementImportSummary = nil }
+        } message: { summary in
+            Text(summary)
+        }
+        .alert(
+            "Couldn't process receipt",
+            isPresented: Binding(
+                get: { expenseCaptureError != nil },
+                set: { if !$0 { expenseCaptureError = nil } }
+            ),
+            presenting: expenseCaptureError
+        ) { _ in
+            Button("OK", role: .cancel) { expenseCaptureError = nil }
+        } message: { message in
+            Text(message)
+        }
     }
 
     // MARK: - Tab bar
@@ -197,6 +274,26 @@ struct TripDetailView: View {
                 ProgressView()
                     .tint(Tokens.accent(for: .itineraries))
                 Text("Reading ticket…")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+            }
+            .padding(Space.xl)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.lg)
+            .shadowMd()
+        }
+        .transition(.opacity)
+    }
+
+    /// Expense-upload processing overlay (#258). Same treatment as the ticket
+    /// overlay but finance-tinted and labelled for receipt / statement reads.
+    private var expenseProcessingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.12).ignoresSafeArea()
+            VStack(spacing: Space.md) {
+                ProgressView()
+                    .tint(Tokens.accentFinance)
+                Text("Reading receipt…")
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.inkSoft)
             }
@@ -361,12 +458,14 @@ struct TripDetailView: View {
                 }
             }
             Button {
-                showingTicketPhotoLibrary = true
+                photoPickPurpose = .ticket
+                showingPhotoLibrary = true
             } label: {
                 Label("Ticket from Photos", systemImage: "photo")
             }
             Button {
-                showingTicketPDFPicker = true
+                pdfPickPurpose = .ticket
+                showingPDFPicker = true
             } label: {
                 Label("Ticket from PDF", systemImage: "doc.text")
             }
@@ -377,14 +476,49 @@ struct TripDetailView: View {
         .accessibilityLabel("Add to trip")
     }
 
-    /// Expenses FAB: opens the expense editor scoped to this trip.
+    /// Expenses FAB: a capture menu scoped to this trip (#258). Mirrors the
+    /// Finance capture menu — scan / photo / PDF / statement / manual — but
+    /// every path stamps this trip (and its default split) on the result.
     private var expenseFab: some View {
-        Button {
-            Haptics.light()
-            expenseEditorTarget = .new
+        Menu {
+            // Camera is hidden on hardware without one (simulator), where
+            // UIImagePickerController would silently fall back to the library.
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button {
+                    showingExpenseCamera = true
+                } label: {
+                    Label("Scan receipt", systemImage: "camera")
+                }
+            }
+            Button {
+                photoPickPurpose = .expense
+                showingPhotoLibrary = true
+            } label: {
+                Label("Photo from library", systemImage: "photo.on.rectangle")
+            }
+            Button {
+                pdfPickPurpose = .expenseReceipt
+                showingPDFPicker = true
+            } label: {
+                Label("PDF from Files", systemImage: "doc.text")
+            }
+            Button {
+                pdfPickPurpose = .statement
+                showingPDFPicker = true
+            } label: {
+                Label("Import statement", systemImage: "doc.text.magnifyingglass")
+            }
+            Divider()
+            Button {
+                Haptics.light()
+                expenseEditorTarget = .new
+            } label: {
+                Label("Enter manually", systemImage: "pencil")
+            }
         } label: {
             fabCircle
         }
+        .disabled(isProcessingExpenseUpload)
         .accessibilityLabel("Add trip expense")
     }
 
@@ -435,6 +569,169 @@ struct TripDetailView: View {
             ticketError = (error as? LocalizedError)?.errorDescription
                 ?? "We couldn't save that ticket. Please try again."
         }
+    }
+
+    // MARK: - Expense upload / import (#258)
+
+    /// Picker callback for the receipt/photo/PDF flows. `data == nil` is a
+    /// cancel. Otherwise save + extract in the background.
+    private func handleExpenseCaptureData(_ data: Data?, source: FinanceCaptureSource) {
+        guard let data else { return }
+        Task { await processExpenseCapture(data: data, captureSource: source) }
+    }
+
+    /// Save the asset, extract it, and route into the trip-scoped review sheet.
+    /// Mirrors `FinanceView.processCapturedAsset`, but a single extracted
+    /// expense flows into the review sheet (which already carries this trip's
+    /// context — tripUUID + default split + payer You) rather than auto-adding,
+    /// so the user reviews the split before saving. A photo yielding 2+ lines
+    /// batch-imports through the trip-aware statement pipeline.
+    private func processExpenseCapture(data: Data, captureSource: FinanceCaptureSource) async {
+        let storage = ReceiptStorage.shared
+        let client = AnthropicClient()
+
+        withAnimation(.easeInOut(duration: 0.15)) { isProcessingExpenseUpload = true }
+        defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingExpenseUpload = false } }
+
+        // Persist the file. Images compress once (off the main actor) and reuse
+        // the JPEG for both the disk save and the Vision call, matching Finance.
+        let relativePath: String
+        let expenseSource: ExpenseSource
+        let visionImageData: Data?
+        do {
+            switch captureSource {
+            case .camera:
+                let compressed = try await Task.detached(priority: .userInitiated) {
+                    try storage.compress(imageData: data)
+                }.value
+                relativePath = try storage.saveCompressedJpeg(compressed)
+                expenseSource = .receipt
+                visionImageData = compressed
+            case .photoLibrary:
+                let compressed = try await Task.detached(priority: .userInitiated) {
+                    try storage.compress(imageData: data)
+                }.value
+                relativePath = try storage.saveCompressedJpeg(compressed)
+                expenseSource = .photo
+                visionImageData = compressed
+            case .pdf:
+                relativePath = try storage.save(pdfData: data)
+                expenseSource = .pdf
+                visionImageData = nil
+            }
+        } catch {
+            expenseCaptureError = error.localizedDescription
+            return
+        }
+
+        do {
+            switch captureSource {
+            case .camera, .photoLibrary:
+                let lines = try await client.extractExpenses(
+                    imageData: visionImageData ?? data,
+                    mediaType: "image/jpeg"
+                )
+                await handleExtractedTripPhotoLines(
+                    lines,
+                    receiptImagePath: relativePath,
+                    source: expenseSource
+                )
+            case .pdf:
+                let extracted = try await client.extractExpense(pdfData: data)
+                let prefill = PrefilledExpense.fromExtraction(
+                    extracted,
+                    receiptImagePath: relativePath,
+                    source: expenseSource
+                )
+                expenseEditorTarget = .prefilled(prefill)
+            }
+        } catch {
+            // Save the receipt regardless; open the review sheet with a banner.
+            let message: String = {
+                if let typed = error as? ReceiptExtractionError { return typed.localizedDescription }
+                if let typed = error as? StatementExtractionError { return typed.localizedDescription }
+                return "We saved your receipt but couldn't read it. Fill in the details below."
+            }()
+            let prefill = PrefilledExpense.fromFailure(
+                receiptImagePath: relativePath,
+                source: expenseSource,
+                message: message
+            )
+            expenseEditorTarget = .prefilled(prefill)
+        }
+    }
+
+    /// Route the expenses extracted from ONE photo, trip-scoped (#258):
+    /// 0 → review sheet with a banner; 1 → review sheet prefilled (trip context
+    /// seeds the split); 2+ → batch-import through the trip-aware statement
+    /// pipeline sharing the one saved receipt image.
+    private func handleExtractedTripPhotoLines(
+        _ lines: [ExtractedStatementLine],
+        receiptImagePath: String,
+        source: ExpenseSource
+    ) async {
+        switch lines.count {
+        case 0:
+            let prefill = PrefilledExpense.fromFailure(
+                receiptImagePath: receiptImagePath,
+                source: source,
+                message: "We saved your photo but couldn't read any expenses. Fill in the details below."
+            )
+            expenseEditorTarget = .prefilled(prefill)
+        case 1:
+            let prefill = PrefilledExpense.from(
+                line: lines[0],
+                receiptImagePath: receiptImagePath,
+                source: source
+            )
+            expenseEditorTarget = .prefilled(prefill)
+        default:
+            let result = await StatementImporter.default().insert(
+                lines: lines,
+                fileName: nil,
+                source: source,
+                receiptImagePath: receiptImagePath,
+                recordsImportHistory: false,
+                possiblyTruncated: false,
+                trip: trip
+            )
+            statementImportSummary = tripImportSummary(result.summaryLine)
+        }
+    }
+
+    /// Statement picker callback. `data == nil` is a cancel.
+    private func handleStatementData(_ data: Data?, fileName: String?) {
+        guard let data else { return }
+        Task { await importTripStatement(pdfData: data, fileName: fileName) }
+    }
+
+    /// Batch-import a statement PDF, linked to this trip (#258). Every inserted
+    /// row gets the trip FK and — when the trip has participants — the default
+    /// equal split. Dedup is unchanged.
+    private func importTripStatement(pdfData: Data, fileName: String? = nil) async {
+        withAnimation(.easeInOut(duration: 0.15)) { isProcessingExpenseUpload = true }
+        defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingExpenseUpload = false } }
+
+        do {
+            let result = try await StatementImporter.default().importStatement(
+                pdfData: pdfData,
+                fileName: fileName,
+                trip: trip
+            )
+            statementImportSummary = tripImportSummary(result.summaryLine)
+        } catch {
+            let message: String = {
+                if let typed = error as? StatementExtractionError { return typed.localizedDescription }
+                return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
+            }()
+            expenseCaptureError = message
+        }
+    }
+
+    /// Append the trip name to a batch-import summary so it's clear the rows
+    /// landed on this trip (#258).
+    private func tripImportSummary(_ base: String) -> String {
+        "\(base) · Added to \(trip.name)"
     }
 
     // MARK: - Grouping
