@@ -23,6 +23,37 @@ enum ExpenseEditorTarget: Identifiable, Hashable {
     }
 }
 
+/// Trip context passed to the expense sheet when adding / editing an expense
+/// that belongs to a trip with participants (#258). Its presence (with a
+/// non-empty participant list) swaps the #188 "split N ways" stepper for the
+/// full settle-up UI: a payer picker + a per-person shares editor. Absent (the
+/// Finance surface) the sheet behaves exactly as before.
+struct TripExpenseContext {
+    let tripUUID: UUID
+    /// The trip's participants (people other than the user). Resolved by the
+    /// caller from the trip's `participantPersonUUIDs`.
+    let participants: [LocalPerson]
+}
+
+/// Identifies one party in a trip split: the user ("me") or a specific person.
+enum SplitPartyID: Hashable {
+    case me
+    case person(UUID)
+}
+
+/// Editable per-party split row backing the trip split editor. `included`
+/// gates whether the party is part of this bill; `shares` is their weight.
+struct SplitDraft: Identifiable {
+    let party: SplitPartyID
+    let name: String
+    /// Chip colour hex; nil for the user ("me").
+    let colorHex: String?
+    var included: Bool
+    var shares: Int
+
+    var id: SplitPartyID { party }
+}
+
 /// AddExpense / EditExpense form. One sheet handles create, edit, and
 /// "create-from-scanned-receipt" keyed off `target`. FX conversion runs
 /// on save (cached so it doesn't block on the home currency).
@@ -31,6 +62,18 @@ struct AddExpenseSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let target: ExpenseEditorTarget
+
+    /// Optional trip context (#258). Non-nil (with participants) turns on the
+    /// settle-up split UI and stamps `tripUUID` on save. Defaults to nil so the
+    /// Finance call sites (`AddExpenseSheet(target:)`) are unchanged.
+    var tripContext: TripExpenseContext? = nil
+
+    /// Per-party split editor state (trip context only). Seeded in
+    /// `loadIfNeeded`. Order is [You, participant, participant, …].
+    @State private var splitDrafts: [SplitDraft] = []
+
+    /// Who fronted the money. Defaults to the user.
+    @State private var payerParty: SplitPartyID = .me
 
     @State private var amountText: String = ""
     @State private var currency: String = FinanceSettings.displayCurrencyCode
@@ -129,7 +172,14 @@ struct AddExpenseSheet: View {
                         }
                         personField
                         eventField
-                        sharesField
+                        // Trip context with participants → full settle-up split
+                        // UI (payer + per-person shares). Otherwise the existing
+                        // #188 "split N ways" stepper, visually unchanged.
+                        if tripSplitActive {
+                            tripSplitSection
+                        } else {
+                            sharesField
+                        }
 
                         if let errorMessage {
                             Text(errorMessage)
@@ -531,6 +581,274 @@ struct AddExpenseSheet: View {
         return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
     }
 
+    // MARK: - Trip split (#258)
+
+    /// True when a trip context with at least one participant is active — the
+    /// signal to swap in the settle-up UI.
+    private var tripSplitActive: Bool {
+        if let tripContext { return !tripContext.participants.isEmpty }
+        return false
+    }
+
+    /// Parties currently sharing the bill (included, positive shares).
+    private var includedDrafts: [SplitDraft] {
+        splitDrafts.filter { $0.included && $0.shares > 0 }
+    }
+
+    private var totalShares: Int {
+        includedDrafts.reduce(0) { $0 + $1.shares }
+    }
+
+    /// This party's slice of the entered amount, in the entered currency.
+    private func splitAmount(for draft: SplitDraft) -> Double {
+        guard totalShares > 0, draft.included, draft.shares > 0 else { return 0 }
+        return amountValue * Double(draft.shares) / Double(totalShares)
+    }
+
+    /// Whether the bill is shared with someone other than the user. Only then
+    /// do we persist a split; a "just me" configuration stays an unsplit
+    /// personal expense so it counts fully in personal totals.
+    private var hasOtherParticipantsInSplit: Bool {
+        includedDrafts.contains {
+            if case .person = $0.party { return true }
+            return false
+        }
+    }
+
+    private var tripSplitSection: some View {
+        VStack(alignment: .leading, spacing: Space.lg) {
+            payerField
+            splitField
+        }
+    }
+
+    /// "Paid by" picker — who fronted the money. Defaults to You.
+    private var payerField: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            Text("Paid by").eyebrow()
+            Menu {
+                Button { payerParty = .me } label: { Label("You", systemImage: "person.fill") }
+                ForEach(tripContext?.participants ?? [], id: \.clientUUID) { person in
+                    Button { payerParty = .person(person.clientUUID) } label: { Text(person.name) }
+                }
+            } label: {
+                HStack(spacing: Space.sm) {
+                    Circle()
+                        .fill(payerColor)
+                        .frame(width: 12, height: 12)
+                    Text(payerName)
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Tokens.muted)
+                }
+                .padding(Space.md)
+                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                .paperBorder(Tokens.border, radius: Radius.md)
+            }
+            .accessibilityLabel("Paid by \(payerName)")
+        }
+    }
+
+    /// "Split between" editor: a tappable include circle, a colour dot + name,
+    /// the party's slice of the bill, and a shares stepper per included party.
+    private var splitField: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            HStack {
+                Text("Split between").eyebrow()
+                Spacer()
+                Text(hasOtherParticipantsInSplit ? "\(includedDrafts.count) people" : "Just you")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            VStack(spacing: 0) {
+                ForEach($splitDrafts) { $draft in
+                    splitRow($draft)
+                    if draft.id != splitDrafts.last?.id {
+                        Divider().background(Tokens.divider)
+                    }
+                }
+            }
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+
+            if hasOtherParticipantsInSplit {
+                tripShareReadout
+            }
+        }
+    }
+
+    private func splitRow(_ draft: Binding<SplitDraft>) -> some View {
+        let d = draft.wrappedValue
+        return HStack(spacing: Space.sm) {
+            Button {
+                draft.wrappedValue.included.toggle()
+            } label: {
+                Image(systemName: d.included ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(d.included ? Tokens.accentFinance : Tokens.mutedSoft)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(d.included ? "\(d.name) included" : "\(d.name) excluded")
+
+            Circle()
+                .fill(partyColor(d))
+                .frame(width: 10, height: 10)
+            Text(d.name)
+                .font(.edBody)
+                .foregroundStyle(d.included ? Tokens.ink : Tokens.muted)
+                .lineLimit(1)
+
+            Spacer()
+
+            if d.included {
+                Text("\(currency.uppercased()) \(formatShare(splitAmount(for: d)))")
+                    .font(.edCaption)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.muted)
+                Stepper("", value: draft.shares, in: 1...20)
+                    .labelsHidden()
+                    .tint(Tokens.accentFinance)
+                    .fixedSize()
+                    .accessibilityLabel("\(d.name) shares: \(d.shares)")
+            }
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+    }
+
+    /// "Your share: CUR X of CUR Y" line, shown when the bill is shared.
+    private var tripShareReadout: some View {
+        let cur = currency.uppercased()
+        let mine = splitDrafts.first { $0.party == .me }.map { splitAmount(for: $0) } ?? 0
+        return HStack(spacing: 4) {
+            Text("Your share:")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+            Text("\(cur) \(formatShare(mine))")
+                .font(.edCaption)
+                .monospacedDigit()
+                .foregroundStyle(Tokens.ink)
+            Text("of \(cur) \(formatShare(amountValue))")
+                .font(.edCaption)
+                .monospacedDigit()
+                .foregroundStyle(Tokens.mutedSoft)
+        }
+    }
+
+    private var payerName: String {
+        switch payerParty {
+        case .me: return "You"
+        case .person(let id):
+            return tripContext?.participants.first { $0.clientUUID == id }?.name ?? "You"
+        }
+    }
+
+    private var payerColor: Color {
+        switch payerParty {
+        case .me: return Tokens.accentFinance
+        case .person(let id):
+            if let person = tripContext?.participants.first(where: { $0.clientUUID == id }) {
+                return Color(personHex: person.colorHex)
+            }
+            return Tokens.accentFinance
+        }
+    }
+
+    private func partyColor(_ draft: SplitDraft) -> Color {
+        if let hex = draft.colorHex { return Color(personHex: hex) }
+        return Tokens.accentFinance
+    }
+
+    /// Seed the split editor (trip context only). New expenses default to an
+    /// equal split across everyone; editing a split expense reconstructs its
+    /// stored entries; editing an UNSPLIT trip expense keeps it unsplit (only
+    /// "You" ticked) so it never silently converts to a split on save.
+    private func seedTripSplit() {
+        guard let ctx = tripContext else { return }
+
+        var existingSplits: [ExpenseSplitEntry] = []
+        var existingPayer: UUID?
+        if case .existing(let uuid) = target {
+            let descriptor = FetchDescriptor<LocalExpense>(
+                predicate: #Predicate { $0.clientUUID == uuid }
+            )
+            if let row = try? modelContext.fetch(descriptor).first {
+                existingSplits = row.splits
+                existingPayer = row.paidByPersonUUID
+            }
+        }
+        let editingUnsplit: Bool = {
+            if case .existing = target { return existingSplits.isEmpty }
+            return false
+        }()
+
+        func makeDraft(party: SplitPartyID, name: String, colorHex: String?) -> SplitDraft {
+            let entry: ExpenseSplitEntry? = {
+                switch party {
+                case .me: return existingSplits.first { $0.personUUID == nil }
+                case .person(let id): return existingSplits.first { $0.personID == id }
+                }
+            }()
+            let included: Bool
+            let shares: Int
+            if !existingSplits.isEmpty {
+                included = entry != nil
+                shares = max(entry?.shares ?? 1, 1)
+            } else if editingUnsplit {
+                included = (party == .me)
+                shares = 1
+            } else {
+                included = true
+                shares = 1
+            }
+            return SplitDraft(party: party, name: name, colorHex: colorHex, included: included, shares: shares)
+        }
+
+        var drafts: [SplitDraft] = [makeDraft(party: .me, name: "You", colorHex: nil)]
+        for person in ctx.participants {
+            drafts.append(makeDraft(party: .person(person.clientUUID), name: person.name, colorHex: person.colorHex))
+        }
+        splitDrafts = drafts
+
+        // Payer defaults to You; fall back to You if the stored payer is no
+        // longer on the trip.
+        if let payer = existingPayer, ctx.participants.contains(where: { $0.clientUUID == payer }) {
+            payerParty = .person(payer)
+        } else {
+            payerParty = .me
+        }
+
+        // Trip splits store the FULL bill and carry the breakdown in
+        // `splitsData`; the #188 per-share model must stay off.
+        numberOfShares = 1
+    }
+
+    /// Write the split state onto a row on save (trip context only). Persists a
+    /// split only when someone other than the user shares the bill; otherwise
+    /// clears the split so it's a plain personal expense.
+    private func applyTripSplit(to row: LocalExpense) {
+        guard tripContext != nil else { return }
+        if hasOtherParticipantsInSplit {
+            row.splits = includedDrafts.map { draft in
+                switch draft.party {
+                case .me: return ExpenseSplitEntry(person: nil, shares: draft.shares)
+                case .person(let id): return ExpenseSplitEntry(person: id, shares: draft.shares)
+                }
+            }
+            if case .person(let id) = payerParty {
+                row.paidByPersonUUID = id
+            } else {
+                row.paidByPersonUUID = nil
+            }
+        } else {
+            row.splits = []
+            row.paidByPersonUUID = nil
+        }
+    }
+
     /// Shared "tappable field that opens a picker" row for Person / Event.
     /// Shows the selected name (or a placeholder), a chevron, and a clear
     /// button when a value is set.
@@ -667,6 +985,11 @@ struct AddExpenseSheet: View {
                 }
             }
         }
+
+        // Seed the settle-up split editor after the base fields load (#258).
+        if tripSplitActive {
+            seedTripSplit()
+        }
     }
 
     private func save() async {
@@ -686,7 +1009,11 @@ struct AddExpenseSheet: View {
         // we store (#188). Divide first, then FX-convert the share so
         // `originalAmount` / `sgdAmount` are already the per-person figure and
         // every aggregation site stays correct without change. Equal split only.
-        let shares = max(numberOfShares, 1)
+        //
+        // Trip splits (#258) use a DIFFERENT model: the row stores the FULL
+        // bill and the breakdown lives in `splitsData`, so the #188 division is
+        // forced off (shares = 1) and `applyTripSplit` writes the split after.
+        let shares = tripSplitActive ? 1 : max(numberOfShares, 1)
         let shareAmount = amountValue / Double(shares)
 
         let conversion: (sgdAmount: Double, rate: Double)
@@ -724,6 +1051,13 @@ struct AddExpenseSheet: View {
                     row.receiptImagePath = path
                     try modelContext.save()
                 }
+                // Trip linkage + settle-up split (#258). Stamp the tripUUID and
+                // write the split; only persisted when a trip context is active.
+                if let ctx = tripContext {
+                    row.tripUUID = ctx.tripUUID
+                    applyTripSplit(to: row)
+                    try modelContext.save()
+                }
 
             case .existing(let uuid):
                 let descriptor = FetchDescriptor<LocalExpense>(
@@ -749,6 +1083,13 @@ struct AddExpenseSheet: View {
                     // removed the image, or scan path → manual edit).
                     existing.receiptImagePath = receiptImagePath
                     existing.source = source.rawValue
+                    // Trip linkage + settle-up split (#258). Only touched when a
+                    // trip context is active, so editing a trip expense from the
+                    // Finance surface (no context) round-trips splits untouched.
+                    if let ctx = tripContext {
+                        existing.tripUUID = ctx.tripUUID
+                        applyTripSplit(to: existing)
+                    }
                     try modelContext.save()
                 }
             }

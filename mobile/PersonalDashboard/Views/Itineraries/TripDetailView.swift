@@ -20,6 +20,18 @@ struct TripDetailView: View {
 
     @Query private var items: [LocalItineraryItem]
 
+    /// All people, so the trip's participant UUIDs resolve to names + colours
+    /// for the expense split context (#258).
+    @Query private var allPeople: [LocalPerson]
+
+    /// Which tab of the trip detail is showing. Defaults to the itinerary so
+    /// existing behaviour is unchanged on open (#258).
+    @State private var tab: TripDetailTab = .itinerary
+
+    /// Drives the expense editor sheet on the Expenses tab. `.new` for the FAB,
+    /// `.existing(uuid)` for a tapped row.
+    @State private var expenseEditorTarget: ExpenseEditorTarget?
+
     /// Drives the item editor. `.new(day:)` carries the pre-filled day;
     /// `.existing(_)` carries the item UUID for edit.
     @State private var editingItem: ItineraryItemEditorTarget?
@@ -51,26 +63,55 @@ struct TripDetailView: View {
                 SortDescriptor(\.createdAt, order: .forward)
             ]
         )
+        _allPeople = Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    }
+
+    /// Trip context handed to `AddExpenseSheet` so it stamps `tripUUID` and
+    /// shows the settle-up split UI. Participants preserve their stored order.
+    private var tripExpenseContext: TripExpenseContext {
+        let participants = trip.participantPersonUUIDs.compactMap { id in
+            allPeople.first { $0.clientUUID == id }
+        }
+        return TripExpenseContext(tripUUID: trip.clientUUID, participants: participants)
     }
 
     var body: some View {
         ZStack {
             Tokens.paper.ignoresSafeArea()
 
-            if grouped.isEmpty {
-                emptyState
-            } else {
-                timelineScroll
+            VStack(spacing: 0) {
+                tripTabBar
+
+                switch tab {
+                case .itinerary:
+                    if grouped.isEmpty {
+                        emptyState
+                    } else {
+                        timelineScroll
+                    }
+                case .expenses:
+                    TripExpensesView(trip: trip) { uuid in
+                        expenseEditorTarget = .existing(uuid)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
 
             // FAB sits above the bottom tab bar AND the home indicator. The
             // 96pt bumper at the end of the scroll content guarantees the
-            // last card is not hidden by this overlay.
+            // last card is not hidden by this overlay. Its action is
+            // contextual: add a stop on the itinerary tab, add an expense on
+            // the expenses tab.
             fabOverlay
 
             if isProcessingTicket {
                 ticketProcessingOverlay
             }
+        }
+        .sheet(item: $expenseEditorTarget) { target in
+            AddExpenseSheet(target: target, tripContext: tripExpenseContext)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(item: $editingItem) { target in
             ItineraryItemEditorSheet(trip: trip, target: target)
@@ -129,6 +170,22 @@ struct TripDetailView: View {
         } message: {
             Text(ticketError ?? "")
         }
+    }
+
+    // MARK: - Tab bar
+
+    /// Segmented switch between the itinerary timeline and the expense ledger
+    /// (#258). Native segmented picker keeps it lightweight and familiar; the
+    /// itinerary is the default so opening a trip is unchanged.
+    private var tripTabBar: some View {
+        Picker("", selection: $tab) {
+            Text("Itinerary").tag(TripDetailTab.itinerary)
+            Text("Expenses").tag(TripDetailTab.expenses)
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, Space.lg)
+        .padding(.top, Space.md)
+        .padding(.bottom, Space.sm)
     }
 
     // MARK: - Ticket processing overlay
@@ -272,49 +329,73 @@ struct TripDetailView: View {
             Spacer()
             HStack {
                 Spacer()
-                Menu {
-                    Button {
-                        Haptics.light()
-                        editingItem = .new(day: defaultDayForNewItem)
-                    } label: {
-                        Label("Add a stop", systemImage: "plus")
-                    }
-                    Divider()
-                    // Camera is hidden on hardware without one (simulator), where
-                    // UIImagePickerController would silently fall back to the
-                    // library and make two menu items redundant.
-                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                        Button {
-                            showingTicketCamera = true
-                        } label: {
-                            Label("Scan a ticket", systemImage: "camera")
-                        }
-                    }
-                    Button {
-                        showingTicketPhotoLibrary = true
-                    } label: {
-                        Label("Ticket from Photos", systemImage: "photo")
-                    }
-                    Button {
-                        showingTicketPDFPicker = true
-                    } label: {
-                        Label("Ticket from PDF", systemImage: "doc.text")
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(Tokens.accentFg)
-                        .frame(width: 48, height: 48)
-                        .background(Tokens.accent(for: .itineraries), in: Circle())
-                        .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
+                switch tab {
+                case .itinerary: itineraryFab
+                case .expenses:  expenseFab
                 }
-                .disabled(isProcessingTicket)
-                .accessibilityLabel("Add to trip")
             }
         }
         .padding(.trailing, Space.lg)
         .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
         .allowsHitTesting(true)
+    }
+
+    /// Itinerary FAB: the existing add-stop / scan-ticket menu.
+    private var itineraryFab: some View {
+        Menu {
+            Button {
+                Haptics.light()
+                editingItem = .new(day: defaultDayForNewItem)
+            } label: {
+                Label("Add a stop", systemImage: "plus")
+            }
+            Divider()
+            // Camera is hidden on hardware without one (simulator), where
+            // UIImagePickerController would silently fall back to the
+            // library and make two menu items redundant.
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button {
+                    showingTicketCamera = true
+                } label: {
+                    Label("Scan a ticket", systemImage: "camera")
+                }
+            }
+            Button {
+                showingTicketPhotoLibrary = true
+            } label: {
+                Label("Ticket from Photos", systemImage: "photo")
+            }
+            Button {
+                showingTicketPDFPicker = true
+            } label: {
+                Label("Ticket from PDF", systemImage: "doc.text")
+            }
+        } label: {
+            fabCircle
+        }
+        .disabled(isProcessingTicket)
+        .accessibilityLabel("Add to trip")
+    }
+
+    /// Expenses FAB: opens the expense editor scoped to this trip.
+    private var expenseFab: some View {
+        Button {
+            Haptics.light()
+            expenseEditorTarget = .new
+        } label: {
+            fabCircle
+        }
+        .accessibilityLabel("Add trip expense")
+    }
+
+    /// The shared circular "+" glyph both FABs wear.
+    private var fabCircle: some View {
+        Image(systemName: "plus")
+            .font(.system(size: 17, weight: .regular))
+            .foregroundStyle(Tokens.accentFg)
+            .frame(width: 48, height: 48)
+            .background(Tokens.accent(for: .itineraries), in: Circle())
+            .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
     }
 
     // MARK: - Ticket upload
@@ -422,6 +503,15 @@ struct TripDetailView: View {
         modelContext.delete(item)
         try? modelContext.save()
     }
+}
+
+// MARK: - Trip detail tabs
+
+/// The two tabs of a trip's detail screen (#258): the itinerary timeline and
+/// the expense ledger.
+enum TripDetailTab: Hashable {
+    case itinerary
+    case expenses
 }
 
 // MARK: - Layout constants

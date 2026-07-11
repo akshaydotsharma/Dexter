@@ -645,8 +645,10 @@ struct FinanceView: View {
         let dict = Dictionary(grouping: rows) { cal.startOfDay(for: $0.date) }
         return dict.keys.sorted(by: >).map { day in
             let dayRows = dict[day] ?? []
-            // Net refunds into the day-group header total (#206).
-            let total = dayRows.reduce(0) { $0 + $1.signedSGD }
+            // Net refunds into the day-group header total (#206), and count only
+            // the user's share of any split trip expense (#258) so the per-day
+            // header matches the my-share dashboard total.
+            let total = dayRows.reduce(0) { $0 + $1.myShareSGD }
             return DailyGroup(day: day, total: total, rows: dayRows)
         }
     }
@@ -804,9 +806,11 @@ struct FinanceView: View {
         var rangeFilter = filter
         rangeFilter.dateRange = range
         let rangeRows = allExpenses.filter { matches($0, filter: rangeFilter) }
-        // All dashboard-band figures net refunds (#206): the headline total,
-        // the delta comparison, the category bars, and the sparkline.
-        let rangeTotal = rangeRows.reduce(0) { $0 + $1.signedSGD }
+        // All dashboard-band figures net refunds (#206) AND count only the
+        // user's share of split trip expenses (#258) — "my share counts": the
+        // headline total, the delta comparison, the category bars, the average
+        // per month, and the sparkline all sum `myShareSGD`.
+        let rangeTotal = rangeRows.reduce(0) { $0 + $1.myShareSGD }
 
         // Average monthly spend: normalise the period total to a 30.44-day month,
         // using elapsed time (range start -> earlier of range end and now) so
@@ -843,11 +847,11 @@ struct FinanceView: View {
         var prevFilter = filter
         prevFilter.dateRange = prevRange
         let prevRows = allExpenses.filter { matches($0, filter: prevFilter) }
-        let prevTotal = prevRows.reduce(0) { $0 + $1.signedSGD }
+        let prevTotal = prevRows.reduce(0) { $0 + $1.myShareSGD }
 
         var byCategory: [ExpenseCategory: Double] = [:]
         for row in rangeRows {
-            byCategory[row.categoryEnum, default: 0] += row.signedSGD
+            byCategory[row.categoryEnum, default: 0] += row.myShareSGD
         }
         let topCategories = byCategory
             .sorted { $0.value > $1.value }
@@ -862,7 +866,7 @@ struct FinanceView: View {
         var dailyDict: [Date: Double] = [:]
         for row in rangeRows {
             let day = cal.startOfDay(for: row.date)
-            dailyDict[day, default: 0] += row.signedSGD
+            dailyDict[day, default: 0] += row.myShareSGD
         }
         var dailyTotals: [(date: Date, total: Double)] = []
         for offset in 0..<max(dayCount, 1) {
