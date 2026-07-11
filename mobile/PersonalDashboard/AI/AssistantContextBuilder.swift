@@ -146,7 +146,27 @@ struct AssistantContextBuilder {
             )) ?? []
             let itemsByTrip = Dictionary(grouping: allItems, by: { $0.tripUUID })
 
-            out += "\n\nEXISTING TRIPS:\n"
+            // Participant names (#258): resolve each trip's participant UUIDs to
+            // LocalPerson names so the model can map "split between all of us" to
+            // the participant list and use those names for split_with / paid_by.
+            let allPeople = (try? context.fetch(FetchDescriptor<LocalPerson>())) ?? []
+            var peopleNamesByUUID: [UUID: String] = [:]
+            for person in allPeople { peopleNamesByUUID[person.clientUUID] = person.name }
+
+            // Per-trip expense totals (#258): a compact "SGD X across N" rollup
+            // so the model can answer trip-spend questions and knows which trips
+            // already have expenses. Sums signedSGD (full bills, refunds netted).
+            let allTripExpenses = (try? context.fetch(FetchDescriptor<LocalExpense>())) ?? []
+            var expenseAggByTrip: [UUID: (total: Double, count: Int)] = [:]
+            for expense in allTripExpenses {
+                guard let tripFK = expense.tripUUID else { continue }
+                var agg = expenseAggByTrip[tripFK] ?? (total: 0, count: 0)
+                agg.total += expense.signedSGD
+                agg.count += 1
+                expenseAggByTrip[tripFK] = agg
+            }
+
+            out += "\n\nEXISTING TRIPS (a trip's participant names are valid split_with / paid_by values for add_expense):\n"
             out += trips.enumerated().map { (idx, trip) -> String in
                 let id = Self.uuidString(trip.clientUUID)
                 let startISO = Self.isoDate.string(from: trip.startDate)
@@ -176,6 +196,18 @@ struct AssistantContextBuilder {
                         line += "\n  Day \(dayNumber) (\(dayISO)): \(pretty)"
                     }
                 }
+
+                // Participants + expense rollup (#258). Both skipped when empty
+                // so a solo trip with no expenses reads exactly as before.
+                let participantNames = trip.participantPersonUUIDs.compactMap { peopleNamesByUUID[$0] }
+                if !participantNames.isEmpty {
+                    let names = participantNames.map { Self.safe($0, maxLen: 80) }.joined(separator: ", ")
+                    line += "\n  Participants: \(names)"
+                }
+                if let agg = expenseAggByTrip[trip.clientUUID], agg.count > 0 {
+                    line += String(format: "\n  Expenses: SGD %.2f across %d", agg.total, agg.count)
+                }
+
                 return line
             }.joined(separator: "\n")
         }

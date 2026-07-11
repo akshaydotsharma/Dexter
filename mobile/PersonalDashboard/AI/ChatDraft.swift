@@ -325,7 +325,27 @@ extension ChatDraft {
         if !event.isEmpty {
             line += " · \(event)"
         }
+
+        // Trip / group split (#258): who paid + how many ways, when present, so
+        // the confirm card reads "Sam paid · split 4 ways" before the user
+        // commits. Payer is named only when someone other than the user paid.
+        let payer = (dict["paid_by"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let splitWith = dict["split_with"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+        if !payer.isEmpty, !isMeToken(payer) {
+            line += " · \(payer) paid"
+        }
+        if splitWith.count > 1 {
+            line += " · split \(splitWith.count) ways"
+        }
         return line
+    }
+
+    /// True when a split name refers to the user rather than another person.
+    /// Mirrors `ExecuteDraftAction.isMeToken` so the preview and the executor
+    /// agree on who the user is.
+    private static func isMeToken(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["me", "myself", "i", "you", "self"].contains(t)
     }
 
     /// Build the preview for `edit_trip`. Falls back to a generic line if

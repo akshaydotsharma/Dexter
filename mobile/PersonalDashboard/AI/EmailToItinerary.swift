@@ -77,9 +77,13 @@ struct EmailToItinerary {
     /// auto-create / auto-edit a trip". A receipt with no matching trip can
     /// still produce an expense; a booking with a fare produces both (#177).
     private var emailTools: [AnthropicTool] {
-        ToolDefinitions.allTools.filter {
-            $0.name == "add_itinerary_item" || $0.name == "add_expense"
-        }
+        // `add_itinerary_item` from the shared set, plus the EMAIL-SAFE
+        // add_expense (#258) — the settle-up params (paid_by / split_with) are
+        // deliberately withheld from this untrusted surface; trip splits are
+        // defaulted in Swift after execution instead.
+        var tools = ToolDefinitions.allTools.filter { $0.name == "add_itinerary_item" }
+        tools.append(ToolDefinitions.addExpenseEmailSafe)
+        return tools
     }
 
     /// - Parameter reconcile: when true (the explicit "Re-scan (ignore
@@ -438,7 +442,14 @@ struct EmailToItinerary {
         addedExpenseUUIDs: inout [UUID],
         skippedExpenseDuplicates: inout Int
     ) async -> AnthropicContentBlock {
-        let input = call.input
+        // Belt-and-braces on the untrusted email surface (#258): even though the
+        // email tool schema doesn't advertise them, strip any settle-up params
+        // an injected email might smuggle in so the shared executor never
+        // find-or-creates people or a split from email content. Trip splits are
+        // defaulted in Swift below instead.
+        var input = call.input
+        input.removeValue(forKey: "paid_by")
+        input.removeValue(forKey: "split_with")
 
         // Build the dedup descriptor from the proposed input, parsing amount /
         // date the same way `ExecuteDraftAction.addExpense` does.
@@ -466,6 +477,12 @@ struct EmailToItinerary {
                     reference: proposed.sourceReference,
                     store: store
                 )
+                // Trip split defaults (#258): when this expense linked to a trip
+                // (trip_id resolved inside addExpense) AND that trip has
+                // participants, default the stored split to everyone at one share
+                // each with the user as payer. Done in Swift — the email path
+                // never asks the model to emit split data.
+                Self.applyTripSplitDefaults(expenseUUID: expenseUUID, store: store)
                 // #180: attach the forwarded receipt to the FIRST newly-created
                 // expense only. Saved lazily here (not before the loop) so a
                 // run that creates no new expense writes no orphan file. If the
@@ -608,6 +625,41 @@ struct EmailToItinerary {
         ).first else { return }
         row.dedupeKey = signature
         row.sourceReference = ExpenseDedupe.normalizeReference(reference)
+        try? store.context.save()
+    }
+
+    /// Default the settle-up split on an email-logged expense (#258).
+    ///
+    /// Runs after `addExpense` (which already stamped `tripUUID` from the tool
+    /// input). When the row is linked to a trip that HAS participants and
+    /// carries no split yet, seed an equal split across everyone (the user +
+    /// each participant, one share each) with the user as the payer — the same
+    /// default the trip AddExpense sheet applies. No-op for a standalone
+    /// expense, a trip with no participants, or a row that somehow already has a
+    /// split. The email path never lets the model emit split data, so this is
+    /// the only place a forwarded trip receipt becomes a group split.
+    private static func applyTripSplitDefaults(expenseUUID: UUID, store: SwiftDataStore) {
+        let key = expenseUUID.uuidString.lowercased()
+        guard let row = try? store.context.fetch(
+            FetchDescriptor<LocalExpense>(predicate: #Predicate { $0.clientUUID == key })
+        ).first else { return }
+        guard let tripUUID = row.tripUUID, row.splits.isEmpty else { return }
+
+        let tripFK = tripUUID
+        guard let trip = try? store.context.fetch(
+            FetchDescriptor<LocalTrip>(predicate: #Predicate { $0.clientUUID == tripFK })
+        ).first else { return }
+
+        let participants = trip.participantPersonUUIDs
+        guard !participants.isEmpty else { return }
+
+        // Full-bill convention: the row already stores the full amount (the
+        // email path never sets number_of_shares), and myShareSGD divides by the
+        // split shares. Everyone at one share = equal split; the user pays.
+        var entries: [ExpenseSplitEntry] = [ExpenseSplitEntry(person: nil, shares: 1)]
+        entries.append(contentsOf: participants.map { ExpenseSplitEntry(person: $0, shares: 1) })
+        row.splits = entries
+        row.paidByPersonUUID = nil
         try? store.context.save()
     }
 
