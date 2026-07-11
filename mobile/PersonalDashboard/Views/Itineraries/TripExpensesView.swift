@@ -29,10 +29,11 @@ struct TripExpensesView: View {
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var people: [LocalPerson]
 
-    /// Whose numbers the summary card shows (and, for non-You selections,
-    /// which expenses the list narrows to). Defaults to the user — the tab's
-    /// core question is "how much have I spent on this trip".
-    @State private var filterParty: SplitPartyID = .me
+    /// Whose numbers the summary card shows (and, for non-default selections,
+    /// which expenses the list narrows to). Multi-select; never empty.
+    /// Defaults to just the user — the tab's core question is "how much have
+    /// I spent on this trip".
+    @State private var filterParties: Set<SplitPartyID> = [.me]
     /// Currency the summary card renders in. `nil` = the Settings display
     /// currency; otherwise one of the currencies captured on this trip
     /// (converted through the trip's own frozen FX observations).
@@ -84,7 +85,7 @@ struct TripExpensesView: View {
                 participants: participantPeople,
                 currencyOptions: filterCurrencyOptions,
                 displayCode: displayCurrencyCode,
-                party: $filterParty,
+                parties: $filterParties,
                 currency: $filterCurrency
             )
             .presentationDetents([.medium, .large])
@@ -134,39 +135,64 @@ struct TripExpensesView: View {
         return Self.formatOriginal(sgdValue / rate, code: code)
     }
 
-    private var filterPartyName: String {
-        switch filterParty {
-        case .me: return "You"
-        case .person(let id): return personName(id)
+    /// Selected party names in stable order: You first, then trip-participant
+    /// order.
+    private var selectedPartyNames: [String] {
+        var names: [String] = []
+        if filterParties.contains(.me) { names.append("You") }
+        for person in participantPeople where filterParties.contains(.person(person.clientUUID)) {
+            names.append(person.name)
         }
+        return names
+    }
+
+    /// "Your spend" / "Rohan's spend" / "You + Rohan" / "3 people".
+    private var summaryTitle: String {
+        let names = selectedPartyNames
+        if filterParties == [.me] { return "Your spend" }
+        if names.count == 1 { return names[0] == "You" ? "Your spend" : "\(names[0])'s spend" }
+        if names.count == 2 { return "\(names[0]) + \(names[1])" }
+        return "\(names.count) people"
+    }
+
+    /// Short list-header suffix for the active selection.
+    private var selectionShortLabel: String {
+        let names = selectedPartyNames
+        if names.count <= 2 { return names.joined(separator: " + ") }
+        return "\(names.count) people"
     }
 
     /// The card that answers "how much have I spent on this trip" — and the
-    /// same for any participant via the filter. Spent = their consumed share
-    /// across the bills; Paid = what they fronted; the net line is the
-    /// settle-up position.
+    /// same for any set of participants via the filter. Spent = their combined
+    /// consumed share across the bills; Paid = what they fronted; the net line
+    /// is their combined settle-up position.
     private var personSummaryCard: some View {
-        let totals = TripSettlement.totals(expenses: expenses)[filterParty] ?? (paid: 0, owed: 0)
-        let net = totals.paid - totals.owed
-        let isMe = filterParty == .me
+        let allTotals = TripSettlement.totals(expenses: expenses)
+        let paid = filterParties.reduce(0) { $0 + (allTotals[$1]?.paid ?? 0) }
+        let owed = filterParties.reduce(0) { $0 + (allTotals[$1]?.owed ?? 0) }
+        let net = paid - owed
+        let meOnly = filterParties == [.me]
+        let single = filterParties.count == 1
+        let owedLabel: String = {
+            if meOnly { return net >= 0 ? "You are owed" : "You owe" }
+            if single { return net >= 0 ? "Is owed" : "Owes" }
+            return net >= 0 ? "Owed" : "Owe"
+        }()
         return VStack(alignment: .leading, spacing: Space.md) {
             HStack {
-                Text(isMe ? "Your spend" : "\(filterPartyName)'s spend").eyebrow()
+                Text(summaryTitle).eyebrow()
                 Spacer()
                 filterButton
             }
 
-            Text(formatFiltered(totals.owed))
+            Text(formatFiltered(owed))
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
                 .tracking(-0.6)
 
             HStack(spacing: Space.lg) {
-                statTile(label: "Paid", value: formatFiltered(totals.paid))
-                statTile(
-                    label: net >= 0 ? (isMe ? "You are owed" : "Is owed") : (isMe ? "You owe" : "Owes"),
-                    value: formatFiltered(abs(net))
-                )
+                statTile(label: "Paid", value: formatFiltered(paid))
+                statTile(label: owedLabel, value: formatFiltered(abs(net)))
             }
             .padding(.top, Space.xs)
         }
@@ -180,19 +206,13 @@ struct TripExpensesView: View {
         Button {
             showingFilter = true
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(filterCurrency ?? displayCurrencyCode)
-                    .font(.edCaption)
-            }
-            .foregroundStyle(Tokens.accentFinance)
-            .padding(.horizontal, Space.sm)
-            .padding(.vertical, 4)
-            .background(Tokens.accentFinance.opacity(0.12), in: Capsule())
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(Tokens.accentFinance)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Filter by person and currency")
+        .accessibilityLabel("Filter by people and currency")
     }
 
     // MARK: - Currency mode
@@ -420,17 +440,19 @@ struct TripExpensesView: View {
         }
     }
 
-    /// The list narrows to the filtered participant's expenses; the default
-    /// You selection keeps the full list (the summary card already answers
-    /// the "my spend" question without hiding group context).
+    /// The list narrows to expenses involving ANY selected participant; the
+    /// default You-only selection keeps the full list (the summary card
+    /// already answers the "my spend" question without hiding group context).
     private var visibleExpenses: [LocalExpense] {
-        guard filterParty != .me else { return Array(expenses) }
-        return expenses.filter { involves($0, party: filterParty) }
+        guard filterParties != [.me] else { return Array(expenses) }
+        return expenses.filter { expense in
+            filterParties.contains { involves(expense, party: $0) }
+        }
     }
 
     private var expenseList: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            Text(filterParty == .me ? "Expenses" : "Expenses · \(filterPartyName)").eyebrow()
+            Text(filterParties == [.me] ? "Expenses" : "Expenses · \(selectionShortLabel)").eyebrow()
             VStack(spacing: Space.xs) {
                 ForEach(visibleExpenses) { expense in
                     ExpenseRow(expense: expense, showsOriginalFirst: true) {
@@ -438,8 +460,8 @@ struct TripExpensesView: View {
                     }
                 }
             }
-            if filterParty != .me && visibleExpenses.isEmpty {
-                Text("No expenses involve \(filterPartyName) yet.")
+            if filterParties != [.me] && visibleExpenses.isEmpty {
+                Text("No expenses involve this selection yet.")
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
             }
@@ -478,16 +500,17 @@ struct TripExpensesView: View {
 
 // MARK: - Filter sheet
 
-/// Person + currency filter for the trip expenses summary (#258). Person picks
-/// whose spend the summary card shows (and narrows the list for non-You
-/// picks); currency picks what the summary renders in — the Settings display
-/// currency, or any currency captured on the trip.
+/// People + currency filter for the trip expenses summary (#258). People are
+/// multi-select — the summary card shows the combined spend/paid/net of the
+/// selection and the list narrows to expenses involving any of them. Currency
+/// picks what the summary renders in — the Settings display currency, or any
+/// currency captured on the trip.
 private struct TripExpenseFilterSheet: View {
     let participants: [LocalPerson]
     /// Trip capture currencies, excluding the display currency.
     let currencyOptions: [String]
     let displayCode: String
-    @Binding var party: SplitPartyID
+    @Binding var parties: Set<SplitPartyID>
     @Binding var currency: String?
 
     @Environment(\.dismiss) private var dismiss
@@ -538,9 +561,21 @@ private struct TripExpenseFilterSheet: View {
         }
     }
 
+    /// Toggle a party in the multi-select. The selection can never go empty —
+    /// removing the last member snaps back to You.
+    private func toggle(_ rowParty: SplitPartyID) {
+        if parties.contains(rowParty) {
+            parties.remove(rowParty)
+            if parties.isEmpty { parties = [.me] }
+        } else {
+            parties.insert(rowParty)
+        }
+    }
+
     private func partyRow(_ rowParty: SplitPartyID, name: String, colorHex: String?) -> some View {
-        Button {
-            party = rowParty
+        let selected = parties.contains(rowParty)
+        return Button {
+            toggle(rowParty)
         } label: {
             HStack(spacing: Space.sm) {
                 Circle()
@@ -550,18 +585,16 @@ private struct TripExpenseFilterSheet: View {
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                 Spacer()
-                if party == rowParty {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Tokens.accentFinance)
-                }
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(selected ? Tokens.accentFinance : Tokens.mutedSoft)
             }
             .padding(.horizontal, Space.md)
             .padding(.vertical, Space.sm + 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(party == rowParty ? "\(name), selected" : name)
+        .accessibilityLabel(selected ? "\(name), selected" : name)
     }
 
     private func currencyChip(_ code: String?, label: String) -> some View {
