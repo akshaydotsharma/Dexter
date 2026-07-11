@@ -29,10 +29,6 @@ struct TripExpensesView: View {
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var people: [LocalPerson]
 
-    /// False (default) = amounts render in the currency each expense was
-    /// captured in. True = everything converts to the chosen display currency.
-    @State private var showConverted: Bool = false
-
     init(trip: LocalTrip, onEditExpense: @escaping (String) -> Void) {
         self.trip = trip
         self.onEditExpense = onEditExpense
@@ -114,29 +110,6 @@ struct TripExpensesView: View {
         FinanceSettings.displayCurrencyCode.uppercased()
     }
 
-    /// Small capsule that flips the tab between as-captured and converted
-    /// amounts. Labelled with the mode a tap switches TO.
-    private var currencyToggle: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) { showConverted.toggle() }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.left.arrow.right")
-                    .font(.system(size: 9, weight: .semibold))
-                Text(showConverted ? "As added" : displayCurrencyCode)
-                    .font(.edCaption)
-            }
-            .foregroundStyle(Tokens.accentFinance)
-            .padding(.horizontal, Space.sm)
-            .padding(.vertical, 4)
-            .background(Tokens.accentFinance.opacity(0.12), in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(showConverted
-            ? "Show amounts in the currency they were added in"
-            : "Show amounts in \(displayCurrencyCode)")
-    }
-
     // MARK: - Stats card
 
     private var groupTotalSGD: Double {
@@ -147,37 +120,46 @@ struct TripExpensesView: View {
         expenses.reduce(0) { $0 + $1.myShareSGD }
     }
 
+    /// Whether the per-currency breakdown adds information: hidden when the
+    /// trip has a single currency that IS the display currency (the Total row
+    /// would just repeat it).
+    private var showsCurrencyBreakdown: Bool {
+        let totals = totalsByCurrency
+        if totals.count == 1, totals[0].code == displayCurrencyCode { return false }
+        return !totals.isEmpty
+    }
+
     private var statsCard: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            HStack {
-                Text("Group total").eyebrow()
-                Spacer()
-                currencyToggle
-            }
+            Text("Group total").eyebrow()
 
-            if showConverted {
-                Text(FinanceDashboardBand.formatMoney(groupTotalSGD))
-                    .font(.edDisplay)
-                    .foregroundStyle(Tokens.ink)
-                    .tracking(-0.6)
-            } else {
-                let totals = totalsByCurrency
-                if let first = totals.first {
-                    Text(Self.formatOriginal(first.total, code: first.code))
+            VStack(alignment: .leading, spacing: Space.xs) {
+                // As-added spend, one same-weight line per capture currency.
+                if showsCurrencyBreakdown {
+                    ForEach(totalsByCurrency, id: \.code) { entry in
+                        Text(Self.formatOriginal(entry.total, code: entry.code))
+                            .font(.edBodyMedium)
+                            .monospacedDigit()
+                            .foregroundStyle(Tokens.inkSoft)
+                    }
+                    Divider().background(Tokens.divider)
+                }
+                // The one number that sums the whole trip: converted into the
+                // display currency chosen in Settings.
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Total")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.mutedSoft)
+                    Spacer()
+                    Text(FinanceDashboardBand.formatMoney(groupTotalSGD))
                         .font(.edDisplay)
                         .foregroundStyle(Tokens.ink)
                         .tracking(-0.6)
                 }
-                ForEach(totals.dropFirst(), id: \.code) { entry in
-                    Text(Self.formatOriginal(entry.total, code: entry.code))
-                        .font(.edBodyMedium)
-                        .monospacedDigit()
-                        .foregroundStyle(Tokens.inkSoft)
-                }
             }
 
             HStack(spacing: Space.lg) {
-                statTile(label: "Your share", value: yourShareLabel)
+                statTile(label: "Your share", value: FinanceDashboardBand.formatMoney(yourShareSGD))
                 statTile(label: "Expenses", value: "\(expenses.count)")
             }
             .padding(.top, Space.xs)
@@ -186,15 +168,6 @@ struct TripExpensesView: View {
         .padding(Space.lg)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
-    }
-
-    private var yourShareLabel: String {
-        if showConverted {
-            return FinanceDashboardBand.formatMoney(yourShareSGD)
-        }
-        return totalsByCurrency
-            .map { Self.formatOriginal($0.myShare, code: $0.code) }
-            .joined(separator: " · ")
     }
 
     private func statTile(label: String, value: String) -> some View {
@@ -212,11 +185,11 @@ struct TripExpensesView: View {
     // MARK: - Settle up
 
     /// True when the settle-up card can run natively in the capture currency:
-    /// the user wants as-added amounts AND the trip is single-currency. A
-    /// mixed-currency trip has no meaningful "as added" net, so it falls back
-    /// to the display currency (flagged in the card).
+    /// the whole trip shares one currency. A mixed-currency trip has no
+    /// meaningful "as added" net, so it falls back to the display currency
+    /// (flagged in the card).
     private var settlesInCaptureCurrency: Bool {
-        !showConverted && singleCurrencyCode != nil
+        singleCurrencyCode != nil
     }
 
     /// Netted per-party balances, sorted with the user first, then the people
@@ -239,7 +212,7 @@ struct TripExpensesView: View {
         VStack(alignment: .leading, spacing: Space.md) {
             HStack {
                 Text("Settle up").eyebrow()
-                if !showConverted && singleCurrencyCode == nil {
+                if singleCurrencyCode == nil {
                     Spacer()
                     Text("in \(displayCurrencyCode) · mixed currencies")
                         .font(.edCaption)
@@ -315,7 +288,7 @@ struct TripExpensesView: View {
             Text("Expenses").eyebrow()
             VStack(spacing: Space.xs) {
                 ForEach(expenses) { expense in
-                    ExpenseRow(expense: expense, showsOriginalFirst: !showConverted) {
+                    ExpenseRow(expense: expense, showsOriginalFirst: true) {
                         onEditExpense(expense.clientUUID)
                     }
                 }
