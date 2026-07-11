@@ -23,6 +23,14 @@ struct TripExpensesView: View {
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var people: [LocalPerson]
 
+    /// In-place participant management (#261 QA follow-up). Splitting is only
+    /// offered once the trip has participants, and burying that in the trip
+    /// editor on the Itineraries list made it undiscoverable — so the Expenses
+    /// tab manages the group directly. Reuses `PersonPickerSheet`
+    /// (find-or-create by name), same as the trip editor.
+    @State private var pickedParticipant: ExpenseTag?
+    @State private var showingParticipantPicker: Bool = false
+
     init(trip: LocalTrip, onEditExpense: @escaping (String) -> Void) {
         self.trip = trip
         self.onEditExpense = onEditExpense
@@ -37,31 +45,122 @@ struct TripExpensesView: View {
     }
 
     var body: some View {
-        Group {
-            if expenses.isEmpty {
-                emptyState
-            } else {
-                populated
-            }
-        }
-    }
-
-    // MARK: - Populated
-
-    private var populated: some View {
         ScrollView {
             VStack(spacing: Space.lg) {
-                statsCard
-                if !balances.isEmpty {
-                    settleUpCard
+                peopleCard
+                if expenses.isEmpty {
+                    emptyState
+                } else {
+                    statsCard
+                    if !balances.isEmpty {
+                        settleUpCard
+                    }
+                    expenseList
                 }
-                expenseList
                 Color.clear.frame(height: 96)
             }
             .padding(.horizontal, Space.lg)
             .padding(.top, Space.lg)
         }
         .scrollDismissesKeyboard(.interactively)
+        .sheet(isPresented: $showingParticipantPicker) {
+            PersonPickerSheet(selection: $pickedParticipant)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .onChange(of: pickedParticipant) { _, newValue in
+            if let tag = newValue, !trip.participantPersonUUIDs.contains(tag.uuid) {
+                trip.participantPersonUUIDs.append(tag.uuid)
+            }
+            // Reset so picking the same person twice in a row still fires.
+            pickedParticipant = nil
+        }
+    }
+
+    // MARK: - People
+
+    /// Resolved participant records, preserving the stored order.
+    private var participantPeople: [LocalPerson] {
+        trip.participantPersonUUIDs.compactMap { id in
+            people.first { $0.clientUUID == id }
+        }
+    }
+
+    /// Who's on this trip. Add / remove writes straight to the trip, so the
+    /// next expense immediately offers the split UI. Removing someone never
+    /// touches splits already stored on expenses — settle-up resolves names
+    /// from the people table, not this list.
+    private var peopleCard: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack {
+                Text("People").eyebrow()
+                Spacer()
+                Text("For splitting expenses")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Space.sm) {
+                    ForEach(participantPeople, id: \.clientUUID) { person in
+                        participantChip(person)
+                    }
+                    addParticipantChip
+                }
+                .padding(.vertical, 2)
+            }
+            if participantPeople.isEmpty {
+                Text("Add the people on this trip to split expenses and see who owes whom.")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+            }
+        }
+        .padding(Space.lg)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.lg)
+    }
+
+    private func participantChip(_ person: LocalPerson) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(personHex: person.colorHex))
+                .frame(width: 8, height: 8)
+            Text(person.name)
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
+            Button {
+                trip.participantPersonUUIDs.removeAll { $0 == person.clientUUID }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(person.name)")
+        }
+        .padding(.leading, Space.sm)
+        .padding(.trailing, Space.xs + 2)
+        .padding(.vertical, 6)
+        .background(Tokens.surface2, in: Capsule())
+    }
+
+    private var addParticipantChip: some View {
+        Button {
+            showingParticipantPicker = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Add")
+                    .font(.edFootnote)
+            }
+            .foregroundStyle(Tokens.accentFinance)
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, 6)
+            .background(Tokens.accentFinance.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add participant")
     }
 
     // MARK: - Stats card
@@ -196,31 +295,28 @@ struct TripExpensesView: View {
 
     // MARK: - Empty state
 
+    /// Rendered inside the scroll column, under the people card.
     private var emptyState: some View {
         VStack(spacing: 0) {
-            Spacer()
-            VStack(spacing: 0) {
-                Image(systemName: "wallet.bifold")
-                    .font(.system(size: 32, weight: .light))
-                    .foregroundStyle(Tokens.mutedSoft)
-                Spacer().frame(height: Space.md)
-                Text("No expenses yet")
-                    .font(.edTitle)
-                    .foregroundStyle(Tokens.ink)
-                    .multilineTextAlignment(.center)
-                Spacer().frame(height: Space.xs)
-                Text(trip.participantPersonUUIDs.isEmpty
-                     ? "Tap + to log a trip expense. Add participants in Edit trip to split the bill."
-                     : "Tap + to log a trip expense and split it with your group.")
-                    .font(.edSubheadline)
-                    .foregroundStyle(Tokens.muted)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: 300)
-            Spacer()
+            Image(systemName: "wallet.bifold")
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(Tokens.mutedSoft)
+            Spacer().frame(height: Space.md)
+            Text("No expenses yet")
+                .font(.edTitle)
+                .foregroundStyle(Tokens.ink)
+                .multilineTextAlignment(.center)
+            Spacer().frame(height: Space.xs)
+            Text(trip.participantPersonUUIDs.isEmpty
+                 ? "Add the people above, then tap + to log an expense and split it."
+                 : "Tap + to log a trip expense and split it with your group.")
+                .font(.edSubheadline)
+                .foregroundStyle(Tokens.muted)
+                .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, Space.lg)
+        .frame(maxWidth: 300)
+        .frame(maxWidth: .infinity)
+        .padding(.top, Space.xxl)
     }
 }
 
