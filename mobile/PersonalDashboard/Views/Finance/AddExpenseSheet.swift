@@ -712,7 +712,20 @@ struct AddExpenseSheet: View {
                     .font(.edCaption)
                     .monospacedDigit()
                     .foregroundStyle(Tokens.muted)
-                Stepper("", value: draft.shares, in: 1...20)
+                // Minusing down to 0 removes the person from the split (same
+                // as unticking them); shares reset to 1 so re-including starts
+                // clean rather than at a stale zero.
+                Stepper("", value: Binding(
+                    get: { draft.wrappedValue.shares },
+                    set: { newValue in
+                        if newValue <= 0 {
+                            draft.wrappedValue.included = false
+                            draft.wrappedValue.shares = 1
+                        } else {
+                            draft.wrappedValue.shares = newValue
+                        }
+                    }
+                ), in: 0...20)
                     .labelsHidden()
                     .tint(Tokens.accentFinance)
                     .fixedSize()
