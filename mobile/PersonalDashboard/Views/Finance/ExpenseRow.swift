@@ -5,6 +5,11 @@ import SwiftData
 /// in by the parent so we don't couple the row to a sheet binding).
 struct ExpenseRow: View {
     let expense: LocalExpense
+    /// When true the row leads with the amount in the currency the expense was
+    /// CAPTURED in, and the converted display-currency figure becomes the
+    /// sub-label (trip surfaces default to as-added amounts, #258). False —
+    /// the Finance list — keeps the display-currency-first layout.
+    var showsOriginalFirst: Bool = false
     let onTap: () -> Void
 
     /// People, so a tagged expense's chip renders in that person's colour.
@@ -57,12 +62,12 @@ struct ExpenseRow: View {
                 // Refunds are money coming IN: shown in the success (green)
                 // colour with a leading "+" so they read as a credit against
                 // spend, distinct from a normal debit (#206).
-                Text(sgdAmountLabel)
+                Text(showsOriginalFirst ? originalAmountLabel : sgdAmountLabel)
                     .font(.edBodyMedium)
                     .monospacedDigit()
                     .foregroundStyle(expense.isRefund ? Tokens.success : Tokens.ink)
                 if showsOriginalAmount {
-                    Text(originalAmountLabel)
+                    Text(showsOriginalFirst ? sgdAmountLabel : originalAmountLabel)
                         .font(.edCaption)
                         .monospacedDigit()
                         .foregroundStyle(expense.isRefund ? Tokens.success.opacity(0.8) : Tokens.mutedSoft)
@@ -159,7 +164,13 @@ struct ExpenseRow: View {
     }
 
     private var groupSplitLabel: String {
-        "your \(FinanceDashboardBand.formatMoney(abs(expense.myShareSGD))) of \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
+        if showsOriginalFirst {
+            let code = expense.originalCurrency.uppercased()
+            let mine = TripExpensesView.formatOriginal(abs(expense.myShareOriginal), code: code)
+            let full = TripExpensesView.formatOriginal(expense.originalAmount, code: code)
+            return "your \(mine) of \(full)"
+        }
+        return "your \(FinanceDashboardBand.formatMoney(abs(expense.myShareSGD))) of \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
     }
 
     /// Split badge (#188). Same capsule shape as `PersonEventBadge` but muted

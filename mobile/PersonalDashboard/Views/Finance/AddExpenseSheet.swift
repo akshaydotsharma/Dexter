@@ -170,7 +170,11 @@ struct AddExpenseSheet: View {
                         if let statement = statementLabel.trimmedNonEmpty {
                             statementAttribution(statement)
                         }
-                        personField
+                        // The "for/with person" tag (#183) is redundant on a
+                        // trip expense — "Split between" carries who it's for.
+                        if tripContext == nil {
+                            personField
+                        }
                         eventField
                         // Trip context with participants → full settle-up split
                         // UI (payer + per-person shares). Otherwise the existing

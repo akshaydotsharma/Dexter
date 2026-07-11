@@ -487,12 +487,14 @@ private struct TripEditorSheet: View {
             HStack {
                 Text("Participants").eyebrow()
                 Spacer()
-                Text("For splitting expenses")
+                // Headcount includes the user — "3 going" means You + 2.
+                Text("\(participantPeople.count + 1) going")
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Space.sm) {
+                    youChip
                     ForEach(participantPeople, id: \.clientUUID) { person in
                         participantChip(person)
                     }
@@ -518,6 +520,23 @@ private struct TripEditorSheet: View {
     /// Resolved participant records, preserving the stored order.
     private var participantPeople: [LocalPerson] {
         participantUUIDs.compactMap { id in allPeople.first { $0.clientUUID == id } }
+    }
+
+    /// The user's own chip — always first, not removable. Makes the headcount
+    /// readable at a glance ("You, Rohan, Sam" = 3 going).
+    private var youChip: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Tokens.accentFinance)
+                .frame(width: 8, height: 8)
+            Text("You")
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.ink)
+        }
+        .padding(.horizontal, Space.sm)
+        .padding(.vertical, 6)
+        .background(Tokens.surface2, in: Capsule())
+        .accessibilityLabel("You are going")
     }
 
     private func participantChip(_ person: LocalPerson) -> some View {
