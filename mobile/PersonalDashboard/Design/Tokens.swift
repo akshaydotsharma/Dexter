@@ -129,14 +129,21 @@ enum Tokens {
     static let dangerSoft   = Color.paper(0xFEE2E2, 0x450A0A)
     static let info         = Color.paper(0x0E7490, 0x22D3EE)
 
-    /// Edge-bar color for a task priority. Reuses the existing semantic tokens
-    /// (no new hex): P0 danger, P1 warning, P2/none success.
+    /// Edge-bar color for a task priority. Uses dedicated priority hues rather
+    /// than the alert `danger`/`warning` tokens: those two sit too close in
+    /// light mode (brick red vs brownish amber) to tell apart on a thin bar.
+    /// These are picked for maximum hue separation — a true red, a golden
+    /// yellow, and a green — each light/dark-aware. P2 and none share green.
+    static let priorityRed    = Color.paper(0xDC2626, 0xF87171)
+    static let priorityYellow = Color.paper(0xEAB308, 0xFACC15)
+    static let priorityGreen  = Color.paper(0x16A34A, 0x4ADE80)
+
     static func priorityColor(for p: TaskPriority) -> Color {
         switch p {
-        case .p0:   return danger
-        case .p1:   return warning
-        case .p2:   return success
-        case .none: return success
+        case .p0:   return priorityRed
+        case .p1:   return priorityYellow
+        case .p2:   return priorityGreen
+        case .none: return priorityGreen
         }
     }
 
