@@ -671,7 +671,7 @@ private struct TaskRow: View {
             Button(action: onInfoTap) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(Tokens.warning)
+                    .foregroundStyle(Tokens.mutedSoft)
                     .frame(width: 32, height: 32, alignment: .trailing)
                     .contentShape(Rectangle())
             }
@@ -759,6 +759,16 @@ private struct TaskEditorSheet: View {
 
     private var isEditing: Bool { todo != nil }
 
+    /// Distinct, non-empty tags across all todos, sorted case-insensitively.
+    /// The picker itself folds in the current selection, so a tag the edited
+    /// todo carries (or a just-added new tag) still shows even if it's the
+    /// only todo using it.
+    private var availableTags: [String] {
+        Set(viewModel.todos.compactMap { $0.tag })
+            .filter { !$0.isEmpty }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     /// The current editor's maps link as a URL, coercing a bare host to https.
     /// `nil` when the field is empty (so the Open button stays hidden).
     private var editorMapsURL: URL? {
@@ -792,22 +802,35 @@ private struct TaskEditorSheet: View {
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
                         }
-                        Toggle(isOn: $hasDueDate.animation()) {
-                            Text("Due date").font(.edBodyMedium).foregroundStyle(Tokens.ink)
-                        }
-                        if hasDueDate {
-                            DatePicker("", selection: $dueDate)
-                                .labelsHidden()
-                                .tint(Tokens.accentTasks)
+                        labeled("Due date") {
+                            VStack(spacing: 0) {
+                                HStack {
+                                    Text("Set a due date")
+                                        .font(.edBody)
+                                        .foregroundStyle(Tokens.inkSoft)
+                                    Spacer()
+                                    Toggle("", isOn: $hasDueDate.animation())
+                                        .labelsHidden()
+                                        .tint(Tokens.accentTasks)
+                                }
+                                .padding(Space.md)
+
+                                if hasDueDate {
+                                    Divider().background(Tokens.divider)
+                                    HStack {
+                                        DatePicker("", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
+                                            .labelsHidden()
+                                            .tint(Tokens.accentTasks)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(Space.md)
+                                }
+                            }
+                            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                            .paperBorder(Tokens.border, radius: Radius.md)
                         }
                         labeled("Tag") {
-                            TextField("e.g. work, personal", text: $tag)
-                                .textInputAutocapitalization(.never)
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.ink)
-                                .padding(Space.md)
-                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                                .paperBorder(Tokens.border, radius: Radius.md)
+                            TagChipPicker(selection: $tag, tags: availableTags)
                         }
                         labeled("Priority") {
                             Picker("Priority", selection: $priority) {
