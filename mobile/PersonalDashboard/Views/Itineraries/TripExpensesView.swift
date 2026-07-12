@@ -40,12 +40,20 @@ struct TripExpensesView: View {
     @State private var filterCurrency: String? = nil
     @State private var showingFilter: Bool = false
 
+    /// Expense the user has swiped-to-delete and we're confirming (#264).
+    @State private var pendingDelete: LocalExpense?
+
+    @Environment(\.modelContext) private var modelContext
+
     init(trip: LocalTrip, onEditExpense: @escaping (String) -> Void) {
         self.trip = trip
         self.onEditExpense = onEditExpense
         let tripID = trip.clientUUID
+        // Rows removed from the trip (#264) stay in the store to keep backing
+        // the Finance list, but no trip surface — totals, settle-up, list —
+        // may see them. Filtering in the predicate covers all of them at once.
         _expenses = Query(
-            filter: #Predicate<LocalExpense> { $0.tripUUID == tripID },
+            filter: #Predicate<LocalExpense> { $0.tripUUID == tripID && !$0.hiddenFromTrip },
             sort: [
                 SortDescriptor(\.date, order: .reverse),
                 SortDescriptor(\.createdAt, order: .reverse)
@@ -61,6 +69,65 @@ struct TripExpensesView: View {
                 populated
             }
         }
+        .confirmationDialog(
+            "Remove this expense?",
+            isPresented: deleteDialogBinding,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let row = pendingDelete {
+                    delete(row)
+                }
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: {
+            Text(pendingDelete.map { deleteMessage(for: $0) } ?? "")
+        }
+    }
+
+    private var deleteDialogBinding: Binding<Bool> {
+        Binding(
+            get: { pendingDelete != nil },
+            set: { newValue in if !newValue { pendingDelete = nil } }
+        )
+    }
+
+    private func deleteMessage(for expense: LocalExpense) -> String {
+        let label = expense.merchant?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? expense.expenseDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? expense.categoryEnum.displayName
+        let amount = Self.formatOriginal(expense.originalAmount, code: expense.originalCurrency.uppercased())
+        if expense.hiddenFromFinance {
+            return "\(label) · \(amount)"
+        }
+        return "\(label) · \(amount)\nRemoves it from this trip only — it stays in your finances."
+    }
+
+    /// Trip-side delete honouring the per-surface visibility model (#264): a
+    /// row still visible in Finance is only HIDDEN from the trip; a row the
+    /// user already removed from Finance has no remaining surface and is
+    /// physically deleted (receipt file cleaned up unless a sibling row from
+    /// the same multi-expense import still references it).
+    private func delete(_ expense: LocalExpense) {
+        if !expense.hiddenFromFinance {
+            expense.hiddenFromTrip = true
+            try? modelContext.save()
+            return
+        }
+        if let path = expense.receiptImagePath {
+            let all = (try? modelContext.fetch(FetchDescriptor<LocalExpense>())) ?? []
+            let stillReferenced = all.contains {
+                $0.clientUUID != expense.clientUUID && $0.receiptImagePath == path
+            }
+            if !stillReferenced {
+                try? ReceiptStorage.shared.delete(relativePath: path)
+            }
+        }
+        modelContext.delete(expense)
+        try? modelContext.save()
     }
 
     // MARK: - Populated
@@ -465,6 +532,9 @@ struct TripExpensesView: View {
                 ForEach(visibleExpenses) { expense in
                     ExpenseRow(expense: expense, showsOriginalFirst: true) {
                         onEditExpense(expense.clientUUID)
+                    }
+                    .swipeToDeleteTrash {
+                        pendingDelete = expense
                     }
                 }
             }

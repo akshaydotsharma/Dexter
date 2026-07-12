@@ -182,6 +182,18 @@ final class LocalExpense {
     var paidByPersonUUID: UUID? = nil
     var splitsData: Data? = nil
 
+    // MARK: - Per-surface visibility (#264)
+    //
+    // A trip expense is ONE row shown on two surfaces (the trip's Expenses tab
+    // and the Finance list). Deleting it from one surface must not affect the
+    // other, so each surface owns a hide flag instead of hard-deleting the
+    // shared row. Only when BOTH flags are set (no surface shows it) does the
+    // row get physically deleted. The row keeps existing while hidden so
+    // `ExpenseDedupe` still sees it and a re-import can't resurrect a
+    // duplicate. Both additive with defaults for a safe lightweight migration.
+    var hiddenFromFinance: Bool = false
+    var hiddenFromTrip: Bool = false
+
     // MARK: - Dead-field parity with other LocalModels
     //
     // These are intentionally unused on Phase A. Kept so that the SwiftData
@@ -218,6 +230,8 @@ final class LocalExpense {
         dedupeDescriptor: String = "",
         paidByPersonUUID: UUID? = nil,
         splitsData: Data? = nil,
+        hiddenFromFinance: Bool = false,
+        hiddenFromTrip: Bool = false,
         needsSync: Bool = false,
         version: Int = 0
     ) {
@@ -248,6 +262,8 @@ final class LocalExpense {
         self.dedupeDescriptor = dedupeDescriptor
         self.paidByPersonUUID = paidByPersonUUID
         self.splitsData = splitsData
+        self.hiddenFromFinance = hiddenFromFinance
+        self.hiddenFromTrip = hiddenFromTrip
         self.needsSync = needsSync
         self.version = version
     }

@@ -159,7 +159,8 @@ struct AssistantContextBuilder {
             let allTripExpenses = (try? context.fetch(FetchDescriptor<LocalExpense>())) ?? []
             var expenseAggByTrip: [UUID: (total: Double, count: Int)] = [:]
             for expense in allTripExpenses {
-                guard let tripFK = expense.tripUUID else { continue }
+                // Rows removed from the trip surface (#264) don't count here.
+                guard let tripFK = expense.tripUUID, !expense.hiddenFromTrip else { continue }
                 var agg = expenseAggByTrip[tripFK] ?? (total: 0, count: 0)
                 agg.total += expense.signedSGD
                 agg.count += 1
@@ -245,9 +246,11 @@ struct AssistantContextBuilder {
         let now = Date()
         if let last30Cutoff = cal.date(byAdding: .day, value: -30, to: now) {
             let cutoff = cal.startOfDay(for: last30Cutoff)
+            // Rows removed from Finance (#264) are invisible to the finance
+            // block — they only back their trip's rollup above.
             if let recent = try? context.fetch(
                 FetchDescriptor<LocalExpense>(
-                    predicate: #Predicate { $0.date >= cutoff },
+                    predicate: #Predicate { $0.date >= cutoff && !$0.hiddenFromFinance },
                     sortBy: [
                         SortDescriptor(\LocalExpense.date, order: .reverse),
                         SortDescriptor(\LocalExpense.createdAt, order: .reverse)
@@ -258,14 +261,16 @@ struct AssistantContextBuilder {
                 let monthComps = cal.dateComponents([.year, .month], from: now)
                 let monthStart = cal.date(from: monthComps) ?? now
                 let monthRows = recent.filter { $0.date >= monthStart }
-                // Net refunds against spend (#206) so the figure the assistant
-                // reports matches the Finance UI's netted totals.
-                let monthTotal = monthRows.reduce(0.0) { $0 + $1.signedSGD }
+                // Net refunds against spend (#206) and count only the user's
+                // share of group-split trip expenses (#258/#264) so the figure
+                // the assistant reports matches the Finance UI's totals.
+                let monthTotal = monthRows.reduce(0.0) { $0 + $1.myShareSGD }
 
-                // Category totals this month, biggest first (refunds netted).
+                // Category totals this month, biggest first (refunds netted,
+                // share-based — same convention as the month total).
                 var byCategory: [String: Double] = [:]
                 for row in monthRows {
-                    byCategory[row.category, default: 0] += row.signedSGD
+                    byCategory[row.category, default: 0] += row.myShareSGD
                 }
                 let topCategories = byCategory
                     .sorted { $0.value > $1.value }

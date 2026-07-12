@@ -512,7 +512,7 @@ struct FinanceView: View {
 
     @ViewBuilder
     private var content: some View {
-        if allExpenses.isEmpty {
+        if !allExpenses.contains(where: { !$0.hiddenFromFinance }) {
             emptyState
         } else {
             populatedContent
@@ -752,6 +752,11 @@ struct FinanceView: View {
     /// so we don't fetch through the service when SwiftData already gave
     /// us the array via `@Query`.
     private func matches(_ expense: LocalExpense, filter: ExpenseFilter) -> Bool {
+        // Removed-from-Finance rows (#264) stay in the store to back their
+        // trip's settle-up, but no Finance surface — list, dashboard band,
+        // insights — may see them. Guard here so every aggregation site that
+        // funnels through this matcher is covered at once.
+        if expense.hiddenFromFinance { return false }
         if let range = filter.dateRange {
             if !range.contains(expense.date) { return false }
         }
@@ -906,11 +911,25 @@ struct FinanceView: View {
         let label = expense.merchant?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? expense.expenseDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? expense.categoryEnum.displayName
-        let amount = FinanceDashboardBand.formatMoney(expense.sgdAmount)
+        // Match the amount the row leads with: the user's share for a group
+        // split, the full amount otherwise (#264).
+        let shown = expense.isGroupSplit ? abs(expense.myShareSGD) : expense.sgdAmount
+        let amount = FinanceDashboardBand.formatMoney(shown)
+        if expense.tripUUID != nil && !expense.hiddenFromTrip {
+            return "\(label) · \(amount)\nRemoves it from your finances only — it stays on the trip."
+        }
         return "\(label) · \(amount)"
     }
 
     private func delete(_ expense: LocalExpense) {
+        // Per-surface delete (#264): a trip expense still visible on its trip
+        // is only hidden from Finance — the shared row keeps backing the
+        // trip's totals and settle-up, so the receipt file must survive too.
+        if expense.tripUUID != nil && !expense.hiddenFromTrip {
+            expense.hiddenFromFinance = true
+            try? modelContext.save()
+            return
+        }
         // Receipt file is the expense's only off-row dependency, so its
         // lifecycle is tied to the row. Clean up first, then the row —
         // if the file delete fails (read-only volume, etc.) we still
