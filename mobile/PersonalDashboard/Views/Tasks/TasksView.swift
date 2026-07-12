@@ -8,7 +8,7 @@ struct TasksView: View {
     @State private var completedExpanded: Bool = false
     // Per-section tap-below inline draft state.
     // draftBucket == nil → no draft active; non-nil → draft in that section.
-    private enum DraftBucket: String { case today, thisWeek, later, noDate }
+    private enum DraftBucket: String { case today, tomorrow, thisWeek, later, noDate }
     @State private var draftBucket: DraftBucket? = nil
     @State private var draftText: String = ""
     @FocusState private var draftFocused: Bool
@@ -147,6 +147,9 @@ struct TasksView: View {
         switch bucket {
         case .today:
             return cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)
+        case .tomorrow:
+            let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
+            return cal.date(byAdding: .day, value: 1, to: eod)
         case .thisWeek:
             let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
             return cal.date(byAdding: .day, value: 3, to: eod)
@@ -262,6 +265,9 @@ struct TasksView: View {
         if !buckets.today.isEmpty || draftBucket == .today {
             taskSection(title: "Today", count: buckets.today.count, accent: Tokens.warning, soft: Tokens.warningSoft, todos: buckets.today, bucket: .today)
         }
+        if !buckets.tomorrow.isEmpty || draftBucket == .tomorrow {
+            taskSection(title: "Tomorrow", count: buckets.tomorrow.count, accent: Tokens.info, soft: Tokens.paper2, todos: buckets.tomorrow, bucket: .tomorrow)
+        }
         if !buckets.thisWeek.isEmpty || draftBucket == .thisWeek {
             taskSection(title: "This Week", count: buckets.thisWeek.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.thisWeek, bucket: .thisWeek)
         }
@@ -279,10 +285,23 @@ struct TasksView: View {
     private struct TaskBuckets {
         var overdue: [Todo] = []
         var today: [Todo] = []
+        var tomorrow: [Todo] = []
         var thisWeek: [Todo] = []
         var later: [Todo] = []
         var noDate: [Todo] = []
         var completed: [Todo] = []
+    }
+
+    /// Sort order shared by every open bucket: highest priority first
+    /// (P0 → P1 → P2/none), and within one priority the most recently created
+    /// task on top. Keeps the date-based sections intact while ranking rows
+    /// inside each section by urgency.
+    private func prioritySorted(_ todos: [Todo]) -> [Todo] {
+        todos.sorted { a, b in
+            let ra = a.taskPriority.sortRank, rb = b.taskPriority.sortRank
+            if ra != rb { return ra < rb }
+            return a.createdAt > b.createdAt
+        }
     }
 
     private func computeBuckets() -> TaskBuckets {
@@ -290,6 +309,7 @@ struct TasksView: View {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
+        let dayAfterTomorrow = cal.date(byAdding: .day, value: 2, to: today)!
         let weekEnd = cal.date(byAdding: .day, value: 7, to: today)!
 
         var b = TaskBuckets()
@@ -299,9 +319,16 @@ struct TasksView: View {
             guard let due = todo.dueDate else { b.noDate.append(todo); continue }
             if due < today { b.overdue.append(todo) }
             else if due < tomorrow { b.today.append(todo) }
+            else if due < dayAfterTomorrow { b.tomorrow.append(todo) }
             else if due < weekEnd { b.thisWeek.append(todo) }
             else { b.later.append(todo) }
         }
+        b.overdue = prioritySorted(b.overdue)
+        b.today = prioritySorted(b.today)
+        b.tomorrow = prioritySorted(b.tomorrow)
+        b.thisWeek = prioritySorted(b.thisWeek)
+        b.later = prioritySorted(b.later)
+        b.noDate = prioritySorted(b.noDate)
         return b
     }
 
@@ -644,7 +671,7 @@ private struct TaskRow: View {
             Button(action: onInfoTap) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(Tokens.warning)
+                    .foregroundStyle(Tokens.mutedSoft)
                     .frame(width: 32, height: 32, alignment: .trailing)
                     .contentShape(Rectangle())
             }
@@ -655,6 +682,13 @@ private struct TaskRow: View {
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
         .background(Color.clear)
+        // Thin colored left-edge bar keyed to the task's priority. Spans the row
+        // height at the leading edge; reads as a subtle accent, not a block.
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                .fill(Tokens.priorityColor(for: todo.taskPriority))
+                .frame(width: Space.xs)
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             // When a tap-below draft is active, actively flip draftFocused in the parent
@@ -715,6 +749,7 @@ private struct TaskEditorSheet: View {
     @State private var hasDueDate: Bool = false
     @State private var dueDate: Date = Date().addingTimeInterval(3600)
     @State private var tag: String = ""
+    @State private var priority: TaskPriority = .none
     @State private var address: String = ""
     @State private var googleMapsLink: String = ""
     @State private var isResolvingAddress = false
@@ -723,6 +758,16 @@ private struct TaskEditorSheet: View {
     @Environment(\.openURL) private var openURL
 
     private var isEditing: Bool { todo != nil }
+
+    /// Distinct, non-empty tags across all todos, sorted case-insensitively.
+    /// The picker itself folds in the current selection, so a tag the edited
+    /// todo carries (or a just-added new tag) still shows even if it's the
+    /// only todo using it.
+    private var availableTags: [String] {
+        Set(viewModel.todos.compactMap { $0.tag })
+            .filter { !$0.isEmpty }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
 
     /// The current editor's maps link as a URL, coercing a bare host to https.
     /// `nil` when the field is empty (so the Open button stays hidden).
@@ -757,22 +802,43 @@ private struct TaskEditorSheet: View {
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
                         }
-                        Toggle(isOn: $hasDueDate.animation()) {
-                            Text("Due date").font(.edBodyMedium).foregroundStyle(Tokens.ink)
-                        }
-                        if hasDueDate {
-                            DatePicker("", selection: $dueDate)
-                                .labelsHidden()
-                                .tint(Tokens.accentTasks)
+                        labeled("Due date") {
+                            VStack(spacing: 0) {
+                                HStack {
+                                    Text("Set a due date")
+                                        .font(.edBody)
+                                        .foregroundStyle(Tokens.inkSoft)
+                                    Spacer()
+                                    Toggle("", isOn: $hasDueDate.animation())
+                                        .labelsHidden()
+                                        .tint(Tokens.accentTasks)
+                                }
+                                .padding(Space.md)
+
+                                if hasDueDate {
+                                    Divider().background(Tokens.divider)
+                                    HStack {
+                                        DatePicker("", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
+                                            .labelsHidden()
+                                            .tint(Tokens.accentTasks)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(Space.md)
+                                }
+                            }
+                            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                            .paperBorder(Tokens.border, radius: Radius.md)
                         }
                         labeled("Tag") {
-                            TextField("e.g. work, personal", text: $tag)
-                                .textInputAutocapitalization(.never)
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.ink)
-                                .padding(Space.md)
-                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                                .paperBorder(Tokens.border, radius: Radius.md)
+                            TagChipPicker(selection: $tag, tags: availableTags)
+                        }
+                        labeled("Priority") {
+                            Picker("Priority", selection: $priority) {
+                                ForEach(TaskPriority.allCases, id: \.self) { p in
+                                    Text(p.label).tag(p)
+                                }
+                            }
+                            .pickerStyle(.segmented)
                         }
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             HStack(spacing: Space.sm) {
@@ -856,6 +922,7 @@ private struct TaskEditorSheet: View {
         descriptionText = todo.description ?? ""
         if let due = todo.dueDate { hasDueDate = true; dueDate = due }
         tag = todo.tag ?? ""
+        priority = todo.taskPriority
         address = todo.address
         googleMapsLink = todo.googleMapsLink
     }
@@ -892,9 +959,9 @@ private struct TaskEditorSheet: View {
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
         if let existing = todo {
-            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink)
+            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
         } else {
-            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink)
+            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
         }
         dismiss()
     }

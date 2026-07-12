@@ -63,8 +63,19 @@ struct TodayView: View {
 
     private var tasksCard: some View {
         let open = todosVM.todos.filter { !$0.completed }
+        // Highest priority first (P0 → P1 → P2/none), newest within a priority,
+        // matching the Tasks screen ordering so the preview surfaces P0 rows.
+        let byPriority: ([Todo]) -> [Todo] = { todos in
+            todos.sorted { a, b in
+                let ra = a.taskPriority.sortRank, rb = b.taskPriority.sortRank
+                if ra != rb { return ra < rb }
+                return a.createdAt > b.createdAt
+            }
+        }
         let dueTodayOrSoon = open.filter { isDueTodayOrOverdue($0.dueDate) }
-        let preview = dueTodayOrSoon.isEmpty ? Array(open.prefix(5)) : Array(dueTodayOrSoon.prefix(5))
+        let preview = dueTodayOrSoon.isEmpty
+            ? Array(byPriority(open).prefix(5))
+            : Array(byPriority(dueTodayOrSoon).prefix(5))
 
         return TodayCard(
             section: .tasks,
@@ -314,6 +325,12 @@ private struct TodayTaskRow: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
+        // Thin colored left-edge bar keyed to priority, matching the Tasks screen.
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                .fill(Tokens.priorityColor(for: todo.taskPriority))
+                .frame(width: Space.xs)
+        }
     }
 
     private func isOverdue(_ date: Date) -> Bool {

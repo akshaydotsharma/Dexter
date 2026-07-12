@@ -64,6 +64,13 @@ extension ChatDraft {
             if let title = dict["title"]?.stringValue, !title.isEmpty, title != "null" {
                 summary += ": \"\(title)\""
             }
+            if let raw = dict["priority"]?.stringValue, !raw.isEmpty {
+                if raw == "null" {
+                    summary += " {clear priority}"
+                } else if let p = TaskPriority(aiString: raw) {
+                    summary += " {\(p.label)}"
+                }
+            }
             return summary
 
         case .updateNote:
@@ -106,6 +113,9 @@ extension ChatDraft {
             }
             if let tag = dict["tag"]?.stringValue, !tag.isEmpty, tag != "null" {
                 summary += " [\(tag)]"
+            }
+            if let p = TaskPriority(aiString: dict["priority"]?.stringValue), p != .none {
+                summary += " {\(p.label)}"
             }
             return summary
 

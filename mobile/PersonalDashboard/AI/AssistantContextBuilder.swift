@@ -51,6 +51,11 @@ struct AssistantContextBuilder {
                 if let tag = todo.tag, !tag.isEmpty {
                     line += " [\(Self.safe(tag, maxLen: 50))]"
                 }
+                // Surface priority (when set) so the model can target "make the
+                // taxes task p0" and skip a redundant edit if it is already there.
+                if let p = TaskPriority(rawValue: todo.priority), p != .none {
+                    line += " {\(p.label)}"
+                }
                 if todo.completed {
                     line += " ✓"
                 }

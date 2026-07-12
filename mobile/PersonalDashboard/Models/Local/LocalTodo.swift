@@ -26,6 +26,11 @@ final class LocalTodo {
     /// the row shows a tappable "MAP" chip only when it resolves to a URL.
     var googleMapsLink: String = ""
 
+    /// Task priority as a raw `Int` (see `TaskPriority`). Local-only, stored
+    /// with a default so adding it to an existing install is a safe lightweight
+    /// migration (no data loss). Drives the colored left-edge bar on task rows.
+    var priority: Int = 0
+
     var version: Int64
 
     var createdAt: Date
@@ -44,6 +49,7 @@ final class LocalTodo {
         position: Int? = nil,
         address: String = "",
         googleMapsLink: String = "",
+        priority: Int = 0,
         version: Int64 = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -59,6 +65,7 @@ final class LocalTodo {
         self.position = position
         self.address = address
         self.googleMapsLink = googleMapsLink
+        self.priority = priority
         self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -83,7 +90,8 @@ final class LocalTodo {
             updatedAt: updatedAt,
             deletedAt: deletedAt,
             address: address,
-            googleMapsLink: googleMapsLink
+            googleMapsLink: googleMapsLink,
+            priority: priority
         )
     }
 }

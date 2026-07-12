@@ -28,6 +28,15 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     /// Optional Google Maps URL. Local-only, same handling as `address`.
     var googleMapsLink: String = ""
 
+    /// Task priority as a raw `Int` (see `TaskPriority`). Local-only, same
+    /// handling as `address`/`googleMapsLink`: defaulted and omitted from
+    /// `CodingKeys` so the server sync contract is untouched.
+    var priority: Int = 0
+
+    /// Typed view of `priority` for the UI. Unknown raw values fall back to
+    /// `.none` so a bad stored value never renders a blank/missing bar.
+    var taskPriority: TaskPriority { TaskPriority(rawValue: priority) ?? .none }
+
     /// Server JSON has both `id` (int) and `client_uuid`; we map our `id`
     /// to `client_uuid` and ignore the server's int. The decoder's
     /// `.convertFromSnakeCase` strategy turns `client_uuid` into
@@ -66,6 +75,7 @@ struct TodoCreateRequest: Encodable {
     let tag: String?
     var address: String = ""
     var googleMapsLink: String = ""
+    var priority: Int = 0
 }
 
 struct TodoUpdateRequest: Encodable {
@@ -77,4 +87,6 @@ struct TodoUpdateRequest: Encodable {
     /// `nil` leaves the stored value untouched; a value (incl. "") overwrites.
     var address: String? = nil
     var googleMapsLink: String? = nil
+    /// `nil` leaves the stored priority untouched; a value overwrites it.
+    var priority: Int? = nil
 }

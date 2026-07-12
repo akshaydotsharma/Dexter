@@ -556,6 +556,8 @@ struct ExecuteDraftAction {
         let description = trimmedString(input["description"])
         let dueDate = parseISODate(trimmedString(input["due_at"]))
         let tag = trimmedString(input["tag"])
+        // Empty / unknown -> no priority (0). Parseable value -> its raw Int.
+        let priority = TaskPriority(aiString: trimmedString(input["priority"]))?.rawValue ?? 0
 
         let now = Date()
         let row = LocalTodo(
@@ -564,6 +566,7 @@ struct ExecuteDraftAction {
             completed: false,
             dueDate: dueDate,
             tag: tag,
+            priority: priority,
             createdAt: now,
             updatedAt: now,
             needsSync: false
@@ -672,6 +675,16 @@ struct ExecuteDraftAction {
                 row.tag = nil; changed = true
             } else if !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 row.tag = raw.trimmingCharacters(in: .whitespacesAndNewlines); changed = true
+            }
+        }
+        // "null" -> clear to none, empty -> keep, parseable value -> set. Mirrors
+        // the tag sentinel above.
+        if let raw = input["priority"]?.stringValue {
+            if raw == "null" {
+                row.priority = 0; changed = true
+            } else if !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let parsed = TaskPriority(aiString: raw) {
+                row.priority = parsed.rawValue; changed = true
             }
         }
         guard changed else {
