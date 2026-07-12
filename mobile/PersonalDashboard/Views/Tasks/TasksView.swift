@@ -8,7 +8,7 @@ struct TasksView: View {
     @State private var completedExpanded: Bool = false
     // Per-section tap-below inline draft state.
     // draftBucket == nil → no draft active; non-nil → draft in that section.
-    private enum DraftBucket: String { case today, thisWeek, later, noDate }
+    private enum DraftBucket: String { case today, tomorrow, thisWeek, later, noDate }
     @State private var draftBucket: DraftBucket? = nil
     @State private var draftText: String = ""
     @FocusState private var draftFocused: Bool
@@ -147,6 +147,9 @@ struct TasksView: View {
         switch bucket {
         case .today:
             return cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)
+        case .tomorrow:
+            let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
+            return cal.date(byAdding: .day, value: 1, to: eod)
         case .thisWeek:
             let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
             return cal.date(byAdding: .day, value: 3, to: eod)
@@ -262,6 +265,9 @@ struct TasksView: View {
         if !buckets.today.isEmpty || draftBucket == .today {
             taskSection(title: "Today", count: buckets.today.count, accent: Tokens.warning, soft: Tokens.warningSoft, todos: buckets.today, bucket: .today)
         }
+        if !buckets.tomorrow.isEmpty || draftBucket == .tomorrow {
+            taskSection(title: "Tomorrow", count: buckets.tomorrow.count, accent: Tokens.info, soft: Tokens.paper2, todos: buckets.tomorrow, bucket: .tomorrow)
+        }
         if !buckets.thisWeek.isEmpty || draftBucket == .thisWeek {
             taskSection(title: "This Week", count: buckets.thisWeek.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.thisWeek, bucket: .thisWeek)
         }
@@ -279,10 +285,23 @@ struct TasksView: View {
     private struct TaskBuckets {
         var overdue: [Todo] = []
         var today: [Todo] = []
+        var tomorrow: [Todo] = []
         var thisWeek: [Todo] = []
         var later: [Todo] = []
         var noDate: [Todo] = []
         var completed: [Todo] = []
+    }
+
+    /// Sort order shared by every open bucket: highest priority first
+    /// (P0 → P1 → P2/none), and within one priority the most recently created
+    /// task on top. Keeps the date-based sections intact while ranking rows
+    /// inside each section by urgency.
+    private func prioritySorted(_ todos: [Todo]) -> [Todo] {
+        todos.sorted { a, b in
+            let ra = a.taskPriority.sortRank, rb = b.taskPriority.sortRank
+            if ra != rb { return ra < rb }
+            return a.createdAt > b.createdAt
+        }
     }
 
     private func computeBuckets() -> TaskBuckets {
@@ -290,6 +309,7 @@ struct TasksView: View {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
+        let dayAfterTomorrow = cal.date(byAdding: .day, value: 2, to: today)!
         let weekEnd = cal.date(byAdding: .day, value: 7, to: today)!
 
         var b = TaskBuckets()
@@ -299,9 +319,16 @@ struct TasksView: View {
             guard let due = todo.dueDate else { b.noDate.append(todo); continue }
             if due < today { b.overdue.append(todo) }
             else if due < tomorrow { b.today.append(todo) }
+            else if due < dayAfterTomorrow { b.tomorrow.append(todo) }
             else if due < weekEnd { b.thisWeek.append(todo) }
             else { b.later.append(todo) }
         }
+        b.overdue = prioritySorted(b.overdue)
+        b.today = prioritySorted(b.today)
+        b.tomorrow = prioritySorted(b.tomorrow)
+        b.thisWeek = prioritySorted(b.thisWeek)
+        b.later = prioritySorted(b.later)
+        b.noDate = prioritySorted(b.noDate)
         return b
     }
 

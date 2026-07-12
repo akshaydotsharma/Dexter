@@ -22,6 +22,17 @@ enum TaskPriority: Int, CaseIterable, Sendable {
         }
     }
 
+    /// Ordering weight for task lists: P0 first, then P1, then P2/none last.
+    /// `p2` and `none` share the lowest rank since they read as the same
+    /// (green) priority. Lower value sorts to the top.
+    var sortRank: Int {
+        switch self {
+        case .p0:          return 0
+        case .p1:          return 1
+        case .p2, .none:   return 2
+        }
+    }
+
     /// Parse a value supplied by the AI tools. Accepts "p0"/"p1"/"p2"
     /// (case-insensitive) plus common synonyms ("high"/"medium"/"low").
     /// Empty or unrecognised input returns `nil` so callers decide whether that
