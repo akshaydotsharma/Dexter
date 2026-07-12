@@ -78,9 +78,10 @@ enum ToolDefinitions {
                 "title": string("The title or main text of the task"),
                 "description": string("Optional additional details or notes about the task"),
                 "due_at": string("Due date in ISO 8601 format (e.g., 2024-01-15T14:00:00.000Z). Parse relative dates like \"tomorrow\", \"next week\", etc. Use empty string if no due date."),
-                "tag": string("Category tag for the task (e.g., \"Work\", \"Personal\", \"Shopping\", \"Health\"). Use empty string if no tag.")
+                "tag": string("Category tag for the task (e.g., \"Work\", \"Personal\", \"Shopping\", \"Health\"). Use empty string if no tag."),
+                "priority": string("Task priority. Use \"p0\" (highest/urgent), \"p1\" (medium), or \"p2\" (low). Use empty string when the user does not indicate a priority.")
             ],
-            required: ["title", "description", "due_at", "tag"]
+            required: ["title", "description", "due_at", "tag", "priority"]
         )
     )
 
@@ -140,9 +141,10 @@ enum ToolDefinitions {
                 "title": string("New title for the task. Use empty string ONLY to keep current title unchanged (at least one other field must have a value)."),
                 "description": string("New description for the task. Use empty string to keep unchanged, or \"null\" to clear/delete the description."),
                 "due_at": string("New due date in ISO 8601 format. Use empty string to keep unchanged, or \"null\" to remove. At least one field must actually change."),
-                "tag": string("New tag for the task. Use empty string to keep unchanged, or \"null\" to remove. At least one field must actually change.")
+                "tag": string("New tag for the task. Use empty string to keep unchanged, or \"null\" to remove. At least one field must actually change."),
+                "priority": string("New priority: \"p0\" (highest), \"p1\" (medium), or \"p2\" (low). Use empty string to keep unchanged, or \"null\" to clear it back to no priority.")
             ],
-            required: ["id", "title", "description", "due_at", "tag"]
+            required: ["id", "title", "description", "due_at", "tag", "priority"]
         )
     )
 

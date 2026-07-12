@@ -37,6 +37,7 @@ struct TodoService {
             tag: request.tag,
             address: request.address,
             googleMapsLink: request.googleMapsLink,
+            priority: request.priority,
             createdAt: now,
             updatedAt: now
         )
@@ -54,6 +55,7 @@ struct TodoService {
         if let tag = request.tag { row.tag = tag }
         if let address = request.address { row.address = address }
         if let googleMapsLink = request.googleMapsLink { row.googleMapsLink = googleMapsLink }
+        if let priority = request.priority { row.priority = priority }
         row.updatedAt = Date()
         try store.context.save()
         return row.toDTO()

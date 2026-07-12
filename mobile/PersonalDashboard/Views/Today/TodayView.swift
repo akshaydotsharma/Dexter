@@ -314,6 +314,12 @@ private struct TodayTaskRow: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
+        // Thin colored left-edge bar keyed to priority, matching the Tasks screen.
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                .fill(Tokens.priorityColor(for: todo.taskPriority))
+                .frame(width: Space.xs)
+        }
     }
 
     private func isOverdue(_ date: Date) -> Bool {

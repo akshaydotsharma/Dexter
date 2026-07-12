@@ -129,6 +129,17 @@ enum Tokens {
     static let dangerSoft   = Color.paper(0xFEE2E2, 0x450A0A)
     static let info         = Color.paper(0x0E7490, 0x22D3EE)
 
+    /// Edge-bar color for a task priority. Reuses the existing semantic tokens
+    /// (no new hex): P0 danger, P1 warning, P2/none success.
+    static func priorityColor(for p: TaskPriority) -> Color {
+        switch p {
+        case .p0:   return danger
+        case .p1:   return warning
+        case .p2:   return success
+        case .none: return success
+        }
+    }
+
     static func accent(for section: AppSection) -> Color {
         switch section {
         case .chat:        return accentChat

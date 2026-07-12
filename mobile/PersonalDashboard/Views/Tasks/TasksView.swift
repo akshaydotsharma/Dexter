@@ -655,6 +655,13 @@ private struct TaskRow: View {
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
         .background(Color.clear)
+        // Thin colored left-edge bar keyed to the task's priority. Spans the row
+        // height at the leading edge; reads as a subtle accent, not a block.
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                .fill(Tokens.priorityColor(for: todo.taskPriority))
+                .frame(width: Space.xs)
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             // When a tap-below draft is active, actively flip draftFocused in the parent
@@ -715,6 +722,7 @@ private struct TaskEditorSheet: View {
     @State private var hasDueDate: Bool = false
     @State private var dueDate: Date = Date().addingTimeInterval(3600)
     @State private var tag: String = ""
+    @State private var priority: TaskPriority = .none
     @State private var address: String = ""
     @State private var googleMapsLink: String = ""
     @State private var isResolvingAddress = false
@@ -773,6 +781,14 @@ private struct TaskEditorSheet: View {
                                 .padding(Space.md)
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
+                        }
+                        labeled("Priority") {
+                            Picker("Priority", selection: $priority) {
+                                ForEach(TaskPriority.allCases, id: \.self) { p in
+                                    Text(p.label).tag(p)
+                                }
+                            }
+                            .pickerStyle(.segmented)
                         }
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             HStack(spacing: Space.sm) {
@@ -856,6 +872,7 @@ private struct TaskEditorSheet: View {
         descriptionText = todo.description ?? ""
         if let due = todo.dueDate { hasDueDate = true; dueDate = due }
         tag = todo.tag ?? ""
+        priority = todo.taskPriority
         address = todo.address
         googleMapsLink = todo.googleMapsLink
     }
@@ -892,9 +909,9 @@ private struct TaskEditorSheet: View {
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
         if let existing = todo {
-            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink)
+            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
         } else {
-            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink)
+            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
         }
         dismiss()
     }
