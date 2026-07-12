@@ -245,8 +245,23 @@ struct ExpenseService {
     }
 
     func deleteExpense(_ expense: LocalExpense) throws {
-        store.context.delete(expense)
+        Self.removeFromFinance(expense, context: store.context)
         try save()
+    }
+
+    /// Finance-side removal honouring the per-surface visibility model (#264).
+    /// A trip expense still visible on its trip is only HIDDEN from Finance —
+    /// the shared row keeps backing the trip's totals and settle-up. Anything
+    /// else (a personal expense, or a trip row already hidden from the trip)
+    /// has no remaining surface and is physically deleted. Caller saves; the
+    /// receipt-file cleanup stays with callers that own it (FinanceView) since
+    /// it needs the sibling-reference check.
+    static func removeFromFinance(_ expense: LocalExpense, context: ModelContext) {
+        if expense.tripUUID != nil && !expense.hiddenFromTrip {
+            expense.hiddenFromFinance = true
+        } else {
+            context.delete(expense)
+        }
     }
 
     /// Bulk-delete expenses matching an optional filter (#204, #251). The four
@@ -283,6 +298,9 @@ struct ExpenseService {
         // "no import-source constraint" and never narrows the match.
         let sourceNeedle = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let matches = all.filter { row in
+            // Rows already hidden from Finance are invisible to the user's
+            // "clear my expenses" mental model — leave them for the trip (#264).
+            if row.hiddenFromFinance { return false }
             if let after, !(row.date > after) { return false }
             if let before, !(row.date < before) { return false }
             if let categoryRaw, row.category != categoryRaw { return false }
@@ -295,7 +313,9 @@ struct ExpenseService {
         }
         guard !matches.isEmpty else { return 0 }
         for row in matches {
-            store.context.delete(row)
+            // Same per-surface rule as a single Finance delete (#264): a bulk
+            // clear must not silently gut a trip's settle-up.
+            Self.removeFromFinance(row, context: store.context)
         }
         try save()
         return matches.count
@@ -390,12 +410,15 @@ struct ExpenseService {
         let lo = range.lowerBound
         let hi = range.upperBound
         let descriptor = FetchDescriptor<LocalExpense>(
-            predicate: #Predicate { $0.date >= lo && $0.date <= hi }
+            predicate: #Predicate { $0.date >= lo && $0.date <= hi && !$0.hiddenFromFinance }
         )
         return try store.context.fetch(descriptor)
     }
 
     private static func matches(_ expense: LocalExpense, filter: ExpenseFilter) -> Bool {
+        // Rows removed from Finance (#264) are invisible to every Finance
+        // surface — list, analytics, filters — while still backing their trip.
+        if expense.hiddenFromFinance { return false }
         if let range = filter.dateRange {
             if !range.contains(expense.date) { return false }
         }

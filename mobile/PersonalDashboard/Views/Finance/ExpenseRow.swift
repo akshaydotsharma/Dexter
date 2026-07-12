@@ -18,6 +18,10 @@ struct ExpenseRow: View {
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var people: [LocalPerson]
 
+    /// Trips, so a trip-tagged row in the FINANCE list can name the trip it
+    /// belongs to (#264). Trips are few; same cheap-query rationale as people.
+    @Query private var trips: [LocalTrip]
+
     var body: some View {
         HStack(spacing: Space.md) {
             Image(systemName: expense.categoryEnum.sfSymbol)
@@ -97,10 +101,24 @@ struct ExpenseRow: View {
         personLabel != nil || eventLabel != nil
     }
 
-    /// Whether any badge (person, event, or split) should render on the
+    /// Whether any badge (person, event, split, or trip) should render on the
     /// secondary badge row.
     private var hasBadges: Bool {
-        hasTags || expense.isSplit || expense.isGroupSplit
+        hasTags || expense.isSplit || expense.isGroupSplit || showsTripBadge
+    }
+
+    /// The Finance list leads with the user's SHARE of a group-split trip
+    /// expense (#264) — the full bill belongs to the trip surface. Trip
+    /// surfaces (original-first) keep leading with the full amount, where the
+    /// existing "your X of Y" badge carries the share.
+    private var leadsWithShare: Bool {
+        !showsOriginalFirst && expense.isGroupSplit
+    }
+
+    /// Finance-list rows reference the trip a row belongs to (#264). Trip
+    /// surfaces don't — the whole screen IS the trip.
+    private var showsTripBadge: Bool {
+        !showsOriginalFirst && expense.tripUUID != nil
     }
 
     /// Split badge label, e.g. "1/3 of SGD 90.00" (#188). Shows the user's
@@ -136,10 +154,44 @@ struct ExpenseRow: View {
             if expense.isSplit {
                 splitBadge
             }
-            if expense.isGroupSplit {
+            if showsTripBadge {
+                tripBadge
+            } else if expense.isGroupSplit {
                 groupSplitBadge
             }
         }
+    }
+
+    /// Trip-reference badge on FINANCE rows (#264): names the trip, and — for
+    /// a group split, where the primary amount above is the user's share —
+    /// carries the full bill so the whole picture stays on the row
+    /// ("Italy · of S$300.00"). Replaces `groupSplitBadge` in the Finance list.
+    private var tripBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "airplane")
+                .font(.system(size: 9, weight: .semibold))
+            Text(tripBadgeLabel)
+                .font(.edCaption)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .foregroundStyle(Tokens.muted)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Tokens.muted.opacity(0.12), in: Capsule())
+        .accessibilityLabel("Trip expense, \(tripBadgeLabel)")
+    }
+
+    private var tripName: String {
+        guard let uuid = expense.tripUUID,
+              let trip = trips.first(where: { $0.clientUUID == uuid }) else { return "Trip" }
+        let name = trip.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Trip" : name
+    }
+
+    private var tripBadgeLabel: String {
+        guard expense.isGroupSplit else { return tripName }
+        return "\(tripName) · of \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
     }
 
     /// Group-split badge (#258). The row's primary amount shows the FULL bill
@@ -228,8 +280,12 @@ struct ExpenseRow: View {
     /// Primary SGD amount, with a leading "+" for refunds so a credit is
     /// unmistakable at a glance (the colour alone isn't enough for the
     /// colour-blind, and "+" carries the meaning in VoiceOver too) (#206).
+    /// In the Finance list a group-split trip expense shows the user's SHARE
+    /// (#264) — matching the share-based totals around it — with the full bill
+    /// relegated to the trip badge.
     private var sgdAmountLabel: String {
-        let base = FinanceDashboardBand.formatMoney(expense.sgdAmount)
+        let value = leadsWithShare ? abs(expense.myShareSGD) : expense.sgdAmount
+        let base = FinanceDashboardBand.formatMoney(value)
         return expense.isRefund ? "+\(base)" : base
     }
 
@@ -244,19 +300,24 @@ struct ExpenseRow: View {
     }
 
     private var originalAmountLabel: String {
+        // Same share-first rule as `sgdAmountLabel` (#264): when the Finance
+        // list leads with the user's share, the original-currency sub-label
+        // shows the share too, so the two figures describe the same money.
+        let value = leadsWithShare ? abs(expense.myShareOriginal) : expense.originalAmount
         let formatter = NumberFormatter()
         formatter.minimumFractionDigits = 2
         formatter.maximumFractionDigits = 2
         formatter.numberStyle = .decimal
-        let amount = formatter.string(from: NSNumber(value: expense.originalAmount)) ?? "\(expense.originalAmount)"
+        let amount = formatter.string(from: NSNumber(value: value)) ?? "\(value)"
         let base = "\(expense.originalCurrency.uppercased()) \(amount)"
         return expense.isRefund ? "+\(base)" : base
     }
 
     private var accessibilityLabel: String {
+        let spokenValue = leadsWithShare ? abs(expense.myShareSGD) : expense.sgdAmount
         let amountSpoken = expense.isRefund
-            ? "refund \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
-            : FinanceDashboardBand.formatMoney(expense.sgdAmount)
+            ? "refund \(FinanceDashboardBand.formatMoney(spokenValue))"
+            : FinanceDashboardBand.formatMoney(spokenValue)
         var pieces: [String] = [primaryLine, amountSpoken, expense.categoryEnum.displayName]
         if showsOriginalAmount {
             pieces.append("\(originalAmountLabel) original")
@@ -266,6 +327,7 @@ struct ExpenseRow: View {
         }
         if let personLabel { pieces.append("for \(personLabel)") }
         if let eventLabel { pieces.append("event \(eventLabel)") }
+        if showsTripBadge { pieces.append("on trip \(tripName)") }
         if expense.isSplit { pieces.append("split \(expense.numberOfShares) ways, your \(splitLabel)") }
         return pieces.joined(separator: ", ") + ". Tap to edit."
     }
