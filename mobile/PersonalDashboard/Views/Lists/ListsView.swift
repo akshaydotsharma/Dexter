@@ -408,18 +408,18 @@ private struct ListDetailContent: View {
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
                         }
-                        // Add strip — one row-height tap target right after the last item.
-                        // Tapping here starts a new item (or dismisses an active draft).
-                        Color.clear
-                            .frame(height: 44)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if draftActive { draftFocused = false; hideKeyboard() }
-                                else { startDraft() }
-                            }
-                            .listRowBackground(Tokens.paper)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets())
+                        // Visible ghost add-row (#268): section-level hairline +
+                        // outline plus.circle on the checkbox column, right after the
+                        // last item. Tapping starts a new item (or dismisses an active
+                        // draft). 44pt matches the surface's row height. Zero
+                        // listRowInsets — GhostAddRow owns its own insets.
+                        GhostAddRow(label: "New Item", minHeight: 44) {
+                            if draftActive { draftFocused = false; hideKeyboard() }
+                            else { startDraft() }
+                        }
+                        .listRowBackground(Tokens.paper)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
 
                         // Dismiss filler — the rest of the empty space below. Tapping here only
                         // commits/deselects the current inline edit (or draft); it never adds.
@@ -478,8 +478,9 @@ private struct ListDetailContent: View {
             }
             .sheet(isPresented: $creatingItem) {
                 // New-item mode: editable name + link. Creation is deferred to
-                // Save so Cancel leaves no orphan blank item. addItem inserts at
-                // index 0, so a supplied URL is applied to index 0 right after.
+                // Save so Cancel leaves no orphan blank item. addItem appends to
+                // the end (#267) and returns the new item's index, so a supplied
+                // URL is applied to that appended item — not index 0.
                 ItemDetailsSheet(
                     itemName: "",
                     initialURL: "",
@@ -490,9 +491,9 @@ private struct ListDetailContent: View {
                         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmedName.isEmpty else { return }
                         Task {
-                            await viewModel.addItem(to: list, text: trimmedName)
-                            if !url.isEmpty {
-                                await viewModel.setItemURL(in: list, at: 0, to: url)
+                            let newIndex = await viewModel.addItem(to: list, text: trimmedName)
+                            if !url.isEmpty, let newIndex {
+                                await viewModel.setItemURL(in: list, at: newIndex, to: url)
                             }
                         }
                     }

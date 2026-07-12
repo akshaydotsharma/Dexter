@@ -14,12 +14,13 @@ struct TodoService {
 
     // MARK: - Reads
 
-    /// Return the live, undeleted todos sorted by createdAt descending.
+    /// Return the live, undeleted todos sorted by createdAt ascending
+    /// (oldest first, newest last) so new tasks land at the bottom (#267).
     func list() async throws -> [Todo] {
         let context = store.context
         let descriptor = FetchDescriptor<LocalTodo>(
             predicate: #Predicate { $0.deletedAt == nil },
-            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
         )
         let rows = try context.fetch(descriptor)
         return rows.map { $0.toDTO() }
