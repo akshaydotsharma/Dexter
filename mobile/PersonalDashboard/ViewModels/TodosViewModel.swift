@@ -20,7 +20,8 @@ final class TodosViewModel {
         // never flashes empty. SwiftData's main-context fetch is synchronous.
         let descriptor = FetchDescriptor<LocalTodo>(
             predicate: #Predicate { $0.deletedAt == nil },
-            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            // Oldest first, newest last — new tasks land at the bottom (#267).
+            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
         )
         let rows = (try? resolvedService.store.context.fetch(descriptor)) ?? []
         self.todos = rows.map { $0.toDTO() }
@@ -45,7 +46,8 @@ final class TodosViewModel {
         do {
             let request = TodoCreateRequest(title: title, description: description, dueDate: dueDate, tag: tag, address: address, googleMapsLink: googleMapsLink, priority: priority)
             let new = try await service.create(request)
-            todos.insert(new, at: 0)
+            // Append so a newly created task appears below the last one (#267).
+            todos.append(new)
         } catch {
             errorMessage = error.localizedDescription
         }

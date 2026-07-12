@@ -165,19 +165,34 @@ final class ListsViewModel {
         await update(snapshot)
     }
 
-    func addItem(to list: Checklist, text: String) async {
+    /// Insert a new item at the end of the ACTIVE (non-completed) items — just
+    /// before the first completed item, so it appears below the last active
+    /// item but never below the completed block, which always stays at the
+    /// bottom (#267). Returns the actual insertion index so callers (e.g. the
+    /// new-item sheet applying a URL) can target the new item.
+    @discardableResult
+    func addItem(to list: Checklist, text: String) async -> Int? {
         guard !text.isEmpty,
-              let listIndex = lists.firstIndex(where: { $0.id == list.id }) else { return }
+              let listIndex = lists.firstIndex(where: { $0.id == list.id }) else { return nil }
         var snapshot = lists[listIndex]
-        snapshot.items.insert(ChecklistItem(text: text, checked: false), at: 0)
+        // First completed item marks the boundary; fall back to the end when
+        // nothing is completed.
+        let insertAt = snapshot.items.firstIndex(where: { $0.checked }) ?? snapshot.items.count
+        snapshot.items.insert(ChecklistItem(text: text, checked: false), at: insertAt)
         lists[listIndex] = snapshot
         await update(snapshot)
+        return insertAt
     }
 
     func reorderItems(in list: Checklist, from source: IndexSet, to destination: Int) async {
         guard let listIndex = lists.firstIndex(where: { $0.id == list.id }) else { return }
         var snapshot = lists[listIndex]
         snapshot.items.move(fromOffsets: source, toOffset: destination)
+        // Re-assert completed-at-bottom after a drag: keep completed items pinned
+        // below the active ones, preserving relative order within each group
+        // (filter is stable). This lets the user freely reorder active items but
+        // never leaves a completed item interleaved above an active one.
+        snapshot.items = snapshot.items.filter { !$0.checked } + snapshot.items.filter { $0.checked }
         lists[listIndex] = snapshot
         await update(snapshot)
     }

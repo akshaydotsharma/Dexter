@@ -292,15 +292,25 @@ struct TasksView: View {
         var completed: [Todo] = []
     }
 
-    /// Sort order shared by every open bucket: highest priority first
-    /// (P0 → P1 → P2/none), and within one priority the most recently created
-    /// task on top. Keeps the date-based sections intact while ranking rows
-    /// inside each section by urgency.
-    private func prioritySorted(_ todos: [Todo]) -> [Todo] {
+    /// Sort order shared by every open bucket: soonest due time on top
+    /// ("next event first"), later times below. Tasks without a due date (the
+    /// "No Date" bucket) order among themselves by creation time, oldest first;
+    /// createdAt (ascending) is also the tiebreaker when two tasks share a due
+    /// time. The colored priority bar still renders on each row — it no longer
+    /// affects ordering.
+    private func chronoSorted(_ todos: [Todo]) -> [Todo] {
         todos.sorted { a, b in
-            let ra = a.taskPriority.sortRank, rb = b.taskPriority.sortRank
-            if ra != rb { return ra < rb }
-            return a.createdAt > b.createdAt
+            switch (a.dueDate, b.dueDate) {
+            case let (da?, db?):
+                if da != db { return da < db }
+                return a.createdAt < b.createdAt
+            case (nil, nil):
+                return a.createdAt < b.createdAt
+            case (_?, nil):
+                return true   // a task with a due date sorts before one without
+            case (nil, _?):
+                return false
+            }
         }
     }
 
@@ -323,12 +333,12 @@ struct TasksView: View {
             else if due < weekEnd { b.thisWeek.append(todo) }
             else { b.later.append(todo) }
         }
-        b.overdue = prioritySorted(b.overdue)
-        b.today = prioritySorted(b.today)
-        b.tomorrow = prioritySorted(b.tomorrow)
-        b.thisWeek = prioritySorted(b.thisWeek)
-        b.later = prioritySorted(b.later)
-        b.noDate = prioritySorted(b.noDate)
+        b.overdue = chronoSorted(b.overdue)
+        b.today = chronoSorted(b.today)
+        b.tomorrow = chronoSorted(b.tomorrow)
+        b.thisWeek = chronoSorted(b.thisWeek)
+        b.later = chronoSorted(b.later)
+        b.noDate = chronoSorted(b.noDate)
         return b
     }
 
@@ -377,11 +387,12 @@ struct TasksView: View {
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
                 } else {
-                    // Clear tap target — 40pt keeps sections tight while staying tappable.
-                    Color.clear
-                        .frame(minHeight: 40)
-                        .contentShape(Rectangle())
-                        .onTapGesture { startDraft(in: bucket) }
+                    // Visible ghost add-row (#268): section-level hairline + outline
+                    // plus.circle on the checkbox column. 40pt matches the draft row
+                    // height so swapping ghost → draft doesn't shift the layout.
+                    // Zero listRowInsets — GhostAddRow owns its own insets so its
+                    // divider aligns with the Completed separator.
+                    GhostAddRow(label: "New Task", minHeight: 40) { startDraft(in: bucket) }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets())
