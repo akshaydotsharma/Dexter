@@ -185,10 +185,18 @@ struct TripExpensesView: View {
                 filterButton
             }
 
-            Text(formatFiltered(owed))
-                .font(.edDisplay)
-                .foregroundStyle(Tokens.ink)
-                .tracking(-0.6)
+            // Spent = consumed share of the bills; Paid = fronted out of
+            // pocket; the net tile is Paid − Spent (their settle-up position).
+            HStack(alignment: .firstTextBaseline) {
+                Text("Spent")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+                Spacer()
+                Text(formatFiltered(owed))
+                    .font(.edDisplay)
+                    .foregroundStyle(Tokens.ink)
+                    .tracking(-0.6)
+            }
 
             HStack(spacing: Space.lg) {
                 statTile(label: "Paid", value: formatFiltered(paid))
