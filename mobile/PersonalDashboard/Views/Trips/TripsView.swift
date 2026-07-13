@@ -13,7 +13,7 @@ import SwiftData
 /// `Identifiable` `TripEditorTarget`, mirroring `PersonalVocabularyView`.
 /// Deleting a trip cascades manually: every `LocalItineraryItem` whose
 /// `tripUUID` matches is deleted before the trip itself.
-struct ItinerariesView: View {
+struct TripsView: View {
     @Environment(\.modelContext) private var modelContext
 
     @Bindable var router: AppRouter
@@ -42,7 +42,7 @@ struct ItinerariesView: View {
                     TripDetailView(trip: trip)
                 } else {
                     TopBar(
-                        title: "Itineraries",
+                        title: "Trips",
                         onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                     )
                     rootContent

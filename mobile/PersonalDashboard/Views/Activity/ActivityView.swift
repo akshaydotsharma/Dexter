@@ -380,9 +380,9 @@ struct ActivityView: View {
             router.focus = ActivityFocus(section: .notes, id: item.id, isFolder: true)
             router.go(to: .notes)
         case .itinerary:
-            // Deep-link into the owning trip. ItinerariesView consumes a
+            // Deep-link into the owning trip. TripsView consumes a
             // `.itineraries` focus whose id is the trip UUID and opens that
-            // trip's detail. Falls back to the Itineraries root if the trip
+            // trip's detail. Falls back to the Trips root if the trip
             // can't be resolved.
             if let tripUUID = item.tripUUID {
                 router.focus = ActivityFocus(section: .itineraries, id: tripUUID, isFolder: false)

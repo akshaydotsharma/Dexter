@@ -28,7 +28,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .lists:       return "Lists"
         case .dashboard:   return "Dashboard"
         case .activity:    return "Activity"
-        case .itineraries: return "Itineraries"
+        case .itineraries: return "Trips"
         case .finance:     return "Finance"
         case .vocabulary:  return "Vocabulary"
         case .settings:    return "Settings"

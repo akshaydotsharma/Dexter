@@ -278,7 +278,7 @@ enum ToolDefinitions {
         )
     )
 
-    // MARK: - Itineraries (trips + day-by-day items)
+    // MARK: - Trips (trips + day-by-day itinerary items)
 
     /// Single itinerary-item shape for the `add_itinerary_item` array.
     private static let itineraryItemSchema: AnthropicJSONValue = .object([
@@ -348,7 +348,7 @@ enum ToolDefinitions {
 
     private static let draftTrip = AnthropicTool(
         name: "draft_trip",
-        description: "Create a NEW trip in the Itineraries section with a destination name and a date range. IMPORTANT: If the user does not specify start_date AND end_date, do NOT call this tool. Ask the user for the dates first.",
+        description: "Create a NEW trip in the Trips section with a destination name and a date range. IMPORTANT: If the user does not specify start_date AND end_date, do NOT call this tool. Ask the user for the dates first.",
         input_schema: object(
             properties: [
                 "name": string("Destination or trip title (e.g., 'Italy', 'Vietnam')."),
