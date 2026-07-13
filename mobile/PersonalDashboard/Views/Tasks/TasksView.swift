@@ -32,34 +32,50 @@ struct TasksView: View {
                 // down to keep the editorial paper styling: clear row
                 // backgrounds, hidden separators, and `.scrollContentBackground`
                 // hidden so `Tokens.paper` shows through.
-                List {
-                    if viewModel.isLoading && viewModel.todos.isEmpty {
-                        placeholderRow("Loading…")
-                    } else if viewModel.todos.isEmpty {
-                        // Empty-state: single tap-below that seeds a No Date task.
-                        placeholderRow("No tasks yet. Tap below to start.")
-                        emptyStateDraftRow
-                    } else {
-                        taskGroups
-                    }
+                // Wrapped in a ScrollViewReader so the focused inline draft row can be
+                // scrolled clear of the keyboard (SwiftUI's default List avoidance
+                // won't lift it because there's content below the draft).
+                ScrollViewReader { proxy in
+                    List {
+                        if viewModel.isLoading && viewModel.todos.isEmpty {
+                            placeholderRow("Loading…")
+                        } else if viewModel.todos.isEmpty {
+                            // Empty-state: single tap-below that seeds a No Date task.
+                            placeholderRow("No tasks yet. Tap below to start.")
+                            emptyStateDraftRow
+                        } else {
+                            taskGroups
+                        }
 
-                    // FAB clearance — keeps the last row scrollable above the floating + button.
-                    // Also acts as a tap-to-dismiss zone for any active inline draft.
-                    Color.clear
-                        .frame(height: 96)
-                        .contentShape(Rectangle())
-                        // Commit any in-progress edit: draftFocused = false covers the
-                        // tap-below draft; hideKeyboard() covers a focused task row.
-                        .onTapGesture { draftFocused = false; hideKeyboard() }
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
+                        // FAB clearance — keeps the last row scrollable above the floating + button.
+                        // Also acts as a tap-to-dismiss zone for any active inline draft.
+                        Color.clear
+                            .frame(height: 96)
+                            .contentShape(Rectangle())
+                            // Commit any in-progress edit: draftFocused = false covers the
+                            // tap-below draft; hideKeyboard() covers a focused task row.
+                            .onTapGesture { draftFocused = false; hideKeyboard() }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets())
+                    }
+                    .listStyle(.plain)
+                    .listSectionSpacing(0)
+                    .scrollContentBackground(.hidden)
+                    .background(Tokens.paper)
+                    .refreshable { await viewModel.load() }
+                    // When the inline draft gains focus, scroll it clear of the keyboard.
+                    .onChange(of: draftFocused) { _, focused in
+                        guard focused else { return }
+                        // Let the keyboard finish animating in (viewport shrinks) before scrolling,
+                        // otherwise the target position is computed against the full-height viewport.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("draftTaskRow", anchor: .bottom)
+                            }
+                        }
+                    }
                 }
-                .listStyle(.plain)
-                .listSectionSpacing(0)
-                .scrollContentBackground(.hidden)
-                .background(Tokens.paper)
-                .refreshable { await viewModel.load() }
             }
 
             Button {
@@ -175,6 +191,7 @@ struct TasksView: View {
             // so swapping the empty-state tap-zone for the draft row doesn't jump.
             .frame(minHeight: 60)
             .padding(.horizontal, Space.lg)
+            .id("draftTaskRow")
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets())
@@ -383,6 +400,7 @@ struct TasksView: View {
                     // + internal .padding(.horizontal, Space.md)).
                     .frame(minHeight: 40)
                     .padding(.horizontal, Space.lg)
+                    .id("draftTaskRow")
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets())
