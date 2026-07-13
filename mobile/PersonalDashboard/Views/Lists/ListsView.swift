@@ -298,7 +298,6 @@ private struct ListSummaryRow: View {
 private struct ListDetailContent: View {
     @Bindable var viewModel: ListsViewModel
     let listId: UUID
-    @State private var newItemText: String = ""
     // Tap-below inline draft state. Modelled the same way as TasksView:
     // a boolean flag for "draft active" plus a non-optional String for the
     // text. The earlier optional-binding pattern (`Binding($draftText)` from
@@ -343,123 +342,133 @@ private struct ListDetailContent: View {
 
                 // Items list — always rendered so tap-below works even when empty.
                 // Chrome stripped to keep the editorial calm look.
-                List {
-                    // Existing items live in their own section so .onMove stays scoped to them.
-                    Section {
-                        // Empty state row — only when no items and no draft is active.
-                        if list.items.isEmpty && !draftActive {
-                            Text("No items yet. Add one below.")
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.muted)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, Space.lg)
+                // Wrapped in a ScrollViewReader so the focused inline draft row can be
+                // scrolled clear of the keyboard (SwiftUI's default List avoidance
+                // won't lift it because there's content below the draft).
+                ScrollViewReader { proxy in
+                    List {
+                        // Existing items live in their own section so .onMove stays scoped to them.
+                        Section {
+                            // Empty state row — only when no items and no draft is active.
+                            if list.items.isEmpty && !draftActive {
+                                Text("No items yet. Add one below.")
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.muted)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, Space.lg)
+                                    .listRowBackground(Tokens.paper)
+                                    .listRowSeparator(.hidden)
+                                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                            }
+
+                            // Keyed by item.id (UUID) — not array offset — so the
+                            // checked-to-bottom reorder animates as a move rather
+                            // than a cross-fade. The per-iteration `index` is still
+                            // the row's current array position, which is what the
+                            // view-model methods take.
+                            ForEach(Array(list.items.enumerated()), id: \.element.id) { index, item in
+                                ItemRow(
+                                    item: item,
+                                    onToggle: {
+                                        Task { await viewModel.toggleItem(in: list, at: index) }
+                                    },
+                                    onRename: { newText in
+                                        Task { await viewModel.renameItem(in: list, at: index, to: newText) }
+                                    },
+                                    onDelete: {
+                                        Haptics.destructive()
+                                        Task { await viewModel.removeItem(from: list, at: index) }
+                                    },
+                                    onOpenDetails: {
+                                        editingItem = EditingItem(index: index, item: item)
+                                    },
+                                    isDraftActive: draftActive,
+                                    onTapWhileDraftActive: { draftFocused = false }
+                                )
+                                .swipeToDeleteTrash {
+                                    Task { await viewModel.removeItem(from: list, at: index) }
+                                }
                                 .listRowBackground(Tokens.paper)
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                            }
+                            .onMove { source, destination in
+                                Task { await viewModel.reorderItems(in: list, from: source, to: destination) }
+                            }
                         }
 
-                        // Keyed by item.id (UUID) — not array offset — so the
-                        // checked-to-bottom reorder animates as a move rather
-                        // than a cross-fade. The per-iteration `index` is still
-                        // the row's current array position, which is what the
-                        // view-model methods take.
-                        ForEach(Array(list.items.enumerated()), id: \.element.id) { index, item in
-                            ItemRow(
-                                item: item,
-                                onToggle: {
-                                    Task { await viewModel.toggleItem(in: list, at: index) }
-                                },
-                                onRename: { newText in
-                                    Task { await viewModel.renameItem(in: list, at: index, to: newText) }
-                                },
-                                onDelete: {
-                                    Haptics.destructive()
-                                    Task { await viewModel.removeItem(from: list, at: index) }
-                                },
-                                onOpenDetails: {
-                                    editingItem = EditingItem(index: index, item: item)
-                                },
-                                isDraftActive: draftActive,
-                                onTapWhileDraftActive: { draftFocused = false }
-                            )
-                            .swipeToDeleteTrash {
-                                Task { await viewModel.removeItem(from: list, at: index) }
+                        // Tap-below section — lives after items, at the end of the list.
+                        Section {
+                            if draftActive {
+                                // Draft is active: show an inline editable row mirroring ItemRow.
+                                DraftItemRow(
+                                    text: $draftText,
+                                    isFocused: $draftFocused,
+                                    onSubmit: { commitDraft(in: list, keepFocus: true) },
+                                    onFocusLost: { commitDraft(in: list, keepFocus: false) }
+                                )
+                                .id("draftItemRow")
+                                .listRowBackground(Tokens.paper)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                            }
+                            // Visible ghost add-row (#268): section-level hairline +
+                            // outline plus.circle on the checkbox column, right after the
+                            // last item. Tapping starts a new item (or dismisses an active
+                            // draft). 44pt matches the surface's row height. Zero
+                            // listRowInsets — GhostAddRow owns its own insets.
+                            GhostAddRow(label: "New Item", minHeight: 44) {
+                                if draftActive { draftFocused = false; hideKeyboard() }
+                                else { startDraft() }
                             }
                             .listRowBackground(Tokens.paper)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                        }
-                        .onMove { source, destination in
-                            Task { await viewModel.reorderItems(in: list, from: source, to: destination) }
-                        }
-                    }
-
-                    // Tap-below section — lives after items, before addItemBar.
-                    Section {
-                        if draftActive {
-                            // Draft is active: show an inline editable row mirroring ItemRow.
-                            DraftItemRow(
-                                text: $draftText,
-                                isFocused: $draftFocused,
-                                onSubmit: { commitDraft(in: list, keepFocus: true) },
-                                onFocusLost: { commitDraft(in: list, keepFocus: false) }
-                            )
-                            .listRowBackground(Tokens.paper)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
-                        }
-                        // Visible ghost add-row (#268): section-level hairline +
-                        // outline plus.circle on the checkbox column, right after the
-                        // last item. Tapping starts a new item (or dismisses an active
-                        // draft). 44pt matches the surface's row height. Zero
-                        // listRowInsets — GhostAddRow owns its own insets.
-                        GhostAddRow(label: "New Item", minHeight: 44) {
-                            if draftActive { draftFocused = false; hideKeyboard() }
-                            else { startDraft() }
-                        }
-                        .listRowBackground(Tokens.paper)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-
-                        // Dismiss filler — the rest of the empty space below. Tapping here only
-                        // commits/deselects the current inline edit (or draft); it never adds.
-                        Color.clear
-                            .frame(minHeight: 160)
-                            .contentShape(Rectangle())
-                            .onTapGesture { draftFocused = false; hideKeyboard() }
-                            .listRowBackground(Tokens.paper)
-                            .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets())
-                    }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(Tokens.paper)
-                .scrollDismissesKeyboard(.interactively)
-                // Floating "+" FAB, matching the app-wide root FAB. Scoped to the
-                // List (not the outer VStack) so its bottom edge sits right at the
-                // top of the docked addItemBar — it floats just above the bar with
-                // no hardcoded offsets. Hidden while an inline draft is active so it
-                // never covers the row being typed (mirrors TasksView).
-                .overlay(alignment: .bottomTrailing) {
-                    Button {
-                        creatingItem = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
-                    .padding(.trailing, 22)
-                    .padding(.bottom, Space.sm)
-                    .opacity(draftActive ? 0 : 1)
-                    .animation(.easeOut(duration: 0.15), value: draftActive)
-                }
 
-                addItemBar(list: list)
-                    // Tapping the addItemBar commits any in-progress edit: draftFocused = false
-                    // covers the tap-below draft; hideKeyboard() covers a focused item row.
-                    // simultaneousGesture fires alongside the inner TextField tap so the
-                    // bar's own text field can still receive focus normally.
-                    .simultaneousGesture(TapGesture().onEnded { draftFocused = false; hideKeyboard() })
+                            // Dismiss filler — the rest of the empty space below. Tapping here only
+                            // commits/deselects the current inline edit (or draft); it never adds.
+                            Color.clear
+                                .frame(minHeight: 160)
+                                .contentShape(Rectangle())
+                                .onTapGesture { draftFocused = false; hideKeyboard() }
+                                .listRowBackground(Tokens.paper)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets())
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(Tokens.paper)
+                    .scrollDismissesKeyboard(.interactively)
+                    // When the inline draft gains focus, scroll it clear of the keyboard.
+                    .onChange(of: draftFocused) { _, focused in
+                        guard focused else { return }
+                        // Let the keyboard finish animating in (viewport shrinks) before scrolling,
+                        // otherwise the target position is computed against the full-height viewport.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("draftItemRow", anchor: .bottom)
+                            }
+                        }
+                    }
+                    // Floating "+" FAB, matching the app-wide root FAB. Scoped to the
+                    // List (not the outer VStack) so it floats above the list content.
+                    // Bottom padding clears the global BottomTabBar overlay, matching
+                    // TasksView and the root Lists FAB. Hidden while an inline draft is
+                    // active so it never covers the row being typed (mirrors TasksView).
+                    .overlay(alignment: .bottomTrailing) {
+                        Button {
+                            creatingItem = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+                        .padding(.trailing, 22)
+                        .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                        .opacity(draftActive ? 0 : 1)
+                        .animation(.easeOut(duration: 0.15), value: draftActive)
+                    }
+                }
             }
             .sheet(item: $editingItem) { editing in
                 // Guard against a stale index if the list mutated while the sheet
@@ -543,48 +552,6 @@ private struct ListDetailContent: View {
         }
     }
 
-    private func addItemBar(list: Checklist) -> some View {
-        HStack(spacing: Space.sm) {
-            ZStack(alignment: .leading) {
-                if newItemText.isEmpty {
-                    Text("Add an item…")
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.mutedSoft)
-                        .padding(.horizontal, Space.md)
-                        .allowsHitTesting(false)
-                }
-                TextField("", text: $newItemText)
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-                    .padding(.horizontal, Space.md)
-                    .padding(.vertical, 10)
-                    .submitLabel(.done)
-                    .onSubmit { add(in: list) }
-            }
-            .frame(minHeight: 40)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
-
-            Button { add(in: list) } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(EdSendButtonStyle(enabled: !newItemText.trimmingCharacters(in: .whitespaces).isEmpty))
-            .disabled(newItemText.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .padding(.horizontal, Space.lg)
-        .padding(.vertical, Space.md)
-        .background(Tokens.paper.overlay(alignment: .top) {
-            Rectangle().fill(Tokens.divider).frame(height: 0.5)
-        })
-    }
-
-    private func add(in list: Checklist) {
-        let trimmed = newItemText.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        let snapshot = list
-        newItemText = ""
-        Task { await viewModel.addItem(to: snapshot, text: trimmed) }
-    }
 }
 
 /// Inline draft row that appears when the user taps below the last item.
