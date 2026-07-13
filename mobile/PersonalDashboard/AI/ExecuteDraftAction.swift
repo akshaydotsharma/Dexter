@@ -1110,7 +1110,7 @@ struct ExecuteDraftAction {
         )
     }
 
-    // MARK: - TRIPS (Itineraries)
+    // MARK: - TRIPS
 
     private func createTrip(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
         let name = trimmedString(input["name"]) ?? ""

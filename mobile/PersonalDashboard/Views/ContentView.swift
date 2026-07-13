@@ -247,7 +247,7 @@ struct ContentView: View {
         case .today:
             TodayView(router: router)
         case .itineraries:
-            ItinerariesView(router: router)
+            TripsView(router: router)
         case .finance:
             FinanceView(router: router)
         case .vocabulary:
