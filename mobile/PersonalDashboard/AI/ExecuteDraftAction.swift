@@ -206,6 +206,11 @@ struct ExecuteDraftAction {
         // dedup, mirroring how itinerary items are stamped post-add.
         if let tripUUID {
             row.tripUUID = tripUUID
+            // Trip expenses are opt-in to Finance (#277): a newly captured trip
+            // expense starts hidden from Finance totals until the user ticks it
+            // on the trip's Expenses tab. Non-trip captures keep the in-Finance
+            // default. Still fully counted by the trip's own tiles / settle-up.
+            row.hiddenFromFinance = true
             try? save()
         }
 

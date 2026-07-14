@@ -120,6 +120,19 @@ struct AddExpenseSheet: View {
     /// Full-size receipt viewer flag.
     @State private var showingReceiptViewer: Bool = false
 
+    /// "Add to Finance" toggle for trip expenses (#277). Trip expenses are
+    /// opt-in to the Finance tab: this backs `!hiddenFromFinance`. Seeded from
+    /// the existing row on edit, and defaults OFF for a new trip expense (so a
+    /// manually-added trip expense stays out of Finance unless flipped here).
+    /// Only rendered / written for trip expenses — never touched for personal
+    /// Finance expenses.
+    @State private var addToFinance: Bool = false
+
+    /// Whether the row being EDITED is a trip expense (`tripUUID != nil`),
+    /// captured on load. For `.new` / `.prefilled` the trip signal is
+    /// `tripContext`, so this stays false there.
+    @State private var existingIsTripExpense: Bool = false
+
     @State private var loaded: Bool = false
     @State private var saving: Bool = false
     @State private var errorMessage: String?
@@ -143,6 +156,13 @@ struct AddExpenseSheet: View {
 
     private var canSave: Bool {
         amountValue > 0 && !saving
+    }
+
+    /// Show the "Add to Finance" toggle only for trip expenses (#277): a new /
+    /// prefilled expense opened with a trip context, or an existing row that
+    /// already belongs to a trip. Never for personal Finance expenses.
+    private var showsFinanceToggle: Bool {
+        tripContext != nil || existingIsTripExpense
     }
 
     var body: some View {
@@ -183,6 +203,11 @@ struct AddExpenseSheet: View {
                             tripSplitSection
                         } else {
                             sharesField
+                        }
+
+                        // Trip expenses are opt-in to Finance (#277).
+                        if showsFinanceToggle {
+                            financeToggleField
                         }
 
                         if let errorMessage {
@@ -458,6 +483,29 @@ struct AddExpenseSheet: View {
                 .padding(Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
+
+    /// "Add to Finance" toggle for trip expenses (#277). A trip expense lives on
+    /// its trip's tab regardless; this only controls whether it also counts in
+    /// the Finance tab's totals. Written to `hiddenFromFinance` on save.
+    private var financeToggleField: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            Text("Finance").eyebrow()
+            Toggle(isOn: $addToFinance) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Add to Finance")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                    Text("Count this in your Finance totals")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+            }
+            .tint(Tokens.accentFinance)
+            .padding(Space.md)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
         }
     }
 
@@ -996,6 +1044,11 @@ struct AddExpenseSheet: View {
                 if let uuid = existing.eventUUID, let name = existing.eventName?.trimmedNonEmpty {
                     selectedEvent = ExpenseTag(uuid: uuid, name: name)
                 }
+                // "Add to Finance" toggle state (#277). Only a trip expense
+                // shows the toggle; seed it from the row's current flag so the
+                // switch reflects reality on open.
+                existingIsTripExpense = existing.tripUUID != nil
+                addToFinance = !existing.hiddenFromFinance
             }
 
         case .prefilled(let prefill):
@@ -1101,6 +1154,12 @@ struct AddExpenseSheet: View {
                 // write the split; only persisted when a trip context is active.
                 if let ctx = tripContext {
                     row.tripUUID = ctx.tripUUID
+                    // Trip expenses are opt-in to Finance (#277). The "Add to
+                    // Finance" toggle is the control; it defaults OFF, so a
+                    // newly added trip expense stays out of Finance totals
+                    // unless the user flips it in this same sheet. The trip's
+                    // own tiles / settle-up count it regardless.
+                    row.hiddenFromFinance = !addToFinance
                     applyTripSplit(to: row)
                     try modelContext.save()
                 }
@@ -1135,6 +1194,14 @@ struct AddExpenseSheet: View {
                     if let ctx = tripContext {
                         existing.tripUUID = ctx.tripUUID
                         applyTripSplit(to: existing)
+                    }
+                    // "Add to Finance" toggle (#277). The sheet is the control
+                    // for trip expenses now, so write the flag from the toggle
+                    // whether the edit came from the trip tab (trip context) or
+                    // the Finance surface (no context). Gated to trip expenses
+                    // so a personal Finance expense is never touched.
+                    if existingIsTripExpense {
+                        existing.hiddenFromFinance = !addToFinance
                     }
                     try modelContext.save()
                 }

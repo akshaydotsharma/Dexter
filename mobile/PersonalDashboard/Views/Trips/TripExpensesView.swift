@@ -135,8 +135,8 @@ struct TripExpensesView: View {
     private var populated: some View {
         ScrollView {
             VStack(spacing: Space.lg) {
-                statsCard
                 personSummaryCard
+                statsCard
                 if !balances.isEmpty {
                     settleUpCard
                 }
@@ -336,10 +336,6 @@ struct TripExpensesView: View {
         expenses.reduce(0) { $0 + $1.signedSGD }
     }
 
-    private var yourShareSGD: Double {
-        expenses.reduce(0) { $0 + $1.myShareSGD }
-    }
-
     /// Whether the per-currency breakdown adds information: hidden when the
     /// trip has a single currency that IS the display currency (the Total row
     /// would just repeat it).
@@ -351,7 +347,13 @@ struct TripExpensesView: View {
 
     private var statsCard: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            Text("Group total").eyebrow()
+            HStack {
+                Text("Group total").eyebrow()
+                Spacer()
+                Text("^[\(expenses.count) expense](inflect: true)")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
 
             VStack(alignment: .leading, spacing: Space.xs) {
                 // As-added spend, one same-weight line per capture currency.
@@ -371,18 +373,12 @@ struct TripExpensesView: View {
                         .font(.edCaption)
                         .foregroundStyle(Tokens.mutedSoft)
                     Spacer()
-                    Text(FinanceDashboardBand.formatMoney(groupTotalSGD))
+                    Text(formatFiltered(groupTotalSGD))
                         .font(.edDisplay)
                         .foregroundStyle(Tokens.ink)
                         .tracking(-0.6)
                 }
             }
-
-            HStack(spacing: Space.lg) {
-                statTile(label: "Your share", value: FinanceDashboardBand.formatMoney(yourShareSGD))
-                statTile(label: "Expenses", value: "\(expenses.count)")
-            }
-            .padding(.top, Space.xs)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Space.lg)

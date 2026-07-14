@@ -252,7 +252,13 @@ extension AnthropicClient {
     - Any field you can't read with confidence: return null.
     - "currency" must be an ISO 4217 code. If you genuinely cannot tell,
       default to "SGD".
-    - "category" must be exactly one of: \(categoryList).
+    - "category" must be exactly one of: \(categoryList). Pick the best fit:
+      hotels / apartments / Airbnb / lodging / bed & breakfast → "Accommodation";
+      tours / attractions / museums / experiences / activity tickets / excursions
+      → "Activities"; restaurants / cafes / bars / dining → "Food & Dining";
+      supermarkets / grocery → "Groceries"; local taxis / metro / rideshare /
+      buses / trains within a city → "Transport"; flights / long-distance rail /
+      long-haul travel fares → "Travel". Use "Other" only when nothing fits.
     - "confidence" is one of "high", "medium", "low". Reflect how sure you
       are about the total amount specifically.
     - "items" is a short list of line-item names (at most 6). Skip if not
@@ -304,10 +310,14 @@ extension AnthropicClient {
       Do NOT use "payment", "deposit", "interest", or "fee" — those are
       statement-only concepts and never apply to a receipt photo.
     - "category" must be EXACTLY one of these raw values: \(categoryRawList).
-      Pick the best fit from the merchant (a supermarket → groceries, a
-      restaurant → food_and_dining, an airline/hotel → travel, Netflix/Spotify →
-      subscriptions, a utility → bills_and_utilities, a monthly rent/lease → rent).
-      Use "other" only when nothing fits.
+      Pick the best fit from the merchant: a supermarket / grocery → groceries;
+      a restaurant / cafe / bar / dining → food_and_dining; hotels / apartments /
+      Airbnb / lodging / bed & breakfast → accommodation; tours / attractions /
+      museums / experiences / activity tickets / excursions → activities; local
+      taxis / metro / rideshare / buses / trains within a city → transport;
+      flights / long-distance rail / long-haul travel fares → travel;
+      Netflix/Spotify → subscriptions; a utility → bills_and_utilities; a monthly
+      rent/lease → rent. Use "other" only when nothing fits.
     - "description": a SHORT summary of the line items on that receipt (at most 6,
       comma-separated), e.g. "Latte, croissant". Omit or set null if not visible.
     - Do NOT include a "descriptor" field — receipts have no verbatim bank
