@@ -104,7 +104,7 @@ struct ExpenseRow: View {
     /// Whether any badge (person, event, split, or trip) should render on the
     /// secondary badge row.
     private var hasBadges: Bool {
-        hasTags || expense.isSplit || expense.isGroupSplit || showsTripBadge
+        hasTags || expense.isSplit || showsTripBadge
     }
 
     /// The Finance list leads with the user's SHARE of a group-split trip
@@ -156,8 +156,6 @@ struct ExpenseRow: View {
             }
             if showsTripBadge {
                 tripBadge
-            } else if expense.isGroupSplit {
-                groupSplitBadge
             }
         }
     }
@@ -192,37 +190,6 @@ struct ExpenseRow: View {
     private var tripBadgeLabel: String {
         guard expense.isGroupSplit else { return tripName }
         return "\(tripName) · of \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
-    }
-
-    /// Group-split badge (#258). The row's primary amount shows the FULL bill
-    /// (that's how trip splits store `sgdAmount`), so this badge surfaces the
-    /// user's own share alongside it — "your S$45.00 of S$135.00" — mirroring
-    /// how the finance dashboard now counts only the user's share. Renders only
-    /// for the full settle-up model (`splitsData` set), never for existing rows.
-    private var groupSplitBadge: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "person.2.fill")
-                .font(.system(size: 9, weight: .semibold))
-            Text(groupSplitLabel)
-                .font(.edCaption)
-                .monospacedDigit()
-                .lineLimit(1)
-        }
-        .foregroundStyle(Tokens.muted)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(Tokens.muted.opacity(0.12), in: Capsule())
-        .accessibilityLabel("Split expense, \(groupSplitLabel)")
-    }
-
-    private var groupSplitLabel: String {
-        if showsOriginalFirst {
-            let code = expense.originalCurrency.uppercased()
-            let mine = TripExpensesView.formatOriginal(abs(expense.myShareOriginal), code: code)
-            let full = TripExpensesView.formatOriginal(expense.originalAmount, code: code)
-            return "your \(mine) of \(full)"
-        }
-        return "your \(FinanceDashboardBand.formatMoney(abs(expense.myShareSGD))) of \(FinanceDashboardBand.formatMoney(expense.sgdAmount))"
     }
 
     /// Split badge (#188). Same capsule shape as `PersonEventBadge` but muted

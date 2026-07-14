@@ -1,6 +1,6 @@
 import Foundation
 
-/// Thirteen canonical expense categories. Raw values are the user-facing
+/// Fifteen canonical expense categories. Raw values are the user-facing
 /// strings the LLM picks from in the `add_expense` tool schema and what
 /// gets persisted onto `LocalExpense.category`.
 ///
@@ -17,6 +17,8 @@ enum ExpenseCategory: String, Codable, CaseIterable, Identifiable, Hashable, Sen
     case rent                = "rent"
     case healthAndWellness   = "health_and_wellness"
     case travel              = "travel"
+    case accommodation       = "accommodation"
+    case activities          = "activities"
     case subscriptions       = "subscriptions"
     case personalCare        = "personal_care"
     case giftsAndDonations   = "gifts_and_donations"
@@ -36,6 +38,8 @@ enum ExpenseCategory: String, Codable, CaseIterable, Identifiable, Hashable, Sen
         case .rent:              return "Rent"
         case .healthAndWellness: return "Health & Wellness"
         case .travel:            return "Travel"
+        case .accommodation:     return "Accommodation"
+        case .activities:        return "Activities"
         case .subscriptions:     return "Subscriptions"
         case .personalCare:      return "Personal Care"
         case .giftsAndDonations: return "Gifts & Donations"
@@ -55,6 +59,8 @@ enum ExpenseCategory: String, Codable, CaseIterable, Identifiable, Hashable, Sen
         case .rent:              return "house.fill"
         case .healthAndWellness: return "heart.text.square"
         case .travel:            return "airplane"
+        case .accommodation:     return "bed.double.fill"
+        case .activities:        return "ticket"
         case .subscriptions:     return "repeat"
         case .personalCare:      return "scissors"
         case .giftsAndDonations: return "gift"

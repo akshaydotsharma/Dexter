@@ -636,11 +636,15 @@ extension AnthropicClient {
       use the foreign amount. If you genuinely cannot tell the currency,
       default to "SGD".
     - "category" must be EXACTLY one of these raw values: \(categoryRawList).
-      Pick the best fit from the merchant (a supermarket → groceries, a
-      restaurant → food_and_dining, an airline/hotel → travel, Netflix/Spotify
-      → subscriptions, a utility → bills_and_utilities, a monthly rent/lease
-      payment → rent). For fees and interest use "bills_and_utilities". Use
-      "other" only when nothing fits. A refund
+      Pick the best fit from the merchant: a supermarket / grocery → groceries;
+      a restaurant / cafe / bar / dining → food_and_dining; hotels / apartments /
+      Airbnb / lodging / bed & breakfast → accommodation; tours / attractions /
+      museums / experiences / activity tickets / excursions → activities; local
+      taxis / metro / rideshare / buses / trains within a city → transport;
+      flights / long-distance rail / long-haul travel fares → travel;
+      Netflix/Spotify → subscriptions; a utility → bills_and_utilities; a monthly
+      rent/lease payment → rent. For fees and interest use "bills_and_utilities".
+      Use "other" only when nothing fits. A refund
       is imported, so give it the category of the purchase it reverses (a
       grocery refund → groceries). For a payment or a deposit, still pick a
       plausible category (both are skipped, so the category is ignored).

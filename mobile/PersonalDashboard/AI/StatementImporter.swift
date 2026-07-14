@@ -460,6 +460,11 @@ struct StatementImporter {
                 // re-import stays idempotent regardless of trip linkage.
                 if let tripUUID {
                     row.tripUUID = tripUUID
+                    // Trip expenses are opt-in to Finance (#277): an imported
+                    // trip expense starts hidden from Finance totals until the
+                    // user ticks it on the trip's Expenses tab. The trip's own
+                    // tiles / settle-up still count it.
+                    row.hiddenFromFinance = true
                     if !tripParticipants.isEmpty {
                         var entries: [ExpenseSplitEntry] = [ExpenseSplitEntry(person: nil, shares: 1)]
                         entries.append(contentsOf: tripParticipants.map { ExpenseSplitEntry(person: $0, shares: 1) })

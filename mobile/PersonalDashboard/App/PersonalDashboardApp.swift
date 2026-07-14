@@ -13,6 +13,11 @@ struct PersonalDashboardApp: App {
         WindowGroup {
             ContentView()
                 .task {
+                    // One-time backfill (#277): existing trip expenses become
+                    // opt-in to Finance. Runs first so any rows the coordinators
+                    // below touch already reflect the new default. Idempotent —
+                    // guarded by a UserDefaults flag inside.
+                    TripExpenseFinanceMigration.runIfNeeded(context: SwiftDataStore.shared.context)
                     // Surface the "Find devices on local network" prompt
                     // before any feature tries to reach the LAN dev server.
                     // Bonjour browse is Apple's canonical trigger; a plain
