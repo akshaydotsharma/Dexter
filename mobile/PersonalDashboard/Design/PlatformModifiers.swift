@@ -50,3 +50,17 @@ extension View {
         #endif
     }
 }
+
+extension ToolbarItemPlacement {
+    /// Trailing "Done"-style toolbar slot: `.topBarTrailing` on iOS (the
+    /// navigation-bar trailing position), `.automatic` on macOS where there is
+    /// no top bar and `.topBarTrailing` does not exist. iOS placement is
+    /// unchanged. Added for the native macOS target (issue #281).
+    static var trailingBar: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarTrailing
+        #else
+        .automatic
+        #endif
+    }
+}

@@ -49,9 +49,9 @@ struct ParsedFilesView: View {
                 .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle("Parsed files")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .trailingBar) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -98,7 +98,7 @@ struct ParsedFilesView: View {
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .autocorrectionDisabled(true)
-                .textInputAutocapitalization(.never)
+                .noAutocapitalization()
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
@@ -507,9 +507,9 @@ private struct StatementDetailView: View {
                 }
             }
             .navigationTitle("Statement import")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .trailingBar) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -603,9 +603,9 @@ private struct ParsedEmailDetailView: View {
                 }
             }
             .navigationTitle("Email detail")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .trailingBar) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -614,7 +614,12 @@ private struct ParsedEmailDetailView: View {
 
     private var undoButton: some View {
         Button(role: .destructive) {
+            // Undo is backed by the iOS-only email-ingest service. This button
+            // can't appear on macOS anyway (no email logs are ever written
+            // there), but the call must compile out (issue #281).
+            #if os(iOS)
             _ = EmailIngestService().undo(logUUID: entry.clientUUID)
+            #endif
             undone = true
         } label: {
             HStack(spacing: Space.sm) {

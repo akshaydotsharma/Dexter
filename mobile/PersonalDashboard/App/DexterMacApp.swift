@@ -45,6 +45,18 @@ private struct MacRootView: View {
 
     @State private var selection: AppSection = .tasks
 
+    /// Theme preference, shared with the iOS store via the same UserDefaults
+    /// key (`colorSchemePref`) that `ContentView` uses. Surfaced to `Settings`
+    /// as a binding and applied to the whole window so the picker takes effect.
+    @AppStorage("colorSchemePref") private var schemePrefRaw: String = ColorSchemePref.system.rawValue
+
+    private var schemePref: Binding<ColorSchemePref> {
+        Binding(
+            get: { ColorSchemePref(rawValue: schemePrefRaw) ?? .system },
+            set: { schemePrefRaw = $0.rawValue }
+        )
+    }
+
     var body: some View {
         NavigationSplitView {
             List(sections, selection: $selection) { section in
@@ -58,6 +70,7 @@ private struct MacRootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Tokens.paper)
         }
+        .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
     }
 
     @ViewBuilder
@@ -77,6 +90,8 @@ private struct MacRootView: View {
             PersonalVocabularyView(router: router)
         case .activity:
             ActivityView(router: router)
+        case .settings:
+            SettingsView(router: router, schemePref: schemePref)
         default:
             ComingSoonView(section: section)
         }

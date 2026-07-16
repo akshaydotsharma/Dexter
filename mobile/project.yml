@@ -172,6 +172,26 @@ targets:
       - path: PersonalDashboard/Services/EventService.swift
       - path: PersonalDashboard/Services/RecurringExpenseService.swift
       - path: PersonalDashboard/Services/RecurringExpenseNotifications.swift
+      # Settings (issue #281). The email-inbox surface (EmailInboxView) and its
+      # BackgroundTasks/IMAP ingest stack (EmailIngestService, IMAPClient,
+      # EmailIngestCoordinator) stay OUT of this target — iOS-only. The email
+      # LOG model + outcome enum live in Models/ (already in target) so the
+      # parsed-files history compiles; it just shows zero email rows on macOS.
+      - path: PersonalDashboard/App/ColorSchemePref.swift
+      - path: PersonalDashboard/Views/Settings/SettingsView.swift
+      - path: PersonalDashboard/Views/Settings/ResetDataView.swift
+      - path: PersonalDashboard/Views/Settings/BackupSettingsView.swift
+      - path: PersonalDashboard/Views/Settings/ParsedFilesView.swift
+      - path: PersonalDashboard/Views/Settings/DataExportImportView.swift
+      - path: PersonalDashboard/Services/BackupService.swift
+      - path: PersonalDashboard/Services/BackupSettings.swift
+      - path: PersonalDashboard/Services/DataExportService.swift
+      - path: PersonalDashboard/Services/DataImportService.swift
+      - path: PersonalDashboard/Services/ReceiptStorage.swift
+      - path: PersonalDashboard/Services/MiniZip.swift
+      - path: PersonalDashboard/Services/DataArchive.swift
+      - path: PersonalDashboard/Views/Finance/ExpenseRow.swift
+      - path: PersonalDashboard/Views/Finance/PersonEventBadge.swift
       - path: PersonalDashboard/Resources/Fonts
         type: folder
         buildPhase: resources

@@ -1,7 +1,12 @@
 import SwiftUI
 import SwiftData
-import UIKit
 import UniformTypeIdentifiers
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Sheet that hosts export + import in a single surface. Two rows on the
 /// landing page; tapping one drives the corresponding flow.
@@ -35,7 +40,7 @@ struct DataExportImportView: View {
                 content
             }
             .navigationTitle(navigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if showsBackButton {
@@ -331,12 +336,19 @@ struct DataExportImportView: View {
         let service = DataExportService(modelContext: modelContext)
         do {
             let url = try service.export()
+            #if os(iOS)
             phase = .shareReady(url)
             await presentShareSheet(for: url)
             // Hand back to idle once the share sheet dismisses. The tmp
             // file stays on disk for the OS to clean up (sharing copies
             // it into Files / Mail / etc).
             phase = .idle
+            #else
+            // macOS has no share sheet; let the user pick a save location and
+            // copy the exported archive there (issue #281).
+            phase = .idle
+            saveExportedArchive(at: url)
+            #endif
         } catch {
             phase = .idle
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -379,6 +391,7 @@ struct DataExportImportView: View {
         }
     }
 
+    #if os(iOS)
     @MainActor
     private func presentShareSheet(for url: URL) async {
         guard let topController = topMostViewController() else { return }
@@ -414,6 +427,32 @@ struct DataExportImportView: View {
         while let presented = top.presentedViewController { top = presented }
         return top
     }
+    #endif
+
+    #if os(macOS)
+    /// macOS export: present an `NSSavePanel` and copy the freshly built
+    /// archive to the chosen location. There is no share sheet on macOS, so the
+    /// user saves the `.zip` directly (issue #281).
+    @MainActor
+    private func saveExportedArchive(at url: URL) {
+        let panel = NSSavePanel()
+        panel.title = "Save Dexter export"
+        panel.nameFieldStringValue = url.lastPathComponent
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: url, to: destination)
+        } catch {
+            errorMessage = "Couldn't save export: \(error.localizedDescription)"
+        }
+    }
+    #endif
 
     // MARK: - Helpers
 
@@ -528,8 +567,10 @@ private struct PreviewRow: View {
     }
 }
 
+#if os(iOS)
 private extension UIWindowScene {
     var keyWindow: UIWindow? {
         windows.first { $0.isKeyWindow } ?? windows.first
     }
 }
+#endif

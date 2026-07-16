@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Errors thrown by ReceiptStorage. Surface to the user when a save / delete
 /// can't complete (rare: disk full, sandbox sealed, etc.).
@@ -67,6 +69,7 @@ final class ReceiptStorage {
     /// row render immediately rather than after compression finishes (#200
     /// follow-up). It reads only immutable value-typed constants and touches
     /// no actor-isolated state, so it's safe to call from any executor.
+    #if canImport(UIKit)
     nonisolated func compress(imageData: Data) throws -> Data {
         guard let image = UIImage(data: imageData) else {
             throw ReceiptStorageError.imageEncodingFailed
@@ -89,6 +92,7 @@ final class ReceiptStorage {
         }
         return firstPass
     }
+    #endif
 
     /// Persist a pre-compressed JPEG (typically the output of `compress(imageData:)`).
     /// Returned path is relative.
@@ -98,12 +102,15 @@ final class ReceiptStorage {
 
     /// Legacy convenience: compress + save in one shot. Kept for callers that
     /// don't need the compressed bytes (e.g. failure paths that just need
-    /// the receipt on disk and don't call Vision).
+    /// the receipt on disk and don't call Vision). Depends on `compress`, so
+    /// iOS-only (image encoding is UIKit-backed) — issue #281.
+    #if canImport(UIKit)
     func save(imageData: Data, fileExtension: String) throws -> String {
         _ = fileExtension // Kept for API parity; output is always .jpg.
         let compressed = try compress(imageData: imageData)
         return try persist(data: compressed, ext: "jpg")
     }
+    #endif
 
     /// Save raw PDF data unchanged. Returned path is relative.
     func save(pdfData: Data) throws -> String {
@@ -208,6 +215,7 @@ final class ReceiptStorage {
 
 // MARK: - UIImage downsize helper
 
+#if canImport(UIKit)
 private extension UIImage {
     /// Resize so the longest edge is at most `longestEdge` points, preserving
     /// aspect ratio. Returns nil if the source is degenerate.
@@ -227,3 +235,4 @@ private extension UIImage {
         }
     }
 }
+#endif

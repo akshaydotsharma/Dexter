@@ -45,7 +45,7 @@ struct BackupSettingsView: View {
                 content
             }
             .navigationTitle("Backup")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
