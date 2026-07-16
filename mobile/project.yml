@@ -133,9 +133,12 @@ targets:
       - path: PersonalDashboard/ViewModels/ListsViewModel.swift
       - path: PersonalDashboard/Services/NoteService.swift
       - path: PersonalDashboard/Services/ChecklistService.swift
+      - path: PersonalDashboard/Services/FinanceSettings.swift
       - path: PersonalDashboard/Views/Tasks
       - path: PersonalDashboard/Views/Lists/ListsView.swift
       - path: PersonalDashboard/Views/Today/TodayView.swift
+      - path: PersonalDashboard/Views/Activity/ActivityView.swift
+      - path: PersonalDashboard/Views/Finance/FinanceDashboardBand.swift
       - path: PersonalDashboard/Views/Settings/PersonalVocabularyView.swift
       - path: PersonalDashboard/Views/Components/GhostAddRow.swift
       - path: PersonalDashboard/Views/Components/DeleteRowButton.swift

@@ -71,6 +71,8 @@ private struct MacRootView: View {
             ListsView(router: router)
         case .vocabulary:
             PersonalVocabularyView(router: router)
+        case .activity:
+            ActivityView(router: router)
         default:
             ComingSoonView(section: section)
         }
