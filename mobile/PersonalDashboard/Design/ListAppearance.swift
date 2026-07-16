@@ -1,5 +1,22 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
+/// Whether an SF Symbol name renders on this platform. UIKit on iOS, AppKit on
+/// macOS; both back SF Symbols, so the guard against unknown/AI-supplied names
+/// works identically on both.
+private func sfSymbolExists(_ name: String) -> Bool {
+    #if canImport(UIKit)
+    return UIImage(systemName: name) != nil
+    #elseif canImport(AppKit)
+    return NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+    #else
+    return true
+    #endif
+}
 
 /// Single source of truth for a list's visual identity (#253): the curated SF
 /// Symbol set, the palette, the default fallback, and the local keyword→icon
@@ -98,14 +115,14 @@ enum ListAppearance {
     /// symbol name that doesn't exist on the device (blank-tile prevention).
     static func resolvedIconName(_ stored: String?) -> String {
         guard let stored, !stored.isEmpty,
-              UIImage(systemName: stored) != nil else { return defaultIcon }
+              sfSymbolExists(stored) else { return defaultIcon }
         return stored
     }
 
     /// Whether a symbol name renders on this device.
     static func isValidSymbol(_ name: String?) -> Bool {
         guard let name, !name.isEmpty else { return false }
-        return UIImage(systemName: name) != nil
+        return sfSymbolExists(name)
     }
 
     // MARK: - Keyword → appearance mapper

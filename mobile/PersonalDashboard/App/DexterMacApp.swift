@@ -65,6 +65,12 @@ private struct MacRootView: View {
         switch section {
         case .tasks:
             TasksView(router: router)
+        case .today:
+            TodayView(router: router)
+        case .lists:
+            ListsView(router: router)
+        case .vocabulary:
+            PersonalVocabularyView(router: router)
         default:
             ComingSoonView(section: section)
         }

@@ -123,16 +123,23 @@ targets:
       - path: PersonalDashboard/Cache/SwiftDataStore.swift
       - path: PersonalDashboard/Cache/StoreChange.swift
       - path: PersonalDashboard/Design
-        excludes:
-          - "ListAppearance.swift"   # UIImage(systemName:), Lists-only, not needed by Tasks
       - path: PersonalDashboard/App/AppRouter.swift
       - path: PersonalDashboard/App/DexterMacApp.swift
       - path: PersonalDashboard/ViewModels/TodosViewModel.swift
       - path: PersonalDashboard/Services/TodoService.swift
       - path: PersonalDashboard/Services/MapsLinkResolver.swift
       - path: PersonalDashboard/Services/APIError.swift
+      - path: PersonalDashboard/ViewModels/NotesViewModel.swift
+      - path: PersonalDashboard/ViewModels/ListsViewModel.swift
+      - path: PersonalDashboard/Services/NoteService.swift
+      - path: PersonalDashboard/Services/ChecklistService.swift
       - path: PersonalDashboard/Views/Tasks
+      - path: PersonalDashboard/Views/Lists/ListsView.swift
+      - path: PersonalDashboard/Views/Today/TodayView.swift
+      - path: PersonalDashboard/Views/Settings/PersonalVocabularyView.swift
       - path: PersonalDashboard/Views/Components/GhostAddRow.swift
+      - path: PersonalDashboard/Views/Components/DeleteRowButton.swift
+      - path: PersonalDashboard/Views/Components/MarkdownView.swift
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
       - path: PersonalDashboard/Resources/Fonts
