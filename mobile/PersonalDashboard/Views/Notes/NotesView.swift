@@ -513,7 +513,9 @@ private struct NoteDetailContent: View {
                 }
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.lg)
-                .padding(.bottom, Space.xxxl)
+                // Clear the floating bottom nav so the last lines of a long
+                // note aren't hidden behind it (matches the list view inset).
+                .padding(.bottom, BottomTabBarMetrics.height + Space.lg)
             }
             .scrollDismissesKeyboard(.interactively)
         }
