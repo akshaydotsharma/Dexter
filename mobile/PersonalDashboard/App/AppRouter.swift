@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import Observation
 
 /// Activity timeline deep-link payload. The Activity surface sets this when
@@ -73,12 +75,14 @@ final class AppRouter {
     /// menu tap and the edge-swipe gesture route through here so the
     /// keyboard-dismiss behaviour is consistent.
     func openDrawer() {
+        #if canImport(UIKit)
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,
             from: nil,
             for: nil
         )
+        #endif
         withAnimation(.easeOut(duration: 0.2)) {
             drawerOpen = true
         }

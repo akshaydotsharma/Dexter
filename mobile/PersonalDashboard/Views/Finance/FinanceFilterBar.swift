@@ -394,7 +394,7 @@ private struct CustomDateRangeSheet: View {
                 .padding(Space.lg)
             }
             .navigationTitle("Date range")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -633,7 +633,7 @@ private struct MoreFiltersSheet: View {
                 .background(Tokens.paper)
             }
             .navigationTitle("Filters")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Clear") {

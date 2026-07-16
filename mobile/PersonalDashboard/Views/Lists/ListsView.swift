@@ -810,9 +810,9 @@ private struct ItemDetailsSheet: View {
                             Text("Link (URL)").eyebrow()
                             HStack(spacing: Space.sm) {
                                 TextField("Paste a link", text: $urlText)
-                                    .textInputAutocapitalization(.never)
+                                    .noAutocapitalization()
                                     .autocorrectionDisabled(true)
-                                    .keyboardType(.URL)
+                                    .urlKeyboard()
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
                                     .padding(Space.md)
@@ -852,7 +852,7 @@ private struct ItemDetailsSheet: View {
                 .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle(nameEditable ? "New item" : "Item details")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)
@@ -941,7 +941,7 @@ private struct NewListSheet: View {
             }
             .animation(.easeOut(duration: 0.2), value: inferred.colorHex)
             .navigationTitle("New list")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)
@@ -1052,7 +1052,7 @@ private struct ListPropertiesSheet: View {
                 .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle("List appearance")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)

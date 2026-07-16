@@ -1,6 +1,10 @@
 import Foundation
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// Outcome of running one uploaded ticket through the on-device pipeline (#222).
 /// An item is ALWAYS created (the upload is never lost) — `degraded` flags the
@@ -56,7 +60,7 @@ struct TicketExtraction {
             // Rasterise page 1 for the extraction image (barcode decode reads
             // pages directly from the PDF data below).
             extractionImageData = BarcodeService.renderFirstPage(pdfData: data, targetLongEdge: 2200)?
-                .jpegData(compressionQuality: 0.85)
+                .jpegDataCompat(quality: 0.85)
         } else {
             let compressed = try await Task.detached(priority: .userInitiated) {
                 try storage.compress(imageData: data)
@@ -69,7 +73,7 @@ struct TicketExtraction {
         let decoded: DecodedBarcode?
         if isPDF {
             decoded = BarcodeService.decode(pdfData: data)
-        } else if let image = extractionImageData.flatMap({ UIImage(data: $0) }) {
+        } else if let image = extractionImageData.flatMap({ PlatformImage(data: $0) }) {
             decoded = BarcodeService.decode(image: image)
         } else {
             decoded = nil

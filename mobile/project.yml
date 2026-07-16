@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.akshaysharma
   deploymentTarget:
     iOS: "17.0"
+    macOS: "14.0"
   developmentLanguage: en
   createIntermediateGroups: true
 
@@ -15,6 +16,8 @@ targets:
         excludes:
           - "Resources/Preview Content/**"
           - "Resources/Fonts/**"
+          - "App/DexterMacApp.swift"   # macOS @main; belongs only to DexterMac target
+          - "InfoMac.plist"            # generated Info.plist for the macOS target
       - path: PersonalDashboard/Resources/Preview Content
         type: folder
       - path: PersonalDashboard/Resources/Fonts
@@ -108,6 +111,164 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
 
+  # Native macOS app (issue #281). Shares the portable model/design/service
+  # layer with the iOS target via an explicit curated source list — only files
+  # that compile on macOS (UIKit shimmed behind `#if canImport(UIKit)`) are
+  # included. The first feature is Tasks; the list grows as surfaces are ported.
+  DexterMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: PersonalDashboard/Models
+      - path: PersonalDashboard/Cache/SwiftDataStore.swift
+      - path: PersonalDashboard/Cache/StoreChange.swift
+      - path: PersonalDashboard/Design
+      - path: PersonalDashboard/App/AppRouter.swift
+      - path: PersonalDashboard/App/DexterMacApp.swift
+      - path: PersonalDashboard/ViewModels/TodosViewModel.swift
+      - path: PersonalDashboard/Services/TodoService.swift
+      - path: PersonalDashboard/Services/MapsLinkResolver.swift
+      - path: PersonalDashboard/Services/APIError.swift
+      - path: PersonalDashboard/ViewModels/NotesViewModel.swift
+      - path: PersonalDashboard/ViewModels/ListsViewModel.swift
+      - path: PersonalDashboard/Services/NoteService.swift
+      - path: PersonalDashboard/Services/ChecklistService.swift
+      - path: PersonalDashboard/Services/FinanceSettings.swift
+      - path: PersonalDashboard/Views/Tasks
+      - path: PersonalDashboard/Views/Lists/ListsView.swift
+      - path: PersonalDashboard/Views/Today/TodayView.swift
+      - path: PersonalDashboard/Views/Notes/NotesView.swift
+      - path: PersonalDashboard/Views/Components/MarkdownEditor.swift
+      - path: PersonalDashboard/Views/Activity/ActivityView.swift
+      - path: PersonalDashboard/Views/Finance/FinanceDashboardBand.swift
+      - path: PersonalDashboard/Views/Settings/PersonalVocabularyView.swift
+      - path: PersonalDashboard/Views/Components/GhostAddRow.swift
+      - path: PersonalDashboard/Views/Components/DeleteRowButton.swift
+      - path: PersonalDashboard/Views/Components/SectionEyebrow.swift
+      - path: PersonalDashboard/Views/Components/MarkdownView.swift
+      - path: PersonalDashboard/Views/Shell/TopBar.swift
+      - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
+      # Chat (issue #281). Text chat only — the voice capture path
+      # (VoiceCaptureViewModel / SpeechTranscriber / overlay / InkOrb /
+      # WaveformBars) is AVFoundation/Speech-coupled and gated off with
+      # `#if os(iOS)` inside ChatView, so those files stay out of this target.
+      - path: PersonalDashboard/App/AppConfig.swift
+      - path: PersonalDashboard/Views/Chat/ChatView.swift
+      - path: PersonalDashboard/Views/Chat/ChatInputBar.swift
+      - path: PersonalDashboard/Views/Chat/ChatComponents.swift
+      - path: PersonalDashboard/Views/Chat/ChatResultCard.swift
+      - path: PersonalDashboard/ViewModels/ChatViewModel.swift
+      - path: PersonalDashboard/AI/ChatStream.swift
+      - path: PersonalDashboard/AI/AnthropicClient.swift
+      - path: PersonalDashboard/AI/AssistantContextBuilder.swift
+      - path: PersonalDashboard/AI/ChatDraft.swift
+      - path: PersonalDashboard/AI/ChatActionResult.swift
+      - path: PersonalDashboard/AI/ToolDefinitions.swift
+      - path: PersonalDashboard/AI/ExecuteDraftAction.swift
+      - path: PersonalDashboard/Services/AIStreamingService.swift
+      - path: PersonalDashboard/Services/FXService.swift
+      - path: PersonalDashboard/Services/ExpenseService.swift
+      - path: PersonalDashboard/Services/PersonService.swift
+      - path: PersonalDashboard/Services/EventService.swift
+      - path: PersonalDashboard/Services/RecurringExpenseService.swift
+      - path: PersonalDashboard/Services/RecurringExpenseNotifications.swift
+      # Settings (issue #281). The email-inbox surface (EmailInboxView) and its
+      # BackgroundTasks/IMAP ingest stack (EmailIngestService, IMAPClient,
+      # EmailIngestCoordinator) stay OUT of this target — iOS-only. The email
+      # LOG model + outcome enum live in Models/ (already in target) so the
+      # parsed-files history compiles; it just shows zero email rows on macOS.
+      - path: PersonalDashboard/App/ColorSchemePref.swift
+      - path: PersonalDashboard/Views/Settings/SettingsView.swift
+      - path: PersonalDashboard/Views/Settings/ResetDataView.swift
+      - path: PersonalDashboard/Views/Settings/BackupSettingsView.swift
+      - path: PersonalDashboard/Views/Settings/ParsedFilesView.swift
+      - path: PersonalDashboard/Views/Settings/DataExportImportView.swift
+      - path: PersonalDashboard/Services/BackupService.swift
+      - path: PersonalDashboard/Services/BackupSettings.swift
+      - path: PersonalDashboard/Services/DataExportService.swift
+      - path: PersonalDashboard/Services/DataImportService.swift
+      - path: PersonalDashboard/Services/ReceiptStorage.swift
+      - path: PersonalDashboard/Services/MiniZip.swift
+      - path: PersonalDashboard/Services/DataArchive.swift
+      - path: PersonalDashboard/Views/Finance/ExpenseRow.swift
+      - path: PersonalDashboard/Views/Finance/PersonEventBadge.swift
+      # Finance surface (issue #281). The camera capture path
+      # (CameraPicker.swift, UIImagePickerController) is iOS-only and stays OUT
+      # of this target; FinanceView gates its menu item + fullScreenCover with
+      # `#if os(iOS)`. Photo-library (PhotosUI), PDF + statement import
+      # (.fileImporter), manual entry, and recurring expenses all work on
+      # macOS. Receipt viewers in AddExpenseSheet are AppKit variants behind
+      # `#if os(iOS)/#else`. BarcodeService / APIClient are NOT pulled by the
+      # Finance chain (Trips-only) so they stay out.
+      - path: PersonalDashboard/Views/Finance/FinanceView.swift
+      - path: PersonalDashboard/Views/Finance/AddExpenseSheet.swift
+      - path: PersonalDashboard/Views/Finance/FinanceFilterBar.swift
+      - path: PersonalDashboard/Views/Finance/FinanceProcessingRow.swift
+      - path: PersonalDashboard/Views/Finance/PrefilledExpense.swift
+      - path: PersonalDashboard/Views/Finance/PhotoLibraryPicker.swift
+      - path: PersonalDashboard/Views/Finance/PDFPicker.swift
+      - path: PersonalDashboard/Views/Finance/RecurringExpensesView.swift
+      - path: PersonalDashboard/Views/Finance/RecurringExpenseEditorSheet.swift
+      - path: PersonalDashboard/AI/StatementImporter.swift
+      - path: PersonalDashboard/AI/ExpenseDedupe.swift
+      - path: PersonalDashboard/AI/AnthropicClient+ExtractExpense.swift
+      - path: PersonalDashboard/AI/AnthropicClient+ExtractStatement.swift
+      - path: PersonalDashboard/AI/PDFChunker.swift
+      # Trips / itineraries surface (issue #281 — final feature). The
+      # present-to-scan surface (TicketScanView.swift: UIScreen.brightness +
+      # idle timer + camera) is iOS-only and stays OUT of this target; its call
+      # sites are `#if os(iOS)`-guarded and the stay-detail cover falls back to a
+      # `.sheet` on macOS. The reachable viewers (TicketOriginalViewer /
+      # TicketAttachmentThumbnail) were relocated to the cross-platform
+      # TicketViewers.swift. TicketStorage / BarcodeService / TicketExtraction
+      # are shimmed cross-platform (UIKit `#if`, ImageIO/CoreGraphics on macOS).
+      # BCBPParser + AddressGeocoder are already portable Foundation/CoreLocation.
+      - path: PersonalDashboard/Services/BCBPParser.swift
+      - path: PersonalDashboard/Services/AddressGeocoder.swift
+      - path: PersonalDashboard/Services/TicketStorage.swift
+      - path: PersonalDashboard/Services/BarcodeService.swift
+      - path: PersonalDashboard/AI/TicketExtraction.swift
+      - path: PersonalDashboard/Views/Trips/TripsView.swift
+      - path: PersonalDashboard/Views/Trips/TripDetailView.swift
+      - path: PersonalDashboard/Views/Trips/TripExpensesView.swift
+      - path: PersonalDashboard/Views/Trips/TripCalendarPopover.swift
+      - path: PersonalDashboard/Views/Trips/TicketCardView.swift
+      - path: PersonalDashboard/Views/Trips/TicketViewers.swift
+      - path: PersonalDashboard/Resources/Fonts
+        type: folder
+        buildPhase: resources
+      - path: PersonalDashboard/Resources/Assets.xcassets
+        buildPhase: resources
+    info:
+      path: PersonalDashboard/InfoMac.plist
+      properties:
+        CFBundleDisplayName: Dexter
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: "14.0"
+        ITSAppUsesNonExemptEncryption: false
+        # Anthropic Messages API key for on-device Chat (issue #281). Mirrors
+        # the iOS target: env var wins for `xcodebuild ANTHROPIC_API_KEY=…`,
+        # else this $(ANTHROPIC_API_KEY) build setting. Empty in a plain Xcode
+        # build, in which case Chat degrades gracefully ("not configured").
+        ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+        # Custom fonts ship as a Fonts/ folder reference; register them for
+        # AppKit/SwiftUI. `.custom()` falls back to system font if this fails.
+        ATSApplicationFontsPath: Fonts
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard.mac
+        DEVELOPMENT_TEAM: "PJFPUSSNUW"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        ENABLE_PREVIEWS: YES
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # Dev-only build run from Xcode. Sandbox off keeps file access simple
+        # for the later iCloud-backup-restore milestone; revisit before any
+        # signed distribution.
+        ENABLE_APP_SANDBOX: NO
+
   PersonalDashboardUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -158,3 +319,9 @@ schemes:
       targets:
         - PersonalDashboardTests
         - PersonalDashboardUITests
+  DexterMac:
+    build:
+      targets:
+        DexterMac: all
+    run:
+      config: Debug

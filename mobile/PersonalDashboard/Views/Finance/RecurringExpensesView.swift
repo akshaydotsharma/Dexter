@@ -38,7 +38,7 @@ struct RecurringExpensesView: View {
                 content
             }
             .navigationTitle("Recurring")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }

@@ -84,7 +84,7 @@ struct ResetDataView: View {
                 }
             }
             .navigationTitle("Reset data")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if phase == .confirm {
@@ -232,7 +232,7 @@ struct ResetDataView: View {
                         .foregroundStyle(Tokens.inkSoft)
 
                     TextField("reset", text: $confirmText)
-                        .textInputAutocapitalization(.never)
+                        .noAutocapitalization()
                         .autocorrectionDisabled()
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)

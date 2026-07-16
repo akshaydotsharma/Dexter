@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 // MARK: - Keyboard dismiss helpers
 
@@ -28,12 +30,15 @@ extension View {
     /// routes through those commit paths without the parent needing per-row focus
     /// state. Wraps the same `sendAction` idiom used inline elsewhere.
     func hideKeyboard() {
+        #if canImport(UIKit)
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,
             from: nil,
             for: nil
         )
+        #endif
+        // macOS has no software keyboard; nothing to dismiss.
     }
 }
 
@@ -47,12 +52,14 @@ private struct DismissKeyboardOnTapModifier: ViewModifier {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        #if canImport(UIKit)
                         UIApplication.shared.sendAction(
                             #selector(UIResponder.resignFirstResponder),
                             to: nil,
                             from: nil,
                             for: nil
                         )
+                        #endif
                     }
             )
     }

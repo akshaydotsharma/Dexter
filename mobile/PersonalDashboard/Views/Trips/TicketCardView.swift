@@ -615,7 +615,7 @@ struct StayBookingDetailSheet: View {
                 }
             }
             .navigationTitle("Stay")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -623,9 +623,14 @@ struct StayBookingDetailSheet: View {
                 }
             }
         }
+        // The scan surface is a gate/turnstile idiom that needs the camera-era
+        // brightness + idle-timer control; iOS-only, and `.fullScreenCover` is
+        // unavailable on macOS regardless (issue #281).
+        #if os(iOS)
         .fullScreenCover(isPresented: $showingScan) {
             TicketScanView(item: item)
         }
+        #endif
         .sheet(isPresented: $showingOriginal) {
             TicketOriginalViewer(attachmentPath: item.attachmentPath)
         }
@@ -633,12 +638,15 @@ struct StayBookingDetailSheet: View {
 
     private var actions: some View {
         VStack(spacing: Space.sm) {
+            // "Scan ticket" opens the iOS-only present-to-scan surface.
+            #if os(iOS)
             if item.hasBarcode {
                 actionRow(icon: "barcode.viewfinder", title: "Scan ticket") {
                     Haptics.light()
                     showingScan = true
                 }
             }
+            #endif
             if !item.attachmentPath.isEmpty {
                 actionRow(icon: "doc.text.magnifyingglass", title: "View original ticket") {
                     Haptics.light()
@@ -786,13 +794,13 @@ struct BarcodeImageView: View {
     /// centers it on the stub; the editor thumbnail keeps the default leading.
     var alignment: Alignment = .leading
 
-    @State private var rendered: UIImage?
+    @State private var rendered: PlatformImage?
     @State private var didAttempt = false
 
     var body: some View {
         Group {
             if let rendered {
-                Image(uiImage: rendered)
+                Image(platformImage: rendered)
                     .resizable()
                     .interpolation(.none)
                     .aspectRatio(contentMode: .fit)
@@ -828,7 +836,7 @@ struct BarcodeImageView: View {
         let symbol = BarcodeSymbology(rawValue: symbology) ?? .other
         // Regenerate off the main actor; CoreImage + UIGraphicsImageRenderer are
         // safe off-main and this keeps scrolling smooth.
-        let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+        let image = await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
             if let regenerated = BarcodeService.render(payload: payloadCopy, symbology: symbol, targetLongEdge: 900) {
                 return regenerated
             }
@@ -847,17 +855,17 @@ struct BarcodeImageView: View {
 
     /// Load the original attachment and crop to its barcode's bounding box when
     /// detectable, so the fallback shows the code rather than the whole ticket.
-    private func loadAttachmentBarcodeCrop() async -> UIImage? {
+    private func loadAttachmentBarcodeCrop() async -> PlatformImage? {
         guard !attachmentPath.isEmpty,
               let url = TicketStorage.shared.load(relativePath: attachmentPath) else { return nil }
         let isPDF = TicketStorage.isPDF(attachmentPath)
-        return await Task.detached(priority: .userInitiated) { () -> UIImage? in
-            let base: UIImage?
+        return await Task.detached(priority: .userInitiated) { () -> PlatformImage? in
+            let base: PlatformImage?
             if isPDF {
                 let data = (try? Data(contentsOf: url))
                 base = data.flatMap { BarcodeService.renderFirstPage(pdfData: $0) }
             } else {
-                base = UIImage(contentsOfFile: url.path)
+                base = loadReceiptPlatformImage(url)
             }
             guard let base else { return nil }
             if let decoded = BarcodeService.decode(image: base) {

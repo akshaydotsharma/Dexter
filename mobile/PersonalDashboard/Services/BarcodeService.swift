@@ -1,8 +1,13 @@
 import Foundation
-import UIKit
 import Vision
 import CoreImage
 import PDFKit
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+import CoreGraphics
+#endif
 
 /// Normalised symbology id stored on `LocalItineraryItem.barcodeSymbology`.
 /// We persist a small stable token (not the raw `VNBarcodeSymbology.rawValue`,
@@ -49,6 +54,13 @@ struct DecodedBarcode {
 ///  - `render(...)`: regenerate a crisp barcode image from a stored payload in
 ///    its original symbology, scaled with nearest-neighbour so the modules stay
 ///    hard-edged (a smoothed barcode fails scanners).
+///
+/// Cross-platform (issue #281): the shared work (Vision decode, CoreImage
+/// generation, PDF page geometry) uses first-party frameworks that exist on both
+/// iOS and macOS. Only the concrete bitmap wrap/rasterise differs by platform,
+/// and the returned `PlatformImage` resolves to `UIImage` on iOS / `NSImage` on
+/// macOS, so every call site is source-identical. The iOS pixel path is byte
+/// unchanged from #222.
 enum BarcodeService {
 
     // MARK: - Decode
@@ -56,9 +68,15 @@ enum BarcodeService {
     /// Detect the single most prominent barcode in `image`. Returns `nil` when
     /// no barcode is found. When several are present we prefer the one with the
     /// largest bounding-box area (the primary ticket code, not a tiny promo QR).
-    static func decode(image: UIImage) -> DecodedBarcode? {
-        guard let cgImage = image.cgImage else { return nil }
+    static func decode(image: PlatformImage) -> DecodedBarcode? {
+        guard let cgImage = image.cgImageCompat else { return nil }
+        #if canImport(UIKit)
         return decode(cgImage: cgImage, orientation: cgOrientation(from: image.imageOrientation))
+        #else
+        // `NSImage` carries no EXIF orientation the way `UIImage` does; the
+        // `cgImageCompat` bitmap is already upright.
+        return decode(cgImage: cgImage, orientation: .up)
+        #endif
     }
 
     /// Decode across a PDF's pages, returning the first page's most prominent
@@ -70,7 +88,7 @@ enum BarcodeService {
         for index in 0..<pages {
             guard let page = doc.page(at: index) else { continue }
             let image = render(pdfPage: page, targetLongEdge: 2400)
-            if let cg = image?.cgImage, let hit = decode(cgImage: cg, orientation: .up) {
+            if let cg = image?.cgImageCompat, let hit = decode(cgImage: cg, orientation: .up) {
                 return hit
             }
         }
@@ -118,7 +136,7 @@ enum BarcodeService {
     /// (nearest-neighbour) scaling. Returns `nil` for `.other`/unsupported
     /// symbologies or on any generation failure — the caller then falls back to
     /// the original attachment.
-    static func render(payload: String, symbology: BarcodeSymbology, targetLongEdge: CGFloat = 900) -> UIImage? {
+    static func render(payload: String, symbology: BarcodeSymbology, targetLongEdge: CGFloat = 900) -> PlatformImage? {
         guard !payload.isEmpty else { return nil }
         // Boarding-pass payloads are Latin-1; fall back to UTF-8 for QR URLs.
         let messageData = payload.data(using: .isoLatin1) ?? payload.data(using: .utf8)
@@ -154,11 +172,12 @@ enum BarcodeService {
         return upscale(cgImage: nativeCG, targetLongEdge: targetLongEdge)
     }
 
+    #if canImport(UIKit)
     /// Draw a small generated code into a larger bitmap with nearest-neighbour
     /// sampling (no blur). Preserves aspect ratio (PDF417 is very wide). We draw
     /// via `UIImage.draw(in:)` rather than `CGContext.draw` so the code renders
     /// upright — a manual CG flip would MIRROR the code (fatal for QR/PDF417).
-    private static func upscale(cgImage: CGImage, targetLongEdge: CGFloat) -> UIImage {
+    private static func upscale(cgImage: CGImage, targetLongEdge: CGFloat) -> PlatformImage {
         let w = CGFloat(cgImage.width)
         let h = CGFloat(cgImage.height)
         let scale = max(targetLongEdge / max(w, h), 1)
@@ -175,14 +194,30 @@ enum BarcodeService {
             UIImage(cgImage: cgImage).draw(in: CGRect(origin: .zero, size: size))
         }
     }
+    #else
+    /// macOS upscale (issue #281). The `CIContext`-produced `CGImage` is already
+    /// upright, so we wrap it in an `NSImage` at the target point size WITHOUT
+    /// any coordinate manipulation — that sidesteps the vertical-flip/mirror
+    /// hazard the iOS comment warns about (a mirrored PDF417 fails scanners).
+    /// Crisp upscaling is handled at display time by SwiftUI's
+    /// `.interpolation(.none)` (nearest-neighbour), matching the iOS result.
+    private static func upscale(cgImage: CGImage, targetLongEdge: CGFloat) -> PlatformImage {
+        let w = CGFloat(cgImage.width)
+        let h = CGFloat(cgImage.height)
+        let scale = max(targetLongEdge / max(w, h), 1)
+        let size = NSSize(width: w * scale, height: h * scale)
+        return NSImage(cgImage: cgImage, size: size)
+    }
+    #endif
 
     // MARK: - PDF rasterisation
 
-    /// Render a single PDF page to a UIImage whose longest edge is about
+    #if canImport(UIKit)
+    /// Render a single PDF page to an image whose longest edge is about
     /// `targetLongEdge` points. Used for barcode decoding (needs detail) and
     /// for the one-shot extraction image (so we never depend on the PDF beta
     /// header). White-backed so a transparent page doesn't decode as black.
-    static func render(pdfPage page: PDFPage, targetLongEdge: CGFloat) -> UIImage? {
+    static func render(pdfPage page: PDFPage, targetLongEdge: CGFloat) -> PlatformImage? {
         let pageRect = page.bounds(for: .mediaBox)
         guard pageRect.width > 0, pageRect.height > 0 else { return nil }
         let scale = max(targetLongEdge / max(pageRect.width, pageRect.height), 1)
@@ -203,10 +238,45 @@ enum BarcodeService {
             page.draw(with: .mediaBox, to: cg)
         }
     }
+    #else
+    /// macOS PDF rasterisation (issue #281). A raw `CGContext` bitmap has a
+    /// bottom-left origin (unlike the iOS renderer's top-left context), and PDF
+    /// user space is ALSO bottom-left, so we only scale + translate the origin —
+    /// no y-flip — and the produced `CGImage` reads out upright. White-backed
+    /// for the same decode-safety reason as iOS.
+    static func render(pdfPage page: PDFPage, targetLongEdge: CGFloat) -> PlatformImage? {
+        let pageRect = page.bounds(for: .mediaBox)
+        guard pageRect.width > 0, pageRect.height > 0 else { return nil }
+        let scale = max(targetLongEdge / max(pageRect.width, pageRect.height), 1)
+        let pixelW = Int((pageRect.width * scale).rounded())
+        let pixelH = Int((pageRect.height * scale).rounded())
+        guard pixelW > 0, pixelH > 0,
+              let ctx = CGContext(
+                data: nil,
+                width: pixelW,
+                height: pixelH,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              )
+        else { return nil }
+
+        ctx.interpolationQuality = .high
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.translateBy(x: -pageRect.origin.x, y: -pageRect.origin.y)
+        page.draw(with: .mediaBox, to: ctx)
+
+        guard let cg = ctx.makeImage() else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: pixelW, height: pixelH))
+    }
+    #endif
 
     /// Convenience: render the first page of a PDF's data. Nil when the data
     /// isn't a readable PDF.
-    static func renderFirstPage(pdfData: Data, targetLongEdge: CGFloat = 2000) -> UIImage? {
+    static func renderFirstPage(pdfData: Data, targetLongEdge: CGFloat = 2000) -> PlatformImage? {
         guard let doc = PDFDocument(data: pdfData), let page = doc.page(at: 0) else { return nil }
         return render(pdfPage: page, targetLongEdge: targetLongEdge)
     }
@@ -216,8 +286,8 @@ enum BarcodeService {
     /// Crop `image` to a Vision-normalised bounding box (bottom-left origin),
     /// with a little padding so the quiet zone around the code is preserved.
     /// Returns the original image if the crop can't be computed.
-    static func crop(image: UIImage, toNormalized box: CGRect, padding: CGFloat = 0.06) -> UIImage {
-        guard let cg = image.cgImage else { return image }
+    static func crop(image: PlatformImage, toNormalized box: CGRect, padding: CGFloat = 0.06) -> PlatformImage {
+        guard let cg = image.cgImageCompat else { return image }
         let w = CGFloat(cg.width)
         let h = CGFloat(cg.height)
         // Vision origin is bottom-left; CGImage crop origin is top-left.
@@ -231,9 +301,14 @@ enum BarcodeService {
             height: clamped.height * h
         )
         guard let cropped = cg.cropping(to: rect) else { return image }
+        #if canImport(UIKit)
         return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
+        #else
+        return NSImage(cgImage: cropped, size: NSSize(width: cropped.width, height: cropped.height))
+        #endif
     }
 
+    #if canImport(UIKit)
     private static func cgOrientation(from ui: UIImage.Orientation) -> CGImagePropertyOrientation {
         switch ui {
         case .up:            return .up
@@ -247,4 +322,5 @@ enum BarcodeService {
         @unknown default:    return .up
         }
     }
+    #endif
 }

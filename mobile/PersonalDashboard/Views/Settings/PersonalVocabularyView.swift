@@ -216,7 +216,7 @@ private struct KeywordEditorSheet: View {
                 }
             }
             .navigationTitle(isEditing ? "Edit term" : "New term")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

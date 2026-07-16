@@ -407,7 +407,7 @@ private struct TripEditorSheet: View {
                 }
             }
             .navigationTitle(isEditing ? "Edit trip" : "New trip")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

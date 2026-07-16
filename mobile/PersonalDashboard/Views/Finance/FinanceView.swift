@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Source channel for the "+" capture menu. Drives both the picker
 /// presentation flags and the downstream `ExpenseSource` we tag the
@@ -111,6 +113,11 @@ struct FinanceView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        // Camera capture is iOS-only: `.fullScreenCover` and
+        // UIImagePickerController don't exist on macOS. The menu item that
+        // presents this (below) is likewise gated, so `showingCamera` never
+        // flips on macOS. Photo-library / PDF / statement / manual all stay.
+        #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
             CameraPicker { data in
                 showingCamera = false
@@ -118,6 +125,7 @@ struct FinanceView: View {
             }
             .ignoresSafeArea()
         }
+        #endif
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
             handleCaptureData(data, source: .photoLibrary)
         }
@@ -173,7 +181,9 @@ struct FinanceView: View {
             // .camera path is hidden in the simulator (and other no-camera
             // hardware) — the UIImagePickerController would silently fall
             // back to .photoLibrary, which makes the two top items
-            // confusingly redundant.
+            // confusingly redundant. Also entirely gated off on macOS, which
+            // has no UIImagePickerController camera capture (issue #281).
+            #if os(iOS)
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button {
                     startScan(.camera)
@@ -181,6 +191,7 @@ struct FinanceView: View {
                     Label("Scan receipt", systemImage: "camera")
                 }
             }
+            #endif
             Button {
                 startScan(.photoLibrary)
             } label: {
@@ -593,7 +604,7 @@ struct FinanceView: View {
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .autocorrectionDisabled(true)
-                .textInputAutocapitalization(.never)
+                .noAutocapitalization()
             if !searchText.isEmpty {
                 Button {
                     searchText = ""

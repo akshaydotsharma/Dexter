@@ -134,7 +134,7 @@ struct TagChipPicker: View {
     private var addNewChip: some View {
         if isAddingNew {
             TextField("New tag", text: $newTagText)
-                .textInputAutocapitalization(.never)
+                .noAutocapitalization()
                 .autocorrectionDisabled(true)
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)

@@ -6,7 +6,11 @@ struct SettingsView: View {
 
     @State private var showingResetData: Bool = false
     @State private var showingDataTransfer: Bool = false
+    // Receipts inbox is iOS-only (backed by BackgroundTasks email ingest), so
+    // this flag and its row/sheet are compiled out on macOS (issue #281).
+    #if os(iOS)
     @State private var showingEmailInbox: Bool = false
+    #endif
     @State private var showingParsedFiles: Bool = false
     @State private var showingBackup: Bool = false
 
@@ -29,9 +33,11 @@ struct SettingsView: View {
         .sheet(isPresented: $showingDataTransfer) {
             DataExportImportView()
         }
+        #if os(iOS)
         .sheet(isPresented: $showingEmailInbox) {
             EmailInboxView()
         }
+        #endif
         .sheet(isPresented: $showingParsedFiles) {
             ParsedFilesView()
         }
@@ -116,6 +122,9 @@ struct SettingsView: View {
     private var automationSection: some View {
         SettingsSection(title: "Automation") {
             VStack(spacing: 0) {
+                // Receipts inbox is iOS-only (BackgroundTasks email ingest);
+                // macOS shows only the parsed-files history row (issue #281).
+                #if os(iOS)
                 Button {
                     showingEmailInbox = true
                 } label: {
@@ -130,6 +139,7 @@ struct SettingsView: View {
                     .fill(Tokens.divider)
                     .frame(height: 0.5)
                     .padding(.leading, Space.lg)
+                #endif
 
                 Button {
                     showingParsedFiles = true

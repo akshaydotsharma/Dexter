@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 // MARK: - MarkdownEditor
 //
@@ -13,6 +15,7 @@ import UIKit
 // UITextView gives us `selectedRange`, key-input behavior, and an obvious
 // place to attach the input accessory view.
 
+#if os(iOS)
 struct MarkdownEditor: UIViewRepresentable {
     @Binding var text: String
     @FocusState.Binding var isFocused: Bool
@@ -589,3 +592,40 @@ private struct EditorListMarker {
         }
     }
 }
+#else
+
+// MARK: - macOS MarkdownEditor
+//
+// Native SwiftUI editor for the Mac port (issue #281). macOS has no software
+// keyboard, so the iOS `inputAccessoryView` format toolbar has no analog; and
+// with a full hardware keyboard, typing markdown directly is the natural path.
+// This uses SwiftUI's native `TextEditor` (real focus, scrolling, selection
+// handled by AppKit) with a placeholder overlay, matching the iOS init API so
+// `NotesView` uses it unchanged. The preview tab renders via `MarkdownView`.
+struct MarkdownEditor: View {
+    @Binding var text: String
+    @FocusState.Binding var isFocused: Bool
+    var minHeight: CGFloat = 320
+    var placeholder: String = ""
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if text.isEmpty {
+                Text(placeholder)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 10)
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $text)
+                .focused($isFocused)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 2)
+                .frame(minHeight: minHeight)
+        }
+    }
+}
+#endif

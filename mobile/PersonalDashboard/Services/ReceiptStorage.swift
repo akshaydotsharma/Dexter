@@ -1,5 +1,15 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#else
+// macOS: the receipt encode/downsize path is built on ImageIO +
+// CoreGraphics (portable, no UIKit). `UniformTypeIdentifiers` supplies the
+// JPEG type identifier for the ImageIO destination. Added for the native
+// macOS target (issue #281).
+import ImageIO
+import CoreGraphics
+import UniformTypeIdentifiers
+#endif
 
 /// Errors thrown by ReceiptStorage. Surface to the user when a save / delete
 /// can't complete (rare: disk full, sandbox sealed, etc.).
@@ -67,6 +77,7 @@ final class ReceiptStorage {
     /// row render immediately rather than after compression finishes (#200
     /// follow-up). It reads only immutable value-typed constants and touches
     /// no actor-isolated state, so it's safe to call from any executor.
+    #if canImport(UIKit)
     nonisolated func compress(imageData: Data) throws -> Data {
         guard let image = UIImage(data: imageData) else {
             throw ReceiptStorageError.imageEncodingFailed
@@ -89,6 +100,34 @@ final class ReceiptStorage {
         }
         return firstPass
     }
+    #else
+    /// macOS counterpart to the UIKit `compress`. Same contract (downsize to
+    /// `targetMaxEdge`, JPEG-encode, tighten quality / dimensions until under
+    /// `targetMaxBytes`), built on ImageIO so it needs no AppKit `NSImage`
+    /// round-trip and bakes in EXIF orientation. `nonisolated` for the same
+    /// off-main-actor reason as iOS. Issue #281.
+    nonisolated func compress(imageData: Data) throws -> Data {
+        guard let firstPass = Self.downsampledJPEG(
+            from: imageData, longestEdge: targetMaxEdge, quality: jpegQuality
+        ) else {
+            throw ReceiptStorageError.imageEncodingFailed
+        }
+        if firstPass.count <= targetMaxBytes {
+            return firstPass
+        }
+        if let secondPass = Self.downsampledJPEG(
+            from: imageData, longestEdge: targetMaxEdge, quality: fallbackJpegQuality
+        ), secondPass.count <= targetMaxBytes {
+            return secondPass
+        }
+        if let thirdPass = Self.downsampledJPEG(
+            from: imageData, longestEdge: 1024, quality: fallbackJpegQuality
+        ) {
+            return thirdPass
+        }
+        return firstPass
+    }
+    #endif
 
     /// Persist a pre-compressed JPEG (typically the output of `compress(imageData:)`).
     /// Returned path is relative.
@@ -98,12 +137,21 @@ final class ReceiptStorage {
 
     /// Legacy convenience: compress + save in one shot. Kept for callers that
     /// don't need the compressed bytes (e.g. failure paths that just need
-    /// the receipt on disk and don't call Vision).
+    /// the receipt on disk and don't call Vision). Depends on `compress`, so
+    /// iOS-only (image encoding is UIKit-backed) — issue #281.
+    #if canImport(UIKit)
     func save(imageData: Data, fileExtension: String) throws -> String {
         _ = fileExtension // Kept for API parity; output is always .jpg.
         let compressed = try compress(imageData: imageData)
         return try persist(data: compressed, ext: "jpg")
     }
+    #else
+    func save(imageData: Data, fileExtension: String) throws -> String {
+        _ = fileExtension // Kept for API parity; output is always .jpg.
+        let compressed = try compress(imageData: imageData)
+        return try persist(data: compressed, ext: "jpg")
+    }
+    #endif
 
     /// Save raw PDF data unchanged. Returned path is relative.
     func save(pdfData: Data) throws -> String {
@@ -208,6 +256,7 @@ final class ReceiptStorage {
 
 // MARK: - UIImage downsize helper
 
+#if canImport(UIKit)
 private extension UIImage {
     /// Resize so the longest edge is at most `longestEdge` points, preserving
     /// aspect ratio. Returns nil if the source is degenerate.
@@ -227,3 +276,42 @@ private extension UIImage {
         }
     }
 }
+#else
+
+// MARK: - macOS ImageIO downsample + JPEG encode (issue #281)
+
+private extension ReceiptStorage {
+    /// Decode `data`, downsize so the longest edge is at most `longestEdge`
+    /// pixels (never upscales, matching the iOS `downsized` behaviour), bake in
+    /// EXIF orientation, and re-encode as JPEG at `quality`. Pure ImageIO +
+    /// CoreGraphics, so it runs off the main actor and needs no AppKit.
+    nonisolated static func downsampledJPEG(
+        from data: Data, longestEdge: CGFloat, quality: CGFloat
+    ) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            // Apply the source's EXIF orientation to the pixels so a portrait
+            // photo isn't stored sideways.
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(longestEdge.rounded()),
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+            source, 0, thumbOptions as CFDictionary
+        ) else { return nil }
+
+        let output = NSMutableData()
+        let type = UTType.jpeg.identifier as CFString
+        guard let destination = CGImageDestinationCreateWithData(
+            output, type, 1, nil
+        ) else { return nil }
+        let props: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: quality
+        ]
+        CGImageDestinationAddImage(destination, cgImage, props as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return output as Data
+    }
+}
+#endif

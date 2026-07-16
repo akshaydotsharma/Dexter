@@ -60,7 +60,7 @@ struct TasksView: View {
                             .listRowInsets(EdgeInsets())
                     }
                     .listStyle(.plain)
-                    .listSectionSpacing(0)
+                    .listSectionSpacingCompat(0)
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
                     .refreshable { await viewModel.load() }
@@ -890,9 +890,9 @@ private struct TaskEditorSheet: View {
                         labeled("Google Maps link") {
                             HStack(spacing: Space.sm) {
                                 TextField("Paste a Google Maps link", text: $googleMapsLink)
-                                    .textInputAutocapitalization(.never)
+                                    .noAutocapitalization()
                                     .autocorrectionDisabled(true)
-                                    .keyboardType(.URL)
+                                    .urlKeyboard()
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
                                     .padding(Space.md)
@@ -923,7 +923,7 @@ private struct TaskEditorSheet: View {
                 .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle(isEditing ? "Edit task" : "New task")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)

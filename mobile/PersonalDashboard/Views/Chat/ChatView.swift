@@ -1,17 +1,25 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 struct ChatView: View {
     @State private var viewModel = ChatViewModel()
+    #if os(iOS)
     /// The speech transcriber is owned by the app-level `VoiceCaptureViewModel`
     /// and shared via the environment (issue #150). The inline mic button here
     /// and the global press-and-hold overlay therefore drive the SAME single
     /// transcriber instance, which is what keeps the re-entry guard meaningful
     /// (two instances could each install a tap and crash the audio engine).
+    ///
+    /// iOS-only: voice capture is AVFoundation/Speech-coupled and is gated off
+    /// on macOS (issue #281), where Chat is text-only.
     @Environment(VoiceCaptureViewModel.self) private var voiceVM
     private var transcriber: SpeechTranscriber { voiceVM.transcriber }
+    #endif
     @State private var pendingViewMore: Bool = false
     @State private var keyboardVisible: Bool = false
+    #if os(iOS)
     /// Whatever the user had typed at the moment they tapped the mic.
     /// While recording we replace the input field with `baseline + transcript`
     /// so partials feel live; tapping mic-stop with an empty transcript
@@ -43,6 +51,7 @@ struct ChatView: View {
     /// in the requested 1.5–2s window: long enough to ride out a natural
     /// mid-sentence pause, short enough to feel responsive.
     private let silenceFinalizeDelay: TimeInterval = 1.8
+    #endif
 
     /// Owned here so we can auto-focus the input bar when the user lands on
     /// chat (issue #48 — tapping the chat icon should pop the keyboard
@@ -63,13 +72,9 @@ struct ChatView: View {
                 .ignoresSafeArea()
                 // Tap on empty paper background dismisses the keyboard so
                 // the floating tab bar comes back into view (issue #48).
+                // `hideKeyboard()` is a no-op on macOS (no software keyboard).
                 .onTapGesture {
-                    UIApplication.shared.sendAction(
-                        #selector(UIResponder.resignFirstResponder),
-                        to: nil,
-                        from: nil,
-                        for: nil
-                    )
+                    hideKeyboard()
                 }
 
             VStack(spacing: 0) {
@@ -95,15 +100,11 @@ struct ChatView: View {
                 }
                 .simultaneousGesture(
                     TapGesture().onEnded {
-                        UIApplication.shared.sendAction(
-                            #selector(UIResponder.resignFirstResponder),
-                            to: nil,
-                            from: nil,
-                            for: nil
-                        )
+                        hideKeyboard()
                     }
                 )
 
+                #if os(iOS)
                 if transcriber.isRecording {
                     ListeningIndicator(onStop: stopListening)
                         .padding(.horizontal, Space.lg)
@@ -137,13 +138,14 @@ struct ChatView: View {
                     .onTapGesture { transcriber.errorMessage = nil }
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
+                #endif
 
                 ChatInputBar(
                     text: $viewModel.draftInput,
                     isSending: viewModel.isSending,
                     onSend: send,
-                    onMic: { Task { await toggleMic() } },
-                    isMicActive: transcriber.isRecording,
+                    onMic: micHandler,
+                    isMicActive: micActive,
                     focused: $inputFocused
                 )
                 .padding(.horizontal, Space.lg)
@@ -157,7 +159,9 @@ struct ChatView: View {
             }
             // Animate the listening banner and inline mic-error in/out so they
             // don't pop (their transitions are declared at each call site).
+            #if os(iOS)
             .animation(.easeOut(duration: 0.2), value: transcriber.isRecording)
+            #endif
         }
         .background(Tokens.paper)
         .onAppear {
@@ -179,6 +183,7 @@ struct ChatView: View {
                 }
             }
         }
+        #if os(iOS)
         .onChange(of: transcriber.transcript) { _, newTranscript in
             // Mirror live partials into the existing TextField so the user
             // sees the transcription appear in real time. Append to the
@@ -244,6 +249,7 @@ struct ChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             withAnimation(.easeOut(duration: 0.18)) { keyboardVisible = false }
         }
+        #endif
         .alert("Something went wrong",
                isPresented: Binding(
                    get: { viewModel.errorMessage != nil },
@@ -341,7 +347,28 @@ struct ChatView: View {
         }
     }
 
+    /// Mic tap handler passed to `ChatInputBar`. On macOS there is no voice
+    /// capture (issue #281), so this is `nil` and `ChatInputBar` renders no
+    /// mic button. On iOS it toggles the shared transcriber.
+    private var micHandler: (() -> Void)? {
+        #if os(iOS)
+        return { Task { await toggleMic() } }
+        #else
+        return nil
+        #endif
+    }
+
+    /// Whether the mic is actively recording. Always `false` on macOS.
+    private var micActive: Bool {
+        #if os(iOS)
+        return transcriber.isRecording
+        #else
+        return false
+        #endif
+    }
+
     private func send() {
+        #if os(iOS)
         // Flush any in-flight transcription first so the final partial
         // lands in `draftInput` before the message ships.
         if transcriber.isRecording {
@@ -352,9 +379,11 @@ struct ChatView: View {
         // session can't land in `draftInput` after the message has shipped
         // (issue #151).
         endInlineMicSession()
+        #endif
         Task { await viewModel.send() }
     }
 
+    #if os(iOS)
     private func toggleMic() async {
         if transcriber.isRecording {
             stopListening()
@@ -445,6 +474,7 @@ struct ChatView: View {
         silenceTimer?.invalidate()
         silenceTimer = nil
     }
+    #endif
 
     private var hasLiveAssistantTurn: Bool {
         viewModel.turns.last?.isStreaming == true
@@ -471,6 +501,10 @@ struct ChatView: View {
 /// input-bar stop button so the user has an obvious cancel target right where
 /// their eyes are). Uses the restrained design vocabulary: surface fill,
 /// paper border, danger-tinted dot to echo the input-bar stop affordance.
+///
+/// iOS-only: relies on `WaveformBars` and the voice transcriber, both gated
+/// off on macOS (issue #281).
+#if os(iOS)
 private struct ListeningIndicator: View {
     let onStop: () -> Void
 
@@ -517,6 +551,7 @@ private struct ListeningIndicator: View {
         .accessibilityAddTraits(.isButton)
     }
 }
+#endif
 
 /// Three short bars that bob continuously to suggest live audio. Decorative
 /// only — height is time-driven, not bound to actual mic levels (the

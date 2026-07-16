@@ -435,7 +435,7 @@ private struct NewFolderSheet: View {
                 .padding(Space.lg)
             }
             .navigationTitle("New folder")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.foregroundStyle(Tokens.muted)
