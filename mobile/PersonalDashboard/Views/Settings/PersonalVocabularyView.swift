@@ -31,13 +31,17 @@ struct PersonalVocabularyView: View {
 
     var body: some View {
         ZStack {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
+                // iOS in-view top bar; macOS uses the native window toolbar
+                // via `.macSectionChrome` below (issue #283).
+                #if os(iOS)
                 TopBar(
                     title: "Vocabulary",
                     onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                 )
+                #endif
                 content
             }
 
@@ -49,11 +53,12 @@ struct PersonalVocabularyView: View {
             }
             .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
             .padding(.trailing, 22)
-            .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+            .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .accessibilityLabel("Add term")
         }
         .activeSection(.vocabulary)
+        .macSectionChrome("Vocabulary")
         .sheet(item: $editing) { target in
             KeywordEditorSheet(target: target)
                 .presentationDetents([.medium, .large])

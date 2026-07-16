@@ -17,15 +17,19 @@ struct TasksView: View {
 
     var body: some View {
         ZStack {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
+                // iOS in-view top bar; macOS uses the native window toolbar
+                // via `.macSectionChrome` below (issue #283).
+                #if os(iOS)
                 TopBar(
                     title: "Tasks",
                     onMenu: {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
                     }
                 )
+                #endif
 
                 // Using `List` (not `ScrollView { LazyVStack }`) so each row
                 // can opt into native `.swipeActions`. The list is dressed
@@ -85,7 +89,7 @@ struct TasksView: View {
             }
             .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
             .padding(.trailing, 22)
-            .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+            .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             // Hide the FAB while an inline draft is active — the user is already
             // adding a task inline, so the FAB is redundant and visually distracting.
@@ -94,6 +98,7 @@ struct TasksView: View {
             .animation(.easeOut(duration: 0.15), value: draftBucket)
         }
         .activeSection(.tasks)
+        .macSectionChrome("Tasks")
         // Live-refresh when the voice-capture or chat path writes a task.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
             Task { await viewModel.load() }

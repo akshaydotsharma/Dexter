@@ -23,10 +23,11 @@ struct SettingsView: View {
 
     var body: some View {
         ZStack {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper.canvasIgnoresSafeArea()
             rootContent
         }
         .activeSection(.settings)
+        .macSectionChrome("Settings")
         .sheet(isPresented: $showingResetData) {
             ResetDataView()
         }
@@ -50,10 +51,14 @@ struct SettingsView: View {
 
     private var rootContent: some View {
         VStack(spacing: 0) {
+            // iOS in-view top bar; macOS uses the native window toolbar
+            // via `.macSectionChrome` on the body (issue #283).
+            #if os(iOS)
             TopBar(
                 title: "Settings",
                 onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
             )
+            #endif
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.xl) {

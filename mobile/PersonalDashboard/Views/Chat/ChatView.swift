@@ -69,7 +69,10 @@ struct ChatView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Tokens.paper
-                .ignoresSafeArea()
+                // Full-bleed on iOS; keeps the top title-bar inset on macOS so
+                // the split view reserves the title-bar region and the sidebar
+                // keeps its top inset (issue #283).
+                .canvasIgnoresSafeArea()
                 // Tap on empty paper background dismisses the keyboard so
                 // the floating tab bar comes back into view (issue #48).
                 // `hideKeyboard()` is a no-op on macOS (no software keyboard).
@@ -85,12 +88,16 @@ struct ChatView: View {
                 // keyboard. The ChatInputBar is intentionally outside this
                 // gesture so tapping the text field still focuses it.
                 VStack(spacing: 0) {
+                    // iOS renders the in-view top bar; macOS uses the native
+                    // window toolbar via `.macSectionChrome` below (issue #283).
+                    #if os(iOS)
                     TopBar(
                         title: viewModel.turns.isEmpty ? nil : "Chat",
                         onMenu: {
                             router.openDrawer()
                         }
                     )
+                    #endif
 
                     if viewModel.turns.isEmpty {
                         emptyState
@@ -155,7 +162,15 @@ struct ChatView: View {
                 // hides and the keyboard pushes the input up directly. The
                 // gap above the tab bar is intentionally small so the input
                 // sits visually close to the floating pill.
+                //
+                // macOS has no tab bar and no software keyboard, so the input
+                // bar sits a modest inset above the window's bottom edge
+                // instead of reserving the 74pt tab-bar strip (issue #283).
+                #if os(macOS)
+                .padding(.bottom, Space.lg)
+                #else
                 .padding(.bottom, keyboardVisible ? Space.md : BottomTabBarMetrics.height)
+                #endif
             }
             // Animate the listening banner and inline mic-error in/out so they
             // don't pop (their transitions are declared at each call site).
@@ -164,6 +179,7 @@ struct ChatView: View {
             #endif
         }
         .background(Tokens.paper)
+        .macSectionChrome("Chat")
         .onAppear {
             // Land in keyboard-up state on first appearance. The small
             // delay gives SwiftUI time to lay the view tree out before

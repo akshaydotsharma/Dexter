@@ -15,7 +15,7 @@ struct NotesView: View {
 
     var body: some View {
         ZStack {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
                 if let id = selectedNoteId, let note = viewModel.notes.first(where: { $0.id == id }) {
@@ -43,15 +43,20 @@ struct NotesView: View {
                     )
                     folderNotesList(folder)
                 } else {
+                    // iOS: in-view top bar, and the create-folder affordance
+                    // overlays the top-right of the list area so it doesn't
+                    // take layout space — Folders/Unfiled start at the same
+                    // vertical level as Lists/Tasks.
+                    //
+                    // macOS: no top bar; the folder-add is a native toolbar
+                    // button (see `.macSectionChrome` below) and the list sits
+                    // flush under the window title bar, so the overlay hack —
+                    // which mis-aligned the UNFILED header — is dropped (#283).
+                    #if os(iOS)
                     TopBar(
                         title: "Notes",
                         onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                     )
-                    // Create-folder affordance overlays the top-right of the
-                    // list area so it doesn't take layout space — the
-                    // Folders/Unfiled sections start at the same vertical
-                    // level as Lists/Tasks. The button sits between the top
-                    // bar (with the AS pip) and the first row of content.
                     rootList
                         .overlay(alignment: .topTrailing) {
                             Button {
@@ -66,6 +71,9 @@ struct NotesView: View {
                             .accessibilityLabel("New folder")
                             .padding(.trailing, Space.sm)
                         }
+                    #else
+                    rootList
+                    #endif
                 }
             }
 
@@ -77,11 +85,24 @@ struct NotesView: View {
                 }
                 .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
                 .padding(.trailing, 22)
-                .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }
         .activeSection(.notes)
+        .macSectionChrome("Notes") {
+            // Native folder-add lives in the toolbar on macOS. Only at the
+            // root list (no note / folder open), mirroring the iOS overlay's
+            // visibility (issue #283).
+            if selectedNoteId == nil && selectedFolder == nil {
+                Button {
+                    showingNewFolder = true
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .accessibilityLabel("New folder")
+            }
+        }
         // Live-refresh when the voice-capture or chat path writes a note.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
             Task { await viewModel.load() }
