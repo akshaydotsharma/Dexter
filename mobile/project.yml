@@ -148,6 +148,30 @@ targets:
       - path: PersonalDashboard/Views/Components/MarkdownView.swift
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
+      # Chat (issue #281). Text chat only — the voice capture path
+      # (VoiceCaptureViewModel / SpeechTranscriber / overlay / InkOrb /
+      # WaveformBars) is AVFoundation/Speech-coupled and gated off with
+      # `#if os(iOS)` inside ChatView, so those files stay out of this target.
+      - path: PersonalDashboard/App/AppConfig.swift
+      - path: PersonalDashboard/Views/Chat/ChatView.swift
+      - path: PersonalDashboard/Views/Chat/ChatInputBar.swift
+      - path: PersonalDashboard/Views/Chat/ChatComponents.swift
+      - path: PersonalDashboard/Views/Chat/ChatResultCard.swift
+      - path: PersonalDashboard/ViewModels/ChatViewModel.swift
+      - path: PersonalDashboard/AI/ChatStream.swift
+      - path: PersonalDashboard/AI/AnthropicClient.swift
+      - path: PersonalDashboard/AI/AssistantContextBuilder.swift
+      - path: PersonalDashboard/AI/ChatDraft.swift
+      - path: PersonalDashboard/AI/ChatActionResult.swift
+      - path: PersonalDashboard/AI/ToolDefinitions.swift
+      - path: PersonalDashboard/AI/ExecuteDraftAction.swift
+      - path: PersonalDashboard/Services/AIStreamingService.swift
+      - path: PersonalDashboard/Services/FXService.swift
+      - path: PersonalDashboard/Services/ExpenseService.swift
+      - path: PersonalDashboard/Services/PersonService.swift
+      - path: PersonalDashboard/Services/EventService.swift
+      - path: PersonalDashboard/Services/RecurringExpenseService.swift
+      - path: PersonalDashboard/Services/RecurringExpenseNotifications.swift
       - path: PersonalDashboard/Resources/Fonts
         type: folder
         buildPhase: resources
@@ -161,6 +185,11 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: "14.0"
         ITSAppUsesNonExemptEncryption: false
+        # Anthropic Messages API key for on-device Chat (issue #281). Mirrors
+        # the iOS target: env var wins for `xcodebuild ANTHROPIC_API_KEY=…`,
+        # else this $(ANTHROPIC_API_KEY) build setting. Empty in a plain Xcode
+        # build, in which case Chat degrades gracefully ("not configured").
+        ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
         # Custom fonts ship as a Fonts/ folder reference; register them for
         # AppKit/SwiftUI. `.custom()` falls back to system font if this fails.
         ATSApplicationFontsPath: Fonts

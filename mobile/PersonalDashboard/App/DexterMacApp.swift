@@ -63,6 +63,8 @@ private struct MacRootView: View {
     @ViewBuilder
     private func detailView(for section: AppSection) -> some View {
         switch section {
+        case .chat:
+            ChatView(router: router)
         case .tasks:
             TasksView(router: router)
         case .today:
