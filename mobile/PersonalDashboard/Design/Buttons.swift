@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 enum ButtonKind {
     case primary
@@ -182,7 +181,7 @@ struct GlassButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
             .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
             .onChange(of: configuration.isPressed) { _, pressed in
-                if pressed { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                if pressed { Haptics.light() }
             }
     }
 }

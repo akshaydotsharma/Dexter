@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.akshaysharma
   deploymentTarget:
     iOS: "17.0"
+    macOS: "14.0"
   developmentLanguage: en
   createIntermediateGroups: true
 
@@ -15,6 +16,8 @@ targets:
         excludes:
           - "Resources/Preview Content/**"
           - "Resources/Fonts/**"
+          - "App/DexterMacApp.swift"   # macOS @main; belongs only to DexterMac target
+          - "InfoMac.plist"            # generated Info.plist for the macOS target
       - path: PersonalDashboard/Resources/Preview Content
         type: folder
       - path: PersonalDashboard/Resources/Fonts
@@ -108,6 +111,60 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
 
+  # Native macOS app (issue #281). Shares the portable model/design/service
+  # layer with the iOS target via an explicit curated source list — only files
+  # that compile on macOS (UIKit shimmed behind `#if canImport(UIKit)`) are
+  # included. The first feature is Tasks; the list grows as surfaces are ported.
+  DexterMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: PersonalDashboard/Models
+      - path: PersonalDashboard/Cache/SwiftDataStore.swift
+      - path: PersonalDashboard/Cache/StoreChange.swift
+      - path: PersonalDashboard/Design
+        excludes:
+          - "ListAppearance.swift"   # UIImage(systemName:), Lists-only, not needed by Tasks
+      - path: PersonalDashboard/App/AppRouter.swift
+      - path: PersonalDashboard/App/DexterMacApp.swift
+      - path: PersonalDashboard/ViewModels/TodosViewModel.swift
+      - path: PersonalDashboard/Services/TodoService.swift
+      - path: PersonalDashboard/Services/MapsLinkResolver.swift
+      - path: PersonalDashboard/Services/APIError.swift
+      - path: PersonalDashboard/Views/Tasks
+      - path: PersonalDashboard/Views/Components/GhostAddRow.swift
+      - path: PersonalDashboard/Views/Shell/TopBar.swift
+      - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
+      - path: PersonalDashboard/Resources/Fonts
+        type: folder
+        buildPhase: resources
+      - path: PersonalDashboard/Resources/Assets.xcassets
+        buildPhase: resources
+    info:
+      path: PersonalDashboard/InfoMac.plist
+      properties:
+        CFBundleDisplayName: Dexter
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: "14.0"
+        ITSAppUsesNonExemptEncryption: false
+        # Custom fonts ship as a Fonts/ folder reference; register them for
+        # AppKit/SwiftUI. `.custom()` falls back to system font if this fails.
+        ATSApplicationFontsPath: Fonts
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard.mac
+        DEVELOPMENT_TEAM: "PJFPUSSNUW"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        ENABLE_PREVIEWS: YES
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # Dev-only build run from Xcode. Sandbox off keeps file access simple
+        # for the later iCloud-backup-restore milestone; revisit before any
+        # signed distribution.
+        ENABLE_APP_SANDBOX: NO
+
   PersonalDashboardUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -158,3 +215,9 @@ schemes:
       targets:
         - PersonalDashboardTests
         - PersonalDashboardUITests
+  DexterMac:
+    build:
+      targets:
+        DexterMac: all
+    run:
+      config: Debug

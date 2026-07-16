@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Swipe-left-to-delete with circular red trash + gray fade card,
 /// keyed to a UIKit-bridged horizontal-only pan recognizer so the
@@ -24,10 +26,22 @@ import UIKit
 /// into the row.
 extension View {
     func swipeToDeleteTrash(perform action: @escaping () -> Void) -> some View {
-        modifier(SwipeToDeleteWithTint(onDelete: action))
+        #if canImport(UIKit)
+        return modifier(SwipeToDeleteWithTint(onDelete: action))
+        #else
+        // macOS: the custom UIKit pan bridge below doesn't exist. Rows live
+        // inside a `List`, so the native trailing swipe-to-delete gives the
+        // same affordance with a real destructive full-swipe.
+        return self.swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive, action: action) {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        #endif
     }
 }
 
+#if canImport(UIKit)
 private struct SwipeToDeleteWithTint: ViewModifier {
     let onDelete: () -> Void
 
@@ -367,3 +381,4 @@ private struct HorizontalPanCapture<Content: View>: UIViewRepresentable {
         var host: UIHostingController<AnyView>?
     }
 }
+#endif

@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - Section identity
 
@@ -66,10 +70,21 @@ extension Color {
     }
 
     /// Light/dark pair. Resolved at render time via the system color scheme.
+    /// Backed by a platform dynamic color so a single `Color` re-resolves when
+    /// the appearance flips, on both UIKit (iOS) and AppKit (macOS).
     static func paper(_ light: UInt32, _ dark: UInt32) -> Color {
-        Color(UIColor { trait in
+        #if canImport(UIKit)
+        return Color(UIColor { trait in
             UIColor(Color(hex: trait.userInterfaceStyle == .dark ? dark : light))
         })
+        #elseif canImport(AppKit)
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor(Color(hex: isDark ? dark : light))
+        })
+        #else
+        return Color(hex: light)
+        #endif
     }
 }
 

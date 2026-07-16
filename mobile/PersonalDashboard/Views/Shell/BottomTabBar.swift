@@ -1,19 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Layout metrics for the bottom tab bar so surfaces can reserve space
-/// above their content (especially sticky-bottom UI like the chat input).
-///
-/// `height` is the visual footprint occupied above the home-indicator safe
-/// area: pill height + the bottom gap between the pill and the safe-area
-/// inset. The chat circle's lift above the pill is intentionally NOT
-/// included — surfaces reserve space for the pill body, and the lifted
-/// circle is allowed to overlap the surface above (it's a floating
-/// element, not a strip of chrome).
-enum BottomTabBarMetrics {
-    /// Total height reserved above the bottom safe area (pill + bottom gap).
-    static let height: CGFloat = 74
-}
+// `BottomTabBarMetrics` moved to BottomTabBarMetrics.swift (UIKit-free) so
+// surfaces can reserve space without depending on this iOS-only view.
 
 /// Floating-pill bottom tab bar (Navigation v3, issue #48).
 ///
