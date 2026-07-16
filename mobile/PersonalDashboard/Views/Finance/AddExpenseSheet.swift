@@ -1,7 +1,44 @@
 import SwiftUI
 import SwiftData
 import PDFKit
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
+
+/// Cross-platform receipt image alias + loaders (issue #281). The receipt
+/// viewers are backed by UIKit on iOS and AppKit on macOS; both take the
+/// platform-native image type, so a single alias keeps their call sites
+/// identical.
+#if canImport(UIKit)
+typealias ReceiptPlatformImage = UIImage
+#else
+typealias ReceiptPlatformImage = NSImage
+#endif
+
+/// Load a receipt image file into the platform-native image type. Returns nil
+/// when the file is missing or not a decodable image (e.g. a PDF).
+func loadReceiptPlatformImage(_ url: URL) -> ReceiptPlatformImage? {
+    #if canImport(UIKit)
+    return UIImage(contentsOfFile: url.path)
+    #else
+    return NSImage(contentsOfFile: url.path)
+    #endif
+}
+
+extension Image {
+    /// Build a SwiftUI `Image` from a receipt file on disk, cross-platform.
+    /// Fails (returns nil) when the file can't be decoded as an image.
+    init?(receiptFileURL url: URL) {
+        guard let platformImage = loadReceiptPlatformImage(url) else { return nil }
+        #if canImport(UIKit)
+        self.init(uiImage: platformImage)
+        #else
+        self.init(nsImage: platformImage)
+        #endif
+    }
+}
 
 /// Editor target for the AddExpense / EditExpense sheet.
 ///
@@ -221,7 +258,7 @@ struct AddExpenseSheet: View {
                 }
             }
             .navigationTitle(navigationTitleText)
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -349,7 +386,7 @@ struct AddExpenseSheet: View {
             Text("Amount").eyebrow()
             HStack(spacing: Space.sm) {
                 TextField("0.00", text: $amountText)
-                    .keyboardType(.decimalPad)
+                    .decimalKeyboard()
                     .font(.edDisplay)
                     .foregroundStyle(Tokens.ink)
                     .focused($amountFocused)
@@ -1297,7 +1334,7 @@ struct PersonPickerSheet: View {
                 .background(Tokens.paper)
             }
             .navigationTitle("Person")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1427,7 +1464,7 @@ struct EventPickerSheet: View {
                 .background(Tokens.paper)
             }
             .navigationTitle("Event")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1556,8 +1593,8 @@ struct ReceiptThumbnailImage: View {
                let url = ReceiptStorage.shared.load(relativePath: path) {
                 if isPDF(path) {
                     pdfPlaceholder
-                } else if let image = UIImage(contentsOfFile: url.path) {
-                    Image(uiImage: image)
+                } else if let image = Image(receiptFileURL: url) {
+                    image
                         .resizable()
                         .scaledToFill()
                 } else {
@@ -1616,7 +1653,7 @@ struct ReceiptFullViewer: View {
                 content
             }
             .navigationTitle("Receipt")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -1632,7 +1669,7 @@ struct ReceiptFullViewer: View {
             if relativePath.lowercased().hasSuffix(".pdf") {
                 PDFKitView(url: url)
                     .ignoresSafeArea(edges: .bottom)
-            } else if let image = UIImage(contentsOfFile: url.path) {
+            } else if let image = loadReceiptPlatformImage(url) {
                 ZoomableImageView(image: image)
                     .ignoresSafeArea(edges: .bottom)
             } else {
@@ -1650,8 +1687,9 @@ struct ReceiptFullViewer: View {
     }
 }
 
-// MARK: - Zoomable image (UIScrollView-backed)
+// MARK: - Zoomable image (scroll-view-backed)
 
+#if os(iOS)
 /// A `UIScrollView` wrapping a `UIImageView`, exposing native pinch-to-zoom,
 /// pan-while-zoomed, and double-tap-to-toggle. `viewForZooming` is what makes
 /// the scroll view drive the zoom; the image is centred in `layoutSubviews`
@@ -1775,12 +1813,51 @@ private final class CenteringScrollView: UIScrollView {
         imageView.frame = frame
     }
 }
+#else
+/// macOS receipt image viewer (issue #281). An `NSScrollView` with
+/// `allowsMagnification` gives trackpad pinch-to-zoom and drag-to-pan for
+/// free; the document `NSImageView` is sized to the image's natural size and
+/// scaled proportionally. No hand-rolled gesture math, matching the iOS
+/// scroll-view approach.
+private struct ZoomableImageView: NSViewRepresentable {
+    let image: NSImage
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.allowsMagnification = true
+        scrollView.minMagnification = 1.0
+        scrollView.maxMagnification = 5.0
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+
+        let imageView = NSImageView()
+        imageView.image = image
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.frame = NSRect(origin: .zero, size: image.size)
+        scrollView.documentView = imageView
+
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        // Keep the document view sized to the current image; the image is
+        // fixed for the viewer's life, so nothing to reconcile.
+        (nsView.documentView as? NSImageView)?.image = image
+    }
+}
+#endif
 
 // MARK: - PDF (PDFKit-backed)
 
 /// A `PDFView` with `autoScales = true`, which gives native pinch-zoom,
 /// page scrolling, and a fit-to-width initial layout. Loaded from the
-/// on-disk receipt URL.
+/// on-disk receipt URL. `PDFView` is UIKit-backed on iOS and AppKit-backed
+/// on macOS, so the representable splits by platform but shares the same
+/// configuration (issue #281).
+#if os(iOS)
 private struct PDFKitView: UIViewRepresentable {
     let url: URL
 
@@ -1800,3 +1877,24 @@ private struct PDFKitView: UIViewRepresentable {
         }
     }
 }
+#else
+private struct PDFKitView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.backgroundColor = .clear
+        pdfView.document = PDFDocument(url: url)
+        return pdfView
+    }
+
+    func updateNSView(_ nsView: PDFView, context: Context) {
+        if nsView.document == nil {
+            nsView.document = PDFDocument(url: url)
+        }
+    }
+}
+#endif

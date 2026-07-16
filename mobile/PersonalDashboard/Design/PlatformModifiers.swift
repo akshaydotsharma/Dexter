@@ -28,6 +28,17 @@ extension View {
         #endif
     }
 
+    /// Decimal-pad keyboard on iOS; no-op on macOS (hardware keyboard, no
+    /// keyboard type). Used by amount fields in the Finance surface (#281).
+    @ViewBuilder
+    func decimalKeyboard() -> some View {
+        #if os(iOS)
+        self.keyboardType(.decimalPad)
+        #else
+        self
+        #endif
+    }
+
     /// Inline nav-bar title on iOS; no-op on macOS, where the title renders in
     /// the window titlebar and there is no display-mode concept.
     @ViewBuilder

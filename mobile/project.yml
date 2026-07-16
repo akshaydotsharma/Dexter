@@ -192,6 +192,28 @@ targets:
       - path: PersonalDashboard/Services/DataArchive.swift
       - path: PersonalDashboard/Views/Finance/ExpenseRow.swift
       - path: PersonalDashboard/Views/Finance/PersonEventBadge.swift
+      # Finance surface (issue #281). The camera capture path
+      # (CameraPicker.swift, UIImagePickerController) is iOS-only and stays OUT
+      # of this target; FinanceView gates its menu item + fullScreenCover with
+      # `#if os(iOS)`. Photo-library (PhotosUI), PDF + statement import
+      # (.fileImporter), manual entry, and recurring expenses all work on
+      # macOS. Receipt viewers in AddExpenseSheet are AppKit variants behind
+      # `#if os(iOS)/#else`. BarcodeService / APIClient are NOT pulled by the
+      # Finance chain (Trips-only) so they stay out.
+      - path: PersonalDashboard/Views/Finance/FinanceView.swift
+      - path: PersonalDashboard/Views/Finance/AddExpenseSheet.swift
+      - path: PersonalDashboard/Views/Finance/FinanceFilterBar.swift
+      - path: PersonalDashboard/Views/Finance/FinanceProcessingRow.swift
+      - path: PersonalDashboard/Views/Finance/PrefilledExpense.swift
+      - path: PersonalDashboard/Views/Finance/PhotoLibraryPicker.swift
+      - path: PersonalDashboard/Views/Finance/PDFPicker.swift
+      - path: PersonalDashboard/Views/Finance/RecurringExpensesView.swift
+      - path: PersonalDashboard/Views/Finance/RecurringExpenseEditorSheet.swift
+      - path: PersonalDashboard/AI/StatementImporter.swift
+      - path: PersonalDashboard/AI/ExpenseDedupe.swift
+      - path: PersonalDashboard/AI/AnthropicClient+ExtractExpense.swift
+      - path: PersonalDashboard/AI/AnthropicClient+ExtractStatement.swift
+      - path: PersonalDashboard/AI/PDFChunker.swift
       - path: PersonalDashboard/Resources/Fonts
         type: folder
         buildPhase: resources

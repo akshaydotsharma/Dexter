@@ -65,7 +65,7 @@ struct RecurringExpenseEditorSheet: View {
                 }
             }
             .navigationTitle(isEditing ? "Edit recurring" : "New recurring")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -90,7 +90,7 @@ struct RecurringExpenseEditorSheet: View {
             Text("Monthly amount").eyebrow()
             HStack(spacing: Space.sm) {
                 TextField("0.00", text: $amountText)
-                    .keyboardType(.decimalPad)
+                    .decimalKeyboard()
                     .font(.edDisplay)
                     .foregroundStyle(Tokens.ink)
                     .focused($amountFocused)
