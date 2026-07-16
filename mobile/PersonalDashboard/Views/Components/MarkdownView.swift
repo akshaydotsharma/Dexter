@@ -68,11 +68,11 @@ struct MarkdownView: View {
             .font(bodyFont)
             .lineLimit(lineLimit)
 
-        case .orderedList(let items):
+        case .orderedList(let start, let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(idx + 1).")
+                        Text("\(start + idx).")
                             .foregroundStyle(Tokens.muted)
                             .monospacedDigit()
                         inlineText(item)
@@ -113,6 +113,11 @@ struct MarkdownView: View {
                 .fill(Tokens.divider)
                 .frame(height: 0.5)
                 .padding(.vertical, 4)
+
+        case .spacer(let lines):
+            // Intentional blank lines the user typed. ~18pt per blank line
+            // beyond the first, on top of the normal inter-block spacing.
+            Color.clear.frame(height: CGFloat(lines) * 18)
         }
     }
 
@@ -191,10 +196,11 @@ enum MarkdownBlock: Hashable {
     case heading(level: Int, inline: String)
     case paragraph(String)
     case unorderedList([String])
-    case orderedList([String])
+    case orderedList(start: Int, items: [String])
     case blockquote(String)
     case codeBlock(String)
     case divider
+    case spacer(lines: Int)
 }
 
 // MARK: - Parser
@@ -213,7 +219,21 @@ enum MarkdownParser {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
 
             if trimmed.isEmpty {
-                i += 1
+                // Count the run of blank lines. A single blank is a normal block
+                // separator (collapses, as in standard markdown). Two or more
+                // consecutive blanks are treated as intentional vertical space —
+                // the user pressed Return repeatedly — and preserved. Leading and
+                // trailing blank runs are dropped so the preview has no stray
+                // gap at the very top or bottom.
+                var blanks = 0
+                while i < lines.count,
+                      lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                    blanks += 1
+                    i += 1
+                }
+                if blanks >= 2, !blocks.isEmpty, i < lines.count {
+                    blocks.append(.spacer(lines: blanks - 1))
+                }
                 continue
             }
 
@@ -272,6 +292,10 @@ enum MarkdownParser {
             }
 
             if isOrderedItem(trimmed) {
+                // Start from the number the user actually typed, so a list that
+                // resumes at "2." after an intervening bullet sub-list renders
+                // as 2. instead of restarting at 1.
+                let start = orderedStartNumber(trimmed)
                 var items: [String] = []
                 while i < lines.count {
                     let t = lines[i].trimmingCharacters(in: .whitespaces)
@@ -279,7 +303,7 @@ enum MarkdownParser {
                     items.append(stripOrderedMarker(t))
                     i += 1
                 }
-                blocks.append(.orderedList(items))
+                blocks.append(.orderedList(start: start, items: items))
                 continue
             }
 
@@ -340,6 +364,16 @@ enum MarkdownParser {
         let after = line.index(after: dot)
         guard after < line.endIndex, line[after] == " " else { return line }
         return String(line[line.index(after: after)...])
+    }
+
+    /// The leading integer of an ordered-list line ("2. foo" -> 2), or 1 if it
+    /// can't be parsed. Only called on lines that already pass `isOrderedItem`.
+    private static func orderedStartNumber(_ line: String) -> Int {
+        var idx = line.startIndex
+        while idx < line.endIndex, line[idx].isNumber {
+            idx = line.index(after: idx)
+        }
+        return Int(line[line.startIndex..<idx]) ?? 1
     }
 
     private static func isSpecialLine(_ line: String) -> Bool {

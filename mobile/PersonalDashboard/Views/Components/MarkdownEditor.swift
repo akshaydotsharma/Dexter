@@ -101,6 +101,43 @@ struct MarkdownEditor: UIViewRepresentable {
             (textView as? PaddedTextView)?.refreshPlaceholder()
         }
 
+        /// Return-key list continuation. Pressing Return on a list line inserts
+        /// the next marker (bullets repeat, numbers increment). Pressing Return
+        /// on an empty list item removes the marker and exits the list.
+        func textView(_ textView: UITextView,
+                      shouldChangeTextIn range: NSRange,
+                      replacementText replacement: String) -> Bool {
+            guard replacement == "\n" else { return true }
+            let ns = textView.text as NSString
+            let lineRange = ns.lineRange(for: NSRange(location: range.location, length: 0))
+            var line = ns.substring(with: lineRange)
+            if line.hasSuffix("\n") { line.removeLast() }
+
+            guard let marker = EditorListMarker(line: line) else { return true }
+
+            let updated: String
+            let cursor: Int
+            if marker.content.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Empty item: strip the marker and drop out of the list.
+                let markerRange = NSRange(location: lineRange.location,
+                                          length: (marker.raw as NSString).length)
+                updated = ns.replacingCharacters(in: markerRange, with: "")
+                cursor = markerRange.location
+            } else {
+                // Continue the list with the next marker.
+                let insertion = "\n" + marker.next
+                updated = ns.replacingCharacters(in: range, with: insertion)
+                cursor = range.location + (insertion as NSString).length
+            }
+
+            textView.text = updated
+            textView.selectedRange = NSRange(location: cursor, length: 0)
+            parent.text = updated
+            (textView as? PaddedTextView)?.refreshPlaceholder()
+            textView.invalidateIntrinsicContentSize()
+            return false
+        }
+
         func textViewDidBeginEditing(_ textView: UITextView) {
             DispatchQueue.main.async { [weak self] in
                 self?.parent.isFocused = true
@@ -258,7 +295,7 @@ final class MarkdownFormatToolbarView: UIView {
             ("bullet", "•",
                 { [weak self] in self?.prefixLines("- ") }),
             ("numbered", "1.",
-                { [weak self] in self?.prefixLines("1. ") }),
+                { [weak self] in self?.numberLines() }),
             ("quote", "❝",
                 { [weak self] in self?.prefixLines("> ") }),
             ("code", "</>",
@@ -404,6 +441,69 @@ final class MarkdownFormatToolbarView: UIView {
         onChange?()
     }
 
+    /// Numbers the selected lines sequentially (1., 2., 3.…). Re-tapping when
+    /// every content line is already numbered strips the markers (toggle off).
+    /// Unlike `prefixLines`, the marker is computed per line, so multi-digit
+    /// markers (10., 11.) toggle off cleanly instead of dropping a fixed count.
+    private func numberLines() {
+        guard let tv = textViewProvider?() else { return }
+        let ns = tv.text as NSString
+        let range = tv.selectedRange
+        let lineRange = ns.lineRange(for: range)
+        let lines = ns.substring(with: lineRange).components(separatedBy: "\n")
+
+        // lineRange leaves a trailing empty element on multi-line selections;
+        // that isn't a list line.
+        func isTrailingEmpty(_ idx: Int, _ line: String) -> Bool {
+            idx == lines.count - 1 && line.isEmpty
+        }
+        let contentLines = lines.enumerated().filter { !isTrailingEmpty($0.offset, $0.element) }
+        let allNumbered = !contentLines.isEmpty
+            && contentLines.allSatisfy { orderedMarkerLength($0.element) != nil }
+
+        var counter = 0
+        let newLines: [String] = lines.enumerated().map { idx, line in
+            if isTrailingEmpty(idx, line) { return line }
+            if allNumbered {
+                return String(line.dropFirst(orderedMarkerLength(line) ?? 0))
+            }
+            counter += 1
+            return "\(counter). " + line
+        }
+
+        let replacement = newLines.joined(separator: "\n")
+        let updated = ns.replacingCharacters(in: lineRange, with: replacement)
+        tv.text = updated
+        let replacementNS = replacement as NSString
+        if range.length == 0 {
+            // Cursor only: collapse it at the end of the (now-numbered) line so
+            // typing continues naturally.
+            var end = lineRange.location + replacementNS.length
+            if replacement.hasSuffix("\n") { end -= 1 }
+            let safe = max(0, min(end, (updated as NSString).length))
+            tv.selectedRange = NSRange(location: safe, length: 0)
+        } else {
+            // Keep the block selected so a second tap toggles the numbering off.
+            tv.selectedRange = NSRange(location: lineRange.location, length: replacementNS.length)
+        }
+        onChange?()
+    }
+
+    /// Length of a leading ordered-list marker ("12. " -> 4), or nil if the
+    /// line doesn't begin with one.
+    private func orderedMarkerLength(_ line: String) -> Int? {
+        var idx = line.startIndex
+        var digits = 0
+        while idx < line.endIndex, line[idx].isNumber, digits < 3 {
+            digits += 1
+            idx = line.index(after: idx)
+        }
+        guard digits >= 1, idx < line.endIndex, line[idx] == "." else { return nil }
+        let after = line.index(after: idx)
+        guard after < line.endIndex, line[after] == " " else { return nil }
+        return digits + 2
+    }
+
     /// Cycles the heading level of the current line: none → `# ` → `## ` →
     /// `### ` → none. Operates on the line containing the cursor.
     private func cycleHeading() {
@@ -437,5 +537,55 @@ final class MarkdownFormatToolbarView: UIView {
         let safeCursor = max(0, min(newCursor, (updated as NSString).length))
         tv.selectedRange = NSRange(location: safeCursor, length: 0)
         onChange?()
+    }
+}
+
+// MARK: - EditorListMarker
+//
+// Parses a leading list marker on an editor line so the Return key can
+// continue the list. Ordered markers carry their integer so the next line
+// increments; unordered markers repeat their bullet character.
+
+private struct EditorListMarker {
+    private enum Kind {
+        case unordered(Character)
+        case ordered(Int)
+    }
+
+    private let kind: Kind
+    /// The leading marker including its trailing space ("- " or "3. ").
+    let raw: String
+    /// The line text after the marker.
+    let content: String
+
+    init?(line: String) {
+        for bullet in ["- ", "* ", "+ "] where line.hasPrefix(bullet) {
+            kind = .unordered(bullet.first!)
+            raw = bullet
+            content = String(line.dropFirst(bullet.count))
+            return
+        }
+
+        var idx = line.startIndex
+        var digits = 0
+        while idx < line.endIndex, line[idx].isNumber, digits < 3 {
+            digits += 1
+            idx = line.index(after: idx)
+        }
+        guard digits >= 1, idx < line.endIndex, line[idx] == "." else { return nil }
+        let space = line.index(after: idx)
+        guard space < line.endIndex, line[space] == " " else { return nil }
+        guard let number = Int(line[line.startIndex..<idx]) else { return nil }
+        kind = .ordered(number)
+        raw = String(line[line.startIndex...space])
+        content = String(line[line.index(after: space)...])
+    }
+
+    /// The marker that opens the next line.
+    var next: String {
+        switch kind {
+        case .unordered(let char): return "\(char) "
+        case .ordered(let number): return "\(number + 1). "
+        }
     }
 }
