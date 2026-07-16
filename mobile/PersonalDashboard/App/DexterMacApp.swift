@@ -69,6 +69,8 @@ private struct MacRootView: View {
             TodayView(router: router)
         case .lists:
             ListsView(router: router)
+        case .notes:
+            NotesView(router: router)
         case .vocabulary:
             PersonalVocabularyView(router: router)
         case .activity:

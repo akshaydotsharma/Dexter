@@ -137,11 +137,14 @@ targets:
       - path: PersonalDashboard/Views/Tasks
       - path: PersonalDashboard/Views/Lists/ListsView.swift
       - path: PersonalDashboard/Views/Today/TodayView.swift
+      - path: PersonalDashboard/Views/Notes/NotesView.swift
+      - path: PersonalDashboard/Views/Components/MarkdownEditor.swift
       - path: PersonalDashboard/Views/Activity/ActivityView.swift
       - path: PersonalDashboard/Views/Finance/FinanceDashboardBand.swift
       - path: PersonalDashboard/Views/Settings/PersonalVocabularyView.swift
       - path: PersonalDashboard/Views/Components/GhostAddRow.swift
       - path: PersonalDashboard/Views/Components/DeleteRowButton.swift
+      - path: PersonalDashboard/Views/Components/SectionEyebrow.swift
       - path: PersonalDashboard/Views/Components/MarkdownView.swift
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
