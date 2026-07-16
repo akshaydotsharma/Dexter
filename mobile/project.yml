@@ -214,6 +214,26 @@ targets:
       - path: PersonalDashboard/AI/AnthropicClient+ExtractExpense.swift
       - path: PersonalDashboard/AI/AnthropicClient+ExtractStatement.swift
       - path: PersonalDashboard/AI/PDFChunker.swift
+      # Trips / itineraries surface (issue #281 — final feature). The
+      # present-to-scan surface (TicketScanView.swift: UIScreen.brightness +
+      # idle timer + camera) is iOS-only and stays OUT of this target; its call
+      # sites are `#if os(iOS)`-guarded and the stay-detail cover falls back to a
+      # `.sheet` on macOS. The reachable viewers (TicketOriginalViewer /
+      # TicketAttachmentThumbnail) were relocated to the cross-platform
+      # TicketViewers.swift. TicketStorage / BarcodeService / TicketExtraction
+      # are shimmed cross-platform (UIKit `#if`, ImageIO/CoreGraphics on macOS).
+      # BCBPParser + AddressGeocoder are already portable Foundation/CoreLocation.
+      - path: PersonalDashboard/Services/BCBPParser.swift
+      - path: PersonalDashboard/Services/AddressGeocoder.swift
+      - path: PersonalDashboard/Services/TicketStorage.swift
+      - path: PersonalDashboard/Services/BarcodeService.swift
+      - path: PersonalDashboard/AI/TicketExtraction.swift
+      - path: PersonalDashboard/Views/Trips/TripsView.swift
+      - path: PersonalDashboard/Views/Trips/TripDetailView.swift
+      - path: PersonalDashboard/Views/Trips/TripExpensesView.swift
+      - path: PersonalDashboard/Views/Trips/TripCalendarPopover.swift
+      - path: PersonalDashboard/Views/Trips/TicketCardView.swift
+      - path: PersonalDashboard/Views/Trips/TicketViewers.swift
       - path: PersonalDashboard/Resources/Fonts
         type: folder
         buildPhase: resources

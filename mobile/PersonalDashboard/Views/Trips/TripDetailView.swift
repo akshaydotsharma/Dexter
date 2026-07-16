@@ -1,6 +1,8 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Vertical timeline for a single `LocalTrip` (issue #108).
 ///
@@ -155,6 +157,10 @@ struct TripDetailView: View {
         }
         // Ticket upload pickers (#222). Camera is a full-screen cover (UIKit's
         // camera UI is itself full-screen); photo/PDF are system pickers.
+        // Camera capture is iOS-only: `.fullScreenCover` + UIImagePickerController
+        // don't exist on macOS, and the menu item that flips `showingTicketCamera`
+        // is likewise gated (issue #281). Photo/PDF import stay cross-platform.
+        #if os(iOS)
         .fullScreenCover(isPresented: $showingTicketCamera) {
             CameraPicker { data in
                 showingTicketCamera = false
@@ -162,6 +168,7 @@ struct TripDetailView: View {
             }
             .ignoresSafeArea()
         }
+        #endif
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
             switch photoPickPurpose {
             case .ticket:  handleTicketData(data, isPDF: false)
@@ -176,31 +183,32 @@ struct TripDetailView: View {
             }
         }
         // Full-screen scan surface for a ticket card tap (or right after a
-        // successful upload).
+        // successful upload). iOS-only (present-to-scan hardware idiom); on
+        // macOS `scanTarget` is never set for scanning and the cover is absent
+        // (issue #281).
+        #if os(iOS)
         .fullScreenCover(item: $scanTarget) { target in
             if let item = items.first(where: { $0.clientUUID == target.id }) {
                 TicketScanView(item: item)
             }
         }
-        // Full-screen detail surface for a booked stay: the tinted stay card
-        // plus its actions (scan / view original / edit). Presented as a
-        // full-screen cover to match TicketScanView; the sheet's own "Done"
-        // button closes it. Shown from either the check-in or the check-out
-        // row — both resolve to the same item.
+        #endif
+        // Detail surface for a booked stay: the tinted stay card plus its
+        // actions (scan / view original / edit). iOS presents it full-screen to
+        // match TicketScanView; macOS has no `.fullScreenCover`, so it presents
+        // the same content as a `.sheet` instead — the view is presentation-only
+        // and its "Done" button closes either form (issue #281). Shown from
+        // either the check-in or the check-out row — both resolve to the same
+        // item.
+        #if os(iOS)
         .fullScreenCover(item: $stayDetailTarget) { target in
-            if let item = items.first(where: { $0.clientUUID == target.id }) {
-                StayBookingDetailSheet(item: item) {
-                    // Route Edit to the existing editor. Dismiss this surface
-                    // first, then present the editor on the next runloop so the
-                    // two presentations don't fight.
-                    let uuid = item.clientUUID
-                    stayDetailTarget = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        editingItem = .existing(uuid)
-                    }
-                }
-            }
+            stayBookingDetail(for: target)
         }
+        #else
+        .sheet(item: $stayDetailTarget) { target in
+            stayBookingDetail(for: target)
+        }
+        #endif
         .alert(
             "Couldn't save the ticket",
             isPresented: Binding(
@@ -216,6 +224,7 @@ struct TripDetailView: View {
         // shared pickers above (#261); receipt results flow into the review
         // sheet (which already carries this trip's context), a statement PDF
         // batch-imports every line, linked to the trip.
+        #if os(iOS)
         .fullScreenCover(isPresented: $showingExpenseCamera) {
             CameraPicker { data in
                 showingExpenseCamera = false
@@ -223,6 +232,7 @@ struct TripDetailView: View {
             }
             .ignoresSafeArea()
         }
+        #endif
         .alert(
             "Import complete",
             isPresented: Binding(
@@ -449,7 +459,9 @@ struct TripDetailView: View {
             Divider()
             // Camera is hidden on hardware without one (simulator), where
             // UIImagePickerController would silently fall back to the
-            // library and make two menu items redundant.
+            // library and make two menu items redundant. iOS-only: neither
+            // UIImagePickerController nor the camera cover exist on macOS (#281).
+            #if os(iOS)
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button {
                     showingTicketCamera = true
@@ -457,6 +469,7 @@ struct TripDetailView: View {
                     Label("Scan a ticket", systemImage: "camera")
                 }
             }
+            #endif
             Button {
                 photoPickPurpose = .ticket
                 showingPhotoLibrary = true
@@ -483,6 +496,8 @@ struct TripDetailView: View {
         Menu {
             // Camera is hidden on hardware without one (simulator), where
             // UIImagePickerController would silently fall back to the library.
+            // iOS-only (no UIImagePickerController / camera cover on macOS — #281).
+            #if os(iOS)
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button {
                     showingExpenseCamera = true
@@ -490,6 +505,7 @@ struct TripDetailView: View {
                     Label("Scan receipt", systemImage: "camera")
                 }
             }
+            #endif
             Button {
                 photoPickPurpose = .expense
                 showingPhotoLibrary = true
@@ -520,6 +536,25 @@ struct TripDetailView: View {
         }
         .disabled(isProcessingExpenseUpload)
         .accessibilityLabel("Add trip expense")
+    }
+
+    /// Shared builder for the booked-stay detail surface, presented as a
+    /// full-screen cover on iOS and a sheet on macOS (issue #281). Kept in one
+    /// place so both presentations carry identical content + Edit routing.
+    @ViewBuilder
+    private func stayBookingDetail(for target: StayDetailTarget) -> some View {
+        if let item = items.first(where: { $0.clientUUID == target.id }) {
+            StayBookingDetailSheet(item: item) {
+                // Route Edit to the existing editor. Dismiss this surface
+                // first, then present the editor on the next runloop so the
+                // two presentations don't fight.
+                let uuid = item.clientUUID
+                stayDetailTarget = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    editingItem = .existing(uuid)
+                }
+            }
+        }
     }
 
     /// The shared circular "+" glyph both FABs wear.
@@ -1342,7 +1377,7 @@ struct ItineraryItemEditorSheet: View {
                 }
             }
             .navigationTitle(isEditing ? "Edit item" : "New item")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1734,9 +1769,9 @@ struct ItineraryItemEditorSheet: View {
                 TextField("Paste a Google Maps link", text: $googleMapsLink)
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
-                    .textInputAutocapitalization(.never)
+                    .noAutocapitalization()
                     .autocorrectionDisabled(true)
-                    .keyboardType(.URL)
+                    .urlKeyboard()
                     .submitLabel(.done)
                     .padding(Space.md)
                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))

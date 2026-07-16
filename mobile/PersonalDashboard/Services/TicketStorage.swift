@@ -1,5 +1,15 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#else
+// macOS: the ticket encode/downsize path is built on ImageIO +
+// CoreGraphics (portable, no UIKit), mirroring `ReceiptStorage`'s macOS branch.
+// `UniformTypeIdentifiers` supplies the JPEG type identifier for the ImageIO
+// destination. Added for the native macOS target (issue #281).
+import ImageIO
+import CoreGraphics
+import UniformTypeIdentifiers
+#endif
 
 /// Errors thrown by TicketStorage. Surface to the user when a save / delete
 /// can't complete (rare: disk full, sandbox sealed, etc.).
@@ -26,6 +36,11 @@ enum TicketStorageError: LocalizedError {
 /// a longest edge that keeps the base64 payload well under Anthropic's 5 MB
 /// per-image limit, so the SAME compressed bytes are safe for both the on-disk
 /// save AND the barcode-decode / extraction passes.
+///
+/// Cross-platform (issue #281): iOS keeps the UIKit `UIImage` compression path
+/// byte-for-byte; macOS uses the exact ImageIO + CoreGraphics approach already
+/// proven in `ReceiptStorage` (decode → EXIF-transform → downsample →
+/// JPEG-encode, off the main actor, no AppKit round-trip).
 @MainActor
 final class TicketStorage {
     static let shared = TicketStorage()
@@ -53,6 +68,7 @@ final class TicketStorage {
     /// to `targetMaxEdge` first. `nonisolated` so callers can run it off the
     /// main actor via `Task.detached` (the decode + re-encode is the expensive
     /// step) — it touches only immutable value constants.
+    #if canImport(UIKit)
     nonisolated func compress(imageData: Data) throws -> Data {
         guard let image = UIImage(data: imageData) else {
             throw TicketStorageError.imageEncodingFailed
@@ -72,6 +88,32 @@ final class TicketStorage {
         }
         return firstPass
     }
+    #else
+    /// macOS counterpart to the UIKit `compress`. Same contract (downsize to
+    /// `targetMaxEdge`, JPEG-encode, tighten quality / dimensions until under
+    /// `targetMaxBytes`), built on ImageIO so it needs no AppKit `NSImage`
+    /// round-trip and bakes in EXIF orientation. `nonisolated` for the same
+    /// off-main-actor reason as iOS. Issue #281.
+    nonisolated func compress(imageData: Data) throws -> Data {
+        guard let firstPass = Self.downsampledJPEG(
+            from: imageData, longestEdge: targetMaxEdge, quality: jpegQuality
+        ) else {
+            throw TicketStorageError.imageEncodingFailed
+        }
+        if firstPass.count <= targetMaxBytes { return firstPass }
+        if let secondPass = Self.downsampledJPEG(
+            from: imageData, longestEdge: targetMaxEdge, quality: fallbackJpegQuality
+        ), secondPass.count <= targetMaxBytes {
+            return secondPass
+        }
+        if let thirdPass = Self.downsampledJPEG(
+            from: imageData, longestEdge: 1400, quality: fallbackJpegQuality
+        ) {
+            return thirdPass
+        }
+        return firstPass
+    }
+    #endif
 
     /// Persist a pre-compressed JPEG (typically the output of `compress`).
     /// Returned path is relative.
@@ -161,6 +203,7 @@ final class TicketStorage {
 
 // MARK: - UIImage downsize helper
 
+#if canImport(UIKit)
 private extension UIImage {
     /// Resize so the longest edge is at most `longestEdge` points, preserving
     /// aspect ratio. Returns self when already small enough; nil only for a
@@ -182,3 +225,43 @@ private extension UIImage {
         }
     }
 }
+#else
+
+// MARK: - macOS ImageIO downsample + JPEG encode (issue #281)
+
+private extension TicketStorage {
+    /// Decode `data`, downsize so the longest edge is at most `longestEdge`
+    /// pixels (never upscales, matching the iOS `downsizedForTicket` behaviour),
+    /// bake in EXIF orientation, and re-encode as JPEG at `quality`. Pure
+    /// ImageIO + CoreGraphics, so it runs off the main actor and needs no
+    /// AppKit. Mirrors `ReceiptStorage.downsampledJPEG`.
+    nonisolated static func downsampledJPEG(
+        from data: Data, longestEdge: CGFloat, quality: CGFloat
+    ) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            // Apply the source's EXIF orientation to the pixels so a portrait
+            // photo isn't stored sideways.
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(longestEdge.rounded()),
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+            source, 0, thumbOptions as CFDictionary
+        ) else { return nil }
+
+        let output = NSMutableData()
+        let type = UTType.jpeg.identifier as CFString
+        guard let destination = CGImageDestinationCreateWithData(
+            output, type, 1, nil
+        ) else { return nil }
+        let props: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: quality
+        ]
+        CGImageDestinationAddImage(destination, cgImage, props as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return output as Data
+    }
+}
+#endif
