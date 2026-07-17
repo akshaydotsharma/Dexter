@@ -67,6 +67,9 @@ struct TasksView: View {
                     .listSectionSpacingCompat(0)
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
+                    // macOS: kill the hard full-bleed grey selection bar; rows
+                    // get a soft inset hover instead via `.macRowHover()`.
+                    .macTamedListSelection()
                     .refreshable { await viewModel.load() }
                     // When the inline draft gains focus, scroll it clear of the keyboard.
                     .onChange(of: draftFocused) { _, focused in
@@ -592,30 +595,11 @@ private struct TaskRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            // Empty Button action: the high-priority tap gesture below is the single
-            // source of the toggle. This guarantees one toggle per tap even while the
-            // inline field is focused (iOS's "first tap dismisses keyboard" would
-            // otherwise eat a plain row/Button tap).
-            Button(action: {}) {
-                ZStack {
-                    Circle()
-                        .stroke(todo.completed ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
-                        .background(todo.completed ? Tokens.success.clipShape(Circle()) : nil)
-                        .frame(width: 22, height: 22)
-                    if todo.completed {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Tokens.paper)
-                    }
-                }
-                .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
-            // Map the circle's center (with a 4pt body-font offset for x-height) to the
-            // firstTextBaseline so the bullet visually centers on the title's first line.
-            .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
-            .accessibilityLabel(todo.completed ? "Mark incomplete" : "Mark complete")
+            completionButton
+                // Map the circle's center (with a 4pt body-font offset for x-height) to the
+                // firstTextBaseline so the bullet visually centers on the title's first line.
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
+                .accessibilityLabel(todo.completed ? "Mark incomplete" : "Mark complete")
 
             VStack(alignment: .leading, spacing: 4) {
                 if isEditing {
@@ -716,6 +700,10 @@ private struct TaskRow: View {
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
         .background(Color.clear)
+        // macOS: soft inset rounded hover highlight (Reminders-style), which
+        // replaces the hard system selection bar killed by
+        // `macTamedListSelection()` on the List. No-op on iOS.
+        .macRowHover()
         // Thin colored left-edge bar keyed to the task's priority. Spans the row
         // height at the leading edge; reads as a subtle accent, not a block.
         .overlay(alignment: .leading) {
@@ -741,6 +729,40 @@ private struct TaskRow: View {
             // DispatchQueue.main.async lets the TextField mount before we focus it.
             DispatchQueue.main.async { titleFocused = true }
         }
+    }
+
+    /// The completion control. On macOS it's a real `Button` whose action
+    /// toggles completion, because a real mouse click fires the button action
+    /// directly (issue #285) — the iOS empty-action + high-priority tap-gesture
+    /// trick never delivers under a selectable `List` on the Mac. On iOS the
+    /// original pattern is kept verbatim: an empty action plus a high-priority
+    /// tap gesture, so one tap toggles even while the inline field owns first
+    /// responder (iOS's "first tap dismisses keyboard" would otherwise eat it).
+    @ViewBuilder
+    private var completionButton: some View {
+        #if os(macOS)
+        Button(action: handleToggle) { completionCircle }
+            .buttonStyle(.plain)
+        #else
+        Button(action: {}) { completionCircle }
+            .buttonStyle(.plain)
+            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
+        #endif
+    }
+
+    private var completionCircle: some View {
+        ZStack {
+            Circle()
+                .stroke(todo.completed ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
+                .background(todo.completed ? Tokens.success.clipShape(Circle()) : nil)
+                .frame(width: 22, height: 22)
+            if todo.completed {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Tokens.paper)
+            }
+        }
+        .frame(width: 24, height: 24)
     }
 
     private func commitInlineEdit() {

@@ -160,6 +160,8 @@ struct ListsView: View {
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
         .scrollDismissesKeyboard(.interactively)
+        // macOS: drop the hard grey row-selection bar (issue #285).
+        .macTamedListSelection()
         .refreshable { await viewModel.load() }
     }
 }
@@ -189,6 +191,8 @@ private struct ListDetailHeader: View {
                 .frame(height: 44)
                 .contentShape(Rectangle())
             }
+            // macOS: strip the hard default-bordered button chrome (issue #285).
+            .macPlainButtonStyle()
             Spacer()
             if isEditing {
                 TextField("", text: $draft)
@@ -222,12 +226,18 @@ private struct ListDetailHeader: View {
                     .foregroundStyle(Tokens.muted)
             }
             .accessibilityLabel("List appearance")
+            // macOS: quiet rounded chrome instead of the hard square default
+            // button background (issue #285). No-op on iOS.
+            .macPlainButtonStyle()
+            .macHeaderIconChrome()
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .frame(width: 44, height: 44)
                     .foregroundStyle(Tokens.muted)
             }
             .accessibilityLabel("Delete list")
+            .macPlainButtonStyle()
+            .macHeaderIconChrome()
         }
         .padding(.horizontal, Space.md)
         .frame(height: 56)
@@ -445,6 +455,9 @@ private struct ListDetailContent: View {
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
                     .scrollDismissesKeyboard(.interactively)
+                    // macOS: drop the hard grey row-selection bar; rows get a
+                    // soft inset hover via `.macRowHover()` (issue #285).
+                    .macTamedListSelection()
                     // When the inline draft gains focus, scroll it clear of the keyboard.
                     .onChange(of: draftFocused) { _, focused in
                         guard focused else { return }
@@ -615,26 +628,7 @@ private struct ItemRow: View {
 
     var body: some View {
         HStack(spacing: Space.md) {
-            // Empty Button action: the high-priority tap gesture below is the single
-            // source of the toggle. This guarantees one toggle per tap even while the
-            // inline field is focused (iOS's "first tap dismisses keyboard" would
-            // otherwise eat a plain row/Button tap).
-            Button(action: {}) {
-                ZStack {
-                    Circle()
-                        .stroke(item.checked ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
-                        .background(item.checked ? Tokens.success.clipShape(Circle()) : nil)
-                        .frame(width: 22, height: 22)
-                    if item.checked {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Tokens.paper)
-                    }
-                }
-                .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
+            completionButton
 
             if isEditing {
                 TextField("", text: $draft)
@@ -696,6 +690,10 @@ private struct ItemRow: View {
         }
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
+        // macOS: soft inset rounded hover highlight (Reminders-style), which
+        // replaces the hard system selection bar killed by
+        // `macTamedListSelection()` on the List. No-op on iOS.
+        .macRowHover()
         .contentShape(Rectangle())
         .onTapGesture {
             // When a tap-below draft is active, actively flip draftFocused in the parent
@@ -712,6 +710,37 @@ private struct ItemRow: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    /// Completion control. macOS uses a real `Button` action so a mouse click
+    /// toggles under a selectable `List`; iOS keeps the empty-action +
+    /// high-priority tap-gesture trick that survives the keyboard-dismiss first
+    /// tap (issue #285). Circle visual is shared.
+    @ViewBuilder
+    private var completionButton: some View {
+        #if os(macOS)
+        Button(action: handleToggle) { completionCircle }
+            .buttonStyle(.plain)
+        #else
+        Button(action: {}) { completionCircle }
+            .buttonStyle(.plain)
+            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
+        #endif
+    }
+
+    private var completionCircle: some View {
+        ZStack {
+            Circle()
+                .stroke(item.checked ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
+                .background(item.checked ? Tokens.success.clipShape(Circle()) : nil)
+                .frame(width: 22, height: 22)
+            if item.checked {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Tokens.paper)
+            }
+        }
+        .frame(width: 24, height: 24)
     }
 
     private func beginEditing() {

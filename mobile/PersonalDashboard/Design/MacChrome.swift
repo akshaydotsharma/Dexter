@@ -16,18 +16,19 @@ import SwiftUI
 /// unchanged.
 
 #if os(macOS)
-/// The "AS" profile coin, lifted verbatim from `TopBar` so the macOS toolbar
-/// carries the same affordance the iOS top bar does. A paper coin, not a
-/// colored badge. Sized a touch smaller than the iOS pip to sit cleanly in
-/// the ~28pt window toolbar.
+/// The "AS" profile coin in the macOS window toolbar, echoing the iOS top-bar
+/// affordance. A single solid ink round with paper "AS" text — no surrounding
+/// oval or button chrome (issue #285). Sized to sit cleanly in the toolbar
+/// while reading as a proper account bubble (à la Reminders), not a faint
+/// badge.
 struct MacProfilePip: View {
     var body: some View {
         Text("AS")
-            .font(.edFootnote)
-            .foregroundStyle(Tokens.ink)
-            .frame(width: 24, height: 24)
-            .background(Tokens.paper2, in: Circle())
-            .overlay(Circle().stroke(Tokens.border, lineWidth: 0.5))
+            .font(.system(size: 12, weight: .semibold))
+            .tracking(0.3)
+            .foregroundStyle(Tokens.paper)
+            .frame(width: 30, height: 30)
+            .background(Tokens.ink, in: Circle())
             .accessibilityLabel("Akshay")
     }
 }
@@ -60,6 +61,13 @@ extension View {
                     MacProfilePip()
                 }
             }
+            // Consistent transparent title-bar across every section (issue
+            // #285). Some sections lit the toolbar's scrolled-material band (a
+            // grey stripe under the traffic lights) while others stayed clear,
+            // depending on whether their content scrolled under the title bar.
+            // Hiding the window-toolbar background everywhere makes the paper
+            // canvas read straight up to the window edge in all sections.
+            .toolbarBackground(.hidden, for: .windowToolbar)
         #else
         self
         #endif
@@ -79,4 +87,113 @@ extension View {
         self.ignoresSafeArea()
         #endif
     }
+
+    // MARK: - Reminders-like row + control polish (issue #285)
+
+    /// Disables the `List`'s built-in row selection on macOS so a click no
+    /// longer paints the hard full-bleed grey selection bar. Rows keep their
+    /// own tap gestures and buttons; only the system selection chrome goes
+    /// away. No-op on iOS, where List rows here are never selection-driven.
+    @ViewBuilder
+    func macTamedListSelection() -> some View {
+        #if os(macOS)
+        self.selectionDisabled(true)
+        #else
+        self
+        #endif
+    }
+
+    /// Subtle, inset, rounded hover background for a `List` row on macOS — the
+    /// soft Reminders-style highlight that replaces the system selection bar
+    /// (paired with `macTamedListSelection()`). Owns its own hover state.
+    /// No-op on iOS (touch has no hover; the iOS row render path is unchanged).
+    @ViewBuilder
+    func macRowHover() -> some View {
+        #if os(macOS)
+        modifier(MacRowHover())
+        #else
+        self
+        #endif
+    }
+
+    /// Quiet, rounded background for an in-view header icon button on macOS,
+    /// replacing the hard square default-bordered button chrome with a soft
+    /// inset surface that lifts on hover (issue #285). Pair with
+    /// `macPlainButtonStyle()`. No-op on iOS.
+    @ViewBuilder
+    func macHeaderIconChrome() -> some View {
+        #if os(macOS)
+        modifier(MacHeaderIconChrome())
+        #else
+        self
+        #endif
+    }
+
+    /// `.buttonStyle(.plain)` on macOS only — strips the default bordered
+    /// button chrome from in-view header controls. No-op on iOS so the phone
+    /// button rendering is untouched.
+    @ViewBuilder
+    func macPlainButtonStyle() -> some View {
+        #if os(macOS)
+        self.buttonStyle(.plain)
+        #else
+        self
+        #endif
+    }
+
+    /// `.textFieldStyle(.plain)` on macOS only, so a `TextField` inside a
+    /// custom rounded surface doesn't draw its own default bordered box
+    /// (the box-in-a-box on the chat input, issue #285). No-op on iOS, where
+    /// the field already renders borderless.
+    @ViewBuilder
+    func plainFieldStyleOnMac() -> some View {
+        #if os(macOS)
+        self.textFieldStyle(.plain)
+        #else
+        self
+        #endif
+    }
 }
+
+#if os(macOS)
+/// Inset rounded hover highlight for a macOS List row. Sits behind the row
+/// content (the row's own leading priority bar / glyphs stay on top) and is
+/// inset from the row edges so the highlight reads as a soft rounded pill, the
+/// way Reminders renders row hover — not a full-bleed bar.
+private struct MacRowHover: ViewModifier {
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .fill(hovering ? Tokens.paper2 : Color.clear)
+                    .padding(.horizontal, Space.xs)
+            )
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// Quiet rounded chrome for a header icon button on macOS: a soft inset
+/// surface with a hairline, lifting to `paper2` on hover. Replaces the hard
+/// square default-bordered macOS button background.
+private struct MacHeaderIconChrome: ViewModifier {
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .fill(hovering ? Tokens.paper2 : Tokens.surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                            .stroke(Tokens.border, lineWidth: 0.5)
+                    )
+                    .padding(Space.xs)
+            )
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+#endif
