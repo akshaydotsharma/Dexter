@@ -181,6 +181,14 @@ struct ChatView: View {
         .background(Tokens.paper)
         .macSectionChrome("Chat")
         .onAppear {
+            // Auto-focusing the input on landing is a phone idiom ("pop the
+            // keyboard so the surface is ready to type", issue #48). On macOS
+            // it steals first-responder the moment Chat opens, which (a) makes
+            // the first click on another sidebar row merely resign focus
+            // instead of switching sections — leaving Chat highlighted — and
+            // (b) drives a focus-into-a-bottom-field relayout that rides the
+            // sidebar up under the traffic lights. So it stays iOS-only (#283).
+            #if os(iOS)
             // Land in keyboard-up state on first appearance. The small
             // delay gives SwiftUI time to lay the view tree out before
             // we ask the TextField to take first responder.
@@ -189,8 +197,10 @@ struct ChatView: View {
                     inputFocused = true
                 }
             }
+            #endif
         }
         .onChange(of: router.currentSection) { _, newSection in
+            #if os(iOS)
             // Tapping the chat circle from any other surface should drop
             // the user straight into typing (issue #48).
             if newSection == .chat {
@@ -198,6 +208,7 @@ struct ChatView: View {
                     inputFocused = true
                 }
             }
+            #endif
         }
         #if os(iOS)
         .onChange(of: transcriber.transcript) { _, newTranscript in
