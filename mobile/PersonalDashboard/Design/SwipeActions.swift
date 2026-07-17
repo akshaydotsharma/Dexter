@@ -2,6 +2,9 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Swipe-left-to-delete with circular red trash + gray fade card,
 /// keyed to a UIKit-bridged horizontal-only pan recognizer so the
@@ -68,114 +71,61 @@ extension View {
 }
 
 #if os(macOS)
-/// The macOS custom swipe implementation. Built on a plain `DragGesture` (so it
-/// responds to a mouse click-drag, unlike a trackpad-scroll gesture) that only
-/// engages when the drag is horizontal-dominant, leaving vertical drags to the
-/// parent `ScrollView`.
+/// The macOS row-delete affordance.
+///
+/// A literal trackpad swipe was tried twice and abandoned. A SwiftUI
+/// `DragGesture` fires only on a mouse click-drag (not the two-finger trackpad
+/// swipe users make) AND intercepts real clicks during gesture arbitration, so
+/// the completion toggle and tap-to-edit stopped firing. An AppKit
+/// `scrollWheel` bridge that hosted each row in a nested `NSHostingView`
+/// crashed the app outright (AttributeGraph precondition failure in
+/// `NSHostingView.layout()` — nesting a hosting view inside the SwiftUI
+/// `LazyVStack` is not viable).
+///
+/// This version is pure SwiftUI and leaves the click layer completely
+/// untouched: a trailing red trash button fades in on row hover (positioned
+/// clear of the info button), plus a right-click context-menu delete. Reliable
+/// on both mouse and trackpad (issue #285).
 private struct MacSwipeToDelete: ViewModifier {
     let onDelete: () -> Void
-
-    @State private var offset: CGFloat = 0
-    @State private var isOpen: Bool = false
-    @GestureState private var isDragging: Bool = false
-
-    /// How far the row slides to fully reveal the trash button.
-    private let revealedWidth: CGFloat = 68
-    /// Drag magnitude past which releasing commits the delete outright.
-    private let commitThreshold: CGFloat = 150
-    /// The iOS system delete tint, matched here for visual parity.
+    @State private var hovering = false
     private let trashColor = Color(.sRGB, red: 1.0, green: 0.231, blue: 0.188, opacity: 1.0)
-    private let animation: Animation = .snappy(duration: 0.24, extraBounce: 0.04)
 
     func body(content: Content) -> some View {
-        let dragMag = -offset
-        let progress = min(1.0, max(0.0, dragMag / revealedWidth))
-
-        ZStack(alignment: .trailing) {
-            // Row content slides left; its hit region moves with the offset,
-            // exposing the trash button behind it at the trailing edge.
-            content
-                .offset(x: offset)
-                .gesture(dragGesture)
-
-            // Red trash affordance: full row height, inset slightly, moderate
-            // corner radius (Reminders-style). Only hittable once the swipe is
-            // open so it never blocks the row while closed.
-            Button(action: commit) {
-                Image(systemName: "trash")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(.white)
-                    .frame(width: revealedWidth)
-                    .frame(maxHeight: .infinity)
-                    .background(
-                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                            .fill(trashColor)
-                    )
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.vertical, 2)
-            .opacity(progress)
-            .allowsHitTesting(isOpen)
-            .accessibilityLabel("Delete")
-        }
-    }
-
-    private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .updating($isDragging) { _, state, _ in state = true }
-            .onChanged { value in
-                // Engage only horizontal-dominant drags; let vertical drags
-                // fall through to the scroll view.
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                let base: CGFloat = isOpen ? -revealedWidth : 0
-                offset = rubberBanded(base + value.translation.width)
-            }
-            .onEnded { value in
-                guard abs(value.translation.width) > abs(value.translation.height) else {
-                    // Non-horizontal release: settle back to the current state.
-                    withAnimation(animation) { offset = isOpen ? -revealedWidth : 0 }
-                    return
+        content
+            // Trailing red trash, revealed on row hover. Padded in from the
+            // trailing edge so it lands to the LEFT of the row's info button,
+            // never over it. Only hittable while shown, so it can't block the
+            // rest of the row (or steal the checkbox's click) when hidden.
+            .overlay(alignment: .trailing) {
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                                .fill(trashColor)
+                        )
+                        .contentShape(Rectangle())
                 }
-                let base: CGFloat = isOpen ? -revealedWidth : 0
-                let endMag = -(base + value.translation.width)
-                if endMag > commitThreshold {
-                    commit()
-                } else if endMag > revealedWidth * 0.5 {
-                    open()
-                } else {
-                    close()
+                .buttonStyle(.plain)
+                .padding(.trailing, 44)
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
+                .accessibilityLabel("Delete")
+            }
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            // Right-click delete, always available (mouse or trackpad).
+            .contextMenu {
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete", systemImage: "trash")
                 }
             }
-    }
-
-    /// Light asymptotic resistance past the reveal width so the row keeps
-    /// tracking the cursor toward the commit threshold without sliding off.
-    private func rubberBanded(_ raw: CGFloat) -> CGFloat {
-        if raw >= 0 { return 0 }
-        let mag = -raw
-        if mag <= revealedWidth { return raw }
-        let overshoot = mag - revealedWidth
-        let damped = overshoot / (1.0 + overshoot * 0.008)
-        return -(revealedWidth + damped)
-    }
-
-    private func open() {
-        isOpen = true
-        withAnimation(animation) { offset = -revealedWidth }
-    }
-
-    private func close() {
-        isOpen = false
-        withAnimation(animation) { offset = 0 }
-    }
-
-    private func commit() {
-        Haptics.destructive()
-        isOpen = false
-        onDelete()
     }
 }
+
 #endif
 
 #if canImport(UIKit)
