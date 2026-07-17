@@ -14,7 +14,7 @@ struct ListsView: View {
 
     var body: some View {
         ZStack {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
                 if let id = selectedListId, let list = viewModel.lists.first(where: { $0.id == id }) {
@@ -39,10 +39,14 @@ struct ListsView: View {
                             ListPropertiesSheet(viewModel: viewModel, list: list)
                         }
                 } else {
+                    // iOS in-view top bar; macOS uses the native window
+                    // toolbar via `.macSectionChrome` below (issue #283).
+                    #if os(iOS)
                     TopBar(
                         title: "Lists",
                         onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                     )
+                    #endif
                     rootList
                 }
             }
@@ -55,11 +59,12 @@ struct ListsView: View {
                 }
                 .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
                 .padding(.trailing, 22)
-                .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }
         .activeSection(.lists)
+        .macSectionChrome("Lists")
         // Live-refresh when the voice-capture or chat path writes a list / item.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
             Task { await viewModel.load() }
@@ -464,7 +469,7 @@ private struct ListDetailContent: View {
                         }
                         .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
                         .padding(.trailing, 22)
-                        .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                        .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
                         .opacity(draftActive ? 0 : 1)
                         .animation(.easeOut(duration: 0.15), value: draftActive)
                     }

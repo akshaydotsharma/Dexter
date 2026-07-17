@@ -16,4 +16,17 @@ import CoreGraphics
 enum BottomTabBarMetrics {
     /// Total height reserved above the bottom safe area (pill + bottom gap).
     static let height: CGFloat = 74
+
+    /// Bottom inset for a floating "+" FAB. On iOS the FAB clears the floating
+    /// tab bar (pill height + a small gap) and is allowed to overlap the
+    /// surface above. On macOS there is no tab bar, so the FAB anchors flush to
+    /// the true bottom corner with a modest inset (issue #283). Callers keep
+    /// their own trailing padding; only the bottom differs per platform.
+    static var fabBottomInset: CGFloat {
+        #if os(macOS)
+        Space.xl
+        #else
+        height + Space.sm
+        #endif
+    }
 }

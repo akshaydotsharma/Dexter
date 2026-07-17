@@ -443,7 +443,7 @@ struct TripDetailView: View {
             }
         }
         .padding(.trailing, Space.lg)
-        .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+        .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
         .allowsHitTesting(true)
     }
 

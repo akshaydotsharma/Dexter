@@ -28,7 +28,7 @@ struct TripsView: View {
 
     var body: some View {
         ZStack {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
                 if let id = selectedTripUUID, let trip = trips.first(where: { $0.clientUUID == id }) {
@@ -41,10 +41,14 @@ struct TripsView: View {
                     )
                     TripDetailView(trip: trip)
                 } else {
+                    // iOS in-view top bar; macOS uses the native window toolbar
+                    // via `.macSectionChrome` below (issue #283).
+                    #if os(iOS)
                     TopBar(
                         title: "Trips",
                         onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                     )
+                    #endif
                     rootContent
                 }
             }
@@ -57,12 +61,13 @@ struct TripsView: View {
                 }
                 .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
                 .padding(.trailing, 22)
-                .padding(.bottom, BottomTabBarMetrics.height + Space.sm)
+                .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .accessibilityLabel("New trip")
             }
         }
         .activeSection(.itineraries)
+        .macSectionChrome("Trips")
         .onAppear {
             consumeFocus()
             syncBackHandler()

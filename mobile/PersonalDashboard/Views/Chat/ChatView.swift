@@ -67,9 +67,87 @@ struct ChatView: View {
     ]
 
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
+        iosBody
+        #endif
+    }
+
+    #if os(macOS)
+    /// Native macOS layout, kept entirely separate from `iosBody` so the iOS
+    /// `ZStack(alignment: .bottom)` + keyboard/voice code is untouched (#283).
+    ///
+    /// Root cause of the sidebar-scroll bug: Chat's detail has focusable
+    /// controls (the example-chip buttons in the empty state, the input
+    /// TextField) but — unlike the List-based sections — had no scroll view of
+    /// its own. macOS's scroll-to-reveal-first-responder then bubbled to the
+    /// nearest enclosing scroll view, which was the NavigationSplitView SIDEBAR
+    /// `List`, sliding it up under the traffic lights and lighting the toolbar's
+    /// scrolled-material band. Giving the detail its own `ScrollView` (below,
+    /// for the empty state; `conversation` already has one) absorbs the reveal
+    /// locally, so the sidebar stays put. The input docks via `.safeAreaInset`.
+    private var macBody: some View {
+        ZStack {
+            Tokens.paper
+                .canvasIgnoresSafeArea()
+
+            if viewModel.turns.isEmpty {
+                // Wrap the empty state in the detail's OWN ScrollView. macOS
+                // scroll-to-reveal-first-responder (triggered by the focusable
+                // example-chip buttons / the input field) bubbles to the
+                // nearest enclosing scroll view; without one in the detail it
+                // reached the sidebar List and slid it up under the traffic
+                // lights (issue #283). A local ScrollView absorbs the reveal.
+                // GeometryReader lets the state fill the viewport so it stays
+                // vertically centered like on iOS.
+                GeometryReader { proxy in
+                    ScrollView {
+                        emptyState
+                            .frame(minHeight: proxy.size.height)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            } else {
+                conversation
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            ChatInputBar(
+                text: $viewModel.draftInput,
+                isSending: viewModel.isSending,
+                onSend: send,
+                onMic: micHandler,
+                isMicActive: micActive,
+                focused: $inputFocused
+            )
+            .padding(.horizontal, Space.lg)
+            .padding(.top, Space.sm)
+            .padding(.bottom, Space.lg)
+        }
+        .background(Tokens.paper)
+        .macSectionChrome("Chat")
+        .alert("Something went wrong",
+               isPresented: Binding(
+                   get: { viewModel.errorMessage != nil },
+                   set: { if !$0 { viewModel.errorMessage = nil } }
+               )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
+    }
+    #endif
+
+    #if os(iOS)
+    private var iosBody: some View {
         ZStack(alignment: .bottom) {
             Tokens.paper
-                .ignoresSafeArea()
+                // Full-bleed on iOS; keeps the top title-bar inset on macOS so
+                // the split view reserves the title-bar region and the sidebar
+                // keeps its top inset (issue #283).
+                .canvasIgnoresSafeArea()
                 // Tap on empty paper background dismisses the keyboard so
                 // the floating tab bar comes back into view (issue #48).
                 // `hideKeyboard()` is a no-op on macOS (no software keyboard).
@@ -85,12 +163,16 @@ struct ChatView: View {
                 // keyboard. The ChatInputBar is intentionally outside this
                 // gesture so tapping the text field still focuses it.
                 VStack(spacing: 0) {
+                    // iOS renders the in-view top bar; macOS uses the native
+                    // window toolbar via `.macSectionChrome` below (issue #283).
+                    #if os(iOS)
                     TopBar(
                         title: viewModel.turns.isEmpty ? nil : "Chat",
                         onMenu: {
                             router.openDrawer()
                         }
                     )
+                    #endif
 
                     if viewModel.turns.isEmpty {
                         emptyState
@@ -155,7 +237,15 @@ struct ChatView: View {
                 // hides and the keyboard pushes the input up directly. The
                 // gap above the tab bar is intentionally small so the input
                 // sits visually close to the floating pill.
+                //
+                // macOS has no tab bar and no software keyboard, so the input
+                // bar sits a modest inset above the window's bottom edge
+                // instead of reserving the 74pt tab-bar strip (issue #283).
+                #if os(macOS)
+                .padding(.bottom, Space.lg)
+                #else
                 .padding(.bottom, keyboardVisible ? Space.md : BottomTabBarMetrics.height)
+                #endif
             }
             // Animate the listening banner and inline mic-error in/out so they
             // don't pop (their transitions are declared at each call site).
@@ -164,7 +254,16 @@ struct ChatView: View {
             #endif
         }
         .background(Tokens.paper)
+        .macSectionChrome("Chat")
         .onAppear {
+            // Auto-focusing the input on landing is a phone idiom ("pop the
+            // keyboard so the surface is ready to type", issue #48). On macOS
+            // it steals first-responder the moment Chat opens, which (a) makes
+            // the first click on another sidebar row merely resign focus
+            // instead of switching sections — leaving Chat highlighted — and
+            // (b) drives a focus-into-a-bottom-field relayout that rides the
+            // sidebar up under the traffic lights. So it stays iOS-only (#283).
+            #if os(iOS)
             // Land in keyboard-up state on first appearance. The small
             // delay gives SwiftUI time to lay the view tree out before
             // we ask the TextField to take first responder.
@@ -173,8 +272,10 @@ struct ChatView: View {
                     inputFocused = true
                 }
             }
+            #endif
         }
         .onChange(of: router.currentSection) { _, newSection in
+            #if os(iOS)
             // Tapping the chat circle from any other surface should drop
             // the user straight into typing (issue #48).
             if newSection == .chat {
@@ -182,6 +283,7 @@ struct ChatView: View {
                     inputFocused = true
                 }
             }
+            #endif
         }
         #if os(iOS)
         .onChange(of: transcriber.transcript) { _, newTranscript in
@@ -261,6 +363,7 @@ struct ChatView: View {
             Text(viewModel.errorMessage ?? "")
         }
     }
+    #endif
 
     // MARK: - Empty state
 

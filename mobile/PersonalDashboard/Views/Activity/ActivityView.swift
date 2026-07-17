@@ -86,15 +86,19 @@ struct ActivityView: View {
 
     var body: some View {
         ZStack {
-            Tokens.paper.ignoresSafeArea()
+            Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
+                // iOS in-view top bar; macOS uses the native window toolbar
+                // via `.macSectionChrome` below (issue #283).
+                #if os(iOS)
                 TopBar(
                     title: "Activity",
                     onMenu: {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
                     }
                 )
+                #endif
 
                 Text("Everything you have captured, newest first.")
                     .font(.edSubheadline)
@@ -167,6 +171,7 @@ struct ActivityView: View {
             }
         }
         .activeSection(.activity)
+        .macSectionChrome("Activity")
     }
 
     // MARK: - Combine + filter + paginate
