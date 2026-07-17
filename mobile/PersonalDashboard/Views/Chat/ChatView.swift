@@ -67,6 +67,81 @@ struct ChatView: View {
     ]
 
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
+        iosBody
+        #endif
+    }
+
+    #if os(macOS)
+    /// Native macOS layout, kept entirely separate from `iosBody` so the iOS
+    /// `ZStack(alignment: .bottom)` + keyboard/voice code is untouched (#283).
+    ///
+    /// Root cause of the sidebar-scroll bug: Chat's detail has focusable
+    /// controls (the example-chip buttons in the empty state, the input
+    /// TextField) but — unlike the List-based sections — had no scroll view of
+    /// its own. macOS's scroll-to-reveal-first-responder then bubbled to the
+    /// nearest enclosing scroll view, which was the NavigationSplitView SIDEBAR
+    /// `List`, sliding it up under the traffic lights and lighting the toolbar's
+    /// scrolled-material band. Giving the detail its own `ScrollView` (below,
+    /// for the empty state; `conversation` already has one) absorbs the reveal
+    /// locally, so the sidebar stays put. The input docks via `.safeAreaInset`.
+    private var macBody: some View {
+        ZStack {
+            Tokens.paper
+                .canvasIgnoresSafeArea()
+
+            if viewModel.turns.isEmpty {
+                // Wrap the empty state in the detail's OWN ScrollView. macOS
+                // scroll-to-reveal-first-responder (triggered by the focusable
+                // example-chip buttons / the input field) bubbles to the
+                // nearest enclosing scroll view; without one in the detail it
+                // reached the sidebar List and slid it up under the traffic
+                // lights (issue #283). A local ScrollView absorbs the reveal.
+                // GeometryReader lets the state fill the viewport so it stays
+                // vertically centered like on iOS.
+                GeometryReader { proxy in
+                    ScrollView {
+                        emptyState
+                            .frame(minHeight: proxy.size.height)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            } else {
+                conversation
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            ChatInputBar(
+                text: $viewModel.draftInput,
+                isSending: viewModel.isSending,
+                onSend: send,
+                onMic: micHandler,
+                isMicActive: micActive,
+                focused: $inputFocused
+            )
+            .padding(.horizontal, Space.lg)
+            .padding(.top, Space.sm)
+            .padding(.bottom, Space.lg)
+        }
+        .background(Tokens.paper)
+        .macSectionChrome("Chat")
+        .alert("Something went wrong",
+               isPresented: Binding(
+                   get: { viewModel.errorMessage != nil },
+                   set: { if !$0 { viewModel.errorMessage = nil } }
+               )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
+    }
+    #endif
+
+    #if os(iOS)
+    private var iosBody: some View {
         ZStack(alignment: .bottom) {
             Tokens.paper
                 // Full-bleed on iOS; keeps the top title-bar inset on macOS so
@@ -288,6 +363,7 @@ struct ChatView: View {
             Text(viewModel.errorMessage ?? "")
         }
     }
+    #endif
 
     // MARK: - Empty state
 
