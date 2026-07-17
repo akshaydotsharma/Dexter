@@ -340,11 +340,15 @@ private struct ListDetailContent: View {
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
                     Spacer()
+                    // Reorder is List-only; macOS renders off `List`, so drop
+                    // the "Hold to reorder" hint there (issue #285).
+                    #if os(iOS)
                     if !list.items.isEmpty {
                         Text("Hold to reorder")
                             .font(.edCaption)
                             .foregroundStyle(Tokens.mutedSoft)
                     }
+                    #endif
                 }
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.lg)
@@ -359,6 +363,15 @@ private struct ListDetailContent: View {
 
                 // Items list — always rendered so tap-below works even when empty.
                 // Chrome stripped to keep the editorial calm look.
+                //
+                // macOS renders off `List` in a custom `ScrollView { LazyVStack }`
+                // (issue #285): `List` on macOS paints an un-removable system
+                // highlight behind the row being renamed and its `.swipeActions`
+                // styling is system-fixed. iOS keeps the `List` verbatim (native
+                // swipe + `.onMove` reorder + keyboard-avoidance scrolling).
+                #if os(macOS)
+                macItemScroll(list)
+                #else
                 // Wrapped in a ScrollViewReader so the focused inline draft row can be
                 // scrolled clear of the keyboard (SwiftUI's default List avoidance
                 // won't lift it because there's content below the draft).
@@ -489,6 +502,7 @@ private struct ListDetailContent: View {
                         .animation(.easeOut(duration: 0.15), value: draftActive)
                     }
                 }
+                #endif
             }
             .sheet(item: $editingItem) { editing in
                 // Guard against a stale index if the list mutated while the sheet
@@ -571,6 +585,92 @@ private struct ListDetailContent: View {
             draftFocused = false
         }
     }
+
+    // MARK: - macOS scroll stack (issue #285)
+    //
+    // Same items, draft row, ghost add-row and dismiss filler as iOS, but off
+    // `List` in a `ScrollView { LazyVStack }`. Rows use `.macSwipeToDelete`
+    // (Reminders-style) instead of `.swipeToDeleteTrash`; `.onMove` reorder is
+    // dropped (List-only). The FAB overlays the scroll exactly as on iOS.
+    #if os(macOS)
+    @ViewBuilder
+    private func macItemScroll(_ list: Checklist) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if list.items.isEmpty && !draftActive {
+                    Text("No items yet. Add one below.")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.muted)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, Space.lg)
+                        .padding(.horizontal, Space.lg)
+                }
+
+                ForEach(Array(list.items.enumerated()), id: \.element.id) { index, item in
+                    ItemRow(
+                        item: item,
+                        onToggle: {
+                            Task { await viewModel.toggleItem(in: list, at: index) }
+                        },
+                        onRename: { newText in
+                            Task { await viewModel.renameItem(in: list, at: index, to: newText) }
+                        },
+                        onDelete: {
+                            Haptics.destructive()
+                            Task { await viewModel.removeItem(from: list, at: index) }
+                        },
+                        onOpenDetails: {
+                            editingItem = EditingItem(index: index, item: item)
+                        },
+                        isDraftActive: draftActive,
+                        onTapWhileDraftActive: { draftFocused = false }
+                    )
+                    .macSwipeToDelete {
+                        Task { await viewModel.removeItem(from: list, at: index) }
+                    }
+                    // Reproduce the iOS `.listRowInsets` gutter now that we're off `List`.
+                    .padding(.horizontal, Space.lg)
+                    .padding(.vertical, 2)
+                }
+
+                if draftActive {
+                    DraftItemRow(
+                        text: $draftText,
+                        isFocused: $draftFocused,
+                        onSubmit: { commitDraft(in: list, keepFocus: true) },
+                        onFocusLost: { commitDraft(in: list, keepFocus: false) }
+                    )
+                    .padding(.horizontal, Space.lg)
+                    .padding(.vertical, 2)
+                }
+
+                GhostAddRow(label: "New Item", minHeight: 44) {
+                    if draftActive { draftFocused = false }
+                    else { startDraft() }
+                }
+
+                // Dismiss filler + FAB clearance below the last row.
+                Color.clear
+                    .frame(minHeight: 160)
+                    .contentShape(Rectangle())
+                    .onTapGesture { draftFocused = false }
+            }
+        }
+        .background(Tokens.paper)
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                creatingItem = true
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+            .padding(.trailing, 22)
+            .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
+            .opacity(draftActive ? 0 : 1)
+            .animation(.easeOut(duration: 0.15), value: draftActive)
+        }
+    }
+    #endif
 
 }
 

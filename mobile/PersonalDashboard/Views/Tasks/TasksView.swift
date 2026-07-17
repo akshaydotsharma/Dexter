@@ -31,6 +31,17 @@ struct TasksView: View {
                 )
                 #endif
 
+                // macOS renders the tasks list off `List` — a custom
+                // `ScrollView { LazyVStack }` (issue #285). `List` on macOS
+                // paints a system highlight behind the row being edited (an
+                // un-removable grey box) and its `.swipeActions` styling is
+                // system-fixed, so neither the clean inline edit nor the
+                // Reminders-style swipe was achievable on `List`. iOS keeps the
+                // `List` verbatim so its native `.swipeActions` + UIKit-pan
+                // path is unchanged.
+                #if os(macOS)
+                macTaskScroll
+                #else
                 // Using `List` (not `ScrollView { LazyVStack }`) so each row
                 // can opt into native `.swipeActions`. The list is dressed
                 // down to keep the editorial paper styling: clear row
@@ -83,6 +94,7 @@ struct TasksView: View {
                         }
                     }
                 }
+                #endif
             }
 
             Button {
@@ -306,6 +318,178 @@ struct TasksView: View {
             completedSection(buckets.completed)
         }
     }
+
+    // MARK: - macOS scroll stack (issue #285)
+    //
+    // The macOS surface renders the same section grouping, headers, counts,
+    // inline draft rows and collapsible Completed section as iOS, but in a
+    // `ScrollView { LazyVStack }` instead of a `List`. Rows use the custom
+    // `.macSwipeToDelete` (Reminders-style) in place of `.swipeToDeleteTrash`,
+    // and the List-only `.listRow*` insets are replaced by explicit padding.
+    // Reorder ("Hold to reorder") is dropped — it isn't available off `List`.
+    #if os(macOS)
+    private var macTaskScroll: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if viewModel.isLoading && viewModel.todos.isEmpty {
+                    placeholderRow("Loading…")
+                } else if viewModel.todos.isEmpty {
+                    placeholderRow("No tasks yet. Tap below to start.")
+                    emptyStateDraftRow
+                } else {
+                    macTaskGroups
+                }
+
+                // FAB clearance — keeps the last row scrollable clear of the
+                // floating + button. Also a tap-to-dismiss zone for a draft.
+                Color.clear
+                    .frame(height: 96)
+                    .contentShape(Rectangle())
+                    .onTapGesture { draftFocused = false }
+            }
+        }
+        .background(Tokens.paper)
+    }
+
+    @ViewBuilder
+    private var macTaskGroups: some View {
+        let buckets = computeBuckets()
+        let hasOpenTasks = !buckets.overdue.isEmpty
+            || !buckets.today.isEmpty
+            || !buckets.thisWeek.isEmpty
+            || !buckets.later.isEmpty
+            || !buckets.noDate.isEmpty
+        if !hasOpenTasks && draftBucket == nil && !buckets.completed.isEmpty {
+            allCaughtUpRow
+        }
+        if !buckets.overdue.isEmpty {
+            macTaskSection(title: "Overdue", count: buckets.overdue.count, accent: Tokens.danger, soft: Tokens.dangerSoft, todos: buckets.overdue, bucket: nil)
+        }
+        if !buckets.today.isEmpty || draftBucket == .today {
+            macTaskSection(title: "Today", count: buckets.today.count, accent: Tokens.warning, soft: Tokens.warningSoft, todos: buckets.today, bucket: .today)
+        }
+        if !buckets.tomorrow.isEmpty || draftBucket == .tomorrow {
+            macTaskSection(title: "Tomorrow", count: buckets.tomorrow.count, accent: Tokens.info, soft: Tokens.paper2, todos: buckets.tomorrow, bucket: .tomorrow)
+        }
+        if !buckets.thisWeek.isEmpty || draftBucket == .thisWeek {
+            macTaskSection(title: "This Week", count: buckets.thisWeek.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.thisWeek, bucket: .thisWeek)
+        }
+        if !buckets.later.isEmpty || draftBucket == .later {
+            macTaskSection(title: "Later", count: buckets.later.count, accent: Tokens.inkSoft, soft: Tokens.paper2, todos: buckets.later, bucket: .later)
+        }
+        if !buckets.noDate.isEmpty || draftBucket == .noDate {
+            macTaskSection(title: "No Date", count: buckets.noDate.count, accent: Tokens.muted, soft: Tokens.paper2, todos: buckets.noDate, bucket: .noDate)
+        }
+        if !buckets.completed.isEmpty {
+            macCompletedSection(buckets.completed)
+        }
+    }
+
+    @ViewBuilder
+    private func macTaskSection(title: String, count: Int, accent: Color, soft: Color, todos: [Todo], bucket: DraftBucket?) -> some View {
+        Section {
+            ForEach(todos) { todo in
+                TaskRow(
+                    todo: todo,
+                    isDraftActive: draftBucket != nil,
+                    onToggle: { Task { await viewModel.toggleCompleted(todo) } },
+                    onInfoTap: { editingTodo = todo },
+                    onTitleCommit: { newTitle in
+                        Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
+                    },
+                    onTapWhileDraftActive: { draftFocused = false }
+                )
+                .macSwipeToDelete {
+                    Task { await viewModel.delete(todo) }
+                }
+                // Reproduce the iOS `.listRowInsets` gutter (leading/trailing
+                // Space.lg + 2pt vertical) now that we're off `List`.
+                .padding(.horizontal, Space.lg)
+                .padding(.vertical, 2)
+            }
+
+            if let bucket {
+                if draftBucket == bucket {
+                    DraftTaskRow(
+                        text: $draftText,
+                        isFocused: $draftFocused,
+                        onSubmit: { commitDraft(keepFocus: true) },
+                        onFocusLost: { commitDraft(keepFocus: false) }
+                    )
+                    .frame(minHeight: 40)
+                    .padding(.horizontal, Space.lg)
+                } else {
+                    GhostAddRow(label: "New Task", minHeight: 40) { startDraft(in: bucket) }
+                }
+            }
+        } header: {
+            sectionHeader(title: title, count: count, accent: accent, soft: soft)
+        }
+    }
+
+    @ViewBuilder
+    private func macCompletedSection(_ todos: [Todo]) -> some View {
+        Section {
+            if completedExpanded {
+                ForEach(todos) { todo in
+                    TaskRow(
+                        todo: todo,
+                        isDraftActive: draftBucket != nil,
+                        onToggle: { Task { await viewModel.toggleCompleted(todo) } },
+                        onInfoTap: { editingTodo = todo },
+                        onTitleCommit: { newTitle in
+                            Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
+                        },
+                        onTapWhileDraftActive: { draftFocused = false }
+                    )
+                    .macSwipeToDelete {
+                        Task { await viewModel.delete(todo) }
+                    }
+                    .padding(.horizontal, Space.lg)
+                    .padding(.vertical, 2)
+                }
+            }
+        } header: {
+            // Duplicated from the iOS `completedSection` header so iOS rendering
+            // stays byte-for-byte untouched.
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(Tokens.border)
+                    .frame(height: 1)
+                    .padding(.horizontal, Space.lg)
+                    .padding(.top, Space.md)
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { completedExpanded.toggle() }
+                } label: {
+                    HStack(spacing: Space.sm) {
+                        Image(systemName: completedExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(Tokens.muted)
+                        Text("Completed")
+                            .font(.edHeading)
+                            .foregroundStyle(Tokens.muted)
+                        Text("\(todos.count)")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                            .padding(.horizontal, Space.sm)
+                            .padding(.vertical, 2)
+                            .background(Tokens.paper2, in: Capsule())
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .textCase(nil)
+                .padding(.horizontal, Space.lg)
+                .padding(.top, Space.md)
+                .padding(.bottom, Space.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(Tokens.paper)
+        }
+    }
+    #endif
 
     private struct TaskBuckets {
         var overdue: [Todo] = []
