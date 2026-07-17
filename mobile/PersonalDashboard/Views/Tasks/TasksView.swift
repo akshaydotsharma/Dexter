@@ -554,6 +554,8 @@ private struct DraftTaskRow: View {
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
 
             TextField("New task", text: $text)
+                // macOS: no default bordered field box (issue #285).
+                .plainFieldStyleOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)

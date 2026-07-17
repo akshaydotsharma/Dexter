@@ -32,14 +32,15 @@ extension View {
         // macOS: the custom UIKit pan bridge below doesn't exist. Rows live
         // inside a `List`, so the native trailing swipe-to-delete gives the
         // same affordance with a real destructive full-swipe.
-        // Text-only "Delete", not a Label: on macOS a Label in a swipe action
-        // wraps its icon above the text and renders an oversized, cramped pill
-        // on tall rows. A plain "Delete" gives the clean, full-height red button
-        // Reminders uses (issue #285).
+        // Reminders-style trailing swipe: a red full-height button with a white
+        // trash glyph (icon only — a Label stacks icon-over-text into an
+        // oversized pill on tall rows). `.tint(.red)` fills the reveal red;
+        // full-swipe commits the delete (issue #285).
         return self.swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive, action: action) {
-                Text("Delete")
+                Image(systemName: "trash")
             }
+            .tint(.red)
         }
         #endif
     }

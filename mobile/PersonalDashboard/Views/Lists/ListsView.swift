@@ -196,6 +196,8 @@ private struct ListDetailHeader: View {
             Spacer()
             if isEditing {
                 TextField("", text: $draft)
+                    // macOS: no default bordered field box (issue #285).
+                    .plainFieldStyleOnMac()
                     .font(.edTitle)
                     .foregroundStyle(Tokens.ink)
                     .multilineTextAlignment(.center)
@@ -589,6 +591,8 @@ private struct DraftItemRow: View {
                 .frame(width: 24, height: 24)
 
             TextField("New item", text: $text)
+                // macOS: no default bordered field box (issue #285).
+                .plainFieldStyleOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
