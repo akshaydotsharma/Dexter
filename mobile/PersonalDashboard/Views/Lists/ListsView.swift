@@ -632,6 +632,9 @@ private struct ItemRow: View {
 
             if isEditing {
                 TextField("", text: $draft)
+                    // macOS: drop the default bordered field box so inline
+                    // rename reads as clean text, Reminders-style (issue #285).
+                    .plainFieldStyleOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .submitLabel(.done)
@@ -646,6 +649,12 @@ private struct ItemRow: View {
                     .font(.edBody)
                     .strikethrough(item.checked)
                     .foregroundStyle(item.checked ? Tokens.mutedSoft : Tokens.ink)
+                    // macOS: item text is the tap-to-rename target (the row tap
+                    // is gated off there so the circle stays clickable).
+                    #if os(macOS)
+                    .contentShape(Rectangle())
+                    .onTapGesture { beginBodyTap() }
+                    #endif
             }
             Spacer(minLength: Space.sm)
 
@@ -695,16 +704,12 @@ private struct ItemRow: View {
         // `macTamedListSelection()` on the List. No-op on iOS.
         .macRowHover()
         .contentShape(Rectangle())
-        .onTapGesture {
-            // When a tap-below draft is active, actively flip draftFocused in the parent
-            // so the focus-loss → commitDraft → dismiss cycle fires immediately.
-            // We still return early so this row does not enter its own edit flow.
-            if isDraftActive {
-                onTapWhileDraftActive()
-                return
-            }
-            if !isEditing { beginEditing() }
-        }
+        // iOS: whole-row tap enters rename (circle beats it via high-priority
+        // gesture). macOS scopes tap-to-rename to the item text only so the
+        // completion circle stays clickable (#285).
+        #if os(iOS)
+        .onTapGesture { beginBodyTap() }
+        #endif
         .contextMenu {
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
@@ -712,11 +717,20 @@ private struct ItemRow: View {
         }
     }
 
-    /// Completion control. macOS uses a real `Button` action so a mouse click
-    /// toggles under a selectable `List`; iOS keeps the empty-action +
-    /// high-priority tap-gesture trick that survives the keyboard-dismiss first
-    /// tap (issue #285). Circle visual is shared.
-    @ViewBuilder
+    /// Enters inline rename from a body tap. Shared by iOS (whole-row tap) and
+    /// macOS (item-text tap).
+    private func beginBodyTap() {
+        if isDraftActive {
+            onTapWhileDraftActive()
+            return
+        }
+        if !isEditing { beginEditing() }
+    }
+
+    /// Completion control. macOS uses a clean `Button(action:)` — with the
+    /// full-row tap gated off there, nothing competes for the click. iOS keeps
+    /// the empty-action + high-priority tap gesture so one tap toggles even
+    /// while the inline field owns first responder (#285).
     private var completionButton: some View {
         #if os(macOS)
         Button(action: handleToggle) { completionCircle }
@@ -741,6 +755,10 @@ private struct ItemRow: View {
             }
         }
         .frame(width: 24, height: 24)
+        // Make the whole 24pt frame hittable, not just the 2pt stroke ring —
+        // otherwise a click in the transparent center falls through and the
+        // toggle never fires on macOS (issue #285).
+        .contentShape(Rectangle())
     }
 
     private func beginEditing() {

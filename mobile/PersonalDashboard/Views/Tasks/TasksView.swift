@@ -604,6 +604,9 @@ private struct TaskRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 if isEditing {
                     TextField("", text: $editText)
+                        // macOS: drop the default bordered field box so inline
+                        // edit reads as clean text, Reminders-style (issue #285).
+                        .plainFieldStyleOnMac()
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)
                         .submitLabel(.done)
@@ -618,6 +621,12 @@ private struct TaskRow: View {
                         .strikethrough(todo.completed)
                         .foregroundStyle(todo.completed ? Tokens.mutedSoft : Tokens.ink)
                         .multilineTextAlignment(.leading)
+                        // macOS: title text is the tap-to-edit target (the row
+                        // tap is gated off there so the circle stays clickable).
+                        #if os(macOS)
+                        .contentShape(Rectangle())
+                        .onTapGesture { beginBodyTap() }
+                        #endif
                 }
 
                 if let desc = todo.description, !desc.isEmpty {
@@ -712,33 +721,34 @@ private struct TaskRow: View {
                 .frame(width: Space.xs)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            // When a tap-below draft is active, actively flip draftFocused in the parent
-            // so the focus-loss → commitDraft → dismiss cycle fires immediately.
-            // We still return early so the editor sheet does not open over the keyboard.
-            if isDraftActive {
-                onTapWhileDraftActive()
-                return
-            }
-            // Completed rows ignore body taps; the info icon still works.
-            if todo.completed { return }
-            // Already in inline-edit; let the TextField own the tap.
-            if isEditing { return }
-            editText = todo.title
-            isEditing = true
-            // DispatchQueue.main.async lets the TextField mount before we focus it.
-            DispatchQueue.main.async { titleFocused = true }
-        }
+        // iOS: the WHOLE row is tap-to-edit; the completion circle beats it with
+        // a high-priority gesture (see `completionButton`). On macOS a full-row
+        // tap gesture greedily swallows the circle's click (the circle never
+        // toggles, the row just opens the editor), so macOS scopes tap-to-edit
+        // to the title text only and leaves the circle a clean Button (#285).
+        #if os(iOS)
+        .onTapGesture { beginBodyTap() }
+        #endif
     }
 
-    /// The completion control. On macOS it's a real `Button` whose action
-    /// toggles completion, because a real mouse click fires the button action
-    /// directly (issue #285) — the iOS empty-action + high-priority tap-gesture
-    /// trick never delivers under a selectable `List` on the Mac. On iOS the
-    /// original pattern is kept verbatim: an empty action plus a high-priority
-    /// tap gesture, so one tap toggles even while the inline field owns first
-    /// responder (iOS's "first tap dismisses keyboard" would otherwise eat it).
-    @ViewBuilder
+    /// Enters inline edit from a body tap. Extracted so iOS (whole-row tap) and
+    /// macOS (title-text tap) share one path.
+    private func beginBodyTap() {
+        if isDraftActive {
+            onTapWhileDraftActive()
+            return
+        }
+        if todo.completed { return }
+        if isEditing { return }
+        editText = todo.title
+        isEditing = true
+        DispatchQueue.main.async { titleFocused = true }
+    }
+
+    /// The completion control. macOS uses a clean `Button(action:)` — with the
+    /// full-row tap gated off there, nothing competes for the click. iOS keeps
+    /// the empty-action + high-priority tap gesture so one tap toggles even
+    /// while the inline field owns first responder (#285).
     private var completionButton: some View {
         #if os(macOS)
         Button(action: handleToggle) { completionCircle }
@@ -763,6 +773,10 @@ private struct TaskRow: View {
             }
         }
         .frame(width: 24, height: 24)
+        // Make the whole 24pt frame hittable, not just the 2pt stroke ring —
+        // otherwise a click in the transparent center falls through and the
+        // toggle never fires on macOS (issue #285).
+        .contentShape(Rectangle())
     }
 
     private func commitInlineEdit() {

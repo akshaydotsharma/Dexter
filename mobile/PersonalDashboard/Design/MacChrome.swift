@@ -55,11 +55,13 @@ extension View {
         #if os(macOS)
         self
             .navigationTitle(title)
+            // Two DISTINCT toolbar items, not one group: a group renders the
+            // secondary control and the AS coin inside a single bordered pill,
+            // so they read as merged (issue #285). Separate items get macOS's
+            // standard inter-item spacing and their own chrome.
             .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    trailing()
-                    MacProfilePip()
-                }
+                ToolbarItem(placement: .primaryAction) { trailing() }
+                ToolbarItem(placement: .primaryAction) { MacProfilePip() }
             }
             // Consistent transparent title-bar across every section (issue
             // #285). Some sections lit the toolbar's scrolled-material band (a
@@ -167,7 +169,11 @@ private struct MacRowHover: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    .fill(hovering ? Tokens.paper2 : Color.clear)
+                    // A whisper-subtle tint, not the solid `paper2` surface —
+                    // `paper2` reads as a heavy dark box on a row (issue #285).
+                    // `ink` at low opacity gives Reminders' barely-there hover:
+                    // a faint light wash in dark mode, a faint grey in light.
+                    .fill(hovering ? Tokens.ink.opacity(0.06) : Color.clear)
                     .padding(.horizontal, Space.xs)
             )
             .onHover { hovering = $0 }
