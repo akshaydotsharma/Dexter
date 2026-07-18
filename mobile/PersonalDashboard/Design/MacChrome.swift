@@ -158,23 +158,6 @@ extension View {
         self
         #endif
     }
-
-    /// Makes a `TextField`'s underlying `NSTextField` background fully
-    /// transparent on macOS. `.textFieldStyle(.plain)` drops the border but the
-    /// focused field editor still fills `NSColor.textBackgroundColor` (an opaque
-    /// white box). A SwiftUI `.background(.clear)` can't reach that fill — it
-    /// lives on the AppKit `NSTextField` / its field editor. This walks to the
-    /// enclosing `NSTextField` and clears its fill, border, and focus ring so
-    /// inline editing blends into the paper row (issue #287). Caret + typed text
-    /// are untouched. No-op on iOS. Pair with `plainFieldStyleOnMac()`.
-    @ViewBuilder
-    func clearTextFieldBackgroundOnMac() -> some View {
-        #if os(macOS)
-        self.background(ClearTextFieldBackground())
-        #else
-        self
-        #endif
-    }
 }
 
 #if os(macOS)
@@ -196,63 +179,6 @@ private struct MacRowHover: ViewModifier {
                     NSCursor.pop()
                 }
             }
-    }
-}
-
-/// Transparent-background enforcer for a SwiftUI `TextField` on macOS.
-///
-/// Installed as a `.background(...)` behind the field, it drops a zero-size
-/// `NSView` into the same AppKit subtree as the field's `NSTextField`, then
-/// walks up to that `NSTextField` and clears its fill, border, and focus ring.
-/// The reconfigure runs on `makeNSView` and every `updateNSView`, so it also
-/// re-applies when the field gains focus (SwiftUI re-renders on focus change)
-/// and the field editor is swapped in. Scoped, safe, and a no-op away from
-/// macOS (the whole type is compiled out on iOS).
-private struct ClearTextFieldBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { Self.clearEnclosingTextField(from: view) }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { Self.clearEnclosingTextField(from: nsView) }
-    }
-
-    /// Walk up from our anchor view; at each ancestor search its subtree for the
-    /// nearest `NSTextField` and neutralise its background chrome. Stops at the
-    /// first field found so we only ever touch the field we're backing.
-    private static func clearEnclosingTextField(from anchor: NSView) {
-        var ancestor: NSView? = anchor.superview
-        while let current = ancestor {
-            if let field = firstTextField(in: current) {
-                field.drawsBackground = false
-                field.backgroundColor = .clear
-                field.isBordered = false
-                field.isBezeled = false
-                field.focusRingType = .none
-                if let cell = field.cell as? NSTextFieldCell {
-                    cell.drawsBackground = false
-                    cell.backgroundColor = .clear
-                }
-                // When focused, the live field editor draws its own fill — clear
-                // that too so the white box doesn't reappear while typing.
-                if let editor = field.currentEditor() as? NSTextView {
-                    editor.drawsBackground = false
-                    editor.backgroundColor = .clear
-                }
-                return
-            }
-            ancestor = current.superview
-        }
-    }
-
-    private static func firstTextField(in view: NSView) -> NSTextField? {
-        for sub in view.subviews {
-            if let field = sub as? NSTextField { return field }
-            if let found = firstTextField(in: sub) { return found }
-        }
-        return nil
     }
 }
 

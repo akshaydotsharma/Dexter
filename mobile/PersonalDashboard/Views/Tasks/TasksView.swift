@@ -642,11 +642,24 @@ private struct DraftTaskRow: View {
                 // Align circle center to firstTextBaseline as TaskRow does.
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
 
+            // macOS uses a dedicated borderless AppKit field that clears the
+            // shared window field editor's grey fill on every focus (issue
+            // #287); the SwiftUI TextField could not reach that fill on the
+            // autofocusing draft row. iOS keeps the SwiftUI TextField unchanged.
+            #if os(macOS)
+            MacClearTextField(
+                placeholder: "New task",
+                text: $text,
+                isFocused: Binding(
+                    get: { isFocused.wrappedValue },
+                    set: { isFocused.wrappedValue = $0 }
+                ),
+                onSubmit: onSubmit,
+                onFocusChange: { focused in if !focused { onFocusLost() } }
+            )
+            .accessibilityLabel("New task")
+            #else
             TextField("New task", text: $text)
-                // macOS: no default bordered field box (issue #285); also clear
-                // the focused field editor's opaque white fill (issue #287).
-                .plainFieldStyleOnMac()
-                .clearTextFieldBackgroundOnMac()
                 .font(TaskRowMetrics.titleFont)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
@@ -656,6 +669,7 @@ private struct DraftTaskRow: View {
                     if !nowFocused { onFocusLost() }
                 }
                 .accessibilityLabel("New task")
+            #endif
 
             Spacer(minLength: 0)
         }
@@ -708,13 +722,23 @@ private struct TaskRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 if isEditing {
+                    // macOS: borderless AppKit field that clears the shared
+                    // field editor's grey fill on every focus, so inline rename
+                    // reads as clean text on the paper row (issue #287). iOS
+                    // keeps the SwiftUI TextField unchanged.
+                    #if os(macOS)
+                    MacClearTextField(
+                        placeholder: "",
+                        text: $editText,
+                        isFocused: Binding(
+                            get: { titleFocused },
+                            set: { titleFocused = $0 }
+                        ),
+                        onSubmit: { commitInlineEdit() },
+                        onFocusChange: { focused in if !focused { commitInlineEdit() } }
+                    )
+                    #else
                     TextField("", text: $editText)
-                        // macOS: drop the default bordered field box so inline
-                        // edit reads as clean text, Reminders-style (issue #285),
-                        // and clear the focused field editor's opaque white fill
-                        // so it blends into the paper row (issue #287).
-                        .plainFieldStyleOnMac()
-                        .clearTextFieldBackgroundOnMac()
                         .font(TaskRowMetrics.titleFont)
                         .foregroundStyle(Tokens.ink)
                         .submitLabel(.done)
@@ -723,6 +747,7 @@ private struct TaskRow: View {
                         .onChange(of: titleFocused) { _, nowFocused in
                             if !nowFocused { commitInlineEdit() }
                         }
+                    #endif
                 } else {
                     Text(todo.title)
                         .font(TaskRowMetrics.titleFont)
