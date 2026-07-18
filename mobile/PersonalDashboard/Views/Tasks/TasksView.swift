@@ -1,5 +1,8 @@
 import SwiftUI
 import Combine
+#if os(macOS)
+import AppKit
+#endif
 
 struct TasksView: View {
     @State private var viewModel = TodosViewModel()
@@ -129,6 +132,13 @@ struct TasksView: View {
 
     // MARK: - Tap-below helpers
 
+    // iOS uses the ghost→draft swap + programmatic autofocus below. macOS was
+    // split off (#287) to a PERSISTENT native add-field (`MacAddTaskRow`) the
+    // user clicks directly — the programmatic focus here raced the initiating
+    // mouse-up on macOS and lost, requiring a second click. These two helpers
+    // are therefore iOS-only now; `suggestedDueDate` is shared with the macOS
+    // add-field so it stays unguarded.
+    #if os(iOS)
     private func startDraft(in bucket: DraftBucket) {
         draftBucket = bucket
         draftText = ""
@@ -156,6 +166,7 @@ struct TasksView: View {
             draftFocused = false
         }
     }
+    #endif
 
     private func suggestedDueDate(for bucket: DraftBucket) -> Date? {
         let cal = Calendar.current
@@ -180,6 +191,17 @@ struct TasksView: View {
     // Empty-state fallback: single tap-below seeding a No Date task.
     @ViewBuilder
     private var emptyStateDraftRow: some View {
+        #if os(macOS)
+        // macOS: a persistent one-click add-field (see MacAddTaskRow / #287)
+        // instead of the invisible tap-zone → autofocusing draft row.
+        MacAddTaskRow(onCreate: { title in
+            Task { await viewModel.create(title: title, dueDate: suggestedDueDate(for: .noDate)) }
+        })
+        .id("macAdd-empty")
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets())
+        #else
         if draftBucket == .noDate {
             DraftTaskRow(
                 text: $draftText,
@@ -204,6 +226,7 @@ struct TasksView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets())
         }
+        #endif
     }
 
     // MARK: - All caught up
@@ -230,6 +253,17 @@ struct TasksView: View {
                     .multilineTextAlignment(.center)
             }
 
+            #if os(macOS)
+            // macOS: a persistent one-click add-field (see MacAddTaskRow / #287)
+            // rather than a button that reveals an autofocusing draft row (which
+            // had the second-click focus race). Width-capped so it sits neatly
+            // under the celebratory block.
+            MacAddTaskRow(onCreate: { title in
+                Task { await viewModel.create(title: title, dueDate: suggestedDueDate(for: .noDate)) }
+            })
+            .id("macAdd-allcaughtup")
+            .frame(maxWidth: 320)
+            #else
             // Quick-add: reuses the inline-draft flow. Tapping flips
             // draftBucket to .noDate, which hides this state (draftBucket != nil)
             // and surfaces the DraftTaskRow inside the "No Date" section below.
@@ -249,6 +283,7 @@ struct TasksView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Add a task")
+            #endif
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, Space.xxxl)
@@ -281,8 +316,15 @@ struct TasksView: View {
             .frame(height: 96)
             .contentShape(Rectangle())
             // Commit any in-progress edit: draftFocused = false covers the
-            // tap-below draft; hideKeyboard() covers a focused task row.
-            .onTapGesture { draftFocused = false; hideKeyboard() }
+            // tap-below draft; hideKeyboard() covers a focused task row. On
+            // macOS, resign first responder so a click in the empty area below
+            // the list ends the persistent add-field's edit → commit (#287 bug 2).
+            .onTapGesture {
+                draftFocused = false; hideKeyboard()
+                #if os(macOS)
+                macResignFirstResponder()
+                #endif
+            }
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets())
@@ -416,6 +458,22 @@ struct TasksView: View {
 
             // Tap-below affordance for this section (skipped for Overdue).
             if let bucket {
+                #if os(macOS)
+                // macOS: a PERSISTENT native add-field the user clicks directly.
+                // Focus comes from the real mouse-down — one click, no race —
+                // replacing the iOS ghost→draft swap + programmatic autofocus
+                // that lost first responder to the List and needed a second
+                // click (#287, bug 1). Zero listRowInsets: MacAddTaskRow owns
+                // its own insets so its hairline aligns with the Completed
+                // separator, exactly like the ghost it replaces.
+                MacAddTaskRow(onCreate: { title in
+                    Task { await viewModel.create(title: title, dueDate: suggestedDueDate(for: bucket)) }
+                })
+                .id("macAdd-\(bucket.rawValue)")
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
+                #else
                 if draftBucket == bucket {
                     DraftTaskRow(
                         text: $draftText,
@@ -446,6 +504,7 @@ struct TasksView: View {
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets())
                 }
+                #endif
             }
         } header: {
             sectionHeader(title: title, count: count, accent: accent, soft: soft)
@@ -513,8 +572,14 @@ struct TasksView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // Commit any in-progress edit alongside the expand/collapse toggle so the
                 // keyboard collapses when the user taps the Completed header: draftFocused = false
-                // covers the tap-below draft; hideKeyboard() covers a focused task row.
-                .simultaneousGesture(TapGesture().onEnded { draftFocused = false; hideKeyboard() })
+                // covers the tap-below draft; hideKeyboard() covers a focused task row. On macOS,
+                // resign first responder so the persistent add-field commits (#287 bug 2).
+                .simultaneousGesture(TapGesture().onEnded {
+                    draftFocused = false; hideKeyboard()
+                    #if os(macOS)
+                    macResignFirstResponder()
+                    #endif
+                })
             }
             .background(Tokens.paper)
         }
@@ -540,9 +605,15 @@ struct TasksView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.paper)
         // Tapping a section header commits any in-progress edit: draftFocused = false
-        // covers the tap-below draft; hideKeyboard() covers a focused task row.
+        // covers the tap-below draft; hideKeyboard() covers a focused task row. On macOS,
+        // resign first responder so the persistent add-field commits (#287 bug 2).
         .contentShape(Rectangle())
-        .onTapGesture { draftFocused = false; hideKeyboard() }
+        .onTapGesture {
+            draftFocused = false; hideKeyboard()
+            #if os(macOS)
+            macResignFirstResponder()
+            #endif
+        }
     }
 
     private func placeholderRow(_ text: String) -> some View {
@@ -678,6 +749,108 @@ private struct DraftTaskRow: View {
         .contentShape(Rectangle())
     }
 }
+
+// MARK: - macOS persistent add-row (#287)
+
+#if os(macOS)
+/// Resigns the key window's first responder, ending any active inline-edit
+/// session. Used by section headers and the empty tap zone so clicking away
+/// from the persistent add-field ends its edit → commit/dismiss (#287, bug 2).
+@MainActor
+private func macResignFirstResponder() {
+    NSApp.keyWindow?.makeFirstResponder(nil)
+}
+
+/// macOS "New Task" add-row. Unlike the iOS ghost→draft swap, this field is
+/// ALWAYS present, so the user's real mouse-down focuses it natively — one
+/// click, no programmatic-focus race (that race was #287 bug 1). Focus, text,
+/// and commit are driven entirely by the field's own AppKit events
+/// (`controlTextDidBeginEditing` / `controlTextDidEndEditing` / `insertNewline`),
+/// so there is no shared programmatic focus state fighting the List.
+///
+/// - At rest (empty, unfocused): a muted "New Task" placeholder + an outline
+///   `plus.circle` on the checkbox column + the section hairline — visually the
+///   same as the `GhostAddRow` it replaces on macOS.
+/// - While editing: the bullet becomes an empty stroked circle (like an
+///   unchecked task) and the field shows the transparent inline editor
+///   (`ClearBackgroundTextField` already suppresses the grey field-editor box).
+///
+/// Commit paths:
+/// - Return → create the task, clear the field, keep focus (chain a new draft).
+/// - Blur (click another row / header / empty area, or Escape) → create if
+///   non-empty, clear. Escape clears first, so it dismisses without creating.
+private struct MacAddTaskRow: View {
+    /// Called with the trimmed, non-empty title on commit.
+    let onCreate: (String) -> Void
+
+    @State private var text: String = ""
+    // Driven by the field's own begin/end-editing events (via MacClearTextField's
+    // two-way isFocused binding), NOT set programmatically — so it never forces
+    // focus and never races the click.
+    @State private var isFocused: Bool = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Section hairline — identical construction to GhostAddRow and the
+            // Completed separator so the add-row aligns and reads as one system.
+            Rectangle()
+                .fill(Tokens.border)
+                .frame(height: 1)
+                .padding(.horizontal, Space.lg)
+
+            HStack(spacing: Space.md) {
+                bullet
+                    // Fixed 24×24 frame matching GhostAddRow / the real checkbox
+                    // column so the bullet x-position never shifts on focus.
+                    .frame(width: 24, height: 24)
+
+                MacClearTextField(
+                    placeholder: "New Task",
+                    text: $text,
+                    isFocused: $isFocused,
+                    onSubmit: { commit() },
+                    onFocusChange: { focused in if !focused { commit() } },
+                    placeholderColor: Tokens.mutedSoft
+                )
+                .accessibilityLabel("New Task")
+
+                Spacer(minLength: 0)
+            }
+            // Leading = Space.lg (hairline/base column) + Space.md (checkbox
+            // column) so the bullet lands at the real checkbox x — same as
+            // GhostAddRow.
+            .padding(.leading, Space.lg + Space.md)
+            .padding(.trailing, Space.lg)
+            .frame(maxHeight: .infinity)
+        }
+        .frame(minHeight: 40)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var bullet: some View {
+        if isFocused {
+            // Editing: an empty stroked circle, matching an unchecked TaskRow.
+            Circle()
+                .stroke(Tokens.borderStrong, lineWidth: 2)
+                .frame(width: TaskRowMetrics.circleInner, height: TaskRowMetrics.circleInner)
+        } else {
+            // At rest: the ghost's outline plus, lightest neutral + light weight.
+            Image(systemName: "plus.circle")
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(Tokens.mutedSoft)
+        }
+    }
+
+    /// Promote the current text to a real task (if non-empty) and reset the
+    /// field. Called on Return (field stays focused to chain) and on blur.
+    private func commit() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { onCreate(trimmed) }
+        text = ""
+    }
+}
+#endif
 
 // MARK: - Row
 

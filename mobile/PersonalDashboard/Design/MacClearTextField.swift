@@ -96,8 +96,28 @@ struct MacClearTextField: NSViewRepresentable {
     /// Fired whenever the field's editing focus changes; callers use the
     /// `false` edge to commit on blur.
     let onFocusChange: (Bool) -> Void
+    /// Optional placeholder color override. When nil, AppKit's default
+    /// placeholder styling is used. The macOS Tasks add-row passes
+    /// `Tokens.mutedSoft` so the resting field matches the old ghost row (#287).
+    var placeholderColor: Color? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    /// Apply the placeholder as either a plain string (default styling) or an
+    /// attributed string tinted with `placeholderColor` in the field's font,
+    /// so the resting add-field reads as the same muted "New Task" as the ghost
+    /// row it replaces (#287).
+    private func applyPlaceholder(to field: ClearBackgroundTextField) {
+        guard let placeholderColor else {
+            field.placeholderString = placeholder
+            return
+        }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor(placeholderColor),
+            .font: field.font ?? NSFont.systemFont(ofSize: 15)
+        ]
+        field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: attrs)
+    }
 
     func makeNSView(context: Context) -> ClearBackgroundTextField {
         let field = ClearBackgroundTextField()
@@ -116,7 +136,7 @@ struct MacClearTextField: NSViewRepresentable {
         // Text it toggles with.
         field.font = NSFont(name: "Inter-Regular", size: 15) ?? .systemFont(ofSize: 15)
         field.textColor = NSColor(Tokens.ink)
-        field.placeholderString = placeholder
+        applyPlaceholder(to: field)
         field.stringValue = text
         if let cell = field.cell as? NSTextFieldCell {
             cell.drawsBackground = false
@@ -140,7 +160,7 @@ struct MacClearTextField: NSViewRepresentable {
         if !field.isEditingNow, field.stringValue != text {
             field.stringValue = text
         }
-        field.placeholderString = placeholder
+        applyPlaceholder(to: field)
         field.wantsFocus = isFocused
         // Deferred a runloop tick so the window/hierarchy is settled (the draft
         // row is inserted and focused asynchronously by the caller).
@@ -181,6 +201,17 @@ struct MacClearTextField: NSViewRepresentable {
             textView: NSTextView,
             doCommandBy selector: Selector
         ) -> Bool {
+            if selector == #selector(NSResponder.cancelOperation(_:)) {
+                // Escape: abandon the draft/rename without committing. Clear the
+                // field then resign first responder; the resulting end-editing
+                // sees empty text, so no task is created and no rename is saved
+                // (#287, outcome 4). The empty-text commit is guarded downstream.
+                textView.string = ""
+                control.stringValue = ""
+                parent.text = ""
+                control.window?.makeFirstResponder(nil)
+                return true
+            }
             if selector == #selector(NSResponder.insertNewline(_:)) {
                 // Return: push current text into the binding, commit, then clear
                 // the field so the draft can chain into the next new task. We
