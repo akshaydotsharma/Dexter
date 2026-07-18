@@ -643,8 +643,10 @@ private struct DraftTaskRow: View {
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
 
             TextField("New task", text: $text)
-                // macOS: no default bordered field box (issue #285).
+                // macOS: no default bordered field box (issue #285); also clear
+                // the focused field editor's opaque white fill (issue #287).
                 .plainFieldStyleOnMac()
+                .clearTextFieldBackgroundOnMac()
                 .font(TaskRowMetrics.titleFont)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
@@ -708,8 +710,11 @@ private struct TaskRow: View {
                 if isEditing {
                     TextField("", text: $editText)
                         // macOS: drop the default bordered field box so inline
-                        // edit reads as clean text, Reminders-style (issue #285).
+                        // edit reads as clean text, Reminders-style (issue #285),
+                        // and clear the focused field editor's opaque white fill
+                        // so it blends into the paper row (issue #287).
                         .plainFieldStyleOnMac()
+                        .clearTextFieldBackgroundOnMac()
                         .font(TaskRowMetrics.titleFont)
                         .foregroundStyle(Tokens.ink)
                         .submitLabel(.done)
