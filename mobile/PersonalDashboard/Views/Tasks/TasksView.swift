@@ -12,14 +12,6 @@ struct TasksView: View {
     @State private var draftBucket: DraftBucket? = nil
     @State private var draftText: String = ""
     @FocusState private var draftFocused: Bool
-    // macOS-only: an always-empty selection set for the `List`. Paired with
-    // `.selectionDisabled(true)` (via `macTamedListSelection`) to try to stop
-    // `List` painting its grey selection/edit highlight behind a row whose
-    // inline TextField holds focus (issue #285). Unused on iOS.
-    #if os(macOS)
-    @State private var macRowSelection = Set<UUID>()
-    #endif
-
     @Bindable var router: AppRouter
 
     var body: some View {
@@ -47,23 +39,21 @@ struct TasksView: View {
                 // scrolled clear of the keyboard (SwiftUI's default List avoidance
                 // won't lift it because there's content below the draft).
                 ScrollViewReader { proxy in
-                    // macOS: bind an always-empty selection set and disable
-                    // selection (via `.macTamedListSelection()` below) to try to
-                    // suppress the grey highlight `List` paints behind the row
-                    // being inline-edited (issue #285). iOS keeps the plain
-                    // initializer, byte-for-byte unchanged.
-                    #if os(macOS)
-                    let listView = List(selection: $macRowSelection) { taskListRows }
-                    #else
+                    // Plain, non-selectable `List` on both platforms. macOS
+                    // gets NO selection binding: a selectable macOS List paints
+                    // a grey row-hover highlight, which #287 wants gone. Without
+                    // a selection model there is nothing to highlight on hover,
+                    // and `.macTamedListSelection()` (selectionDisabled) below
+                    // still guards against the inline-edit grey from issue #285.
                     let listView = List { taskListRows }
-                    #endif
                     listView
                     .listStyle(.plain)
                     .listSectionSpacingCompat(0)
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
-                    // macOS: kill the hard full-bleed grey selection bar; rows
-                    // get a soft inset hover instead via `.macRowHover()`.
+                    // macOS: mark rows non-selectable so `List` never paints a
+                    // selection/edit highlight behind a focused inline-edit row
+                    // (issue #285). Rows carry their own tap gestures + buttons.
                     .macTamedListSelection()
                     .refreshable { await viewModel.load() }
                     // When the inline draft gains focus, scroll it clear of the keyboard.
@@ -112,12 +102,19 @@ struct TasksView: View {
                 router.focus = nil
             }
         }
+        // New-task editor. On iOS a full sheet; on macOS the same restyled
+        // editor presented as a compact modal sheet (the FAB has no anchor for
+        // a popover — the per-task detail editor is the popover, issue #287).
         .sheet(isPresented: $showingEditor) {
             TaskEditorSheet(viewModel: viewModel, todo: nil)
         }
+        // Detail editor from a row's info button. iOS only — macOS presents
+        // this as a popover anchored to the info button inside `TaskRow`.
+        #if os(iOS)
         .sheet(item: $editingTodo) { todo in
             TaskEditorSheet(viewModel: viewModel, todo: todo)
         }
+        #endif
         .alert("Couldn't load tasks",
                isPresented: Binding(
                    get: { viewModel.errorMessage != nil },
@@ -400,6 +397,7 @@ struct TasksView: View {
             ForEach(todos) { todo in
                 TaskRow(
                     todo: todo,
+                    viewModel: viewModel,
                     isDraftActive: draftBucket != nil,
                     onToggle: { Task { await viewModel.toggleCompleted(todo) } },
                     onInfoTap: { editingTodo = todo },
@@ -413,7 +411,7 @@ struct TasksView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.rowTrailingGutter))
+                .listRowInsets(EdgeInsets(top: TaskRowMetrics.listVInset, leading: Space.lg, bottom: TaskRowMetrics.listVInset, trailing: Space.rowTrailingGutter))
             }
 
             // Tap-below affordance for this section (skipped for Overdue).
@@ -461,6 +459,7 @@ struct TasksView: View {
                 ForEach(todos) { todo in
                     TaskRow(
                         todo: todo,
+                        viewModel: viewModel,
                         isDraftActive: draftBucket != nil,
                         onToggle: { Task { await viewModel.toggleCompleted(todo) } },
                         onInfoTap: { editingTodo = todo },
@@ -474,7 +473,7 @@ struct TasksView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.rowTrailingGutter))
+                    .listRowInsets(EdgeInsets(top: TaskRowMetrics.listVInset, leading: Space.lg, bottom: TaskRowMetrics.listVInset, trailing: Space.rowTrailingGutter))
                 }
             }
         } header: {
@@ -558,6 +557,71 @@ struct TasksView: View {
     }
 }
 
+// MARK: - Row metrics (macOS density)
+
+/// Row sizing shared by `TaskRow` and `DraftTaskRow`. macOS uses a denser,
+/// slightly smaller variant to match the Apple Reminders row rhythm (issue
+/// #287); iOS keeps its established sizing byte-for-byte. These are LOCAL to
+/// the Tasks views — the shared design tokens (`.edBody`, `Space`) are left
+/// untouched so no other screen shifts.
+private enum TaskRowMetrics {
+    /// Vertical padding inside a row. Tighter on macOS for denser rows.
+    static var verticalPadding: CGFloat {
+        #if os(macOS)
+        Space.xs
+        #else
+        Space.sm
+        #endif
+    }
+
+    /// Extra per-row vertical inset applied via `listRowInsets`. Zero on macOS
+    /// (density); 2pt on iOS (unchanged).
+    static var listVInset: CGFloat {
+        #if os(macOS)
+        0
+        #else
+        2
+        #endif
+    }
+
+    /// Completion-circle inner ring diameter (~1pt smaller on macOS).
+    static var circleInner: CGFloat {
+        #if os(macOS)
+        21
+        #else
+        22
+        #endif
+    }
+
+    /// Completion-circle outer hit frame (~1pt smaller on macOS).
+    static var circleOuter: CGFloat {
+        #if os(macOS)
+        23
+        #else
+        24
+        #endif
+    }
+
+    /// Checkmark glyph size (~1pt smaller on macOS).
+    static var checkFont: Font {
+        #if os(macOS)
+        .system(size: 10, weight: .bold)
+        #else
+        .system(size: 11, weight: .bold)
+        #endif
+    }
+
+    /// Title font. macOS shrinks Inter to 15pt (~1pt under the shared
+    /// `.edBody`) WITHOUT touching that token; iOS keeps `.edBody`.
+    static var titleFont: Font {
+        #if os(macOS)
+        .custom("Inter-Regular", size: 15, relativeTo: .body)
+        #else
+        .edBody
+        #endif
+    }
+}
+
 // MARK: - Inline draft row
 
 /// Inline draft row that appears when the user taps below the last task.
@@ -573,15 +637,15 @@ private struct DraftTaskRow: View {
             // Empty stroked circle — identical to TaskRow's unchecked bullet.
             Circle()
                 .stroke(Tokens.borderStrong, lineWidth: 2)
-                .frame(width: 22, height: 22)
-                .frame(width: 24, height: 24)
+                .frame(width: TaskRowMetrics.circleInner, height: TaskRowMetrics.circleInner)
+                .frame(width: TaskRowMetrics.circleOuter, height: TaskRowMetrics.circleOuter)
                 // Align circle center to firstTextBaseline as TaskRow does.
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
 
             TextField("New task", text: $text)
                 // macOS: no default bordered field box (issue #285).
                 .plainFieldStyleOnMac()
-                .font(.edBody)
+                .font(TaskRowMetrics.titleFont)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
                 .focused(isFocused)
@@ -593,7 +657,7 @@ private struct DraftTaskRow: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.vertical, Space.sm)
+        .padding(.vertical, TaskRowMetrics.verticalPadding)
         .padding(.horizontal, Space.md)
         .contentShape(Rectangle())
     }
@@ -603,11 +667,17 @@ private struct DraftTaskRow: View {
 
 private struct TaskRow: View {
     let todo: Todo
+    /// Backing view model. On macOS it builds the inline detail-editor popover
+    /// anchored to this row's info button (issue #287). Unused on iOS, where
+    /// the info tap opens a sheet via `onInfoTap`; stored on both so the
+    /// initializer stays identical and iOS behaviour is byte-for-byte unchanged.
+    let viewModel: TodosViewModel
     /// When a tap-below draft is active, suppress opening the editor sheet so the tap
     /// only dismisses the draft keyboard — nothing re-steals first responder.
     var isDraftActive: Bool = false
     let onToggle: () -> Void
-    /// Tapping the trailing info icon opens the full editor sheet.
+    /// Tapping the trailing info icon opens the full editor (a sheet on iOS, a
+    /// popover on macOS).
     let onInfoTap: () -> Void
     /// Inline title commit (tap row body → edit title → submit / focus loss).
     let onTitleCommit: (String) -> Void
@@ -619,6 +689,12 @@ private struct TaskRow: View {
     @State private var editText: String = ""
     @FocusState private var titleFocused: Bool
     @Environment(\.openURL) private var openURL
+    // macOS: local presentation state for the Reminders-style detail popover
+    // anchored to the info button. iOS presents the editor as a sheet driven
+    // by the parent's `editingTodo`, so this state is macOS-only.
+    #if os(macOS)
+    @State private var showingEditorPopover = false
+    #endif
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -634,7 +710,7 @@ private struct TaskRow: View {
                         // macOS: drop the default bordered field box so inline
                         // edit reads as clean text, Reminders-style (issue #285).
                         .plainFieldStyleOnMac()
-                        .font(.edBody)
+                        .font(TaskRowMetrics.titleFont)
                         .foregroundStyle(Tokens.ink)
                         .submitLabel(.done)
                         .focused($titleFocused)
@@ -644,7 +720,7 @@ private struct TaskRow: View {
                         }
                 } else {
                     Text(todo.title)
-                        .font(.edBody)
+                        .font(TaskRowMetrics.titleFont)
                         .strikethrough(todo.completed)
                         .foregroundStyle(todo.completed ? Tokens.mutedSoft : Tokens.ink)
                         .multilineTextAlignment(.leading)
@@ -722,7 +798,15 @@ private struct TaskRow: View {
 
             Spacer(minLength: 0)
 
-            Button(action: onInfoTap) {
+            Button {
+                #if os(macOS)
+                // macOS: open the Reminders-style detail popover anchored to
+                // this button (issue #287) rather than the parent sheet.
+                showingEditorPopover = true
+                #else
+                onInfoTap()
+                #endif
+            } label: {
                 Image(systemName: "info.circle")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(Tokens.mutedSoft)
@@ -730,6 +814,13 @@ private struct TaskRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // macOS: the editor emanates from the info button as a popover, so
+            // it visually belongs to this task. iOS keeps the parent `.sheet`.
+            #if os(macOS)
+            .popover(isPresented: $showingEditorPopover, arrowEdge: .leading) {
+                TaskEditorSheet(viewModel: viewModel, todo: todo)
+            }
+            #endif
             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
             .accessibilityLabel("Edit task details")
         }
@@ -792,14 +883,14 @@ private struct TaskRow: View {
             Circle()
                 .stroke(todo.completed ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
                 .background(todo.completed ? Tokens.success.clipShape(Circle()) : nil)
-                .frame(width: 22, height: 22)
+                .frame(width: TaskRowMetrics.circleInner, height: TaskRowMetrics.circleInner)
             if todo.completed {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(TaskRowMetrics.checkFont)
                     .foregroundStyle(Tokens.paper)
             }
         }
-        .frame(width: 24, height: 24)
+        .frame(width: TaskRowMetrics.circleOuter, height: TaskRowMetrics.circleOuter)
         // Make the whole 24pt frame hittable, not just the 2pt stroke ring —
         // otherwise a click in the transparent center falls through and the
         // toggle never fires on macOS (issue #285).
@@ -876,6 +967,17 @@ private struct TaskEditorSheet: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
+        iosBody
+        #endif
+    }
+
+    // MARK: - iOS editor (full sheet, unchanged)
+
+    #if os(iOS)
+    private var iosBody: some View {
         NavigationStack {
             ZStack {
                 Tokens.paper.ignoresSafeArea()
@@ -1012,6 +1114,230 @@ private struct TaskEditorSheet: View {
             content()
         }
     }
+    #endif
+
+    // MARK: - macOS editor (Reminders-style inspector popover, issue #287)
+
+    #if os(macOS)
+    private var macBody: some View {
+        VStack(spacing: 0) {
+            // Header: Cancel · title · Save — the Reminders "New Reminder"
+            // grammar. Commit/dismiss live here instead of a window toolbar
+            // because this content is presented as a popover / compact sheet.
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Tokens.muted)
+                Spacer()
+                Text(isEditing ? "Details" : "New Task")
+                    .font(.edHeading)
+                    .foregroundStyle(Tokens.ink)
+                Spacer()
+                Button(isEditing ? "Save" : "Add") { Task { await save() } }
+                    .buttonStyle(.plain)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(isTitleEmpty ? Tokens.muted : Tokens.accentTasks)
+                    .disabled(isTitleEmpty)
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    // Title + Notes — first grouped card, no icons (Reminders).
+                    macGroup {
+                        TextField("Title", text: $title, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .lineLimit(1...3)
+                            .font(.edBodyMedium)
+                            .foregroundStyle(Tokens.ink)
+                            .padding(.horizontal, Space.md)
+                            .padding(.vertical, Space.sm)
+                        macRowDivider
+                        TextField("Notes", text: $descriptionText, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .lineLimit(2...6)
+                            .font(.edBody)
+                            .foregroundStyle(Tokens.inkSoft)
+                            .padding(.horizontal, Space.md)
+                            .padding(.vertical, Space.sm)
+                    }
+
+                    // Date & Time
+                    macSectionHeader("Date & Time")
+                    macGroup {
+                        HStack(spacing: Space.md) {
+                            macIconTile("calendar", Tokens.accentToday)
+                            Text("Due Date").font(.edBody).foregroundStyle(Tokens.ink)
+                            Spacer()
+                            Toggle("", isOn: $hasDueDate.animation())
+                                .labelsHidden()
+                                .tint(Tokens.accentTasks)
+                        }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm)
+
+                        if hasDueDate {
+                            macRowDivider
+                            HStack(spacing: Space.md) {
+                                macIconTile("clock", Tokens.accentTasks)
+                                DatePicker("", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
+                                    .labelsHidden()
+                                    .datePickerStyle(.compact)
+                                    .tint(Tokens.accentTasks)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, Space.md)
+                            .padding(.vertical, Space.sm)
+                        }
+                    }
+
+                    // Organization (Tag)
+                    macSectionHeader("Organization")
+                    macGroup {
+                        VStack(alignment: .leading, spacing: Space.sm) {
+                            HStack(spacing: Space.md) {
+                                macIconTile("tag.fill", Tokens.accentNotes)
+                                Text("Tag").font(.edBody).foregroundStyle(Tokens.ink)
+                                Spacer()
+                            }
+                            TagChipPicker(selection: $tag, tags: availableTags)
+                        }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm)
+                    }
+
+                    // Flag & Priority
+                    macSectionHeader("Flag & Priority")
+                    macGroup {
+                        HStack(spacing: Space.md) {
+                            macIconTile("flag.fill", Tokens.warning)
+                            Text("Priority").font(.edBody).foregroundStyle(Tokens.ink)
+                            Spacer()
+                            Menu {
+                                ForEach(TaskPriority.allCases, id: \.self) { p in
+                                    Button(p.label) { priority = p }
+                                }
+                            } label: {
+                                HStack(spacing: Space.xs) {
+                                    Text(priority.label)
+                                        .font(.edBody)
+                                        .foregroundStyle(Tokens.inkSoft)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(Tokens.muted)
+                                }
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                        }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm)
+                    }
+
+                    // Location (Address + Google Maps link)
+                    macSectionHeader("Location")
+                    macGroup {
+                        VStack(alignment: .leading, spacing: Space.sm) {
+                            HStack(spacing: Space.md) {
+                                macIconTile("mappin", Tokens.accentFinance)
+                                Text("Address").font(.edBody).foregroundStyle(Tokens.ink)
+                                if isResolvingAddress {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Spacer()
+                            }
+                            TextField("Street address or area", text: $address, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...3)
+                                .font(.edSubheadline)
+                                .foregroundStyle(Tokens.inkSoft)
+                        }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm)
+
+                        macRowDivider
+
+                        HStack(spacing: Space.sm) {
+                            macIconTile("map.fill", Tokens.accentTasks)
+                            TextField("Google Maps link", text: $googleMapsLink)
+                                .textFieldStyle(.plain)
+                                .autocorrectionDisabled(true)
+                                .font(.edSubheadline)
+                                .foregroundStyle(Tokens.inkSoft)
+                                .onChange(of: googleMapsLink) { _, newValue in
+                                    scheduleAddressResolve(from: newValue)
+                                }
+                            if let url = editorMapsURL {
+                                Button {
+                                    openURL(url)
+                                } label: {
+                                    Image(systemName: "arrow.up.right.square")
+                                        .font(.system(size: 15, weight: .medium))
+                                        .foregroundStyle(Tokens.accentTasks)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Open saved Google Maps link")
+                            }
+                        }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm)
+                    }
+                }
+                .padding(Space.lg)
+            }
+        }
+        .frame(width: 360, height: 520)
+        .background(Tokens.paper)
+        .onAppear(perform: prefill)
+    }
+
+    private var isTitleEmpty: Bool {
+        title.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Thin inset separator between rows within a grouped card.
+    private var macRowDivider: some View {
+        Rectangle()
+            .fill(Tokens.divider)
+            .frame(height: 0.5)
+            .padding(.leading, Space.md)
+    }
+
+    /// Gray eyebrow header above a grouped card (Reminders section header).
+    private func macSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .eyebrow()
+            .padding(.horizontal, Space.xs)
+            .padding(.top, Space.xs)
+    }
+
+    /// A rounded inset card grouping one or more rows, with a hairline border.
+    @ViewBuilder
+    private func macGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
+    /// Small colored rounded tile carrying an SF Symbol — the signature
+    /// Reminders row-icon affordance, tinted from the app's existing tokens.
+    private func macIconTile(_ symbol: String, _ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(color)
+            .frame(width: 22, height: 22)
+            .overlay(
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+            )
+    }
+    #endif
 
     private func prefill() {
         guard let todo else { return }

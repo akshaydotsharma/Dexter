@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Native macOS window chrome, shared across every ported section view
 /// (issue #283).
@@ -158,26 +161,24 @@ extension View {
 }
 
 #if os(macOS)
-/// Inset rounded hover highlight for a macOS List row. Sits behind the row
-/// content (the row's own leading priority bar / glyphs stay on top) and is
-/// inset from the row edges so the highlight reads as a soft rounded pill, the
-/// way Reminders renders row hover — not a full-bleed bar.
+/// Row hover behaviour for a macOS List row. The background tint is gone
+/// (issue #287) — the row stays flat on hover, matching a cleaner Reminders
+/// read. Hovering instead switches the pointer to an I-beam to signal that the
+/// title is click-to-edit text. Scoped to task rows only (does not touch
+/// `MacHeaderIconChrome`, which keeps its own hover chrome).
 private struct MacRowHover: ViewModifier {
-    @State private var hovering = false
-
     func body(content: Content) -> some View {
         content
-            .background(
-                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    // A whisper-subtle tint, not the solid `paper2` surface —
-                    // `paper2` reads as a heavy dark box on a row (issue #285).
-                    // `ink` at low opacity gives Reminders' barely-there hover:
-                    // a faint light wash in dark mode, a faint grey in light.
-                    .fill(hovering ? Tokens.ink.opacity(0.06) : Color.clear)
-                    .padding(.horizontal, Space.xs)
-            )
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: hovering)
+            // macOS 14 min deployment target, so use NSCursor push/pop rather
+            // than `.pointerStyle` (macOS 15+). Push on enter, pop on exit so
+            // the cursor stack stays balanced.
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.iBeam.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
     }
 }
 
