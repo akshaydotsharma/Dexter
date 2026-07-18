@@ -305,8 +305,8 @@ private struct ListSummaryRow: View {
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .paperBorder(Tokens.border, radius: 26)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.card)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }
@@ -516,7 +516,7 @@ private struct ListDetailContent: View {
                 }
                 .listRowBackground(Tokens.paper)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.rowTrailingGutter))
             }
             .onMove { source, destination in
                 Task { await viewModel.reorderItems(in: list, from: source, to: destination) }

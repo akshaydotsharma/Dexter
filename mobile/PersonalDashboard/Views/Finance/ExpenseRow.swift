@@ -80,8 +80,8 @@ struct ExpenseRow: View {
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm + 2)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .paperBorder(Tokens.border, radius: 26)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.card)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityLabel(accessibilityLabel)
