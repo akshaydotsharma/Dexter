@@ -2,9 +2,6 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
-#if canImport(AppKit)
-import AppKit
-#endif
 
 /// Swipe-left-to-delete with circular red trash + gray fade card,
 /// keyed to a UIKit-bridged horizontal-only pan recognizer so the
@@ -47,86 +44,7 @@ extension View {
         }
         #endif
     }
-
-    /// macOS-only, Reminders-style custom swipe-to-delete for rows that live in
-    /// a `ScrollView { LazyVStack }` rather than a `List` (issue #285). The
-    /// Tasks and Lists-detail surfaces were moved off `List` on macOS to kill
-    /// the system edit highlight and to get a swipe affordance that matches
-    /// Reminders, neither of which `List` allows. iOS is untouched — it keeps
-    /// the UIKit-bridged `swipeToDeleteTrash` pan (this is a no-op there).
-    ///
-    /// A horizontal mouse/trackpad drag slides the row content left to reveal a
-    /// red trash button at the trailing edge. Dragging past a threshold and
-    /// releasing, or clicking the revealed button, deletes the row; a small drag
-    /// snaps back closed. Vertical-dominant drags are ignored so they pass
-    /// through to the scroll view.
-    @ViewBuilder
-    func macSwipeToDelete(perform action: @escaping () -> Void) -> some View {
-        #if os(macOS)
-        modifier(MacSwipeToDelete(onDelete: action))
-        #else
-        self
-        #endif
-    }
 }
-
-#if os(macOS)
-/// The macOS row-delete affordance.
-///
-/// A literal trackpad swipe was tried twice and abandoned. A SwiftUI
-/// `DragGesture` fires only on a mouse click-drag (not the two-finger trackpad
-/// swipe users make) AND intercepts real clicks during gesture arbitration, so
-/// the completion toggle and tap-to-edit stopped firing. An AppKit
-/// `scrollWheel` bridge that hosted each row in a nested `NSHostingView`
-/// crashed the app outright (AttributeGraph precondition failure in
-/// `NSHostingView.layout()` — nesting a hosting view inside the SwiftUI
-/// `LazyVStack` is not viable).
-///
-/// This version is pure SwiftUI and leaves the click layer completely
-/// untouched: a trailing red trash button fades in on row hover (positioned
-/// clear of the info button), plus a right-click context-menu delete. Reliable
-/// on both mouse and trackpad (issue #285).
-private struct MacSwipeToDelete: ViewModifier {
-    let onDelete: () -> Void
-    @State private var hovering = false
-    private let trashColor = Color(.sRGB, red: 1.0, green: 0.231, blue: 0.188, opacity: 1.0)
-
-    func body(content: Content) -> some View {
-        content
-            // Trailing red trash, revealed on row hover. Padded in from the
-            // trailing edge so it lands to the LEFT of the row's info button,
-            // never over it. Only hittable while shown, so it can't block the
-            // rest of the row (or steal the checkbox's click) when hidden.
-            .overlay(alignment: .trailing) {
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-                                .fill(trashColor)
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 44)
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
-                .accessibilityLabel("Delete")
-            }
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: hovering)
-            // Right-click delete, always available (mouse or trackpad).
-            .contextMenu {
-                Button(role: .destructive, action: onDelete) {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
-    }
-}
-
-#endif
 
 #if canImport(UIKit)
 private struct SwipeToDeleteWithTint: ViewModifier {
