@@ -32,6 +32,10 @@ struct ChatInputBar: View {
                         .allowsHitTesting(false)
                 }
                 TextField("", text: $text, axis: .vertical)
+                    // Strip the default macOS bordered field box so the input
+                    // reads as a single rounded surface (no box-in-a-box,
+                    // issue #285). No-op on iOS, where the field is borderless.
+                    .plainFieldStyleOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1...6)

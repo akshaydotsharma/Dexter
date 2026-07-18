@@ -19,6 +19,18 @@ enum Space {
     /// the label-over-field rhythm reads the same everywhere. Sits between
     /// `xs` (too tight) and `md`.
     static let fieldLabelGap: CGFloat = 8
+
+    /// Trailing gutter for a `List` row that carries a trailing control (the
+    /// info icon on task / list-item rows). Tight on macOS so the icon hugs the
+    /// window edge instead of leaving a wide right-hand gap (issue #285); iOS
+    /// keeps the symmetric `lg` gutter, byte-for-byte unchanged.
+    static var rowTrailingGutter: CGFloat {
+        #if os(macOS)
+        Space.xs
+        #else
+        Space.lg
+        #endif
+    }
 }
 
 // MARK: - Corner radius
@@ -29,6 +41,18 @@ enum Radius {
     static let lg:   CGFloat = 12
     static let xl:   CGFloat = 16
     static let pill: CGFloat = 999
+
+    /// Corner radius for a full-width content card / list-row card (Notes,
+    /// Finance, Lists, Vocabulary, Trips). iOS keeps its established soft 26pt
+    /// curve, byte-for-byte unchanged; macOS uses the tighter `xl` (16pt) so
+    /// cards match the Today dashboard tiles and read less pill-like (#285).
+    static var card: CGFloat {
+        #if os(macOS)
+        Radius.xl
+        #else
+        26
+        #endif
+    }
 }
 
 // MARK: - Shadows

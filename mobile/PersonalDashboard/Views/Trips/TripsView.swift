@@ -276,8 +276,8 @@ private struct TripRow: View {
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .paperBorder(Tokens.border, radius: 26)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.card)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityLabel("\(trip.name), \(Self.formatRange(start: trip.startDate, end: trip.endDate)). Tap to open.")

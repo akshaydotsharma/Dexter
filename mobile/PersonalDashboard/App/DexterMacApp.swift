@@ -39,7 +39,7 @@ private struct MacRootView: View {
     /// Sidebar order. Excludes the dead `dashboard` section (issue #30).
     private let sections: [AppSection] = [
         .chat, .today, .tasks, .notes, .lists,
-        .activity, .itineraries, .finance, .vocabulary,
+        .itineraries, .finance, .vocabulary, .activity,
         .settings, .helpCenter,
     ]
 

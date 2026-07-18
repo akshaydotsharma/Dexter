@@ -12,6 +12,13 @@ struct TasksView: View {
     @State private var draftBucket: DraftBucket? = nil
     @State private var draftText: String = ""
     @FocusState private var draftFocused: Bool
+    // macOS-only: an always-empty selection set for the `List`. Paired with
+    // `.selectionDisabled(true)` (via `macTamedListSelection`) to try to stop
+    // `List` painting its grey selection/edit highlight behind a row whose
+    // inline TextField holds focus (issue #285). Unused on iOS.
+    #if os(macOS)
+    @State private var macRowSelection = Set<UUID>()
+    #endif
 
     @Bindable var router: AppRouter
 
@@ -40,33 +47,24 @@ struct TasksView: View {
                 // scrolled clear of the keyboard (SwiftUI's default List avoidance
                 // won't lift it because there's content below the draft).
                 ScrollViewReader { proxy in
-                    List {
-                        if viewModel.isLoading && viewModel.todos.isEmpty {
-                            placeholderRow("Loading…")
-                        } else if viewModel.todos.isEmpty {
-                            // Empty-state: single tap-below that seeds a No Date task.
-                            placeholderRow("No tasks yet. Tap below to start.")
-                            emptyStateDraftRow
-                        } else {
-                            taskGroups
-                        }
-
-                        // FAB clearance — keeps the last row scrollable above the floating + button.
-                        // Also acts as a tap-to-dismiss zone for any active inline draft.
-                        Color.clear
-                            .frame(height: 96)
-                            .contentShape(Rectangle())
-                            // Commit any in-progress edit: draftFocused = false covers the
-                            // tap-below draft; hideKeyboard() covers a focused task row.
-                            .onTapGesture { draftFocused = false; hideKeyboard() }
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets())
-                    }
+                    // macOS: bind an always-empty selection set and disable
+                    // selection (via `.macTamedListSelection()` below) to try to
+                    // suppress the grey highlight `List` paints behind the row
+                    // being inline-edited (issue #285). iOS keeps the plain
+                    // initializer, byte-for-byte unchanged.
+                    #if os(macOS)
+                    let listView = List(selection: $macRowSelection) { taskListRows }
+                    #else
+                    let listView = List { taskListRows }
+                    #endif
+                    listView
                     .listStyle(.plain)
                     .listSectionSpacingCompat(0)
                     .scrollContentBackground(.hidden)
                     .background(Tokens.paper)
+                    // macOS: kill the hard full-bleed grey selection bar; rows
+                    // get a soft inset hover instead via `.macRowHover()`.
+                    .macTamedListSelection()
                     .refreshable { await viewModel.load() }
                     // When the inline draft gains focus, scroll it clear of the keyboard.
                     .onChange(of: draftFocused) { _, focused in
@@ -263,6 +261,36 @@ struct TasksView: View {
         .listRowInsets(EdgeInsets())
     }
 
+    // MARK: - List body
+
+    /// The `List`'s rows, extracted so the macOS `List(selection:)` and the iOS
+    /// plain `List` can share one body without duplicating it. The rendered tree
+    /// is identical to the previous inline content, so iOS is unchanged.
+    @ViewBuilder
+    private var taskListRows: some View {
+        if viewModel.isLoading && viewModel.todos.isEmpty {
+            placeholderRow("Loading…")
+        } else if viewModel.todos.isEmpty {
+            // Empty-state: single tap-below that seeds a No Date task.
+            placeholderRow("No tasks yet. Tap below to start.")
+            emptyStateDraftRow
+        } else {
+            taskGroups
+        }
+
+        // FAB clearance — keeps the last row scrollable above the floating + button.
+        // Also acts as a tap-to-dismiss zone for any active inline draft.
+        Color.clear
+            .frame(height: 96)
+            .contentShape(Rectangle())
+            // Commit any in-progress edit: draftFocused = false covers the
+            // tap-below draft; hideKeyboard() covers a focused task row.
+            .onTapGesture { draftFocused = false; hideKeyboard() }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
+    }
+
     // MARK: - Grouped tasks
 
     @ViewBuilder
@@ -385,7 +413,7 @@ struct TasksView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.rowTrailingGutter))
             }
 
             // Tap-below affordance for this section (skipped for Overdue).
@@ -446,7 +474,7 @@ struct TasksView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.rowTrailingGutter))
                 }
             }
         } header: {
@@ -551,6 +579,8 @@ private struct DraftTaskRow: View {
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
 
             TextField("New task", text: $text)
+                // macOS: no default bordered field box (issue #285).
+                .plainFieldStyleOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
@@ -592,34 +622,18 @@ private struct TaskRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            // Empty Button action: the high-priority tap gesture below is the single
-            // source of the toggle. This guarantees one toggle per tap even while the
-            // inline field is focused (iOS's "first tap dismisses keyboard" would
-            // otherwise eat a plain row/Button tap).
-            Button(action: {}) {
-                ZStack {
-                    Circle()
-                        .stroke(todo.completed ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
-                        .background(todo.completed ? Tokens.success.clipShape(Circle()) : nil)
-                        .frame(width: 22, height: 22)
-                    if todo.completed {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Tokens.paper)
-                    }
-                }
-                .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
-            // Map the circle's center (with a 4pt body-font offset for x-height) to the
-            // firstTextBaseline so the bullet visually centers on the title's first line.
-            .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
-            .accessibilityLabel(todo.completed ? "Mark incomplete" : "Mark complete")
+            completionButton
+                // Map the circle's center (with a 4pt body-font offset for x-height) to the
+                // firstTextBaseline so the bullet visually centers on the title's first line.
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
+                .accessibilityLabel(todo.completed ? "Mark incomplete" : "Mark complete")
 
             VStack(alignment: .leading, spacing: 4) {
                 if isEditing {
                     TextField("", text: $editText)
+                        // macOS: drop the default bordered field box so inline
+                        // edit reads as clean text, Reminders-style (issue #285).
+                        .plainFieldStyleOnMac()
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)
                         .submitLabel(.done)
@@ -634,6 +648,12 @@ private struct TaskRow: View {
                         .strikethrough(todo.completed)
                         .foregroundStyle(todo.completed ? Tokens.mutedSoft : Tokens.ink)
                         .multilineTextAlignment(.leading)
+                        // macOS: title text is the tap-to-edit target (the row
+                        // tap is gated off there so the circle stays clickable).
+                        #if os(macOS)
+                        .contentShape(Rectangle())
+                        .onTapGesture { beginBodyTap() }
+                        #endif
                 }
 
                 if let desc = todo.description, !desc.isEmpty {
@@ -716,6 +736,10 @@ private struct TaskRow: View {
         .padding(.vertical, Space.sm)
         .padding(.horizontal, Space.md)
         .background(Color.clear)
+        // macOS: soft inset rounded hover highlight (Reminders-style), which
+        // replaces the hard system selection bar killed by
+        // `macTamedListSelection()` on the List. No-op on iOS.
+        .macRowHover()
         // Thin colored left-edge bar keyed to the task's priority. Spans the row
         // height at the leading edge; reads as a subtle accent, not a block.
         .overlay(alignment: .leading) {
@@ -724,23 +748,62 @@ private struct TaskRow: View {
                 .frame(width: Space.xs)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            // When a tap-below draft is active, actively flip draftFocused in the parent
-            // so the focus-loss → commitDraft → dismiss cycle fires immediately.
-            // We still return early so the editor sheet does not open over the keyboard.
-            if isDraftActive {
-                onTapWhileDraftActive()
-                return
-            }
-            // Completed rows ignore body taps; the info icon still works.
-            if todo.completed { return }
-            // Already in inline-edit; let the TextField own the tap.
-            if isEditing { return }
-            editText = todo.title
-            isEditing = true
-            // DispatchQueue.main.async lets the TextField mount before we focus it.
-            DispatchQueue.main.async { titleFocused = true }
+        // iOS: the WHOLE row is tap-to-edit; the completion circle beats it with
+        // a high-priority gesture (see `completionButton`). On macOS a full-row
+        // tap gesture greedily swallows the circle's click (the circle never
+        // toggles, the row just opens the editor), so macOS scopes tap-to-edit
+        // to the title text only and leaves the circle a clean Button (#285).
+        #if os(iOS)
+        .onTapGesture { beginBodyTap() }
+        #endif
+    }
+
+    /// Enters inline edit from a body tap. Extracted so iOS (whole-row tap) and
+    /// macOS (title-text tap) share one path.
+    private func beginBodyTap() {
+        if isDraftActive {
+            onTapWhileDraftActive()
+            return
         }
+        if todo.completed { return }
+        if isEditing { return }
+        editText = todo.title
+        isEditing = true
+        DispatchQueue.main.async { titleFocused = true }
+    }
+
+    /// The completion control. macOS uses a clean `Button(action:)` — with the
+    /// full-row tap gated off there, nothing competes for the click. iOS keeps
+    /// the empty-action + high-priority tap gesture so one tap toggles even
+    /// while the inline field owns first responder (#285).
+    private var completionButton: some View {
+        #if os(macOS)
+        Button(action: handleToggle) { completionCircle }
+            .buttonStyle(.plain)
+        #else
+        Button(action: {}) { completionCircle }
+            .buttonStyle(.plain)
+            .highPriorityGesture(TapGesture().onEnded { handleToggle() })
+        #endif
+    }
+
+    private var completionCircle: some View {
+        ZStack {
+            Circle()
+                .stroke(todo.completed ? Tokens.success : Tokens.borderStrong, lineWidth: 2)
+                .background(todo.completed ? Tokens.success.clipShape(Circle()) : nil)
+                .frame(width: 22, height: 22)
+            if todo.completed {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Tokens.paper)
+            }
+        }
+        .frame(width: 24, height: 24)
+        // Make the whole 24pt frame hittable, not just the 2pt stroke ring —
+        // otherwise a click in the transparent center falls through and the
+        // toggle never fires on macOS (issue #285).
+        .contentShape(Rectangle())
     }
 
     private func commitInlineEdit() {
