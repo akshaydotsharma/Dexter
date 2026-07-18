@@ -34,11 +34,25 @@ final class ClearBackgroundTextField: NSTextField {
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
-        if ok, let editor = currentEditor() as? NSTextView {
-            editor.drawsBackground = false
-            editor.backgroundColor = .clear
-            // Keep the caret clearly visible against the paper row.
-            editor.insertionPointColor = NSColor(Tokens.ink)
+        if ok {
+            // Reflect the true first-responder state the INSTANT it changes.
+            // Without this there is a lag window between "the field became first
+            // responder on a native click" and "SwiftUI processed the focus flag
+            // and re-rendered updateNSView to set wantsFocus = true". If any
+            // updateNSView fires in that window (a sibling row re-rendering, a
+            // layout pass) it still sees wantsFocus == false while the field is
+            // genuinely editing, and its deferred applyFocusIfNeeded takes the
+            // `!wantsFocus && focused` branch → makeFirstResponder(nil), which
+            // resigns the field we just focused and fires an end-editing commit.
+            // That race is why the add-row bullet reverted to `+` right after a
+            // click (#287). Setting wantsFocus here closes the window.
+            wantsFocus = true
+            if let editor = currentEditor() as? NSTextView {
+                editor.drawsBackground = false
+                editor.backgroundColor = .clear
+                // Keep the caret clearly visible against the paper row.
+                editor.insertionPointColor = NSColor(Tokens.ink)
+            }
         }
         return ok
     }
@@ -127,6 +141,12 @@ struct MacClearTextField: NSViewRepresentable {
         field.drawsBackground = false
         field.backgroundColor = .clear
         field.focusRingType = .none
+        // A bare NSTextField defaults to editable/selectable, but set both
+        // explicitly so a native single click reliably begins editing and fires
+        // controlTextDidBeginEditing — the signal the add-row bullet swap and the
+        // focus-gain callback both hang off (#287).
+        field.isEditable = true
+        field.isSelectable = true
         field.usesSingleLineMode = true
         field.maximumNumberOfLines = 1
         field.lineBreakMode = .byTruncatingTail
@@ -178,6 +198,13 @@ struct MacClearTextField: NSViewRepresentable {
             // `wantsFocus == false` while the field is editing and resign it —
             // firing a spurious commit after the first keystroke/paste.
             if !parent.isFocused { parent.isFocused = true }
+            // Also surface the rising edge through the direct callback (the
+            // falling edge already fires in controlTextDidEndEditing). This gives
+            // callers an AppKit-authoritative edit-state signal that does NOT
+            // depend on the @Binding write above propagating cleanly — the macOS
+            // add-row drives its bullet swap off this so the empty-circle bullet
+            // reliably appears the moment the field starts editing (#287).
+            parent.onFocusChange(true)
         }
 
         // Deliberately NOT updating `parent.text` on every keystroke. Doing so

@@ -784,9 +784,10 @@ private struct MacAddTaskRow: View {
     let onCreate: (String) -> Void
 
     @State private var text: String = ""
-    // Driven by the field's own begin/end-editing events (via MacClearTextField's
-    // two-way isFocused binding), NOT set programmatically — so it never forces
-    // focus and never races the click.
+    // Drives the bullet swap (plus.circle at rest → empty stroked circle while
+    // editing). Set from the field's begin/end-editing events via
+    // MacClearTextField's onFocusChange callback (AppKit-authoritative), NOT
+    // programmatically — so it never forces focus and never races the click.
     @State private var isFocused: Bool = false
 
     var body: some View {
@@ -809,7 +810,15 @@ private struct MacAddTaskRow: View {
                     text: $text,
                     isFocused: $isFocused,
                     onSubmit: { commit() },
-                    onFocusChange: { focused in if !focused { commit() } },
+                    onFocusChange: { focused in
+                        // Drive the bullet swap off the field's own begin/end
+                        // editing events directly. This is AppKit-authoritative
+                        // and does not rely on the $isFocused binding round-trip
+                        // landing — the earlier code only had the binding path,
+                        // and the bullet stayed on `+` after a real click (#287).
+                        isFocused = focused
+                        if !focused { commit() }
+                    },
                     placeholderColor: Tokens.mutedSoft
                 )
                 .accessibilityLabel("New Task")
