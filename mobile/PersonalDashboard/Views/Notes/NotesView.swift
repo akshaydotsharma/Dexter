@@ -100,6 +100,10 @@ struct NotesView: View {
                 } label: {
                     Image(systemName: "folder.badge.plus")
                 }
+                // Bare glyph, not a bordered box: the default macOS button
+                // chrome sat flush against the round AS coin and read as merged
+                // with the avatar (issue #289). Plain style separates them.
+                .macPlainButtonStyle()
                 .accessibilityLabel("New folder")
             }
         }

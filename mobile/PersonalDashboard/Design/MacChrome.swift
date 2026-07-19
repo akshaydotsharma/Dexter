@@ -121,10 +121,11 @@ extension View {
         #endif
     }
 
-    /// Quiet, rounded background for an in-view header icon button on macOS,
-    /// replacing the hard square default-bordered button chrome with a soft
-    /// inset surface that lifts on hover (issue #285). Pair with
-    /// `macPlainButtonStyle()`. No-op on iOS.
+    /// Reminders-style chrome for an in-view header icon button on macOS: the
+    /// glyph sits on a clear background at rest (no box), and a soft rounded
+    /// highlight fades in only on hover (issue #289). Replaces both the hard
+    /// square default-bordered button chrome and the earlier resting surface
+    /// box. Pair with `macPlainButtonStyle()`. No-op on iOS.
     @ViewBuilder
     func macHeaderIconChrome() -> some View {
         #if os(macOS)
@@ -182,9 +183,11 @@ private struct MacRowHover: ViewModifier {
     }
 }
 
-/// Quiet rounded chrome for a header icon button on macOS: a soft inset
-/// surface with a hairline, lifting to `paper2` on hover. Replaces the hard
-/// square default-bordered macOS button background.
+/// Reminders-style chrome for a header icon button on macOS: no resting
+/// background (the bare glyph reads as a clean, glassy control), with a soft
+/// rounded `paper2` highlight that fades in only on hover. Replaces the earlier
+/// resting surface box and the hard square default-bordered macOS button
+/// background (issue #289).
 private struct MacHeaderIconChrome: ViewModifier {
     @State private var hovering = false
 
@@ -192,11 +195,7 @@ private struct MacHeaderIconChrome: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    .fill(hovering ? Tokens.paper2 : Tokens.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                            .stroke(Tokens.border, lineWidth: 0.5)
-                    )
+                    .fill(hovering ? Tokens.paper2 : Color.clear)
                     .padding(Space.xs)
             )
             .onHover { hovering = $0 }

@@ -329,6 +329,8 @@ private struct TripDetailHeader: View {
                 .frame(height: 44)
                 .contentShape(Rectangle())
             }
+            // macOS: strip the hard default-bordered button chrome (issue #289).
+            .macPlainButtonStyle()
             Spacer()
             VStack(spacing: 2) {
                 Text(trip.name)
@@ -349,6 +351,10 @@ private struct TripDetailHeader: View {
                     .foregroundStyle(Tokens.muted)
             }
             .accessibilityLabel("View calendar")
+            // macOS: quiet Reminders-style rounded chrome instead of the hard
+            // square default button background (issue #289). No-op on iOS.
+            .macPlainButtonStyle()
+            .macHeaderIconChrome()
             .popover(isPresented: $showingCalendar) {
                 TripCalendarPopover(trip: trip)
             }
@@ -358,6 +364,8 @@ private struct TripDetailHeader: View {
                     .foregroundStyle(Tokens.muted)
             }
             .accessibilityLabel("Edit trip")
+            .macPlainButtonStyle()
+            .macHeaderIconChrome()
         }
         .padding(.horizontal, Space.md)
         .frame(height: 56)
