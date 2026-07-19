@@ -359,7 +359,14 @@ private struct ListDetailContent: View {
                 .contentShape(Rectangle())
                 // Tapping the header strip commits any in-progress edit: draftFocused = false
                 // covers the tap-below draft; hideKeyboard() covers a focused item row.
-                .onTapGesture { draftFocused = false; hideKeyboard() }
+                // On macOS, resign first responder so the persistent add-field
+                // (or an inline rename) commits (#287 bug 2).
+                .onTapGesture {
+                    draftFocused = false; hideKeyboard()
+                    #if os(macOS)
+                    macResignFirstResponder()
+                    #endif
+                }
 
                 Rectangle().fill(Tokens.divider).frame(height: 0.5)
                     .padding(.horizontal, Space.lg)
@@ -525,6 +532,23 @@ private struct ListDetailContent: View {
 
         // Tap-below section — lives after items, at the end of the list.
         Section {
+            #if os(macOS)
+            // macOS: a PERSISTENT native add-field the user clicks directly,
+            // shared verbatim with the Tasks "New Task" add-row (#287). Focus
+            // comes from the real mouse-down — one click, no programmatic-focus
+            // race — replacing the iOS ghost→draft swap + autofocus that lost
+            // first responder to the List and needed a second click. Zero
+            // listRowInsets: MacAddRow owns its own insets so its hairline
+            // aligns exactly like the GhostAddRow it replaces. 44pt matches the
+            // Lists row rhythm.
+            MacAddRow(label: "New Item", minHeight: 44, onCreate: { text in
+                Task { await viewModel.addItem(to: list, text: text) }
+            })
+            .id("macAddItem")
+            .listRowBackground(Tokens.paper)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
+            #else
             if draftActive {
                 // Draft is active: show an inline editable row mirroring ItemRow.
                 DraftItemRow(
@@ -550,13 +574,21 @@ private struct ListDetailContent: View {
             .listRowBackground(Tokens.paper)
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets())
+            #endif
 
             // Dismiss filler — the rest of the empty space below. Tapping here only
             // commits/deselects the current inline edit (or draft); it never adds.
+            // On macOS, resign first responder so a click in the empty area ends
+            // the persistent add-field's edit → commit (#287 bug 2).
             Color.clear
                 .frame(minHeight: 160)
                 .contentShape(Rectangle())
-                .onTapGesture { draftFocused = false; hideKeyboard() }
+                .onTapGesture {
+                    draftFocused = false; hideKeyboard()
+                    #if os(macOS)
+                    macResignFirstResponder()
+                    #endif
+                }
                 .listRowBackground(Tokens.paper)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets())
@@ -565,6 +597,12 @@ private struct ListDetailContent: View {
 
     // MARK: - Tap-below helpers
 
+    // iOS uses the ghost→draft swap + programmatic autofocus below. macOS was
+    // split off (#287) to the PERSISTENT native `MacAddRow` the user clicks
+    // directly — the programmatic focus here raced the initiating mouse-up on
+    // macOS and lost, requiring a second click. These two helpers are therefore
+    // iOS-only now.
+    #if os(iOS)
     private func startDraft() {
         draftActive = true
         draftText = ""
@@ -597,6 +635,7 @@ private struct ListDetailContent: View {
             draftFocused = false
         }
     }
+    #endif
 
 }
 
@@ -616,9 +655,26 @@ private struct DraftItemRow: View {
                 .frame(width: 22, height: 22)
                 .frame(width: 24, height: 24)
 
+            // macOS uses a dedicated borderless AppKit field that clears the
+            // shared window field editor's grey fill on every focus (issue
+            // #287). iOS keeps the SwiftUI TextField unchanged. Note: on macOS
+            // the persistent MacAddRow (not this DraftItemRow) is what renders
+            // in the add-item slot, so this macOS branch is defensive parity
+            // with the Tasks DraftTaskRow.
+            #if os(macOS)
+            MacClearTextField(
+                placeholder: "New item",
+                text: $text,
+                isFocused: Binding(
+                    get: { isFocused.wrappedValue },
+                    set: { isFocused.wrappedValue = $0 }
+                ),
+                onSubmit: onSubmit,
+                onFocusChange: { focused in if !focused { onFocusLost() } }
+            )
+            .accessibilityLabel("New item")
+            #else
             TextField("New item", text: $text)
-                // macOS: no default bordered field box (issue #285).
-                .plainFieldStyleOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
@@ -628,6 +684,7 @@ private struct DraftItemRow: View {
                     if !nowFocused { onFocusLost() }
                 }
                 .accessibilityLabel("New item")
+            #endif
 
             Spacer()
         }
@@ -661,10 +718,24 @@ private struct ItemRow: View {
             completionButton
 
             if isEditing {
+                // macOS: borderless AppKit field that clears the shared field
+                // editor's grey fill on every focus, so inline rename reads as
+                // clean text on the paper row — identical to the Tasks inline
+                // rename (issue #287). iOS keeps the SwiftUI TextField unchanged.
+                #if os(macOS)
+                MacClearTextField(
+                    placeholder: "",
+                    text: $draft,
+                    isFocused: Binding(
+                        get: { focused },
+                        set: { focused = $0 }
+                    ),
+                    onSubmit: { commit() },
+                    onFocusChange: { nowFocused in if !nowFocused { commit() } }
+                )
+                .accessibilityLabel("Rename item")
+                #else
                 TextField("", text: $draft)
-                    // macOS: drop the default bordered field box so inline
-                    // rename reads as clean text, Reminders-style (issue #285).
-                    .plainFieldStyleOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .submitLabel(.done)
@@ -674,6 +745,7 @@ private struct ItemRow: View {
                         if !nowFocused { commit() }
                     }
                     .accessibilityLabel("Rename item")
+                #endif
             } else {
                 Text(item.text)
                     .font(.edBody)
