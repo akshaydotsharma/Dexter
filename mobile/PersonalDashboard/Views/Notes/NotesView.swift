@@ -6,6 +6,10 @@ struct NotesView: View {
     @State private var showingNewFolder = false
     @State private var selectedNoteId: UUID?
     @State private var selectedFolder: NoteFolder?
+    /// Drives the macOS folder-rename alert (issue #291). iOS renames inline
+    /// by tapping the folder title in `FolderDetailHeader`.
+    @State private var renamingFolder = false
+    @State private var folderRenameDraft = ""
     @State private var pendingFolderLaunchId: UUID? = {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_FOLDER_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
@@ -27,6 +31,10 @@ struct NotesView: View {
                         }
                     )
                 } else if let folder = selectedFolder {
+                    // iOS: in-view folder header (tap title to rename). macOS:
+                    // back + rename live in the native toolbar; rename opens a
+                    // small alert since there's no in-view title to tap (#291).
+                    #if os(iOS)
                     FolderDetailHeader(
                         folder: folder,
                         onBack: {
@@ -41,7 +49,23 @@ struct NotesView: View {
                             }
                         }
                     )
+                    #endif
                     folderNotesList(folder)
+                        .macDetailChrome(
+                            title: folder.name,
+                            onBack: {
+                                withAnimation(.easeOut(duration: 0.2)) { selectedFolder = nil }
+                            },
+                            actions: {
+                                Button {
+                                    folderRenameDraft = folder.name
+                                    renamingFolder = true
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                                .help("Rename folder")
+                            }
+                        )
                 } else {
                     // iOS: in-view top bar, and the create-folder affordance
                     // overlays the top-right of the list area so it doesn't
@@ -73,6 +97,17 @@ struct NotesView: View {
                         }
                     #else
                     rootList
+                        .macSectionChrome("Notes") {
+                            Button {
+                                showingNewFolder = true
+                            } label: {
+                                Image(systemName: "folder.badge.plus")
+                            }
+                            // Bare glyph, not a bordered box, so it reads as a
+                            // separate control from the round AS coin (issue #289).
+                            .macPlainButtonStyle()
+                            .accessibilityLabel("New folder")
+                        }
                     #endif
                 }
             }
@@ -90,23 +125,10 @@ struct NotesView: View {
             }
         }
         .activeSection(.notes)
-        .macSectionChrome("Notes") {
-            // Native folder-add lives in the toolbar on macOS. Only at the
-            // root list (no note / folder open), mirroring the iOS overlay's
-            // visibility (issue #283).
-            if selectedNoteId == nil && selectedFolder == nil {
-                Button {
-                    showingNewFolder = true
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                }
-                // Bare glyph, not a bordered box: the default macOS button
-                // chrome sat flush against the round AS coin and read as merged
-                // with the avatar (issue #289). Plain style separates them.
-                .macPlainButtonStyle()
-                .accessibilityLabel("New folder")
-            }
-        }
+        // Section vs detail chrome is applied per-branch above (issue #291):
+        // the root list gets `.macSectionChrome`, an open folder/note gets
+        // `.macDetailChrome` so the native toolbar carries back + actions and
+        // the window title tracks the open item instead of staying on "Notes".
         // Live-refresh when the voice-capture or chat path writes a note.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
             Task { await viewModel.load() }
@@ -141,6 +163,21 @@ struct NotesView: View {
         .onChange(of: selectedFolder?.id) { _, _ in syncBackHandler() }
         .sheet(isPresented: $showingNewFolder) {
             NewFolderSheet(viewModel: viewModel)
+        }
+        .alert("Rename folder", isPresented: $renamingFolder) {
+            TextField("Folder name", text: $folderRenameDraft)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                guard let folder = selectedFolder else { return }
+                let trimmed = folderRenameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, trimmed != folder.name else { return }
+                Task {
+                    await viewModel.renameFolder(folder, to: trimmed)
+                    if let updated = viewModel.folders.first(where: { $0.id == folder.id }) {
+                        selectedFolder = updated
+                    }
+                }
+            }
         }
         .alert("Couldn't load notes",
                isPresented: Binding(
@@ -499,8 +536,13 @@ private struct NoteDetailContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // iOS: in-view header row. macOS: back + preview-toggle + delete
+            // live in the native window toolbar via `.macDetailChrome` below,
+            // and the note's own big title field stays in the content (#291).
+            #if os(iOS)
             header
             Rectangle().fill(Tokens.divider).frame(height: 0.5)
+            #endif
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
@@ -545,6 +587,31 @@ private struct NoteDetailContent: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .background(Tokens.paper)
+        .macDetailChrome(
+            title: title.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled" : title,
+            subtitle: note.updatedAt.formatted(.relative(presentation: .named)),
+            onBack: {
+                Task {
+                    await persistIfChanged()
+                    onClose()
+                }
+            },
+            actions: {
+                Button { togglePreview() } label: {
+                    Image(systemName: mode == .edit ? "eye" : "pencil")
+                }
+                .help(mode == .edit ? "Preview note" : "Edit note")
+                Button(role: .destructive) {
+                    Task {
+                        await viewModel.deleteNote(note)
+                        onClose()
+                    }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .help("Delete note")
+            }
+        )
         .onAppear {
             if !hasLoaded {
                 title = note.title ?? ""
@@ -613,17 +680,7 @@ private struct NoteDetailContent: View {
                 .font(.edCaption)
                 .foregroundStyle(Tokens.mutedSoft)
             Button {
-                // Drop the keyboard before flipping to preview so the
-                // accessory toolbar doesn't briefly hang around.
-                if mode == .edit { contentFocused = false }
-                withAnimation(.easeOut(duration: 0.15)) {
-                    mode = (mode == .edit) ? .preview : .edit
-                }
-                if mode == .edit {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        contentFocused = true
-                    }
-                }
+                togglePreview()
             } label: {
                 Image(systemName: mode == .edit ? "eye" : "pencil")
                     .frame(width: 44, height: 44)
@@ -645,6 +702,22 @@ private struct NoteDetailContent: View {
         .padding(.horizontal, Space.md)
         .frame(height: 56)
         .background(Tokens.paper)
+    }
+
+    /// Flip between edit and preview. Drops the keyboard before showing the
+    /// preview so the accessory toolbar doesn't briefly hang around, then
+    /// refocuses when returning to edit. Shared by the iOS header button and
+    /// the macOS toolbar action (issue #291).
+    private func togglePreview() {
+        if mode == .edit { contentFocused = false }
+        withAnimation(.easeOut(duration: 0.15)) {
+            mode = (mode == .edit) ? .preview : .edit
+        }
+        if mode == .edit {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                contentFocused = true
+            }
+        }
     }
 
     private var currentFolderName: String {

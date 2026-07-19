@@ -78,6 +78,50 @@ extension View {
         #endif
     }
 
+    /// Native macOS chrome for a pushed DETAIL screen (an open list, trip,
+    /// folder, or note), matching Apple Reminders/Notes on Tahoe. Instead of a
+    /// hand-rolled in-view header row, the back control and the detail's action
+    /// icons live in the native window toolbar, so macOS 26 draws them as a
+    /// Liquid Glass group for free — correct glyphs, hover, and grouping. The
+    /// window title/subtitle track the open item's name so the title bar no
+    /// longer stays stuck on the section name.
+    ///
+    /// `actions` is a `ToolbarItemGroup`, so several icons read as ONE grouped
+    /// glass pill; the AS profile coin sits to its right as its own element
+    /// (the same split Reminders uses: a grouped action pill + a separate
+    /// control). No-op on iOS, where the in-view detail header owns this chrome
+    /// (issue #291).
+    @ViewBuilder
+    func macDetailChrome<Actions: View>(
+        title: String,
+        subtitle: String? = nil,
+        onBack: @escaping () -> Void,
+        @ViewBuilder actions: () -> Actions = { EmptyView() }
+    ) -> some View {
+        #if os(macOS)
+        self
+            .navigationTitle(title)
+            .navigationSubtitle(subtitle ?? "")
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: onBack) {
+                        Image(systemName: "chevron.left")
+                    }
+                    .help("Back")
+                }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    actions()
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    MacProfilePip()
+                }
+            }
+            .toolbarBackground(.hidden, for: .windowToolbar)
+        #else
+        self
+        #endif
+    }
+
     /// Background fill for a section canvas. On iOS ignores every safe-area
     /// edge (full-bleed under the status bar / home indicator). On macOS keeps
     /// the top title-bar inset so the split view reserves the title-bar region
