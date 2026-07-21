@@ -18,6 +18,11 @@ struct ListsView: View {
 
             VStack(spacing: 0) {
                 if let id = selectedListId, let list = viewModel.lists.first(where: { $0.id == id }) {
+                    // iOS: in-view detail header row. macOS: the back button +
+                    // action icons live in the native window toolbar via
+                    // `.macDetailChrome` so Tahoe draws them as a Liquid Glass
+                    // group, matching Reminders (issue #291).
+                    #if os(iOS)
                     ListDetailHeader(
                         title: list.title,
                         onBack: {
@@ -34,10 +39,34 @@ struct ListsView: View {
                         },
                         onProperties: { showingProperties = true }
                     )
+                    #endif
                     ListDetailContent(viewModel: viewModel, listId: id)
                         .sheet(isPresented: $showingProperties) {
                             ListPropertiesSheet(viewModel: viewModel, list: list)
                         }
+                        // macOS native toolbar chrome (no-op on iOS). Rename is
+                        // covered by the properties sheet's List name field.
+                        .macDetailChrome(
+                            title: list.title,
+                            onBack: {
+                                withAnimation(.easeOut(duration: 0.2)) { selectedListId = nil }
+                            },
+                            actions: {
+                                Button { showingProperties = true } label: {
+                                    Image(systemName: "slider.horizontal.3")
+                                }
+                                .help("List appearance")
+                                Button(role: .destructive) {
+                                    Task {
+                                        await viewModel.delete(list)
+                                        selectedListId = nil
+                                    }
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .help("Delete list")
+                            }
+                        )
                 } else {
                     // iOS in-view top bar; macOS uses the native window
                     // toolbar via `.macSectionChrome` below (issue #283).
@@ -48,6 +77,7 @@ struct ListsView: View {
                     )
                     #endif
                     rootList
+                        .macSectionChrome("Lists")
                 }
             }
 
@@ -64,7 +94,9 @@ struct ListsView: View {
             }
         }
         .activeSection(.lists)
-        .macSectionChrome("Lists")
+        // Section vs detail chrome is applied per-branch above so the macOS
+        // window title tracks the open list instead of staying on "Lists"
+        // (issue #291).
         // Live-refresh when the voice-capture or chat path writes a list / item.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
             Task { await viewModel.load() }

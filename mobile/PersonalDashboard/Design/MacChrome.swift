@@ -78,6 +78,50 @@ extension View {
         #endif
     }
 
+    /// Native macOS chrome for a pushed DETAIL screen (an open list, trip,
+    /// folder, or note), matching Apple Reminders/Notes on Tahoe. Instead of a
+    /// hand-rolled in-view header row, the back control and the detail's action
+    /// icons live in the native window toolbar, so macOS 26 draws them as a
+    /// Liquid Glass group for free — correct glyphs, hover, and grouping. The
+    /// window title/subtitle track the open item's name so the title bar no
+    /// longer stays stuck on the section name.
+    ///
+    /// `actions` is a `ToolbarItemGroup`, so several icons read as ONE grouped
+    /// glass pill; the AS profile coin sits to its right as its own element
+    /// (the same split Reminders uses: a grouped action pill + a separate
+    /// control). No-op on iOS, where the in-view detail header owns this chrome
+    /// (issue #291).
+    @ViewBuilder
+    func macDetailChrome<Actions: View>(
+        title: String,
+        subtitle: String? = nil,
+        onBack: @escaping () -> Void,
+        @ViewBuilder actions: () -> Actions = { EmptyView() }
+    ) -> some View {
+        #if os(macOS)
+        self
+            .navigationTitle(title)
+            .navigationSubtitle(subtitle ?? "")
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: onBack) {
+                        Image(systemName: "chevron.left")
+                    }
+                    .help("Back")
+                }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    actions()
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    MacProfilePip()
+                }
+            }
+            .toolbarBackground(.hidden, for: .windowToolbar)
+        #else
+        self
+        #endif
+    }
+
     /// Background fill for a section canvas. On iOS ignores every safe-area
     /// edge (full-bleed under the status bar / home indicator). On macOS keeps
     /// the top title-bar inset so the split view reserves the title-bar region
@@ -121,10 +165,11 @@ extension View {
         #endif
     }
 
-    /// Quiet, rounded background for an in-view header icon button on macOS,
-    /// replacing the hard square default-bordered button chrome with a soft
-    /// inset surface that lifts on hover (issue #285). Pair with
-    /// `macPlainButtonStyle()`. No-op on iOS.
+    /// Reminders-style chrome for an in-view header icon button on macOS: the
+    /// glyph sits on a clear background at rest (no box), and a soft rounded
+    /// highlight fades in only on hover (issue #289). Replaces both the hard
+    /// square default-bordered button chrome and the earlier resting surface
+    /// box. Pair with `macPlainButtonStyle()`. No-op on iOS.
     @ViewBuilder
     func macHeaderIconChrome() -> some View {
         #if os(macOS)
@@ -182,9 +227,11 @@ private struct MacRowHover: ViewModifier {
     }
 }
 
-/// Quiet rounded chrome for a header icon button on macOS: a soft inset
-/// surface with a hairline, lifting to `paper2` on hover. Replaces the hard
-/// square default-bordered macOS button background.
+/// Reminders-style chrome for a header icon button on macOS: no resting
+/// background (the bare glyph reads as a clean, glassy control), with a soft
+/// rounded `paper2` highlight that fades in only on hover. Replaces the earlier
+/// resting surface box and the hard square default-bordered macOS button
+/// background (issue #289).
 private struct MacHeaderIconChrome: ViewModifier {
     @State private var hovering = false
 
@@ -192,11 +239,7 @@ private struct MacHeaderIconChrome: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    .fill(hovering ? Tokens.paper2 : Tokens.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                            .stroke(Tokens.border, lineWidth: 0.5)
-                    )
+                    .fill(hovering ? Tokens.paper2 : Color.clear)
                     .padding(Space.xs)
             )
             .onHover { hovering = $0 }

@@ -326,3 +326,16 @@ schemes:
         DexterMac: all
     run:
       config: Debug
+      # Anthropic key for the on-device AI, injected into the scheme's Run
+      # environment. `${ANTHROPIC_API_KEY}` is expanded by xcodegen FROM THE
+      # SHELL at `xcodegen generate` time, so the real key only ever lands in
+      # the gitignored .xcodeproj — project.yml keeps just the placeholder.
+      # Export it first (it lives in server/.env):
+      #   export ANTHROPIC_API_KEY=$(grep '^ANTHROPIC_API_KEY=' ../server/.env | cut -d= -f2-)
+      #   xcodegen generate
+      # AppConfig reads the env var before the Info.plist, so running the
+      # DexterMac scheme from Xcode then has a configured key.
+      environmentVariables:
+        - variable: ANTHROPIC_API_KEY
+          value: ${ANTHROPIC_API_KEY}
+          isEnabled: true

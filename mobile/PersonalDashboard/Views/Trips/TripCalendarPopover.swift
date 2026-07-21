@@ -75,10 +75,12 @@ struct TripCalendarPopover: View {
             Button { changeMonth(by: -1) } label: {
                 chevron("chevron.left")
             }
+            .macPlainButtonStyle()
             .accessibilityLabel("Previous month")
             Button { changeMonth(by: 1) } label: {
                 chevron("chevron.right")
             }
+            .macPlainButtonStyle()
             .accessibilityLabel("Next month")
         }
     }

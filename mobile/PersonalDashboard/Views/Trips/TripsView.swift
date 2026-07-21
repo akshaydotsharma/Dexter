@@ -26,12 +26,21 @@ struct TripsView: View {
     /// `nil` means root list is showing. Setting a UUID swaps to detail.
     @State private var selectedTripUUID: UUID?
 
+    /// Drives the read-only calendar popover from the macOS toolbar button
+    /// (issue #291). On iOS the popover state lives inside `TripDetailHeader`.
+    @State private var showingCalendar = false
+
     var body: some View {
         ZStack {
             Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
                 if let id = selectedTripUUID, let trip = trips.first(where: { $0.clientUUID == id }) {
+                    // iOS: in-view detail header row. macOS: back + calendar +
+                    // edit live in the native window toolbar via
+                    // `.macDetailChrome` (Liquid Glass group, à la Reminders) and
+                    // the window subtitle carries the date range (issue #291).
+                    #if os(iOS)
                     TripDetailHeader(
                         trip: trip,
                         onBack: {
@@ -39,7 +48,28 @@ struct TripsView: View {
                         },
                         onEdit: { editingTrip = .existing(id) }
                     )
+                    #endif
                     TripDetailView(trip: trip)
+                        .macDetailChrome(
+                            title: trip.name,
+                            subtitle: TripRow.formatRange(start: trip.startDate, end: trip.endDate),
+                            onBack: {
+                                withAnimation(.easeOut(duration: 0.2)) { selectedTripUUID = nil }
+                            },
+                            actions: {
+                                Button { showingCalendar = true } label: {
+                                    Image(systemName: "calendar")
+                                }
+                                .help("View calendar")
+                                .popover(isPresented: $showingCalendar) {
+                                    TripCalendarPopover(trip: trip)
+                                }
+                                Button { editingTrip = .existing(id) } label: {
+                                    Image(systemName: "square.and.pencil")
+                                }
+                                .help("Edit trip")
+                            }
+                        )
                 } else {
                     // iOS in-view top bar; macOS uses the native window toolbar
                     // via `.macSectionChrome` below (issue #283).
@@ -50,6 +80,7 @@ struct TripsView: View {
                     )
                     #endif
                     rootContent
+                        .macSectionChrome("Trips")
                 }
             }
 
@@ -67,7 +98,9 @@ struct TripsView: View {
             }
         }
         .activeSection(.itineraries)
-        .macSectionChrome("Trips")
+        // Section vs detail chrome is applied per-branch above so the macOS
+        // window title tracks the open trip instead of staying on "Trips"
+        // (issue #291).
         .onAppear {
             consumeFocus()
             syncBackHandler()
@@ -329,6 +362,8 @@ private struct TripDetailHeader: View {
                 .frame(height: 44)
                 .contentShape(Rectangle())
             }
+            // macOS: strip the hard default-bordered button chrome (issue #289).
+            .macPlainButtonStyle()
             Spacer()
             VStack(spacing: 2) {
                 Text(trip.name)
@@ -349,6 +384,10 @@ private struct TripDetailHeader: View {
                     .foregroundStyle(Tokens.muted)
             }
             .accessibilityLabel("View calendar")
+            // macOS: quiet Reminders-style rounded chrome instead of the hard
+            // square default button background (issue #289). No-op on iOS.
+            .macPlainButtonStyle()
+            .macHeaderIconChrome()
             .popover(isPresented: $showingCalendar) {
                 TripCalendarPopover(trip: trip)
             }
@@ -358,6 +397,8 @@ private struct TripDetailHeader: View {
                     .foregroundStyle(Tokens.muted)
             }
             .accessibilityLabel("Edit trip")
+            .macPlainButtonStyle()
+            .macHeaderIconChrome()
         }
         .padding(.horizontal, Space.md)
         .frame(height: 56)
