@@ -440,9 +440,18 @@ final class DataImportService {
 
             // MARK: Models added in #319
             //
-            // People and events go in FIRST: restored expenses reference them by
-            // UUID for splits and tagging, so inserting them earlier keeps those
-            // references resolvable within the same transaction.
+            // Insertion order relative to expenses is IRRELEVANT here, and it is
+            // worth stating so nobody later "preserves" an ordering that carries
+            // no meaning. None of these models declares a `@Relationship`:
+            // `personUUID`, `eventUUID` and `paidByPersonUUID` are plain `UUID?`
+            // fields and `splitsData` is a JSON blob, so SwiftData enforces no
+            // referential integrity between them and there is nothing to resolve
+            // within the transaction. Everything lands in one save regardless.
+            //
+            // (An earlier version of this comment claimed people and events were
+            // inserted first so references would resolve. That was wrong twice
+            // over: they are inserted after expenses, and the ordering would not
+            // have mattered even if they were not.)
             let existingPersonUUIDs    = try existingUUIDs(LocalPerson.self,  keyPath: \.clientUUID)
             let existingEventUUIDs     = try existingUUIDs(LocalEvent.self,   keyPath: \.clientUUID)
             for dto in (payload.persons ?? []) where !existingPersonUUIDs.contains(dto.clientUUID) {
