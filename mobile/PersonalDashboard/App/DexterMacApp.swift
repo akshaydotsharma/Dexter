@@ -165,22 +165,29 @@ private struct MacRootView: View {
 }
 
 /// Placeholder for a section not yet ported to macOS.
+///
+/// Two fixes here (issue #305).
+///
+/// It set no window title, so the detail pane inherited nothing and the window
+/// fell back to the sidebar's `.navigationTitle("Dexter")`. Help center was
+/// therefore the one section whose title bar read "Dexter" instead of its own
+/// name. Found by measuring the screenshots, not by reading the code.
+///
+/// And the placeholder was hand-rolled: a 40pt glyph over two lines of text,
+/// which is phone-sized on a desktop. `ContentUnavailableView` is the native
+/// macOS 14+ empty state, so it gets correct metrics, spacing and vertical
+/// centring from the system rather than from constants maintained here.
 private struct ComingSoonView: View {
     let section: AppSection
 
     var body: some View {
-        VStack(spacing: Space.md) {
-            Image(systemName: section.icon)
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Tokens.muted)
-            Text(section.displayName)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
+        ContentUnavailableView {
+            Label(section.displayName, systemImage: section.icon)
+        } description: {
             Text("Coming to macOS")
-                .font(.edBody)
-                .foregroundStyle(Tokens.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Tokens.paper)
+        .macSectionChrome(section.displayName)
     }
 }
