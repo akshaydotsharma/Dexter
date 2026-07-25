@@ -29,19 +29,45 @@ extension View {
         #if canImport(UIKit)
         return modifier(SwipeToDeleteWithTint(onDelete: action))
         #else
-        // macOS: the custom UIKit pan bridge below doesn't exist. Rows live
-        // inside a `List`, so the native trailing swipe-to-delete gives the
-        // same affordance with a real destructive full-swipe.
-        // Reminders-style trailing swipe: a red full-height button with a white
-        // trash glyph (icon only — a Label stacks icon-over-text into an
-        // oversized pill on tall rows). `.tint(.red)` fills the reveal red;
-        // full-swipe commits the delete (issue #285).
-        return self.swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button(role: .destructive, action: action) {
-                Image(systemName: "trash")
+        // macOS. Two affordances, because the swipe alone does not reach every
+        // user or every container (issues #296, #297).
+        //
+        // The trailing swipe stays: inside a `List`, on a trackpad, it is the
+        // Reminders-style red full-height button with a white trash glyph
+        // (icon only — a Label stacks icon-over-text into an oversized pill on
+        // tall rows), and full-swipe commits (issue #285).
+        //
+        // But it was the ONLY delete path, and it fails in two ways that
+        // between them covered every expense surface in the app:
+        //
+        //  1. `.swipeActions` has no effect outside a `List`. The Finance
+        //     expense list, Recurring Expenses, and Trip expenses all render
+        //     rows in `ScrollView { VStack { ForEach } }`, so the modifier
+        //     silently did nothing and those three surfaces had NO way to
+        //     delete anything at all (#296). The comment previously here
+        //     asserted "rows live inside a List", which was untrue for exactly
+        //     those cases.
+        //  2. A swipe needs a trackpad. With a mouse it is unreachable even
+        //     where it does work (#297).
+        //
+        // A context menu has neither limitation: it works in any container and
+        // it is the macOS-idiomatic home for a row's destructive action, which
+        // is where Reminders puts it. This branch is macOS-only, so no
+        // `.contextMenu` reaches iOS, where it would bind to long-press and
+        // invent a phone gesture that the standing correction
+        // `feedback_inline_edit_gestures.md` forbids.
+        return self
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive, action: action) {
+                    Image(systemName: "trash")
+                }
+                .tint(.red)
             }
-            .tint(.red)
-        }
+            .contextMenu {
+                Button(role: .destructive, action: action) {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
         #endif
     }
 }
