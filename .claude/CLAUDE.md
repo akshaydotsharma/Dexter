@@ -41,7 +41,7 @@ Long-lived notes about this codebase live at:
 
 - Web client: React 19, Vite 7, Tailwind 4. Dev server :5173.
 - Server: Node.js 20+, Express 5, PostgreSQL via `pg`. Default :3000 (falls through to :3001 when squatted). `node --test` against `dexter_test`.
-- These still build, but no new features are being added. Dashboard stats + Activity timeline on iOS are still server-bound (need either porting or graceful-degrade — tracked as follow-up).
+- These still build, but no new features are being added. **Dashboard stats is the only server-bound surface left.** The Activity timeline was migrated to local SwiftData `@Query` and is NOT server-bound (verified 2026-07-25 by two independent audits — don't re-file it as a degradation bug). On macOS nothing can reach the server at all: `APIClient`, `DashboardService`, `DashboardViewModel`, `CacheStore` and `Views/Dashboard/` are all absent from the curated `DexterMac` sources list, and `DexterMacApp.swift` excludes Dashboard from the sidebar as dead. `AppConfig.apiBaseURL` still compiles into the Mac target but has no consumer there.
 
 ## Key paths (iOS + macOS)
 
@@ -93,7 +93,7 @@ Forward-looking rules live in `.claude/rules/`. Read every file in that director
 - iOS free personal-team profile expires every 7 days. Re-run `bash mobile/ota/ship-lan.sh` to ship a fresh build.
 - **CloudKit / iCloud KV / iCloud Documents are NOT available on free personal-team signing.** They require the paid Apple Developer Program. Until that upgrade, the iOS app is single-device only — Apple's automatic device backup covers SwiftData restore on a new phone but there's no real-time multi-device sync.
 - **Anthropic API key lives in the IPA Info.plist.** Extractable with `strings`. Acceptable for a personal dev-signed app you don't redistribute. Set a low monthly spend cap on the key in the Anthropic console as defense-in-depth.
-- **iOS Local Network permission masquerades as DNS error.** If the iOS app shows *"A server with the specified hostname could not be found"* on a private IP (LAN, Tailscale 100.x.x.x, RFC1918), it's almost always Local Network permission, NOT DNS. Fix is the `LocalNetworkPermissionPrimer` (NWBrowser primer) called from `PersonalDashboardApp.task`, plus `NSBonjourServices: [_http._tcp]` and `NSLocalNetworkUsageDescription` in Info.plist. (Less relevant now that Anthropic is the primary endpoint, but the dashboard stats / activity timeline still hit the Mac.)
+- **iOS Local Network permission masquerades as DNS error.** If the iOS app shows *"A server with the specified hostname could not be found"* on a private IP (LAN, Tailscale 100.x.x.x, RFC1918), it's almost always Local Network permission, NOT DNS. Fix is the `LocalNetworkPermissionPrimer` (NWBrowser primer) called from `PersonalDashboardApp.task`, plus `NSBonjourServices: [_http._tcp]` and `NSLocalNetworkUsageDescription` in Info.plist. (Less relevant now that Anthropic is the primary endpoint. Only Dashboard stats still hits the Mac server, and only from iOS — see "Tech stack (paused)" above.)
 - SwiftData @Model migrations are risky. Adding fields with defaults is safe. Removing fields triggers a lightweight migration; if it fails, the user loses everything. Prefer to leave dead fields in place rather than remove them. (`needsSync`, `version` on the local models are intentional dead fields kept for migration safety.)
 
 ### macOS target gotchas
