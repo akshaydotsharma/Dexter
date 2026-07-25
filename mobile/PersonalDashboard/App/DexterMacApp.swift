@@ -26,6 +26,11 @@ struct DexterMacApp: App {
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowResizability(.contentMinSize)
+        // Menu bar commands (issue #295). They act on whichever window is
+        // focused, via the router each window publishes as a focused scene
+        // value, because commands are declared once per scene but routers are
+        // per window.
+        .commands { DexterCommands() }
     }
 }
 
@@ -97,6 +102,8 @@ private struct MacRootView: View {
                 .background(Tokens.paper)
         }
         .preferredColorScheme((ColorSchemePref(rawValue: schemePrefRaw) ?? .system).resolved)
+        // Let the menu bar act on THIS window's router when it is focused.
+        .publishRouterToCommands(router)
         .task {
             // `currentSection` reads an empty path as `.chat`, so seed the
             // historical macOS default of opening on Tasks. Only when nothing

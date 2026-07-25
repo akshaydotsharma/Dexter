@@ -125,6 +125,7 @@ targets:
       - path: PersonalDashboard/Design
       - path: PersonalDashboard/App/AppRouter.swift
       - path: PersonalDashboard/App/DexterMacApp.swift
+      - path: PersonalDashboard/App/MacCommands.swift
       - path: PersonalDashboard/ViewModels/TodosViewModel.swift
       - path: PersonalDashboard/Services/TodoService.swift
       - path: PersonalDashboard/Services/MapsLinkResolver.swift
