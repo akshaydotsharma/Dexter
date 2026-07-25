@@ -84,6 +84,26 @@ extension Font {
     static let edMono        = jbMono(EdSize.mono, relativeTo: .footnote)
 }
 
+// MARK: - Point sizes for AppKit call sites
+
+/// The raw point sizes behind the ramp, for the few call sites that cannot take
+/// a SwiftUI `Font`.
+///
+/// `MacClearTextField` configures an `NSTextField` and needs an `NSFont`, so it
+/// cannot use `.edBody`. It previously hardcoded 15pt with a comment saying
+/// "match `TaskRowMetrics.titleFont` on macOS (Inter-Regular 15)". When #294
+/// changed the ramp and #301 removed that override, the hardcoded 15 silently
+/// became 2pt larger than the row text it toggles with, so clicking a task to
+/// rename it would have made the text jump.
+///
+/// Exposing the size makes the coupling visible to the compiler instead of to a
+/// comment nobody re-reads. New AppKit call sites should read from here rather
+/// than copying a number.
+enum EdMetrics {
+    /// Point size of `.edBody` on this platform.
+    static var bodyPointSize: CGFloat { EdSize.body }
+}
+
 // MARK: - Eyebrow modifier
 
 struct Eyebrow: ViewModifier {
