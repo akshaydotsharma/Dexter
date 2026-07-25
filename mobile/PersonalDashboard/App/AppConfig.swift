@@ -14,6 +14,34 @@ import Foundation
 ///      simulator on the same Mac as the dev server; physical devices on a
 ///      different host need option 1 or 2.
 enum AppConfig {
+    /// Normalises a build-time / launch-time configuration string, returning
+    /// nil when it carries no usable value.
+    ///
+    /// Rejects two kinds of placeholder, because both reach us as ordinary
+    /// non-empty strings and are otherwise indistinguishable from a real value:
+    ///   • `$(FOO)` — an Xcode build setting that was never defined, left
+    ///     unexpanded by the "Process Info.plist" phase.
+    ///   • `${FOO}` — a shell-style placeholder that xcodegen expands from the
+    ///     environment at `xcodegen generate` time. If the variable wasn't
+    ///     exported first, the literal `${FOO}` is written into the generated
+    ///     scheme and handed to us as a launch environment variable.
+    ///
+    /// Without this, an unconfigured build sends the placeholder itself as a
+    /// credential and the user sees a raw HTTP 401 from the provider instead of
+    /// our own "not configured" message (issue: macOS Chat 401).
+    /// Trims first, so a value that is only whitespace is treated as absent and
+    /// a padded placeholder (`" ${FOO} "`) is still rejected. Returns the
+    /// TRIMMED value, which matters because these strings become HTTP header
+    /// values: a key sourced from a shell pipeline (`grep … | cut …`) commonly
+    /// carries a trailing newline, and an invalid header value fails in a way
+    /// that looks nothing like a configuration problem.
+    private static func resolved(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        guard !trimmed.hasPrefix("$("), !trimmed.hasPrefix("${") else { return nil }
+        return trimmed
+    }
+
     static let apiBaseURL: URL = {
         // 1. Runtime env var override (Xcode scheme or xcodebuild injection).
         if let override = ProcessInfo.processInfo.environment["API_URL"],
@@ -21,6 +49,10 @@ enum AppConfig {
             return url
         }
         // 2. Build-time OTA URL embedded in Info.plist by ship.sh.
+        // NOTE: this branch, and the `API_URL` one above, still carry the
+        // narrower legacy guard. Widening them to `resolved` is an iOS-only
+        // behaviour change and is tracked as a separate iOS follow-up so it
+        // isn't folded into a macOS commit (#292 acceptance criteria).
         if let otaURL = Bundle.main.object(forInfoDictionaryKey: "OTA_API_URL") as? String,
            !otaURL.isEmpty,
            !otaURL.hasPrefix("$("),   // guard against unexpanded xcconfig variables
@@ -36,16 +68,19 @@ enum AppConfig {
     ///   2. `ANTHROPIC_API_KEY` Info.plist key, baked at archive time by
     ///      `mobile/ota/ship-lan.sh` so OTA-installed builds carry their own
     ///      key without any per-device setup.
-    /// Returns nil if neither is set, in which case AI features surface a
-    /// clear "Anthropic API key not configured" error to the user.
+    /// On macOS the env var is the live path: the `DexterMac` scheme injects it
+    /// via xcodegen's `${ANTHROPIC_API_KEY}` expansion, so the key is only real
+    /// if the variable was exported before `xcodegen generate`. When it wasn't,
+    /// the scheme carries the literal `${ANTHROPIC_API_KEY}` and `resolved`
+    /// rejects it here rather than letting it reach the `x-api-key` header.
+    ///
+    /// Returns nil if neither source yields a usable value, in which case AI
+    /// features surface a clear "Anthropic API key not configured" error.
     static let anthropicAPIKey: String? = {
-        if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"],
-           !env.isEmpty {
+        if let env = resolved(ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]) {
             return env
         }
-        if let plist = Bundle.main.object(forInfoDictionaryKey: "ANTHROPIC_API_KEY") as? String,
-           !plist.isEmpty,
-           !plist.hasPrefix("$(") {
+        if let plist = resolved(Bundle.main.object(forInfoDictionaryKey: "ANTHROPIC_API_KEY") as? String) {
             return plist
         }
         return nil
@@ -59,6 +94,14 @@ enum AppConfig {
     ///      key without any per-device setup.
     /// Returns nil if neither is set, in which case `VoiceDictation` falls
     /// back to the on-device English recognizer rather than failing.
+    ///
+    /// KNOWN BUG, tracked as a separate iOS follow-up: the env branch below
+    /// accepts an unexpanded `${OPENAI_API_KEY}` placeholder as if it were a
+    /// real key, which defeats the documented on-device fallback and fails
+    /// against OpenAI instead. The fix is to route both branches through
+    /// `resolved` (as `anthropicAPIKey` now does), but that is an iOS-only
+    /// behaviour change so it is deliberately NOT folded into this macOS
+    /// commit, per #292's acceptance criteria.
     static let openAIAPIKey: String? = {
         if let env = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
            !env.isEmpty {
