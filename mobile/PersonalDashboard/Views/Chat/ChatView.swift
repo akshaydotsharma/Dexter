@@ -67,6 +67,25 @@ struct ChatView: View {
     ]
 
     var body: some View {
+        content
+            // #310: cancel any in-flight stream when this view goes away.
+            //
+            // On macOS, switching sidebar sections destroys the Chat detail, but
+            // the send task is unstructured and retains the view-model, so
+            // without this it runs to completion and executes every remaining
+            // tool call against SwiftData with no surface showing it. iOS can
+            // reach the same state by navigating away mid-stream.
+            //
+            // Deliberately on the shared `body` rather than on either platform
+            // body: `iosBody`'s existing `.onDisappear` sits inside an
+            // `#if os(iOS)` block (it touches UIResponder), so a cancel hook
+            // added there would silently not exist on macOS — which is the
+            // platform where section switching makes this easiest to hit.
+            .onDisappear { viewModel.cancelStreaming() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         #if os(macOS)
         macBody
         #else
@@ -483,7 +502,10 @@ struct ChatView: View {
         // (issue #151).
         endInlineMicSession()
         #endif
-        Task { await viewModel.send() }
+        // #310: was `Task { await viewModel.send() }`, an unstructured task with
+        // no stored handle, so nothing could cancel it. The view-model now owns
+        // the handle so `.onDisappear` can cancel it.
+        viewModel.startSend()
     }
 
     #if os(iOS)

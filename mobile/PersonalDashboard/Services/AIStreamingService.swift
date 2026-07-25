@@ -22,6 +22,23 @@ struct AIStreamingService {
 
     /// Forwards `ChatStream.run` events into the local enum so callers stay
     /// decoupled from the Anthropic-flavored wire types.
+    ///
+    /// #310 named the `Task { @MainActor in }` below as compounding the
+    /// main-actor problem. It stays on the main actor, deliberately, and the
+    /// reason is worth recording so it is not "fixed" later:
+    ///
+    /// - `ChatStream` is a `@MainActor` type and its `run` reads SwiftData via
+    ///   `AssistantContextBuilder`. A `ModelContext` is main-actor-confined, so
+    ///   this loop cannot leave the main actor without a background context.
+    /// - Once `AnthropicClient.stream` stopped being `@MainActor`, the expensive
+    ///   work — the SSE read loop and the per-delta JSON decode — moved off
+    ///   main at the source. What remains here is one enum-to-enum mapping per
+    ///   already-parsed event, which is not the cost the ticket was about.
+    ///
+    /// The `onTermination` hook is load-bearing for cancellation: it propagates
+    /// a cancelled consumer down through `ChatStream` to the client's detached
+    /// SSE task, which is what stops tool calls executing after the chat view
+    /// has gone away.
     func parseStream(
         history: [ChatStream.PriorTurn] = [],
         input: String,
