@@ -15,7 +15,11 @@ import SwiftData
 @main
 struct DexterMacApp: App {
     var body: some Scene {
-        WindowGroup {
+        // Identified so `openWindow(id:)` can reopen a window after the last one
+        // is closed. #295 takes ⌘N for record creation, which replaces the
+        // command group that supplied the free New Window item, so the reopen
+        // path has to be explicit.
+        WindowGroup(id: MacRootWindow.id) {
             // `MacRootView` owns its own `AppRouter` so each window carries
             // independent navigation state. Hoisting the router up here would
             // share one selection across every window, because a `WindowGroup`

@@ -90,6 +90,14 @@ struct TasksView: View {
         }
         .activeSection(.tasks)
         .macSectionChrome("Tasks")
+        // Publish this section's create action so File > New Task and ⌘N reach
+        // it while Tasks is on screen (issue #295). Same target as the add
+        // button, so the menu and the button cannot diverge.
+        #if os(macOS)
+        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Task") {
+            showingEditor = true
+        })
+        #endif
         // Live-refresh when the voice-capture or chat path writes a task.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
             Task { await viewModel.load() }

@@ -78,6 +78,16 @@ struct ListsView: View {
                     #endif
                     rootList
                         .macSectionChrome("Lists")
+                        // Publish the create action for File > New List and ⌘N
+                        // while the root list is on screen. Deliberately scoped
+                        // to the root branch: inside an open list ⌘N should mean
+                        // "new item in this list", which is a different action
+                        // and is not wired yet (issue #295).
+                        #if os(macOS)
+                        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New List") {
+                            showingNewList = true
+                        })
+                        #endif
                 }
             }
 

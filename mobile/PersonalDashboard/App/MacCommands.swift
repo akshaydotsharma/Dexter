@@ -33,11 +33,43 @@ extension FocusedValues {
         get { self[AppRouterFocusedValueKey.self] }
         set { self[AppRouterFocusedValueKey.self] = newValue }
     }
+
+    /// The on-screen section's "create a new record" action, or nil when the
+    /// section owns no record type.
+    var newItemAction: NewItemAction? {
+        get { self[NewItemActionKey.self] }
+        set { self[NewItemActionKey.self] = newValue }
+    }
+}
+
+/// A section's create action, published so ⌘N can invoke whichever section is
+/// on screen (issue #295).
+///
+/// `title` names the record rather than reusing a generic "New", so the File
+/// menu reads "New Task" in Tasks and "New Trip" in Trips. A menu item whose
+/// label does not say what it makes is a worse affordance than one that does.
+struct NewItemAction {
+    /// Menu item title, e.g. "New Task".
+    let title: String
+    let perform: () -> Void
+}
+
+struct NewItemActionKey: FocusedValueKey {
+    typealias Value = NewItemAction
+}
+
+/// Identity of the main `WindowGroup`, so `openWindow(id:)` can reopen one after
+/// the last window is closed. Needed because taking ⌘N for record creation
+/// replaces the group that supplied the free New Window item.
+enum MacRootWindow {
+    static let id = "dexter.main"
 }
 
 /// The app's menu bar contributions.
 struct DexterCommands: Commands {
     @FocusedValue(\.appRouter) private var router: AppRouter?
+    @FocusedValue(\.newItemAction) private var newItem: NewItemAction?
+    @Environment(\.openWindow) private var openWindow
 
     /// Sections offered in the Go menu, in sidebar order. The first nine take
     /// ⌘1 through ⌘9, matching the convention Mail and Finder use for
@@ -49,6 +81,34 @@ struct DexterCommands: Commands {
     ]
 
     var body: some Commands {
+        // ⌘N creates the focused section's own record, the way Reminders and
+        // Notes behave. Dexter is not a document app, so "new window" is not
+        // what a user means by ⌘N here.
+        //
+        // This REPLACES the `.newItem` group, which is where `WindowGroup` puts
+        // its free "New Window" item and its ⌘N. That item is the only way back
+        // from an app running with no windows, which is standard macOS behaviour
+        // and something two of us hit during this project. So New Window is
+        // re-added here on ⇧⌘N rather than being silently dropped: taking a
+        // shortcut is fine, removing a recovery path is not.
+        CommandGroup(replacing: .newItem) {
+            Button(newItem?.title ?? "New") {
+                newItem?.perform()
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            // Sections that own no record type publish nothing, so the item
+            // disables rather than doing something surprising. Today, Activity,
+            // Chat, Settings and Help center are deliberately in this state.
+            .disabled(newItem == nil)
+
+            Divider()
+
+            Button("New Window") {
+                openWindow(id: MacRootWindow.id)
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+        }
+
         CommandMenu("Go") {
             ForEach(Array(Self.sections.enumerated()), id: \.element) { index, section in
                 Button(section.displayName) {
