@@ -67,6 +67,19 @@ private struct MacRootView: View {
         .settings, .helpCenter,
     ]
 
+    /// Whether the process was launched with a valid `LAUNCH_SECTION` target.
+    ///
+    /// Read here rather than on `AppRouter` so the iOS-shared file stays
+    /// untouched. Mirrors the parsing in `AppRouter.path`'s initialiser,
+    /// including `.dashboard`, which that initialiser redirects to Activity
+    /// rather than rejecting.
+    private static var hasLaunchTarget: Bool {
+        guard let raw = ProcessInfo.processInfo.environment["LAUNCH_SECTION"]?.lowercased() else {
+            return false
+        }
+        return AppSection(rawValue: raw) != nil
+    }
+
     /// Reads the router and writes back through `go(to:)`, so the sidebar and
     /// every programmatic navigation move the same state.
     private var selection: Binding<AppSection> {
@@ -106,11 +119,17 @@ private struct MacRootView: View {
         .publishRouterToCommands(router)
         .task {
             // `currentSection` reads an empty path as `.chat`, so seed the
-            // historical macOS default of opening on Tasks. Only when nothing
-            // has already set a section, so a `LAUNCH_SECTION` deep-link is
-            // preserved. Idempotent, which matters because `.task` on a
-            // `WindowGroup`'s root view runs once per WINDOW, not per process.
-            if router.path.isEmpty {
+            // historical macOS default of opening on Tasks. Idempotent, which
+            // matters because `.task` on a `WindowGroup`'s root view runs once
+            // per WINDOW, not per process.
+            //
+            // Emptiness alone is not enough to decide. `AppRouter.path`'s
+            // initialiser deliberately leaves the path empty for
+            // `LAUNCH_SECTION=chat`, because on iOS chat IS the stack root.
+            // Seeding on emptiness therefore swallowed that one target and
+            // left Chat the only section unreachable by script. So seed only
+            // when no valid launch target was requested at all.
+            if router.path.isEmpty && !Self.hasLaunchTarget {
                 router.go(to: .tasks)
             }
         }
