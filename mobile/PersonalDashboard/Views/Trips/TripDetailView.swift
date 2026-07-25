@@ -182,14 +182,34 @@ struct TripDetailView: View {
             case .statement:      handleStatementData(data, fileName: fileName)
             }
         }
-        // Full-screen scan surface for a ticket card tap (or right after a
-        // successful upload). iOS-only (present-to-scan hardware idiom); on
-        // macOS `scanTarget` is never set for scanning and the cover is absent
-        // (issue #281).
+        // Surface for a ticket card tap (or right after a successful upload).
+        //
+        // iOS gets the present-to-scan surface: a hardware idiom that raises
+        // screen brightness and holds the idle timer so a barcode can be
+        // scanned at a gate. `TicketScanView` is deliberately absent from the
+        // macOS target for exactly that reason.
+        //
+        // The comment previously here claimed that on macOS "`scanTarget` is
+        // never set for scanning and the cover is absent". The second half was
+        // true and the first was not: the tap site sets `scanTarget`
+        // unconditionally, so on macOS a ticketed flight or event became the
+        // target with no presenter to receive it, and clicking one did nothing
+        // at all, silently (issue #298).
+        //
+        // macOS now serves the same intent, "let me look at my ticket", the
+        // desktop way: the stored original file in the cross-platform viewer.
+        // A barcode-only ticket has no file to show, so the tap site routes
+        // those to the editor and they never reach here.
         #if os(iOS)
         .fullScreenCover(item: $scanTarget) { target in
             if let item = items.first(where: { $0.clientUUID == target.id }) {
                 TicketScanView(item: item)
+            }
+        }
+        #else
+        .sheet(item: $scanTarget) { target in
+            if let item = items.first(where: { $0.clientUUID == target.id }) {
+                TicketOriginalViewer(attachmentPath: item.attachmentPath)
             }
         }
         #endif
@@ -341,7 +361,21 @@ struct TripDetailView: View {
                                 }
                             } else if item.hasTicket {
                                 Haptics.light()
+                                #if os(iOS)
                                 scanTarget = TicketScanTarget(id: item.clientUUID)
+                                #else
+                                // `hasTicket` is true for an attachment OR a
+                                // bare barcode payload. macOS presents the
+                                // stored file, so a barcode-only ticket has
+                                // nothing to show and would open an empty
+                                // viewer. Route those to the editor, which does
+                                // surface the ticket details (issue #298).
+                                if item.attachmentPath.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    editingItem = .existing(item.clientUUID)
+                                } else {
+                                    scanTarget = TicketScanTarget(id: item.clientUUID)
+                                }
+                                #endif
                             } else {
                                 editingItem = .existing(item.clientUUID)
                             }
