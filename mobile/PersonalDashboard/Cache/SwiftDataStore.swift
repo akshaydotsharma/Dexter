@@ -306,8 +306,15 @@ final class SwiftDataStore {
         // does not inherit the shell environment, so `open` arrives with every
         // DEXTER_* unset and each hook correctly no-ops).
         //
-        // So an env-driven harness MUST force a window before expecting any hook
-        // output, e.g.:
+        // As of `0e30805`, `DexterMacApp.init()` touches `shared` unconditionally
+        // under DEBUG, so bootstrap happens at process start on every debug
+        // launch, window or not, and no harness needs to do anything special.
+        // (It went in `init()` rather than a `.task` deliberately: a `.task` only
+        // runs once a view appears, which would have failed in precisely the
+        // headless env-driven case that needed fixing.)
+        //
+        // If that line is ever removed, this reverts to firing only when a window
+        // is constructed, and an env-driven harness must force one:
         //   osascript -e 'tell application "System Events" to tell process \
         //     "DexterMac" to click menu item "New Window" of menu 1 of menu bar \
         //     item "File"'
