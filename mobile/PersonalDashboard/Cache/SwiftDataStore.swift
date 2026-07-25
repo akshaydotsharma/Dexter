@@ -15,6 +15,121 @@ import AppKit
 /// Access the shared `ModelContext` via `SwiftDataStore.shared.context`.
 /// Services and view models inject this context; tests can substitute an
 /// in-memory container via `SwiftDataStore.makeInMemory()`.
+/// Single debug-only seam for every launch hook that redirects or drives the
+/// data layer (#318, #319 verification).
+///
+/// One place on purpose. Scattering `ProcessInfo` reads into views is what #316
+/// exists to clean up, and the `LAUNCH_SECTION` parse is already duplicated, so
+/// this gains a third tenant rather than the codebase gaining a third scattered
+/// read. When #316 consolidates scaffolding it should relocate this whole enum
+/// to its own file; it lives here for now only because a new file needs a
+/// `project.yml` entry, which is MacUI's to add, and that would put the round
+/// trip behind a cross-branch dependency.
+///
+/// Every hook follows the same discipline:
+///   • `#if DEBUG` only, so release builds cannot be driven from the outside.
+///   • Environment-only, never a persisted setting, so nothing stale outlives
+///     the run that set it.
+///   • Three-way resolution: absent is fine, usable proceeds, and **present but
+///     unusable refuses to launch** rather than falling back. Falling back is
+///     what made an unexpanded `${DEXTER_STORE_PATH}` silently target the user's
+///     real store.
+enum DebugLaunchHooks {
+    #if DEBUG
+    /// Resolve a path-valued hook three ways. Returns nil when the variable is
+    /// genuinely absent; traps when it is set to something unusable.
+    ///
+    /// Reuses `AppConfig.resolved` for placeholder DETECTION only. Its nil is
+    /// deliberately ambiguous between "missing" and "junk" because for an API key
+    /// both mean "not configured"; for a path they mean opposite things, so the
+    /// presence check happens here, before the helper is consulted.
+    static func path(for variable: String) -> String? {
+        guard let present = ProcessInfo.processInfo.environment[variable] else { return nil }
+        guard let usable = AppConfig.resolved(present) else {
+            fatalError(
+                """
+                \(variable) is set but carries no usable value (got "\(present)": \
+                empty, whitespace-only, or an unexpanded $(...) / ${...} \
+                placeholder). Refusing to launch rather than guessing.
+                """
+            )
+        }
+        return (usable as NSString).expandingTildeInPath
+    }
+
+    /// Run the export / import hooks once the container exists.
+    ///
+    /// Called from `SwiftDataStore`'s bootstrap rather than from the SwiftUI
+    /// shell: `DexterMacApp.swift` is MacUI's file and currently carries the
+    /// #293 router rework, so editing it concurrently is the worst available
+    /// merge conflict.
+    ///
+    /// Export exits the process on completion so a script can rely on the exit
+    /// code. Import deliberately does NOT exit, because the whole point of
+    /// importing is to then inspect the restored data in the UI — checking a
+    /// restored boarding pass opens is the one assertion that catches a dangling
+    /// `attachmentPath`, and a count check cannot.
+    @MainActor
+    static func runDataHooks(context: ModelContext) {
+        if let target = path(for: "DEXTER_EXPORT_TO") {
+            runExport(to: target, context: context)
+        }
+        if let source = path(for: "DEXTER_IMPORT_FROM") {
+            runImport(from: source, context: context)
+        }
+    }
+
+    @MainActor
+    private static func runExport(to target: String, context: ModelContext) {
+        let url = URL(fileURLWithPath: target)
+        let parent = url.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: parent.path) else {
+            NSLog("DEXTER_EXPORT_TO: parent directory does not exist: %@", parent.path)
+            exit(1)
+        }
+        do {
+            let produced = try DataExportService(modelContext: context).export()
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: produced, to: url)
+            NSLog("DEXTER_EXPORT_TO: wrote archive to %@", url.path)
+            exit(0)
+        } catch {
+            NSLog("DEXTER_EXPORT_TO: export failed: %@", String(describing: error))
+            exit(1)
+        }
+    }
+
+    @MainActor
+    private static func runImport(from source: String, context: ModelContext) {
+        // Import is the one operation that destroys data by design, so it is
+        // gated on the store already being disposable. Without this, a careless
+        // script could restore an archive straight over the user's real
+        // financial data, and a fresh backup would only convert that into a
+        // restore that depends on the code under test.
+        guard SwiftDataStore.isUsingOverrideStore else {
+            NSLog("DEXTER_IMPORT_FROM: refusing to import without DEXTER_STORE_PATH set — will not write to the real store")
+            exit(1)
+        }
+        let url = URL(fileURLWithPath: source)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            NSLog("DEXTER_IMPORT_FROM: no archive at %@", url.path)
+            exit(1)
+        }
+        do {
+            let service = DataImportService(modelContext: context)
+            let preview = try service.preview(url: url)
+            try service.commit(preview: preview)
+            NSLog("DEXTER_IMPORT_FROM: imported %@ — app left running for UI inspection", url.path)
+        } catch {
+            // Surfaced rather than swallowed: this is how a manifestClaimsMismatch
+            // refusal becomes observable, which is otherwise unverifiable.
+            NSLog("DEXTER_IMPORT_FROM: import failed: %@", String(describing: error))
+            exit(1)
+        }
+    }
+    #endif
+}
+
 @MainActor
 final class SwiftDataStore {
     static let shared = SwiftDataStore()
@@ -89,35 +204,15 @@ final class SwiftDataStore {
     /// is meant to prevent. Failing to launch touches nobody's data.
     private static func resolveStoreURL(default defaultURL: URL) -> URL {
         #if DEBUG
-        // Three-way, and the distinction is load-bearing.
-        //
-        // `AppConfig.resolved` (#308) deliberately collapses "missing" and
-        // "junk" into one nil, because for an API key both mean "not
-        // configured". For a store path they mean OPPOSITE things: missing means
-        // use the default, junk means stop. Reusing the helper for its
-        // placeholder detection while treating its nil as a single outcome is
-        // what made an unexpanded `${DEXTER_STORE_PATH}` fall back to the user's
-        // real store, which is the exact accident this override prevents.
-        //
-        // So: detect presence first, THEN usability.
-        let rawEnv = ProcessInfo.processInfo.environment["DEXTER_STORE_PATH"]
-        guard let present = rawEnv else {
+        // Resolved through the shared seam, which does the three-way itself:
+        // absent returns nil, present-but-unusable traps. The distinction is
+        // load-bearing — collapsing it is what made an unexpanded
+        // `${DEXTER_STORE_PATH}` silently target the user's real store.
+        guard let raw = DebugLaunchHooks.path(for: "DEXTER_STORE_PATH") else {
             // Genuinely unset. Default path, silently. The only safe fallback.
             return defaultURL
         }
-        guard let raw = AppConfig.resolved(present) else {
-            fatalError(
-                """
-                DEXTER_STORE_PATH is set but carries no usable value \
-                (got "\(present)": empty, whitespace-only, or an unexpanded \
-                $(...) / ${...} placeholder). Refusing to launch rather than \
-                falling back to the real store, so a run that asked for a \
-                disposable store cannot silently touch live data. Export a real \
-                path or unset the variable entirely.
-                """
-            )
-        }
-        let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
+        let url = URL(fileURLWithPath: raw)
         // Require an existing parent directory. Without this check a typo'd
         // path yields a brand-new empty store, the app opens with no data, and
         // the obvious conclusion is that the data is gone.
@@ -199,6 +294,16 @@ final class SwiftDataStore {
         // One-time retag of pre-existing transport-shaped activities to the new
         // transport kind (#238). Guarded internally.
         migrateActivitiesToTransport()
+        #if DEBUG
+        // Export / import launch hooks (#319 verification). Deferred a run-loop
+        // turn so both launch migrations above have completed and the container
+        // is fully settled before an export snapshots it or an import mutates it.
+        // No-op unless DEXTER_EXPORT_TO / DEXTER_IMPORT_FROM are set.
+        let hookContext = container.mainContext
+        DispatchQueue.main.async {
+            DebugLaunchHooks.runDataHooks(context: hookContext)
+        }
+        #endif
     }
 
     /// One-time backfill (#238): before the `transport` itinerary kind existed,
