@@ -46,14 +46,20 @@ struct PersonalDashboardApp: App {
             }
             // Opt-in automatic backup (#141). Fires on becoming active (covers
             // cold launch and foregrounding) and on entering background (catches
-            // edits made during the session). Cheap and non-blocking: the
-            // service no-ops fast when backup is off, no folder is set, or the
-            // interval hasn't elapsed. Background time is limited, so the active
-            // hook is the primary path.
+            // edits made during the session). The not-due path is genuinely
+            // cheap: the service no-ops fast when backup is off, no folder is
+            // set, or the interval hasn't elapsed. Background time is limited,
+            // so the active hook is the primary path.
+            //
+            // When a backup DOES run, #309 moved the archive build and the
+            // coordinated write off the main actor, so this no longer stalls the
+            // UI for the length of a zip. The fetches and DTO mapping still run
+            // on the main actor and cannot move without #334, so it is "much
+            // shorter", not "free".
             switch newPhase {
             case .active, .background:
                 Task { @MainActor in
-                    try? BackupService(modelContext: SwiftDataStore.shared.context)
+                    try? await BackupService(modelContext: SwiftDataStore.shared.context)
                         .runBackupIfDue(force: false)
                 }
             default:

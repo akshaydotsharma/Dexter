@@ -335,7 +335,7 @@ struct DataExportImportView: View {
         phase = .exporting
         let service = DataExportService(modelContext: modelContext)
         do {
-            let url = try service.export()
+            let url = try await service.export()
             #if os(iOS)
             phase = .shareReady(url)
             await presentShareSheet(for: url)

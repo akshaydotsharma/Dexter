@@ -320,7 +320,7 @@ struct BackupSettingsView: View {
 
         let service = BackupService(modelContext: modelContext)
         do {
-            try service.runBackupIfDue(force: true)
+            try await service.runBackupIfDue(force: true)
             lastBackupAt = BackupSettings.lastBackupAt
             lastFileName = BackupSettings.lastFileName
             successMessage = "Backed up to \(folderName)."

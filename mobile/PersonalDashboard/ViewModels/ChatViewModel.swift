@@ -88,6 +88,41 @@ final class ChatViewModel {
         draftInput = ""
     }
 
+    /// Handle for the in-flight chat send, so view teardown can cancel it
+    /// (#310). Nil whenever nothing is streaming.
+    ///
+    /// Owned here rather than in `ChatView` because the streaming lifecycle is
+    /// the view-model's, and the task retains `self`: a `@State` handle in the
+    /// view is destroyed along with the view that was supposed to cancel it.
+    private var sendTask: Task<Void, Never>?
+
+    /// Start a send and retain its handle. Entry point for the chat surface.
+    ///
+    /// `send()` itself stays `async` and unwrapped because
+    /// `VoiceCaptureViewModel` awaits it directly and depends on structural
+    /// completion; routing that path through here would change its semantics.
+    func startSend() {
+        // An in-flight send is cancelled rather than raced. Two concurrent
+        // streams would interleave appends into `turns` and both execute tool
+        // calls.
+        sendTask?.cancel()
+        sendTask = Task { [weak self] in
+            await self?.send()
+            self?.sendTask = nil
+        }
+    }
+
+    /// Cancel any in-flight stream. Safe to call when nothing is streaming.
+    ///
+    /// Cancelling the task tears down the `AsyncThrowingStream`, which fires the
+    /// `onTermination` handler in `AIStreamingService` and `AnthropicClient` and
+    /// so cancels the underlying SSE read. `send()` additionally refuses to
+    /// execute further drafts once cancelled.
+    func cancelStreaming() {
+        sendTask?.cancel()
+        sendTask = nil
+    }
+
     func send() async {
         let input = draftInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
@@ -119,6 +154,13 @@ final class ChatViewModel {
 
         do {
             for try await event in streamingService.parseStream(history: history, input: input, sessionId: sessionId) {
+                // #310: stop on cancellation rather than relying on the stream's
+                // implicit behaviour. Checked explicitly because the next branch
+                // WRITES TO SWIFTDATA: leaving it to `for try await` to notice
+                // cancellation would still permit one more tool call to land
+                // after the user navigated away, and a silent write is exactly
+                // the failure this ticket is about.
+                if Task.isCancelled { break }
                 guard let idx = turns.firstIndex(where: { $0.id == assistantTurnId }) else { break }
                 switch event {
                 case .draft(let d):
@@ -127,6 +169,10 @@ final class ChatViewModel {
                     // append the success / failure record so the user sees
                     // a stable card stream alongside the streaming prose.
                     let result = await execute(draft: d)
+                    // Re-checked after the await: `execute` suspends, so a
+                    // cancellation arriving during it must not append a result
+                    // row to a turn the user can no longer see.
+                    if Task.isCancelled { break }
                     turns[idx].results.append(result)
                 case .textChunk(let chunk):
                     turns[idx].text += chunk

@@ -23,6 +23,9 @@ final class DataImportService {
         case manifestMissing
         case manifestUnparseable(Error)
         case unsupportedSchemaVersion(found: Int, supported: Int)
+        /// #319: the manifest's declared row counts or model list disagree with
+        /// the payload. Raised during preview, before anything is written.
+        case manifestClaimsMismatch(details: [String])
         case commitFailed(Error)
 
         var errorDescription: String? {
@@ -37,6 +40,8 @@ final class DataImportService {
                 return "The manifest couldn't be parsed: \(e.localizedDescription)"
             case .unsupportedSchemaVersion(let found, let supported):
                 return "This archive uses schema version \(found), but this app supports version \(supported). Update the app to import it."
+            case .manifestClaimsMismatch(let details):
+                return "This archive looks incomplete or damaged, so nothing was imported. \(details.joined(separator: "; "))."
             case .commitFailed(let e):
                 return "Couldn't save imported data: \(e.localizedDescription)"
             }
@@ -109,10 +114,18 @@ final class DataImportService {
 
     private let modelContext: ModelContext
     private let receiptStorage: ReceiptStorage
+    /// #319: ticket files (`tickets/<uuid>.<ext>`) travel in the archive
+    /// alongside receipts. Same shape and same API as `receiptStorage`.
+    private let ticketStorage: TicketStorage
 
-    init(modelContext: ModelContext, receiptStorage: ReceiptStorage = .shared) {
+    init(
+        modelContext: ModelContext,
+        receiptStorage: ReceiptStorage = .shared,
+        ticketStorage: TicketStorage = .shared
+    ) {
         self.modelContext = modelContext
         self.receiptStorage = receiptStorage
+        self.ticketStorage = ticketStorage
     }
 
     // MARK: - Preview
@@ -149,12 +162,26 @@ final class DataImportService {
             throw ImportError.manifestUnparseable(error)
         }
 
-        guard manifest.schemaVersion == DataArchive.currentSchemaVersion else {
+        // #319: was an exact-equality check, which made any future
+        // `currentSchemaVersion` bump reject every archive already in the wild.
+        // That is why this ticket does NOT bump the version: the guard shipped
+        // to the phone is the strict one, so a newer archive would be refused by
+        // code we cannot patch retroactively. Accepting anything up to the
+        // current version means the next legitimate bump degrades instead of
+        // breaking. A NEWER archive is still refused, since we genuinely cannot
+        // know what it contains.
+        guard manifest.schemaVersion <= DataArchive.currentSchemaVersion else {
             throw ImportError.unsupportedSchemaVersion(
                 found: manifest.schemaVersion,
                 supported: DataArchive.currentSchemaVersion
             )
         }
+
+        // Self-verification (#319). Runs here, during preview, so a mismatch is
+        // refused BEFORE any write. Counts absent means a pre-#319 archive:
+        // proceed and warn rather than treating the absence as expected-zero,
+        // which would reject every backup the user already holds as corrupt.
+        try verifyManifestClaims(manifest)
 
         let counts = try computeCounts(payload: manifest.data)
         return Preview(
@@ -224,6 +251,9 @@ final class DataImportService {
 
         let payload = preview.manifest.data
         var writtenReceiptPaths: [String] = []
+        // #319: tracked alongside receipts so a rollback removes restored ticket
+        // files too, rather than leaving orphans behind after a failed import.
+        var writtenTicketPaths: [String] = []
 
         do {
             for dto in payload.noteFolders where !existingFolderUUIDs.contains(dto.clientUUID) {
@@ -247,6 +277,9 @@ final class DataImportService {
                     dueDate: dto.dueDate,
                     tag: dto.tag,
                     position: dto.position,
+                    address: dto.address ?? "",
+                    googleMapsLink: dto.googleMapsLink ?? "",
+                    priority: dto.priority ?? 0,
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt,
                     deletedAt: dto.deletedAt,
@@ -275,12 +308,16 @@ final class DataImportService {
             let itemsByList: [UUID: [DataArchive.ListItemDTO]] = Dictionary(grouping: payload.listItems, by: \.listClientUUID)
             for dto in payload.lists where !existingListUUIDs.contains(dto.clientUUID) {
                 let rawItems = (itemsByList[dto.clientUUID] ?? []).sorted { $0.position < $1.position }
-                let items = rawItems.map { ChecklistItem(text: $0.text, checked: $0.checked) }
+                let items = rawItems.map {
+                    ChecklistItem(text: $0.text, checked: $0.checked, url: $0.url ?? "")
+                }
                 modelContext.insert(LocalList(
                     clientUUID: dto.clientUUID,
                     title: dto.title,
                     items: items,
                     position: dto.position,
+                    iconName: dto.iconName,
+                    colorHex: dto.colorHex,
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt,
                     deletedAt: dto.deletedAt,
@@ -289,7 +326,7 @@ final class DataImportService {
             }
 
             for dto in payload.itineraries where !existingTripUUIDs.contains(dto.clientUUID) {
-                modelContext.insert(LocalTrip(
+                let trip = LocalTrip(
                     clientUUID: dto.clientUUID,
                     name: dto.name,
                     startDate: dto.startDate,
@@ -297,7 +334,12 @@ final class DataImportService {
                     notes: dto.notes,
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt
-                ))
+                )
+                // Participants (#258) are carried as the raw blob and assigned
+                // after init, so the round trip is byte-for-byte and we don't
+                // decode/re-encode a structure the model already guards.
+                trip.participantsData = dto.participantsData
+                modelContext.insert(trip)
             }
 
             for dto in payload.itineraryDays where !existingItineraryUUIDs.contains(dto.clientUUID) {
@@ -305,7 +347,7 @@ final class DataImportService {
                 let transportMode = (dto.transportMode?.isEmpty ?? true)
                     ? nil
                     : TransportMode(rawValue: dto.transportMode!)
-                modelContext.insert(LocalItineraryItem(
+                let item = LocalItineraryItem(
                     clientUUID: dto.clientUUID,
                     tripUUID: dto.tripClientUUID,
                     dayDate: dto.dayDate,
@@ -320,14 +362,38 @@ final class DataImportService {
                     googleMapsLink: dto.googleMapsLink ?? "",
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt
-                ))
+                )
+                // Ticket / wallet fields (#222) and the ingest dedupe fields
+                // (#143), all previously dropped so a restore lost every
+                // boarding pass. Assigned after init to keep the change additive
+                // rather than widening the model's initializer.
+                item.arrivalTime        = dto.arrivalTime
+                item.address            = dto.address ?? ""
+                item.dedupeKey          = dto.dedupeKey ?? ""
+                item.sourceConfirmation = dto.sourceConfirmation ?? ""
+                item.barcodePayload     = dto.barcodePayload ?? ""
+                item.barcodeSymbology   = dto.barcodeSymbology ?? ""
+                item.seat               = dto.seat ?? ""
+                item.gate               = dto.gate ?? ""
+                item.venue              = dto.venue ?? ""
+                item.ticketMetaJSON     = dto.ticketMetaJSON ?? ""
+                // `attachmentPath` is set ONLY when the referenced file was
+                // actually restored from the archive. Setting it otherwise makes
+                // `hasTicket` true against a file that isn't on disk, which is
+                // worse than reporting no ticket.
+                let restoredTicket = try restoreTicket(for: dto, archiveEntries: preview.entries)
+                if let restoredTicket {
+                    writtenTicketPaths.append(restoredTicket)
+                    item.attachmentPath = restoredTicket
+                }
+                modelContext.insert(item)
             }
 
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
                 let restoredPath = try restoreReceipt(for: dto, archiveEntries: preview.entries)
                 if let restoredPath { writtenReceiptPaths.append(restoredPath) }
 
-                modelContext.insert(LocalExpense(
+                let expense = LocalExpense(
                     clientUUID: dto.clientUUID,
                     date: dto.date,
                     category: dto.category,
@@ -345,7 +411,125 @@ final class DataImportService {
                     dedupeDescriptor: dto.dedupeDescriptor ?? "",
                     needsSync: false,
                     version: 0
-                ))
+                )
+                // Trip linkage, person/event tagging (#183), shares (#188) and
+                // group settle-up (#258-#261), plus the per-surface visibility
+                // flags (#264). All previously dropped, which is why a restored
+                // trip expense came back as a loose Finance row with its splits
+                // gone and `myShareSGD` reporting the full amount.
+                expense.tripUUID          = dto.tripUUID
+                expense.sourceReference   = dto.sourceReference ?? ""
+                expense.statementLabel    = dto.statementLabel ?? ""
+                expense.statementFileName = dto.statementFileName ?? ""
+                expense.personUUID        = dto.personUUID
+                expense.personName        = dto.personName
+                expense.eventUUID         = dto.eventUUID
+                expense.eventName         = dto.eventName
+                expense.numberOfShares    = dto.numberOfShares ?? 1
+                expense.paidByPersonUUID  = dto.paidByPersonUUID
+                expense.splitsData        = dto.splitsData
+                // Restores the user's per-surface deletions. Without these a
+                // restore resurrects rows they had already hidden.
+                expense.hiddenFromFinance = dto.hiddenFromFinance ?? false
+                expense.hiddenFromTrip    = dto.hiddenFromTrip ?? false
+                // Statement dedupe key (#208): without it, re-importing the same
+                // statement after a restore re-duplicated every transaction.
+                expense.dedupeKey         = dto.dedupeKey ?? ""
+                modelContext.insert(expense)
+            }
+
+            // MARK: Models added in #319
+            //
+            // Insertion order relative to expenses is IRRELEVANT here, and it is
+            // worth stating so nobody later "preserves" an ordering that carries
+            // no meaning. None of these models declares a `@Relationship`:
+            // `personUUID`, `eventUUID` and `paidByPersonUUID` are plain `UUID?`
+            // fields and `splitsData` is a JSON blob, so SwiftData enforces no
+            // referential integrity between them and there is nothing to resolve
+            // within the transaction. Everything lands in one save regardless.
+            //
+            // (An earlier version of this comment claimed people and events were
+            // inserted first so references would resolve. That was wrong twice
+            // over: they are inserted after expenses, and the ordering would not
+            // have mattered even if they were not.)
+            let existingPersonUUIDs    = try existingUUIDs(LocalPerson.self,  keyPath: \.clientUUID)
+            let existingEventUUIDs     = try existingUUIDs(LocalEvent.self,   keyPath: \.clientUUID)
+            for dto in (payload.persons ?? []) where !existingPersonUUIDs.contains(dto.clientUUID) {
+                let person = LocalPerson(name: dto.name, colorHex: dto.colorHex)
+                person.clientUUID = dto.clientUUID
+                person.createdAt = dto.createdAt
+                modelContext.insert(person)
+            }
+            for dto in (payload.events ?? []) where !existingEventUUIDs.contains(dto.clientUUID) {
+                let event = LocalEvent(name: dto.name)
+                event.clientUUID = dto.clientUUID
+                event.startDate = dto.startDate
+                event.endDate = dto.endDate
+                event.tripUUID = dto.tripUUID
+                event.notes = dto.notes
+                event.createdAt = dto.createdAt
+                event.updatedAt = dto.updatedAt
+                modelContext.insert(event)
+            }
+
+            let existingRecurringUUIDs = try existingStringUUIDs(RecurringExpense.self, keyPath: \.clientUUID)
+            for dto in (payload.recurringExpenses ?? []) where !existingRecurringUUIDs.contains(dto.clientUUID) {
+                let template = RecurringExpense(
+                    amount: dto.amount,
+                    currency: dto.currency,
+                    category: dto.category,
+                    merchant: dto.merchant,
+                    expenseDescription: dto.expenseDescription,
+                    paymentMethod: dto.paymentMethod,
+                    dayOfMonth: dto.dayOfMonth,
+                    isActive: dto.isActive,
+                    startDate: dto.startDate,
+                    endDate: dto.endDate
+                )
+                template.clientUUID = dto.clientUUID
+                // Carried so a restored template does not re-post a month it has
+                // already posted, which would double-charge the current month.
+                template.lastPostedMonthKey = dto.lastPostedMonthKey
+                template.createdAt = dto.createdAt
+                template.updatedAt = dto.updatedAt
+                modelContext.insert(template)
+            }
+
+            let existingStatementUUIDs = try existingUUIDs(LocalStatementImport.self, keyPath: \.clientUUID)
+            for dto in (payload.statementImports ?? []) where !existingStatementUUIDs.contains(dto.clientUUID) {
+                let record = LocalStatementImport(
+                    clientUUID: dto.clientUUID,
+                    fileName: dto.fileName,
+                    statementLabel: dto.statementLabel,
+                    imported: dto.imported,
+                    skippedDuplicates: dto.skippedDuplicates,
+                    ignoredNonSpend: dto.ignoredNonSpend,
+                    failed: dto.failed,
+                    refunds: dto.refunds,
+                    possiblyTruncated: dto.possiblyTruncated,
+                    deposits: dto.deposits,
+                    createdAt: dto.createdAt
+                )
+                // The initialiser takes `[UUID]` and joins it, but the stored
+                // property is the joined string. Assigning it directly keeps the
+                // round trip verbatim instead of parse-then-rejoin, which would
+                // silently drop any entry that no longer parses as a UUID.
+                record.importedExpenseUUIDs = dto.importedExpenseUUIDs
+                modelContext.insert(record)
+            }
+
+            // Keyed on `messageKey`, not a clientUUID.
+            let existingMessageKeys = Set(
+                try modelContext.fetch(FetchDescriptor<LocalProcessedEmail>()).map(\.messageKey)
+            )
+            for dto in (payload.processedEmails ?? []) where !existingMessageKeys.contains(dto.messageKey) {
+                let email = LocalProcessedEmail(
+                    messageKey: dto.messageKey,
+                    uid: dto.uid,
+                    uidValidity: dto.uidValidity
+                )
+                email.processedAt = dto.processedAt
+                modelContext.insert(email)
             }
 
             for dto in payload.vocab where !existingVocabUUIDs.contains(dto.clientUUID) {
@@ -364,6 +548,9 @@ final class DataImportService {
             modelContext.rollback()
             for path in writtenReceiptPaths {
                 try? receiptStorage.delete(relativePath: path)
+            }
+            for path in writtenTicketPaths {
+                try? ticketStorage.delete(relativePath: path)
             }
             throw ImportError.commitFailed(error)
         }
@@ -392,5 +579,78 @@ final class DataImportService {
             return relativePath
         }
         return try receiptStorage.write(data: archivedData, relativePath: relativePath)
+    }
+
+    /// Verify what the manifest claims against what its payload actually holds
+    /// (#319). Deliberately runs during `preview`, before any mutation: a
+    /// mismatch found after writing leaves a half-restored store, and on this
+    /// app that means the user's financial data in an unknown state. A clean
+    /// refusal is strictly better.
+    ///
+    /// Absent claims mean a pre-#319 archive. Those import normally with a log
+    /// line; they are unverifiable, NOT empty. Treating a missing count as an
+    /// expected zero would reject every existing backup as corrupt, which is a
+    /// worse bug than the one this ticket fixes.
+    private func verifyManifestClaims(_ manifest: DataArchive.Manifest) throws {
+        guard let claimed = manifest.counts else {
+            NSLog("DataImportService: archive predates #319 self-verification; row counts unverifiable")
+            return
+        }
+        let actual = Self.actualCounts(for: manifest.data)
+        var mismatches: [String] = []
+        for (model, claimedCount) in claimed.sorted(by: { $0.key < $1.key }) {
+            let actualCount = actual[model] ?? 0
+            if actualCount != claimedCount {
+                mismatches.append("\(model): manifest claims \(claimedCount), payload has \(actualCount)")
+            }
+        }
+        // A model named in `models` but absent from `counts` is the omitted-model
+        // case a count check alone cannot see.
+        if let models = manifest.models {
+            for model in models where claimed[model] == nil {
+                mismatches.append("\(model): listed as exported but carries no count")
+            }
+        }
+        guard mismatches.isEmpty else {
+            throw ImportError.manifestClaimsMismatch(details: mismatches)
+        }
+    }
+
+    /// Counts derived from the payload itself, compared against the manifest's
+    /// claims. Keys match `DataArchive.exportedModels`.
+    private static func actualCounts(for payload: DataArchive.Payload) -> [String: Int] {
+        [
+            "LocalTodo":            payload.tasks.count,
+            "LocalNote":            payload.notes.count,
+            "LocalNoteFolder":      payload.noteFolders.count,
+            "LocalList":            payload.lists.count,
+            "LocalTrip":            payload.itineraries.count,
+            "LocalItineraryItem":   payload.itineraryDays.count,
+            "LocalExpense":         payload.expenses.count,
+            "LocalKeyword":         payload.vocab.count,
+            "RecurringExpense":     payload.recurringExpenses?.count ?? 0,
+            "LocalPerson":          payload.persons?.count ?? 0,
+            "LocalEvent":           payload.events?.count ?? 0,
+            "LocalStatementImport": payload.statementImports?.count ?? 0,
+            "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
+        ]
+    }
+
+    /// #319 counterpart of `restoreReceipt` for ticket attachments. Returns nil
+    /// when the archive carries no file for this row, and the caller then leaves
+    /// `attachmentPath` empty rather than pointing at a file that isn't there.
+    private func restoreTicket(
+        for item: DataArchive.ItineraryDayDTO,
+        archiveEntries: [String: Data]
+    ) throws -> String? {
+        guard let relativePath = item.attachmentPath,
+              !relativePath.isEmpty,
+              let archivedData = archiveEntries[relativePath] else {
+            return nil
+        }
+        if ticketStorage.load(relativePath: relativePath) != nil {
+            return relativePath
+        }
+        return try ticketStorage.write(data: archivedData, relativePath: relativePath)
     }
 }

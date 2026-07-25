@@ -137,6 +137,35 @@ final class TicketStorage {
         return url
     }
 
+    /// Write raw bytes to an explicit `relativePath`, used by the backup
+    /// importer to put an archived ticket file back exactly where the restored
+    /// `LocalItineraryItem.attachmentPath` expects it (#319). Mirrors
+    /// `ReceiptStorage.write(data:relativePath:)`.
+    ///
+    /// Distinct from `saveCompressedJpeg` / `save(pdfData:)`, which mint a fresh
+    /// UUID filename. Here the path is dictated by the archive, so the row and
+    /// the file stay in agreement.
+    @discardableResult
+    func write(data: Data, relativePath: String) throws -> String {
+        _ = try ensureDirectory()
+        let url: URL
+        do {
+            url = try absoluteURL(for: relativePath)
+        } catch {
+            throw TicketStorageError.fileSystem(error)
+        }
+        do {
+            try fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            throw TicketStorageError.fileSystem(error)
+        }
+        return relativePath
+    }
+
     /// Delete the file at `relativePath`. Silent no-op if the file is already
     /// gone — callers don't need to special-case a missing attachment.
     func delete(relativePath: String) throws {

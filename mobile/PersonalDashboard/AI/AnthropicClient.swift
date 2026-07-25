@@ -83,14 +83,49 @@ struct AnthropicClient: Sendable {
     ///   3. `content_block_stop` once the block is complete
     /// Tool inputs arrive as a stream of partial JSON strings keyed by index;
     /// we accumulate them and parse at `content_block_stop`.
-    @MainActor
+    /// ## Isolation (#310)
+    ///
+    /// This used to be `@MainActor`, which put the entire SSE read loop and a
+    /// JSON decode of every single delta on the main thread for the whole
+    /// response. That annotation was not load-bearing — nothing in the body
+    /// touches main-actor state: `AppConfig` is a plain enum, `session` is a
+    /// `URLSession`, `Self.handle` is `static` with no `self` dependency, and
+    /// the sibling `send` was already non-isolated and running off main. So the
+    /// fix is to drop it rather than to work around it.
+    ///
+    /// Measured, under `-swift-version 5` and with the call coming from
+    /// `@MainActor` as `ChatStream` makes it:
+    ///
+    ///   `@MainActor` func  + `Task {}`         -> parses ON main   (the bug)
+    ///   nonisolated  func  + `Task {}`         -> parses off main
+    ///   nonisolated  func  + `Task.detached`   -> parses off main  (this code)
+    ///
+    /// So removing the annotation is what actually fixes it, and is sufficient
+    /// on its own — a plain `Task {}` here does NOT drag the loop back onto main
+    /// today. `Task.detached` is kept anyway because it states the requirement
+    /// independently of the enclosing declaration: an unstructured `Task {}`
+    /// inherits whatever isolation surrounds it, so if this function or
+    /// `AnthropicClient` ever picks up an actor annotation again, `Task {}`
+    /// would silently re-inherit it and restore line 1 of that table while
+    /// still compiling. `detached` cannot.
+    ///
+    /// Cancellation is unaffected by detaching. It does not arrive structurally
+    /// here in either form (an unstructured `Task {}` is not a child task
+    /// either); it arrives through `continuation.onTermination`, which fires
+    /// when the consumer stops iterating — including when the consuming task is
+    /// cancelled — and calls `task.cancel()`. The loop then breaks on its
+    /// existing `Task.isCancelled` check.
+    ///
+    /// UI updates are unaffected too: this only produces events. Every consumer
+    /// (`ChatStream`, `AIStreamingService`, `ChatViewModel`) is `@MainActor`, so
+    /// rendering and all SwiftData writes still happen on the main actor.
     func stream(
         systemPrompt: String,
         messages: [AnthropicMessage],
         tools: [AnthropicTool]
     ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task {
+            let task = Task.detached(priority: .userInitiated) {
                 do {
                     guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
                         throw AnthropicError.notConfigured
