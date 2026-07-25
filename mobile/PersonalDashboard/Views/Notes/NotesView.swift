@@ -439,10 +439,7 @@ private struct FolderRow: View {
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Tokens.mutedSoft)
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        .flatContentRow()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }
@@ -477,10 +474,7 @@ private struct NoteRow: View {
                 .foregroundStyle(Tokens.mutedSoft)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        .flatContentRow()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }

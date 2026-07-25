@@ -105,7 +105,7 @@ struct RecurringExpensesView: View {
     private func section(title: String, rows: [RecurringExpense]) -> some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text(title).eyebrow()
-            VStack(spacing: Space.xs) {
+            VStack(spacing: RowMetrics.interRowSpacing) {
                 ForEach(rows, id: \.clientUUID) { template in
                     RecurringExpenseRow(
                         template: template,
@@ -220,10 +220,9 @@ private struct RecurringExpenseRow: View {
                 .accessibilityLabel(template.isActive ? "Pause" : "Resume")
             }
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm + 2)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        // Same shared construction as every other record row; keeps its own
+        // 10pt iOS padding, matching ExpenseRow (issue #303).
+        .flatContentRow(iOSVerticalPadding: Space.sm + 2)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityElement(children: .combine)

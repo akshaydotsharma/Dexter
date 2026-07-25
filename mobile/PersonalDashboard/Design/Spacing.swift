@@ -88,6 +88,38 @@ enum RowMetrics {
     }
 }
 
+extension View {
+    /// The one construction for a row that lists a record.
+    ///
+    /// Six surfaces used a byte-identical chain of padding, a `Radius.card`
+    /// surface fill, and a `paperBorder`. Converging them here rather than
+    /// editing six copies means the next change to row appearance is one edit,
+    /// and a future divergence has to be deliberate.
+    ///
+    /// macOS renders flat: no fill, no border, and the row's own top hairline,
+    /// which is Activity's construction and the closest thing already in the app
+    /// to Reminders and Mail. iOS keeps its gapped card (issue #303).
+    ///
+    /// - Parameter iOSVerticalPadding: the existing iOS value for this surface,
+    ///   passed in rather than tokenised because the six surfaces genuinely do
+    ///   not agree today (12pt for most, 10pt for expense rows) and iOS must
+    ///   stay byte-for-byte. Ignored on macOS, which uses the shared metric.
+    func flatContentRow(iOSVerticalPadding: CGFloat = Space.md) -> some View {
+        #if os(macOS)
+        return self
+            .padding(.horizontal, RowMetrics.horizontalPadding)
+            .padding(.vertical, RowMetrics.verticalPadding)
+            .overlay(alignment: .top) { RowHairline() }
+        #else
+        return self
+            .padding(.horizontal, RowMetrics.horizontalPadding)
+            .padding(.vertical, iOSVerticalPadding)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.card)
+        #endif
+    }
+}
+
 /// The one hairline used to separate flat rows.
 ///
 /// A single definition because the design language allows exactly one rule
