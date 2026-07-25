@@ -44,18 +44,12 @@ enum AppConfig {
 
     static let apiBaseURL: URL = {
         // 1. Runtime env var override (Xcode scheme or xcodebuild injection).
-        if let override = ProcessInfo.processInfo.environment["API_URL"],
+        if let override = resolved(ProcessInfo.processInfo.environment["API_URL"]),
            let url = URL(string: override) {
             return url
         }
         // 2. Build-time OTA URL embedded in Info.plist by ship.sh.
-        // NOTE: this branch, and the `API_URL` one above, still carry the
-        // narrower legacy guard. Widening them to `resolved` is an iOS-only
-        // behaviour change and is tracked as a separate iOS follow-up so it
-        // isn't folded into a macOS commit (#292 acceptance criteria).
-        if let otaURL = Bundle.main.object(forInfoDictionaryKey: "OTA_API_URL") as? String,
-           !otaURL.isEmpty,
-           !otaURL.hasPrefix("$("),   // guard against unexpanded xcconfig variables
+        if let otaURL = resolved(Bundle.main.object(forInfoDictionaryKey: "OTA_API_URL") as? String),
            let url = URL(string: otaURL) {
             return url
         }
@@ -95,21 +89,17 @@ enum AppConfig {
     /// Returns nil if neither is set, in which case `VoiceDictation` falls
     /// back to the on-device English recognizer rather than failing.
     ///
-    /// KNOWN BUG, tracked as a separate iOS follow-up: the env branch below
-    /// accepts an unexpanded `${OPENAI_API_KEY}` placeholder as if it were a
-    /// real key, which defeats the documented on-device fallback and fails
-    /// against OpenAI instead. The fix is to route both branches through
-    /// `resolved` (as `anthropicAPIKey` now does), but that is an iOS-only
-    /// behaviour change so it is deliberately NOT folded into this macOS
-    /// commit, per #292's acceptance criteria.
+    /// That fallback is the reason this must reject placeholders (#327): an
+    /// unexpanded `${OPENAI_API_KEY}` is a non-empty string, so before the
+    /// guard it was treated as a real key and the app failed against OpenAI
+    /// instead of degrading to the on-device recognizer. Hindi transcription
+    /// is OpenAI-only and the on-device fallback is en-US, so accepting a
+    /// placeholder silently broke a language the user relies on.
     static let openAIAPIKey: String? = {
-        if let env = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
-           !env.isEmpty {
+        if let env = resolved(ProcessInfo.processInfo.environment["OPENAI_API_KEY"]) {
             return env
         }
-        if let plist = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String,
-           !plist.isEmpty,
-           !plist.hasPrefix("$(") {
+        if let plist = resolved(Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String) {
             return plist
         }
         return nil
