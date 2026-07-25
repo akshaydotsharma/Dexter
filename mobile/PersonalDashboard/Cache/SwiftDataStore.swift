@@ -1,5 +1,8 @@
 import Foundation
 import SwiftData
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// SwiftData container singleton.
 ///
@@ -26,6 +29,51 @@ final class SwiftDataStore {
     /// Always false in release builds, where the override is inert.
     private(set) static var isUsingOverrideStore = false
 
+    /// Say out loud, unmissably, that this process is NOT looking at the real
+    /// store (#318).
+    ///
+    /// A disposable store is visually identical to a wiped one, so on this app a
+    /// tester who forgets the override is active sees an empty Finance section
+    /// and concludes their financial history is gone. An `NSLog` line does
+    /// nothing for someone looking at the window, so this is a modal: it cannot
+    /// be missed, scrolled past, or hidden behind a window that opened on
+    /// another section.
+    ///
+    /// A modal is proportionate because the whole override is `#if DEBUG` and
+    /// dev-only; this is never user-facing chrome. Deliberately implemented here
+    /// rather than in the SwiftUI shell, both because `DexterMacApp.swift` is
+    /// MacUI's file and because that file currently carries the #293 router
+    /// rework, so a concurrent edit there would be a painful merge conflict. A
+    /// persistent in-window affordance is a follow-up once the branches
+    /// converge, not a substitute for this.
+    ///
+    /// Deferred to the next run-loop turn: this runs during container bootstrap,
+    /// which can precede `NSApplication` being ready to present modally.
+    private static func warnIfOverrideStore(_ url: URL) {
+        #if DEBUG && canImport(AppKit)
+        guard isUsingOverrideStore else { return }
+        NSLog("SwiftDataStore: OVERRIDE store active at %@", url.path)
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Running against an override store"
+            alert.informativeText = """
+                DEXTER_STORE_PATH is set, so this launch is NOT using your real \
+                Dexter data.
+
+                Store in use:
+                \(url.path)
+
+                An empty or unfamiliar app is EXPECTED here and does not mean \
+                your data is lost. Your real store is untouched. Quit and unset \
+                DEXTER_STORE_PATH to go back to it.
+                """
+            alert.addButton(withTitle: "Continue with override store")
+            alert.runModal()
+        }
+        #endif
+    }
+
     /// Resolve the SQLite URL, honouring the `DEXTER_STORE_PATH` override.
     ///
     /// The override exists so automated verification (notably the #319 backup
@@ -41,11 +89,33 @@ final class SwiftDataStore {
     /// is meant to prevent. Failing to launch touches nobody's data.
     private static func resolveStoreURL(default defaultURL: URL) -> URL {
         #if DEBUG
-        // Reuses AppConfig's placeholder guard (#308) rather than writing a
-        // second one: an unexpanded `${DEXTER_STORE_PATH}` is a non-empty
-        // string and would otherwise be taken for a real path.
-        guard let raw = AppConfig.resolved(ProcessInfo.processInfo.environment["DEXTER_STORE_PATH"]) else {
+        // Three-way, and the distinction is load-bearing.
+        //
+        // `AppConfig.resolved` (#308) deliberately collapses "missing" and
+        // "junk" into one nil, because for an API key both mean "not
+        // configured". For a store path they mean OPPOSITE things: missing means
+        // use the default, junk means stop. Reusing the helper for its
+        // placeholder detection while treating its nil as a single outcome is
+        // what made an unexpanded `${DEXTER_STORE_PATH}` fall back to the user's
+        // real store, which is the exact accident this override prevents.
+        //
+        // So: detect presence first, THEN usability.
+        let rawEnv = ProcessInfo.processInfo.environment["DEXTER_STORE_PATH"]
+        guard let present = rawEnv else {
+            // Genuinely unset. Default path, silently. The only safe fallback.
             return defaultURL
+        }
+        guard let raw = AppConfig.resolved(present) else {
+            fatalError(
+                """
+                DEXTER_STORE_PATH is set but carries no usable value \
+                (got "\(present)": empty, whitespace-only, or an unexpanded \
+                $(...) / ${...} placeholder). Refusing to launch rather than \
+                falling back to the real store, so a run that asked for a \
+                disposable store cannot silently touch live data. Export a real \
+                path or unset the variable entirely.
+                """
+            )
         }
         let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
         // Require an existing parent directory. Without this check a typo'd
@@ -114,6 +184,7 @@ final class SwiftDataStore {
             let defaultURL = supportDir.appendingPathComponent("PersonalDashboard.sqlite")
             let storeURL = Self.resolveStoreURL(default: defaultURL)
             Self.isUsingOverrideStore = (storeURL != defaultURL)
+            Self.warnIfOverrideStore(storeURL)
             let configuration = ModelConfiguration(
                 schema: schema,
                 url: storeURL
