@@ -91,7 +91,7 @@ enum AppMaintenance {
         defer { isRunning = false }
 
         await materialiseRecurringExpenses()
-        runBackupIfDue(isLaunch: isLaunch)
+        await runBackupIfDue(isLaunch: isLaunch)
     }
 
     /// Post any recurring-expense months that have come due.
@@ -122,10 +122,10 @@ enum AppMaintenance {
     ///
     /// So `everyLaunch` is honoured on launch only. A genuine interval
     /// (`daily`/`weekly`) is checked on both.
-    private static func runBackupIfDue(isLaunch: Bool) {
+    private static func runBackupIfDue(isLaunch: Bool) async {
         if !isLaunch && BackupSettings.frequency == .everyLaunch { return }
         do {
-            let didRun = try BackupService(modelContext: SwiftDataStore.shared.context)
+            let didRun = try await BackupService(modelContext: SwiftDataStore.shared.context)
                 .runBackupIfDue(force: false)
             if didRun { NSLog("AppMaintenance: wrote a scheduled backup") }
         } catch {
@@ -141,18 +141,22 @@ enum AppMaintenance {
 
 // MARK: - Sequencing note
 //
-// `runBackupIfDue` is still SYNCHRONOUS and `@MainActor`, and builds the whole
-// zip archive inline. On the user's current store (1541 expenses) that is a
-// visible stall. So this type must NOT be wired into the macOS scene until the
-// archive build moves off the main actor, or the wiring converts a silent bug
-// into a visible freeze and a bisect lands on the four-line scene diff rather
-// than on the real cause.
+// The blocker recorded here previously — `runBackupIfDue` being synchronous and
+// building the whole zip inline on the main actor — is now cleared.
+// `BackupService.runBackupIfDue` is `async`, and the archive build and the
+// coordinated write both hop off the main actor via `Task.detached`. So this
+// type is ready to be wired into the macOS scene.
 //
-// That move is constrained in a way worth recording: `DataExportService` runs
-// eight `FetchDescriptor` fetches against `container.mainContext`, and a
-// `ModelContext` is main-actor-confined, so the fetches cannot leave the main
-// actor without a background context or `@ModelActor` — a data-layer change
-// rather than a threading tweak. The safe split is to keep the fetch and DTO
-// mapping on the main actor and move only the JSON encoding, zip construction
-// and coordinated write off it, which is where the time on a large store
-// actually goes.
+// What is NOT resolved, and should not be described as resolved to whoever
+// wires it: the main-actor hold is reduced, not eliminated. `DataExportService`
+// runs 13 `FetchDescriptor` fetches against `container.mainContext` plus the
+// DTO mapping, and a `ModelContext` is main-actor-confined, so those cannot
+// leave the main actor without a background context or `@ModelActor`. That is a
+// data-layer change filed as #334, deliberately out of scope here. Attachment
+// path resolution also stays on main because `ReceiptStorage` and
+// `TicketStorage` are `@MainActor`, though that is only a `fileExists` stat per
+// attachment and reads no bytes.
+//
+// So: "fetch plus DTO mapping" still runs on the main actor on every due
+// backup. On a 1541-expense store that is expected to be short but is not
+// nothing, and it is the honest ceiling on what this ticket bought.

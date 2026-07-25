@@ -70,9 +70,9 @@ enum DebugLaunchHooks {
     /// restored boarding pass opens is the one assertion that catches a dangling
     /// `attachmentPath`, and a count check cannot.
     @MainActor
-    static func runDataHooks(context: ModelContext) {
+    static func runDataHooks(context: ModelContext) async {
         if let target = path(for: "DEXTER_EXPORT_TO") {
-            runExport(to: target, context: context)
+            await runExport(to: target, context: context)
         }
         if let source = path(for: "DEXTER_IMPORT_FROM") {
             runImport(from: source, context: context)
@@ -80,7 +80,7 @@ enum DebugLaunchHooks {
     }
 
     @MainActor
-    private static func runExport(to target: String, context: ModelContext) {
+    private static func runExport(to target: String, context: ModelContext) async {
         let url = URL(fileURLWithPath: target)
         let parent = url.deletingLastPathComponent()
         guard FileManager.default.fileExists(atPath: parent.path) else {
@@ -88,7 +88,7 @@ enum DebugLaunchHooks {
             exit(1)
         }
         do {
-            let produced = try DataExportService(modelContext: context).export()
+            let produced = try await DataExportService(modelContext: context).export()
             try? FileManager.default.removeItem(at: url)
             try FileManager.default.moveItem(at: produced, to: url)
             NSLog("DEXTER_EXPORT_TO: wrote archive to %@", url.path)
@@ -306,35 +306,63 @@ final class SwiftDataStore {
         // does not inherit the shell environment, so `open` arrives with every
         // DEXTER_* unset and each hook correctly no-ops).
         //
-        // As of `0e30805`, `DexterMacApp.init()` touches `shared` unconditionally
-        // under DEBUG, so bootstrap happens at process start on every debug
-        // launch, window or not, and no harness needs to do anything special.
-        // (It went in `init()` rather than a `.task` deliberately: a `.task` only
-        // runs once a view appears, which would have failed in precisely the
-        // headless env-driven case that needed fixing.)
+        // ⚠️ ON THIS BRANCH, A WINDOW IS STILL REQUIRED. An earlier version of
+        // this comment claimed that `DexterMacApp.init()` touches `shared`
+        // unconditionally under DEBUG (commit `0e30805`), so that bootstrap
+        // happened at process start and no harness needed to do anything
+        // special. That is true of `feat/macos-ux-overhaul` and NOT of this
+        // branch — verify before relying on it:
         //
-        // If that line is ever removed, this reverts to firing only when a window
-        // is constructed, and an env-driven harness must force one:
+        //   git branch -a --contains 0e30805     # -> feat/macos-ux-overhaul only
+        //   git merge-base --is-ancestor 0e30805 HEAD
+        //
+        // Here, `App/DexterMacApp.swift` has no `init()` at all. `shared` is
+        // first touched by `.modelContainer(SwiftDataStore.shared.container)`
+        // inside the `WindowGroup` body, so bootstrap happens only when a window
+        // is actually constructed. So an env-driven launch with no window never
+        // reaches this block, and must force one:
         //   osascript -e 'tell application "System Events" to tell process \
         //     "DexterMac" to click menu item "New Window" of menu 1 of menu bar \
         //     item "File"'
-        // Without it you observe no archive and no refusal, and the natural
-        // reading is that the hooks are broken. That misreading cost real time
-        // twice, once here and once on #318's guards, whose comments made the
-        // same mistake of describing intent ("refuses to launch") rather than
-        // behaviour ("refuses to bootstrap the store").
+        // (Accessibility MENU clicks are reliable here; row clicks and swipes
+        // are not.)
         //
-        // Deferred a run-loop turn for two reasons. First, both launch
-        // migrations above complete before an export snapshots the store or an
-        // import mutates it. Second, and load-bearing: it means the hooks do NOT
-        // run during `init`, so the store is never mutated mid-construction.
-        // `init` has returned and `shared` is fully assigned by the time this
-        // block executes. Nothing in the hook path re-enters `shared` either —
-        // `runImport` reads the static `isUsingOverrideStore`, not the singleton
-        // — so there is no recursive lazy-init deadlock.
+        // Without that you observe no archive and no refusal, and the natural
+        // reading is that the hooks are broken. That misreading has now cost
+        // real time three times: once here, once on #318's guards (whose
+        // comments described intent, "refuses to launch", rather than behaviour,
+        // "refuses to bootstrap the store"), and once when this very comment was
+        // "corrected" to describe another branch's code — which then presented
+        // as a silent 4-minute hang with no output.
+        //
+        // When `0e30805` does land here, delete the osascript step rather than
+        // leaving both claims side by side.
+        //
+        // Enqueued on the main actor rather than called inline, for two reasons.
+        // First, both launch migrations above complete before an export
+        // snapshots the store or an import mutates it. Second, and load-bearing:
+        // it means the hooks do NOT run during `init`, so the store is never
+        // mutated mid-construction. `init` has returned and `shared` is fully
+        // assigned by the time this body executes. Nothing in the hook path
+        // re-enters `shared` either — `runImport` reads the static
+        // `isUsingOverrideStore`, not the singleton — so there is no recursive
+        // lazy-init deadlock.
+        //
+        // A `Task { @MainActor in }` rather than the `DispatchQueue.main.async`
+        // this used to be, because `runDataHooks` is now `async`: as of #309 the
+        // export hops off the main actor to build the zip. Both forms defer past
+        // `init`, so the reasoning above is unchanged.
+        //
+        // One property that hop introduces, and that matters for a harness
+        // reading the archive: the main run loop is no longer blocked for the
+        // duration of an export, so a window can come up while the zip is being
+        // built. The archive is still a consistent snapshot, because
+        // `DataExportService.export` completes every fetch and DTO mapping on
+        // the main actor BEFORE it hops. Anything the UI changes afterwards
+        // lands in the store but not in this archive.
         let hookContext = container.mainContext
-        DispatchQueue.main.async {
-            DebugLaunchHooks.runDataHooks(context: hookContext)
+        Task { @MainActor in
+            await DebugLaunchHooks.runDataHooks(context: hookContext)
         }
         #endif
     }

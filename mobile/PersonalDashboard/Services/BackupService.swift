@@ -111,8 +111,13 @@ final class BackupService {
     ///
     /// Throws on a forced run so the UI can surface the failure. A non-forced
     /// run that isn't due returns quietly without throwing.
+    ///
+    /// `async` as of #309: macOS now calls this from a launch/foreground pass,
+    /// so the two expensive steps (building the archive, and copying it into the
+    /// backup folder) both hop off the main actor. See `DataExportService.export`
+    /// for exactly which part of the archive build has to stay on main and why.
     @discardableResult
-    func runBackupIfDue(force: Bool) throws -> Bool {
+    func runBackupIfDue(force: Bool) async throws -> Bool {
         if !force && !BackupSettings.isDue() {
             return false
         }
@@ -124,7 +129,7 @@ final class BackupService {
         // 1. Build the archive into the system temp dir.
         let tempURL: URL
         do {
-            tempURL = try DataExportService(modelContext: modelContext).export()
+            tempURL = try await DataExportService(modelContext: modelContext).export()
         } catch {
             recordError(BackupError.exportFailed(error))
             throw BackupError.exportFailed(error)
@@ -140,11 +145,24 @@ final class BackupService {
             throw error
         }
 
+        // Read on the main actor and pass the value across, so the off-main
+        // write closes over a `String` rather than reaching back into
+        // `BackupSettings` from another executor.
+        let fileName = BackupSettings.fileName
+
+        // The security scope is held across the `await` below. That is correct
+        // rather than lucky: `startAccessingSecurityScopedResource` is a
+        // ref-counted claim on the URL for the whole process, not a
+        // thread-local or executor-local one, so a detached task writing while
+        // this actor holds the scope open is inside the grant. The `defer`
+        // releases it only after the awaited write has returned.
         let didStart = folderURL.startAccessingSecurityScopedResource()
         defer { if didStart { folderURL.stopAccessingSecurityScopedResource() } }
 
         do {
-            try writeCoordinated(from: tempURL, intoFolder: folderURL)
+            try await Task.detached(priority: .utility) {
+                try Self.writeCoordinated(from: tempURL, intoFolder: folderURL, fileName: fileName)
+            }.value
         } catch {
             recordError(BackupError.writeFailed(error))
             throw BackupError.writeFailed(error)
@@ -160,8 +178,22 @@ final class BackupService {
     /// Coordinated atomic write: stage the bytes into the destination folder
     /// under a temporary name, then `replaceItemAt` so iCloud never observes
     /// a partially written `Dexter-Backup.zip`.
-    private func writeCoordinated(from sourceURL: URL, intoFolder folderURL: URL) throws {
-        let destURL = folderURL.appendingPathComponent(BackupSettings.fileName)
+    ///
+    /// `nonisolated` and `static` so it can run off the main actor (#309): this
+    /// reads the whole archive into memory and writes it back out, which is the
+    /// second-largest cost in a backup after building the archive. `static`
+    /// members of a `@MainActor` type are main-actor-isolated by default, so
+    /// without `nonisolated` the detached task would hop back to main and the
+    /// move off-main would be a no-op.
+    ///
+    /// `fileName` is passed in rather than read from `BackupSettings` here, so
+    /// this function touches no global state from a background executor.
+    private nonisolated static func writeCoordinated(
+        from sourceURL: URL,
+        intoFolder folderURL: URL,
+        fileName: String
+    ) throws {
+        let destURL = folderURL.appendingPathComponent(fileName)
 
         var coordinatorError: NSError?
         var thrownError: Error?
@@ -174,7 +206,7 @@ final class BackupService {
         ) { coordinatedURL in
             do {
                 let data = try Data(contentsOf: sourceURL)
-                let stagingURL = folderURL.appendingPathComponent(".\(BackupSettings.fileName).tmp")
+                let stagingURL = folderURL.appendingPathComponent(".\(fileName).tmp")
                 try? FileManager.default.removeItem(at: stagingURL)
                 try data.write(to: stagingURL, options: .atomic)
 
