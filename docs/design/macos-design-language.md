@@ -70,7 +70,28 @@ All "observed" figures below are measured off 2x retina screenshots of the app a
 | Window opening size | 900x652, the enforced minimum | declare a `defaultSize` |
 | Section content horizontal gutter | `Space.lg` (16) | `Space.md` (12) |
 
-Rows are the main offender, not the sidebar. At the default window width roughly 55 to 60 percent of each row's width is empty, because rows are full-bleed single-column with the trailing control pinned to the far right edge.
+Rows are the main offender, not the sidebar.
+
+### Measured baseline per section, at `a88b48e`
+
+Pixel-scanned from the source PNGs and halved. This is the "before" for the density and flattening work.
+
+| Section | Row pitch | Container | Notes |
+|---|---|---|---|
+| Notes | 54pt (45pt card + 9pt gap) | Gapped cards | Title cap height 10pt |
+| Lists | 75pt (66pt card + 9pt gap) | Gapped cards | 39.5pt icon chip, progress track |
+| Trips | 79pt (70pt card + 9pt gap) | Gapped cards | No leading icon |
+| Vocabulary | 43.5pt card | Gapped cards | No empty state despite 85% dead space |
+| Activity | 56.5 / 65.5 / 82.5pt by line count | **Flat, hairlines** | 31.5pt icon chip. Closest to the reference |
+| Settings | 43.5pt | **One grouped card, internal hairlines** | The most macOS-native pattern present |
+| Tasks / Today / Finance | 63pt | Rows and cards | |
+| Chat | 36pt chip pitch, 56pt input bar | Flat page | Input bar is 2x a standard macOS field |
+
+Three different container systems exist for what is structurally the same thing, a list of items: gapped per-item cards (Notes, Lists, Trips, Vocabulary), one grouped card with internal hairlines (Settings), and flat rows with hairlines (Activity). **Converge on Activity's flat rows for content lists and Settings' grouped card for settings-style forms.** Those two are already right; the gapped-card sections are the ones to change.
+
+Card height spans 43.5pt to 70pt across the four carded sections, a 60 percent spread for the same pattern. Same-role text also drifts: item titles run 10pt cap height in Notes against 12pt in Lists, Trips and Vocabulary; uppercase section headers run 7.5pt cap in Notes and Settings against 10pt in Activity. The same colored rounded-square icon chip is 39.5pt in Lists and 31.5pt in Activity.
+
+At the default window width roughly 55 to 60 percent of each row's width is empty, because rows are full-bleed single-column with the trailing control pinned to the far right edge. Measured content-width usage is 92 to 95 percent in the carded sections, so the pane is filled; it is the row's internal layout that strands the space.
 
 `Space` and `Radius` keep their scales. What changes is which step a macOS layout reaches for. Where a macOS-specific value is needed, add a computed `#if os(macOS)` property to `Space`/`Radius` following the existing `rowTrailingGutter` and `Radius.card` precedent, rather than hardcoding numbers at the call site.
 
