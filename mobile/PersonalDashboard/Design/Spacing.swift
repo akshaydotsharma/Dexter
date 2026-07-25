@@ -91,19 +91,28 @@ enum RowMetrics {
 extension View {
     /// The one construction for a row that lists a record.
     ///
-    /// Six surfaces used a byte-identical chain of padding, a `Radius.card`
+    /// Seven surfaces used a byte-identical chain of padding, a `Radius.card`
     /// surface fill, and a `paperBorder`. Converging them here rather than
-    /// editing six copies means the next change to row appearance is one edit,
-    /// and a future divergence has to be deliberate.
+    /// editing seven copies means the next change to row appearance is one
+    /// edit, and a future divergence has to be deliberate.
+    ///
+    /// Seven, not the six the audit listed. `RecurringExpenseRow` was missed
+    /// because that audit enumerated sections from screenshots, and a visual
+    /// sweep can only find what it can see. The reliable check is grepping for
+    /// the construction, which is how the seventh surfaced.
     ///
     /// macOS renders flat: no fill, no border, and the row's own top hairline,
     /// which is Activity's construction and the closest thing already in the app
     /// to Reminders and Mail. iOS keeps its gapped card (issue #303).
     ///
-    /// - Parameter iOSVerticalPadding: the existing iOS value for this surface,
-    ///   passed in rather than tokenised because the six surfaces genuinely do
-    ///   not agree today (12pt for most, 10pt for expense rows) and iOS must
-    ///   stay byte-for-byte. Ignored on macOS, which uses the shared metric.
+    /// - Parameter iOSVerticalPadding: the existing iOS value for this surface.
+    ///   Passed in rather than tokenised, deliberately. The seven surfaces do
+    ///   not agree today: 12pt on five, 10pt on the two expense rows. A single
+    ///   token would read tidier and would silently move five iOS surfaces by
+    ///   2pt, which is a cross-platform behaviour change disguised as cleanup.
+    ///   The disagreement is real, so it stays visible at the call site until
+    ///   someone decides to change iOS on purpose. Ignored on macOS, which uses
+    ///   the shared metric because macOS has no such legacy to preserve.
     func flatContentRow(iOSVerticalPadding: CGFloat = Space.md) -> some View {
         #if os(macOS)
         return self
