@@ -52,6 +52,14 @@ enum DataArchive {
         let createdAt: Date
         let updatedAt: Date
         let deletedAt: Date?
+
+        // MARK: Added in #319
+        // `priority` is the visible one: dropping it flattened every restored
+        // task to no priority on the app's most-used surface. Optional per the
+        // #206 / #208 precedent, so v1 archives still decode.
+        let priority: Int?
+        let address: String?
+        let googleMapsLink: String?
     }
 
     struct NoteDTO: Codable {
@@ -81,6 +89,10 @@ enum DataArchive {
         let createdAt: Date
         let updatedAt: Date
         let deletedAt: Date?
+
+        // MARK: Added in #319 — list styling was previously dropped.
+        let iconName: String?
+        let colorHex: String?
     }
 
     /// Lists store their checklist items as a JSON blob inside the
@@ -93,6 +105,14 @@ enum DataArchive {
         let position: Int
         let text: String
         let checked: Bool
+
+        // MARK: Added in #319
+        // The flattening dropped `ChecklistItem.url`, so per-item links did not
+        // survive a round trip. `ChecklistItem.id` is deliberately NOT carried:
+        // it exists only to keep SwiftUI's ForEach animations stable, the model
+        // mints a fresh one at decode time when absent, and it is not user
+        // data. Recording that here so the omission reads as intentional.
+        let url: String?
     }
 
     struct ItineraryDTO: Codable {
@@ -103,6 +123,13 @@ enum DataArchive {
         let notes: String
         let createdAt: Date
         let updatedAt: Date
+
+        // MARK: Added in #319
+        // Trip participants (#258) were dropped entirely. Carried as the raw
+        // `participantsData` blob rather than re-modelled, matching how
+        // `ExpenseDTO.splitsData` is handled: the model's accessor already
+        // decodes defensively and falls back to empty.
+        let participantsData: Data?
     }
 
     /// "Itinerary day" in the manifest is a single timeline item on a trip
@@ -129,6 +156,29 @@ enum DataArchive {
         let googleMapsLink: String?
         let createdAt: Date
         let updatedAt: Date
+
+        // MARK: Added in #319
+        // Every field below was previously dropped, so a restore rebuilt the
+        // timeline row but lost its ticket entirely. All optional, following the
+        // #206 / #208 precedent above: a missing key decodes to nil and the
+        // importer coalesces to the model's default, so v1 archives still load
+        // and `schemaVersion` does not move.
+        //
+        // `attachmentPath` is only meaningful because #319 also teaches the
+        // exporter to put the `tickets/<uuid>.<ext>` files INTO the archive.
+        // Restoring the path without the file would set `hasTicket` true and
+        // then fail to open it, which is worse than dropping the field.
+        let arrivalTime: Date?
+        let address: String?
+        let dedupeKey: String?
+        let sourceConfirmation: String?
+        let attachmentPath: String?
+        let barcodePayload: String?
+        let barcodeSymbology: String?
+        let seat: String?
+        let gate: String?
+        let venue: String?
+        let ticketMetaJSON: String?
     }
 
     struct ExpenseDTO: Codable {
@@ -154,6 +204,39 @@ enum DataArchive {
         /// key -> nil -> "" on import, i.e. a legacy row matched on
         /// amount+date+currency alone).
         let dedupeDescriptor: String?
+
+        // MARK: Added in #319
+        // Previously dropped, which is why a restore could not reconstruct trip
+        // expenses or settle-up at all: `personUUID`, `paidByPersonUUID`,
+        // `splitsData` and `numberOfShares` are the whole of the participants /
+        // shares feature (#258-#261, #264), and without `tripUUID` a trip
+        // expense came back as a loose Finance row.
+        //
+        // `hiddenFromFinance` / `hiddenFromTrip` matter more than they look: a
+        // restore that loses them resurrects per-surface deletions the user
+        // already made. And dropping `dedupeKey` / `statementLabel` /
+        // `statementFileName` meant re-importing a statement after a restore
+        // re-duplicated every transaction, reintroducing the class #206-#209
+        // fixed.
+        //
+        // All optional, per the precedent above; v1 archives still decode.
+        let tripUUID: UUID?
+        let sourceReference: String?
+        let statementLabel: String?
+        let statementFileName: String?
+        let personUUID: UUID?
+        let personName: String?
+        let eventUUID: UUID?
+        let eventName: String?
+        let numberOfShares: Int?
+        let paidByPersonUUID: UUID?
+        /// Raw JSON blob from `LocalExpense.splitsData`, carried verbatim rather
+        /// than re-modelled: the accessor already decodes defensively and falls
+        /// back to empty, so a byte-for-byte round trip is the safest shape.
+        let splitsData: Data?
+        let hiddenFromFinance: Bool?
+        let hiddenFromTrip: Bool?
+        let dedupeKey: String?
     }
 
     struct VocabDTO: Codable {

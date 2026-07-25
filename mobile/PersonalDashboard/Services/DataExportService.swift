@@ -24,10 +24,17 @@ final class DataExportService {
 
     private let modelContext: ModelContext
     private let receiptStorage: ReceiptStorage
+    /// #319: ticket attachments travel in the archive alongside receipts.
+    private let ticketStorage: TicketStorage
 
-    init(modelContext: ModelContext, receiptStorage: ReceiptStorage = .shared) {
+    init(
+        modelContext: ModelContext,
+        receiptStorage: ReceiptStorage = .shared,
+        ticketStorage: TicketStorage = .shared
+    ) {
         self.modelContext = modelContext
         self.receiptStorage = receiptStorage
+        self.ticketStorage = ticketStorage
     }
 
     /// Build the archive and return its on-disk URL. Filename follows
@@ -52,6 +59,11 @@ final class DataExportService {
             MiniZip.Entry(name: "manifest.json", data: manifestData)
         ]
         entries.append(contentsOf: collectReceiptEntries(for: payload.expenses))
+        // #319: ticket files were never archived, so restoring an itinerary
+        // item's `attachmentPath` would have pointed at a file that isn't
+        // there. Same shape as receipts: the stored relative path
+        // ("tickets/<uuid>.<ext>") maps 1:1 onto an archive entry path.
+        entries.append(contentsOf: collectTicketEntries(for: payload.itineraryDays))
 
         let url = Self.outputURL()
         do {
@@ -81,7 +93,8 @@ final class DataExportService {
                     listClientUUID: list.clientUUID,
                     position: idx,
                     text: item.text,
-                    checked: item.checked
+                    checked: item.checked,
+                    url: item.url
                 ))
             }
         }
@@ -121,6 +134,24 @@ final class DataExportService {
         return entries
     }
 
+    /// #319 counterpart of `collectReceiptEntries` for itinerary ticket
+    /// attachments. Missing files are skipped, matching the receipt behaviour:
+    /// the importer only sets `attachmentPath` when it actually restored a file,
+    /// so a skipped file yields a row that correctly reports no ticket.
+    private func collectTicketEntries(for items: [DataArchive.ItineraryDayDTO]) -> [MiniZip.Entry] {
+        var entries: [MiniZip.Entry] = []
+        var seenPaths = Set<String>()
+        for item in items {
+            guard let relativePath = item.attachmentPath,
+                  !relativePath.isEmpty,
+                  seenPaths.insert(relativePath).inserted else { continue }
+            guard let url = ticketStorage.load(relativePath: relativePath),
+                  let data = try? Data(contentsOf: url) else { continue }
+            entries.append(MiniZip.Entry(name: relativePath, data: data))
+        }
+        return entries
+    }
+
     // MARK: - DTO mapping
 
     private static func dto(_ todo: LocalTodo) -> DataArchive.TaskDTO {
@@ -134,7 +165,10 @@ final class DataExportService {
             position: todo.position,
             createdAt: todo.createdAt,
             updatedAt: todo.updatedAt,
-            deletedAt: todo.deletedAt
+            deletedAt: todo.deletedAt,
+            priority: todo.priority,
+            address: todo.address,
+            googleMapsLink: todo.googleMapsLink
         )
     }
 
@@ -169,7 +203,9 @@ final class DataExportService {
             position: list.position,
             createdAt: list.createdAt,
             updatedAt: list.updatedAt,
-            deletedAt: list.deletedAt
+            deletedAt: list.deletedAt,
+            iconName: list.iconName,
+            colorHex: list.colorHex
         )
     }
 
@@ -181,7 +217,8 @@ final class DataExportService {
             endDate: trip.endDate,
             notes: trip.notes,
             createdAt: trip.createdAt,
-            updatedAt: trip.updatedAt
+            updatedAt: trip.updatedAt,
+            participantsData: trip.participantsData
         )
     }
 
@@ -200,7 +237,18 @@ final class DataExportService {
             sortOrder: item.sortOrder,
             googleMapsLink: item.googleMapsLink,
             createdAt: item.createdAt,
-            updatedAt: item.updatedAt
+            updatedAt: item.updatedAt,
+            arrivalTime: item.arrivalTime,
+            address: item.address,
+            dedupeKey: item.dedupeKey,
+            sourceConfirmation: item.sourceConfirmation,
+            attachmentPath: item.attachmentPath,
+            barcodePayload: item.barcodePayload,
+            barcodeSymbology: item.barcodeSymbology,
+            seat: item.seat,
+            gate: item.gate,
+            venue: item.venue,
+            ticketMetaJSON: item.ticketMetaJSON
         )
     }
 
@@ -220,7 +268,21 @@ final class DataExportService {
             source: expense.source,
             createdAt: expense.createdAt,
             isRefund: expense.isRefund,
-            dedupeDescriptor: expense.dedupeDescriptor
+            dedupeDescriptor: expense.dedupeDescriptor,
+            tripUUID: expense.tripUUID,
+            sourceReference: expense.sourceReference,
+            statementLabel: expense.statementLabel,
+            statementFileName: expense.statementFileName,
+            personUUID: expense.personUUID,
+            personName: expense.personName,
+            eventUUID: expense.eventUUID,
+            eventName: expense.eventName,
+            numberOfShares: expense.numberOfShares,
+            paidByPersonUUID: expense.paidByPersonUUID,
+            splitsData: expense.splitsData,
+            hiddenFromFinance: expense.hiddenFromFinance,
+            hiddenFromTrip: expense.hiddenFromTrip,
+            dedupeKey: expense.dedupeKey
         )
     }
 
