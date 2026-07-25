@@ -45,7 +45,14 @@ final class DataExportService {
             schemaVersion: DataArchive.currentSchemaVersion,
             exportedAt: Date(),
             appVersion: Self.appVersion,
-            data: payload
+            data: payload,
+            // #319 self-verification. `models` lets the importer detect a model
+            // omitted entirely, which a count alone cannot; `counts` is asserted
+            // before any write; `excludedModels` records the deliberate gaps so
+            // they don't read as the bug this ticket fixed.
+            models: DataArchive.exportedModels,
+            counts: Self.counts(for: payload),
+            excludedModels: DataArchive.excludedModels
         )
 
         let manifestData: Data
@@ -85,6 +92,12 @@ final class DataExportService {
         let itineraryItems = try modelContext.fetch(FetchDescriptor<LocalItineraryItem>())
         let expenses    = try modelContext.fetch(FetchDescriptor<LocalExpense>())
         let vocab       = try modelContext.fetch(FetchDescriptor<LocalKeyword>())
+        // #319: five models that previously had no fetch at all.
+        let recurring   = try modelContext.fetch(FetchDescriptor<RecurringExpense>())
+        let persons     = try modelContext.fetch(FetchDescriptor<LocalPerson>())
+        let events      = try modelContext.fetch(FetchDescriptor<LocalEvent>())
+        let statements  = try modelContext.fetch(FetchDescriptor<LocalStatementImport>())
+        let processed   = try modelContext.fetch(FetchDescriptor<LocalProcessedEmail>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -108,8 +121,33 @@ final class DataExportService {
             itineraries: trips.map(Self.dto),
             itineraryDays: itineraryItems.map(Self.dto),
             expenses: expenses.map(Self.dto),
-            vocab: vocab.map(Self.dto)
+            vocab: vocab.map(Self.dto),
+            recurringExpenses: recurring.map(Self.dto),
+            persons: persons.map(Self.dto),
+            events: events.map(Self.dto),
+            statementImports: statements.map(Self.dto),
+            processedEmails: processed.map(Self.dto)
         )
+    }
+
+    /// #319: per-model row counts written into the manifest and asserted on
+    /// import before anything is written. Keys match `DataArchive.exportedModels`.
+    private static func counts(for payload: DataArchive.Payload) -> [String: Int] {
+        [
+            "LocalTodo":            payload.tasks.count,
+            "LocalNote":            payload.notes.count,
+            "LocalNoteFolder":      payload.noteFolders.count,
+            "LocalList":            payload.lists.count,
+            "LocalTrip":            payload.itineraries.count,
+            "LocalItineraryItem":   payload.itineraryDays.count,
+            "LocalExpense":         payload.expenses.count,
+            "LocalKeyword":         payload.vocab.count,
+            "RecurringExpense":     payload.recurringExpenses?.count ?? 0,
+            "LocalPerson":          payload.persons?.count ?? 0,
+            "LocalEvent":           payload.events?.count ?? 0,
+            "LocalStatementImport": payload.statementImports?.count ?? 0,
+            "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
+        ]
     }
 
     /// Collect receipt files referenced by expenses. Missing files are
@@ -283,6 +321,75 @@ final class DataExportService {
             hiddenFromFinance: expense.hiddenFromFinance,
             hiddenFromTrip: expense.hiddenFromTrip,
             dedupeKey: expense.dedupeKey
+        )
+    }
+
+    // MARK: DTO mapping for the models added in #319
+
+    private static func dto(_ template: RecurringExpense) -> DataArchive.RecurringExpenseDTO {
+        DataArchive.RecurringExpenseDTO(
+            clientUUID: template.clientUUID,
+            amount: template.amount,
+            currency: template.currency,
+            category: template.category,
+            merchant: template.merchant,
+            expenseDescription: template.expenseDescription,
+            paymentMethod: template.paymentMethod,
+            dayOfMonth: template.dayOfMonth,
+            isActive: template.isActive,
+            startDate: template.startDate,
+            endDate: template.endDate,
+            lastPostedMonthKey: template.lastPostedMonthKey,
+            createdAt: template.createdAt,
+            updatedAt: template.updatedAt
+        )
+    }
+
+    private static func dto(_ person: LocalPerson) -> DataArchive.PersonDTO {
+        DataArchive.PersonDTO(
+            clientUUID: person.clientUUID,
+            name: person.name,
+            colorHex: person.colorHex,
+            createdAt: person.createdAt
+        )
+    }
+
+    private static func dto(_ event: LocalEvent) -> DataArchive.EventDTO {
+        DataArchive.EventDTO(
+            clientUUID: event.clientUUID,
+            name: event.name,
+            startDate: event.startDate,
+            endDate: event.endDate,
+            tripUUID: event.tripUUID,
+            notes: event.notes,
+            createdAt: event.createdAt,
+            updatedAt: event.updatedAt
+        )
+    }
+
+    private static func dto(_ record: LocalStatementImport) -> DataArchive.StatementImportDTO {
+        DataArchive.StatementImportDTO(
+            clientUUID: record.clientUUID,
+            fileName: record.fileName,
+            statementLabel: record.statementLabel,
+            imported: record.imported,
+            skippedDuplicates: record.skippedDuplicates,
+            ignoredNonSpend: record.ignoredNonSpend,
+            failed: record.failed,
+            refunds: record.refunds,
+            deposits: record.deposits,
+            possiblyTruncated: record.possiblyTruncated,
+            importedExpenseUUIDs: record.importedExpenseUUIDs,
+            createdAt: record.createdAt
+        )
+    }
+
+    private static func dto(_ email: LocalProcessedEmail) -> DataArchive.ProcessedEmailDTO {
+        DataArchive.ProcessedEmailDTO(
+            messageKey: email.messageKey,
+            uid: email.uid,
+            uidValidity: email.uidValidity,
+            processedAt: email.processedAt
         )
     }
 

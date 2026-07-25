@@ -23,6 +23,9 @@ final class DataImportService {
         case manifestMissing
         case manifestUnparseable(Error)
         case unsupportedSchemaVersion(found: Int, supported: Int)
+        /// #319: the manifest's declared row counts or model list disagree with
+        /// the payload. Raised during preview, before anything is written.
+        case manifestClaimsMismatch(details: [String])
         case commitFailed(Error)
 
         var errorDescription: String? {
@@ -37,6 +40,8 @@ final class DataImportService {
                 return "The manifest couldn't be parsed: \(e.localizedDescription)"
             case .unsupportedSchemaVersion(let found, let supported):
                 return "This archive uses schema version \(found), but this app supports version \(supported). Update the app to import it."
+            case .manifestClaimsMismatch(let details):
+                return "This archive looks incomplete or damaged, so nothing was imported. \(details.joined(separator: "; "))."
             case .commitFailed(let e):
                 return "Couldn't save imported data: \(e.localizedDescription)"
             }
@@ -157,12 +162,26 @@ final class DataImportService {
             throw ImportError.manifestUnparseable(error)
         }
 
-        guard manifest.schemaVersion == DataArchive.currentSchemaVersion else {
+        // #319: was an exact-equality check, which made any future
+        // `currentSchemaVersion` bump reject every archive already in the wild.
+        // That is why this ticket does NOT bump the version: the guard shipped
+        // to the phone is the strict one, so a newer archive would be refused by
+        // code we cannot patch retroactively. Accepting anything up to the
+        // current version means the next legitimate bump degrades instead of
+        // breaking. A NEWER archive is still refused, since we genuinely cannot
+        // know what it contains.
+        guard manifest.schemaVersion <= DataArchive.currentSchemaVersion else {
             throw ImportError.unsupportedSchemaVersion(
                 found: manifest.schemaVersion,
                 supported: DataArchive.currentSchemaVersion
             )
         }
+
+        // Self-verification (#319). Runs here, during preview, so a mismatch is
+        // refused BEFORE any write. Counts absent means a pre-#319 archive:
+        // proceed and warn rather than treating the absence as expected-zero,
+        // which would reject every backup the user already holds as corrupt.
+        try verifyManifestClaims(manifest)
 
         let counts = try computeCounts(payload: manifest.data)
         return Preview(
@@ -419,6 +438,91 @@ final class DataImportService {
                 modelContext.insert(expense)
             }
 
+            // MARK: Models added in #319
+            //
+            // People and events go in FIRST: restored expenses reference them by
+            // UUID for splits and tagging, so inserting them earlier keeps those
+            // references resolvable within the same transaction.
+            let existingPersonUUIDs    = try existingUUIDs(LocalPerson.self,  keyPath: \.clientUUID)
+            let existingEventUUIDs     = try existingUUIDs(LocalEvent.self,   keyPath: \.clientUUID)
+            for dto in (payload.persons ?? []) where !existingPersonUUIDs.contains(dto.clientUUID) {
+                let person = LocalPerson(name: dto.name, colorHex: dto.colorHex)
+                person.clientUUID = dto.clientUUID
+                person.createdAt = dto.createdAt
+                modelContext.insert(person)
+            }
+            for dto in (payload.events ?? []) where !existingEventUUIDs.contains(dto.clientUUID) {
+                let event = LocalEvent(name: dto.name)
+                event.clientUUID = dto.clientUUID
+                event.startDate = dto.startDate
+                event.endDate = dto.endDate
+                event.tripUUID = dto.tripUUID
+                event.notes = dto.notes
+                event.createdAt = dto.createdAt
+                event.updatedAt = dto.updatedAt
+                modelContext.insert(event)
+            }
+
+            let existingRecurringUUIDs = try existingStringUUIDs(RecurringExpense.self, keyPath: \.clientUUID)
+            for dto in (payload.recurringExpenses ?? []) where !existingRecurringUUIDs.contains(dto.clientUUID) {
+                let template = RecurringExpense(
+                    amount: dto.amount,
+                    currency: dto.currency,
+                    category: dto.category,
+                    merchant: dto.merchant,
+                    expenseDescription: dto.expenseDescription,
+                    paymentMethod: dto.paymentMethod,
+                    dayOfMonth: dto.dayOfMonth,
+                    isActive: dto.isActive,
+                    startDate: dto.startDate,
+                    endDate: dto.endDate
+                )
+                template.clientUUID = dto.clientUUID
+                // Carried so a restored template does not re-post a month it has
+                // already posted, which would double-charge the current month.
+                template.lastPostedMonthKey = dto.lastPostedMonthKey
+                template.createdAt = dto.createdAt
+                template.updatedAt = dto.updatedAt
+                modelContext.insert(template)
+            }
+
+            let existingStatementUUIDs = try existingUUIDs(LocalStatementImport.self, keyPath: \.clientUUID)
+            for dto in (payload.statementImports ?? []) where !existingStatementUUIDs.contains(dto.clientUUID) {
+                let record = LocalStatementImport(
+                    clientUUID: dto.clientUUID,
+                    fileName: dto.fileName,
+                    statementLabel: dto.statementLabel,
+                    imported: dto.imported,
+                    skippedDuplicates: dto.skippedDuplicates,
+                    ignoredNonSpend: dto.ignoredNonSpend,
+                    failed: dto.failed,
+                    refunds: dto.refunds,
+                    possiblyTruncated: dto.possiblyTruncated,
+                    deposits: dto.deposits,
+                    createdAt: dto.createdAt
+                )
+                // The initialiser takes `[UUID]` and joins it, but the stored
+                // property is the joined string. Assigning it directly keeps the
+                // round trip verbatim instead of parse-then-rejoin, which would
+                // silently drop any entry that no longer parses as a UUID.
+                record.importedExpenseUUIDs = dto.importedExpenseUUIDs
+                modelContext.insert(record)
+            }
+
+            // Keyed on `messageKey`, not a clientUUID.
+            let existingMessageKeys = Set(
+                try modelContext.fetch(FetchDescriptor<LocalProcessedEmail>()).map(\.messageKey)
+            )
+            for dto in (payload.processedEmails ?? []) where !existingMessageKeys.contains(dto.messageKey) {
+                let email = LocalProcessedEmail(
+                    messageKey: dto.messageKey,
+                    uid: dto.uid,
+                    uidValidity: dto.uidValidity
+                )
+                email.processedAt = dto.processedAt
+                modelContext.insert(email)
+            }
+
             for dto in payload.vocab where !existingVocabUUIDs.contains(dto.clientUUID) {
                 modelContext.insert(LocalKeyword(
                     clientUUID: dto.clientUUID,
@@ -466,6 +570,61 @@ final class DataImportService {
             return relativePath
         }
         return try receiptStorage.write(data: archivedData, relativePath: relativePath)
+    }
+
+    /// Verify what the manifest claims against what its payload actually holds
+    /// (#319). Deliberately runs during `preview`, before any mutation: a
+    /// mismatch found after writing leaves a half-restored store, and on this
+    /// app that means the user's financial data in an unknown state. A clean
+    /// refusal is strictly better.
+    ///
+    /// Absent claims mean a pre-#319 archive. Those import normally with a log
+    /// line; they are unverifiable, NOT empty. Treating a missing count as an
+    /// expected zero would reject every existing backup as corrupt, which is a
+    /// worse bug than the one this ticket fixes.
+    private func verifyManifestClaims(_ manifest: DataArchive.Manifest) throws {
+        guard let claimed = manifest.counts else {
+            NSLog("DataImportService: archive predates #319 self-verification; row counts unverifiable")
+            return
+        }
+        let actual = Self.actualCounts(for: manifest.data)
+        var mismatches: [String] = []
+        for (model, claimedCount) in claimed.sorted(by: { $0.key < $1.key }) {
+            let actualCount = actual[model] ?? 0
+            if actualCount != claimedCount {
+                mismatches.append("\(model): manifest claims \(claimedCount), payload has \(actualCount)")
+            }
+        }
+        // A model named in `models` but absent from `counts` is the omitted-model
+        // case a count check alone cannot see.
+        if let models = manifest.models {
+            for model in models where claimed[model] == nil {
+                mismatches.append("\(model): listed as exported but carries no count")
+            }
+        }
+        guard mismatches.isEmpty else {
+            throw ImportError.manifestClaimsMismatch(details: mismatches)
+        }
+    }
+
+    /// Counts derived from the payload itself, compared against the manifest's
+    /// claims. Keys match `DataArchive.exportedModels`.
+    private static func actualCounts(for payload: DataArchive.Payload) -> [String: Int] {
+        [
+            "LocalTodo":            payload.tasks.count,
+            "LocalNote":            payload.notes.count,
+            "LocalNoteFolder":      payload.noteFolders.count,
+            "LocalList":            payload.lists.count,
+            "LocalTrip":            payload.itineraries.count,
+            "LocalItineraryItem":   payload.itineraryDays.count,
+            "LocalExpense":         payload.expenses.count,
+            "LocalKeyword":         payload.vocab.count,
+            "RecurringExpense":     payload.recurringExpenses?.count ?? 0,
+            "LocalPerson":          payload.persons?.count ?? 0,
+            "LocalEvent":           payload.events?.count ?? 0,
+            "LocalStatementImport": payload.statementImports?.count ?? 0,
+            "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
+        ]
     }
 
     /// #319 counterpart of `restoreReceipt` for ticket attachments. Returns nil
