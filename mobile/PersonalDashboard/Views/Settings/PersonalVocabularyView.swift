@@ -59,6 +59,12 @@ struct PersonalVocabularyView: View {
         }
         .activeSection(.vocabulary)
         .macSectionChrome("Vocabulary")
+        // File > New Word / Cmd-N while Vocabulary is on screen (issue #295).
+        #if os(macOS)
+        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Word") {
+            editing = .new
+        })
+        #endif
         .sheet(item: $editing) { target in
             KeywordEditorSheet(target: target)
                 .presentationDetents([.medium, .large])
@@ -175,10 +181,7 @@ private struct KeywordRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        .flatContentRow()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityLabel("\(keyword.term). Tap to edit.")

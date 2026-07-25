@@ -108,6 +108,18 @@ struct NotesView: View {
                             .macPlainButtonStyle()
                             .accessibilityLabel("New folder")
                         }
+                        // File > New Note / Cmd-N on the notes root, creating an
+                        // unfiled note. An open folder publishes its own action
+                        // so the note lands in that folder instead, per the
+                        // ruling on #295. The folder-add button above stays a
+                        // toolbar control rather than taking Cmd-N, since a
+                        // section's Cmd-N creates its primary record and Notes'
+                        // primary record is a note, not a folder.
+                        #if os(macOS)
+                        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Note") {
+                            Task { await createBlankNote(folderId: nil) }
+                        })
+                        #endif
                     #endif
                 }
             }
@@ -427,10 +439,7 @@ private struct FolderRow: View {
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(Tokens.mutedSoft)
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        .flatContentRow()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }
@@ -465,10 +474,7 @@ private struct NoteRow: View {
                 .foregroundStyle(Tokens.mutedSoft)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        .flatContentRow()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }

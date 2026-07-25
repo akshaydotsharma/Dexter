@@ -33,6 +33,121 @@ enum Space {
     }
 }
 
+// MARK: - Flat content rows (issue #303)
+
+/// Metrics for a flat content row, shared by every section that lists records.
+///
+/// These exist as tokens rather than per-file literals on purpose. Two font
+/// literals in this codebase have already inverted because a numeric
+/// relationship was asserted in a comment instead of expressed in code
+/// (`TaskRowMetrics.titleFont` and `MacClearTextField`'s NSFont, both #301).
+/// Row padding relates across six surfaces in five files, so the same mistake
+/// is available here and would be harder to spot.
+///
+/// macOS converges on Activity's flat row, which the audit measured as the
+/// closest thing in the app to the Reminders and Mail reference: no card, no
+/// border, hairline separators, and the pane's own background showing through.
+/// iOS keeps its gapped cards, so every value below is unchanged there.
+enum RowMetrics {
+    /// Vertical padding inside a row.
+    static var verticalPadding: CGFloat {
+        #if os(macOS)
+        6
+        #else
+        Space.sm + 2
+        #endif
+    }
+
+    /// Horizontal padding inside a row. Wider on macOS because a flat row has
+    /// no card inset of its own to sit within.
+    static var horizontalPadding: CGFloat {
+        #if os(macOS)
+        Space.lg
+        #else
+        Space.md
+        #endif
+    }
+
+    /// Leading icon chip. iOS keeps the 36pt touch-scaled chip.
+    static var iconChip: CGFloat {
+        #if os(macOS)
+        26
+        #else
+        36
+        #endif
+    }
+
+    /// Gap between rows. Zero on macOS, where a hairline does the separating;
+    /// iOS keeps the gap that its cards float in.
+    static var interRowSpacing: CGFloat {
+        #if os(macOS)
+        0
+        #else
+        Space.xs
+        #endif
+    }
+}
+
+extension View {
+    /// The one construction for a row that lists a record.
+    ///
+    /// Seven surfaces used a byte-identical chain of padding, a `Radius.card`
+    /// surface fill, and a `paperBorder`. Converging them here rather than
+    /// editing seven copies means the next change to row appearance is one
+    /// edit, and a future divergence has to be deliberate.
+    ///
+    /// Seven, not the six the audit listed. `RecurringExpenseRow` was missed
+    /// because that audit enumerated sections from screenshots, and a visual
+    /// sweep can only find what it can see. The reliable check is grepping for
+    /// the construction, which is how the seventh surfaced.
+    ///
+    /// macOS renders flat: no fill, no border, and the row's own top hairline,
+    /// which is Activity's construction and the closest thing already in the app
+    /// to Reminders and Mail. iOS keeps its gapped card (issue #303).
+    ///
+    /// - Parameter iOSVerticalPadding: the existing iOS value for this surface.
+    ///   Passed in rather than tokenised, deliberately. The seven surfaces do
+    ///   not agree today: 12pt on five, 10pt on the two expense rows. A single
+    ///   token would read tidier and would silently move five iOS surfaces by
+    ///   2pt, which is a cross-platform behaviour change disguised as cleanup.
+    ///   The disagreement is real, so it stays visible at the call site until
+    ///   someone decides to change iOS on purpose. Ignored on macOS, which uses
+    ///   the shared metric because macOS has no such legacy to preserve.
+    func flatContentRow(iOSVerticalPadding: CGFloat = Space.md) -> some View {
+        #if os(macOS)
+        return self
+            .padding(.horizontal, RowMetrics.horizontalPadding)
+            .padding(.vertical, RowMetrics.verticalPadding)
+            .overlay(alignment: .top) { RowHairline() }
+        #else
+        return self
+            .padding(.horizontal, RowMetrics.horizontalPadding)
+            .padding(.vertical, iOSVerticalPadding)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.card)
+        #endif
+    }
+}
+
+/// The one hairline used to separate flat rows.
+///
+/// A single definition because the design language allows exactly one rule
+/// technique: a 0.5pt `Rectangle`. The system `Divider()` resolves to a
+/// different, thicker line on macOS, and the audit found one section already
+/// mixing the two. Renders as nothing on iOS, where rows are carded and
+/// separated by a gap instead.
+struct RowHairline: View {
+    var body: some View {
+        #if os(macOS)
+        Rectangle()
+            .fill(Tokens.divider)
+            .frame(height: 0.5)
+        #else
+        EmptyView()
+        #endif
+    }
+}
+
 // MARK: - Corner radius
 
 enum Radius {

@@ -151,10 +151,16 @@ struct MacClearTextField: NSViewRepresentable {
         field.maximumNumberOfLines = 1
         field.lineBreakMode = .byTruncatingTail
         field.allowsEditingTextAttributes = false
-        // Match TaskRowMetrics.titleFont on macOS (Inter-Regular 15) and the
-        // Tokens.ink text colour so the field is visually identical to the
-        // Text it toggles with.
-        field.font = NSFont(name: "Inter-Regular", size: 15) ?? .systemFont(ofSize: 15)
+        // Match the row text this field toggles with, plus the Tokens.ink
+        // colour, so an inline edit does not resize the text under the caret.
+        //
+        // This hardcoded 15pt "to match TaskRowMetrics.titleFont". That token is
+        // now `.edBody`, which #294 made 13pt on macOS, so the literal had
+        // drifted 2pt larger and clicking a row to rename would have made the
+        // text jump. Reading the size from the ramp couples them in code rather
+        // than in a comment nobody re-reads (issue #301).
+        let bodySize = EdMetrics.bodyPointSize
+        field.font = NSFont(name: "Inter-Regular", size: bodySize) ?? .systemFont(ofSize: bodySize)
         field.textColor = NSColor(Tokens.ink)
         applyPlaceholder(to: field)
         field.stringValue = text

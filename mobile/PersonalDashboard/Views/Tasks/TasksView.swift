@@ -90,6 +90,14 @@ struct TasksView: View {
         }
         .activeSection(.tasks)
         .macSectionChrome("Tasks")
+        // Publish this section's create action so File > New Task and ⌘N reach
+        // it while Tasks is on screen (issue #295). Same target as the add
+        // button, so the menu and the button cannot diverge.
+        #if os(macOS)
+        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Task") {
+            showingEditor = true
+        })
+        #endif
         // Live-refresh when the voice-capture or chat path writes a task.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
             Task { await viewModel.load() }
@@ -194,7 +202,7 @@ struct TasksView: View {
         #if os(macOS)
         // macOS: a persistent one-click add-field (see MacAddRow / #287)
         // instead of the invisible tap-zone → autofocusing draft row.
-        MacAddRow(label: "New Task", minHeight: 40, onCreate: { title in
+        MacAddRow(label: "New Task", minHeight: 28, onCreate: { title in
             Task { await viewModel.create(title: title, dueDate: suggestedDueDate(for: .noDate)) }
         })
         .id("macAdd-empty")
@@ -258,7 +266,7 @@ struct TasksView: View {
             // rather than a button that reveals an autofocusing draft row (which
             // had the second-click focus race). Width-capped so it sits neatly
             // under the celebratory block.
-            MacAddRow(label: "New Task", minHeight: 40, onCreate: { title in
+            MacAddRow(label: "New Task", minHeight: 28, onCreate: { title in
                 Task { await viewModel.create(title: title, dueDate: suggestedDueDate(for: .noDate)) }
             })
             .id("macAdd-allcaughtup")
@@ -466,7 +474,7 @@ struct TasksView: View {
                 // click (#287, bug 1). Zero listRowInsets: MacAddRow owns
                 // its own insets so its hairline aligns with the Completed
                 // separator, exactly like the ghost it replaces.
-                MacAddRow(label: "New Task", minHeight: 40, onCreate: { title in
+                MacAddRow(label: "New Task", minHeight: 28, onCreate: { title in
                     Task { await viewModel.create(title: title, dueDate: suggestedDueDate(for: bucket)) }
                 })
                 .id("macAdd-\(bucket.rawValue)")
@@ -655,42 +663,46 @@ private enum TaskRowMetrics {
         #endif
     }
 
-    /// Completion-circle inner ring diameter (~1pt smaller on macOS).
+    /// Completion-circle inner ring diameter. macOS targets the Reminders
+    /// checkbox at 16pt; iOS keeps 22pt (issue #301).
     static var circleInner: CGFloat {
         #if os(macOS)
-        21
+        16
         #else
         22
         #endif
     }
 
-    /// Completion-circle outer hit frame (~1pt smaller on macOS).
+    /// Completion-circle outer hit frame.
     static var circleOuter: CGFloat {
         #if os(macOS)
-        23
+        18
         #else
         24
         #endif
     }
 
-    /// Checkmark glyph size (~1pt smaller on macOS).
+    /// Checkmark glyph size, scaled to the circle.
     static var checkFont: Font {
         #if os(macOS)
-        .system(size: 10, weight: .bold)
+        .system(size: 9, weight: .bold)
         #else
         .system(size: 11, weight: .bold)
         #endif
     }
 
-    /// Title font. macOS shrinks Inter to 15pt (~1pt under the shared
-    /// `.edBody`) WITHOUT touching that token; iOS keeps `.edBody`.
-    static var titleFont: Font {
-        #if os(macOS)
-        .custom("Inter-Regular", size: 15, relativeTo: .body)
-        #else
-        .edBody
-        #endif
-    }
+    /// Title font: `.edBody` on both platforms.
+    ///
+    /// This hardcoded Inter at 15pt on macOS, described in the old comment as
+    /// "~1pt under the shared `.edBody` WITHOUT touching that token". It was a
+    /// local workaround for a shared ramp that was too large on the Mac.
+    ///
+    /// #294 fixed the ramp itself, so `.edBody` is now 13pt on macOS and the
+    /// override had inverted: 15pt is 2pt LARGER than the body text it existed
+    /// to compensate for, so Tasks rows would have read bigger than every other
+    /// section. Deleting it is the point. A local patch that outlives the defect
+    /// it patched becomes the defect (issue #301).
+    static var titleFont: Font { .edBody }
 }
 
 // MARK: - Inline draft row

@@ -78,6 +78,16 @@ struct ListsView: View {
                     #endif
                     rootList
                         .macSectionChrome("Lists")
+                        // Publish the create action for File > New List and ⌘N
+                        // while the root list is on screen. Deliberately scoped
+                        // to the root branch: inside an open list ⌘N should mean
+                        // "new item in this list", which is a different action
+                        // and is not wired yet (issue #295).
+                        #if os(macOS)
+                        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New List") {
+                            showingNewList = true
+                        })
+                        #endif
                 }
             }
 
@@ -335,10 +345,7 @@ private struct ListSummaryRow: View {
                 }
             }
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        .flatContentRow()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }
@@ -573,7 +580,7 @@ private struct ListDetailContent: View {
             // listRowInsets: MacAddRow owns its own insets so its hairline
             // aligns exactly like the GhostAddRow it replaces. 44pt matches the
             // Lists row rhythm.
-            MacAddRow(label: "New Item", minHeight: 44, onCreate: { text in
+            MacAddRow(label: "New Item", minHeight: 28, onCreate: { text in
                 Task { await viewModel.addItem(to: list, text: text) }
             })
             .id("macAddItem")

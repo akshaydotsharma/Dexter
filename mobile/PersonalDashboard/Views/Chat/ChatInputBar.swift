@@ -46,6 +46,36 @@ struct ChatInputBar: View {
                     .onSubmit {
                         if canSend { onSend() }
                     }
+                    // macOS: Shift-Return must insert a line break, not send.
+                    //
+                    // `.onSubmit` fires on macOS for BOTH Return and
+                    // Shift-Return, so there was no way to write a multi-line
+                    // chat message on the Mac at all (issue #299). Note the
+                    // original diagnosis was the opposite, that Return did not
+                    // send because `.submitLabel` is iOS-only; the user checked
+                    // and Return works. Only the modifier case is broken.
+                    //
+                    // Deliberately additive, so the working path cannot regress:
+                    // plain Return returns `.ignored` and falls through to the
+                    // `.onSubmit` above, untouched. Only Shift-Return is claimed.
+                    // If `.onKeyPress` turns out not to see the event before the
+                    // field does, the failure mode is the current behaviour
+                    // rather than a new one.
+                    //
+                    // Known limitation: this appends the newline rather than
+                    // inserting at the caret, because SwiftUI's `TextField`
+                    // exposes no selection. Correct for the common case of
+                    // typing at the end; a mid-string caret would see the break
+                    // land at the end. Fixing that properly needs the AppKit
+                    // route `MacClearTextField` already takes, which is a larger
+                    // change than this bug warrants.
+                    #if os(macOS)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.shift) else { return .ignored }
+                        text += "\n"
+                        return .handled
+                    }
+                    #endif
             }
             .frame(minHeight: 40)
 

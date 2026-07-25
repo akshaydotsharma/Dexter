@@ -27,7 +27,7 @@ struct ExpenseRow: View {
             Image(systemName: expense.categoryEnum.sfSymbol)
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(Tokens.accentFinance)
-                .frame(width: 36, height: 36)
+                .frame(width: RowMetrics.iconChip, height: RowMetrics.iconChip)
                 .background(Tokens.paper2, in: Circle())
 
             VStack(alignment: .leading, spacing: 4) {
@@ -78,10 +78,9 @@ struct ExpenseRow: View {
                 }
             }
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm + 2)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        // Same shared construction as every other record row. Expense rows keep
+        // their own 10pt iOS padding, which is why the modifier takes it.
+        .flatContentRow(iOSVerticalPadding: Space.sm + 2)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityLabel(accessibilityLabel)

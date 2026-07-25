@@ -81,6 +81,14 @@ struct TripsView: View {
                     #endif
                     rootContent
                         .macSectionChrome("Trips")
+                        // File > New Trip / Cmd-N on the trip list. Scoped to
+                        // the root branch: inside a trip, Cmd-N would mean a new
+                        // itinerary item, which is a different action (#295).
+                        #if os(macOS)
+                        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Trip") {
+                            editingTrip = .new
+                        })
+                        #endif
                 }
             }
 
@@ -307,10 +315,7 @@ private struct TripRow: View {
                 .background(Tokens.paper2, in: Capsule())
             }
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.card)
+        .flatContentRow()
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityLabel("\(trip.name), \(Self.formatRange(start: trip.startDate, end: trip.endDate)). Tap to open.")

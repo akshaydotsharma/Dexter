@@ -39,14 +39,15 @@ struct MacAddRow: View {
     let label: String
     /// Row height — matches each surface's row rhythm so the add-row aligns
     /// with the rows above it (Tasks: 40, Lists: 44).
-    var minHeight: CGFloat = 40
+    var minHeight: CGFloat = 28
     /// Called with the trimmed, non-empty entry on commit.
     let onCreate: (String) -> Void
 
-    /// Editing-bullet inner diameter. Matches `TaskRowMetrics.circleInner` on
-    /// macOS (21pt) so the stroked circle is identical to the Tasks add-row and
-    /// a real unchecked row.
-    private let circleInner: CGFloat = 21
+    /// Editing-bullet inner diameter. Must track `TaskRowMetrics.circleInner`
+    /// on macOS (16pt after #301) so the stroked circle stays identical to a
+    /// real unchecked row. These two are coupled by eye, not by the compiler,
+    /// so they have to move together.
+    private let circleInner: CGFloat = 16
 
     @State private var text: String = ""
     // Drives the bullet swap (plus.circle at rest → empty stroked circle while
