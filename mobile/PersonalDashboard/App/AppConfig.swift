@@ -35,7 +35,11 @@ enum AppConfig {
     /// values: a key sourced from a shell pipeline (`grep … | cut …`) commonly
     /// carries a trailing newline, and an invalid header value fails in a way
     /// that looks nothing like a configuration problem.
-    private static func resolved(_ value: String?) -> String? {
+    ///
+    /// Deliberately `internal` rather than `private`: `SwiftDataStore` reuses it
+    /// for the `DEXTER_STORE_PATH` override (#318), which is the same class of
+    /// bug in a far more dangerous position. One guard, one place.
+    static func resolved(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty else { return nil }
         guard !trimmed.hasPrefix("$("), !trimmed.hasPrefix("${") else { return nil }

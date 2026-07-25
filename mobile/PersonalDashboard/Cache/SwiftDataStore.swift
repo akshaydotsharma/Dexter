@@ -19,6 +19,68 @@ final class SwiftDataStore {
     let container: ModelContainer
     var context: ModelContext { container.mainContext }
 
+    /// True when `DEXTER_STORE_PATH` redirected this process away from the
+    /// user's real store (#318). Surfaces so the UI can say so out loud: a
+    /// disposable store looks exactly like a wiped one, and a tester who
+    /// forgets the override is active will read an empty app as data loss.
+    /// Always false in release builds, where the override is inert.
+    private(set) static var isUsingOverrideStore = false
+
+    /// Resolve the SQLite URL, honouring the `DEXTER_STORE_PATH` override.
+    ///
+    /// The override exists so automated verification (notably the #319 backup
+    /// round trip, which by design destroys and rebuilds a store) can run
+    /// against a disposable copy instead of the user's real financial data.
+    /// Debug-only and env-only: never a persisted setting, so a stale value
+    /// cannot outlive the run that set it.
+    ///
+    /// On any problem this **refuses to launch** rather than falling back to the
+    /// default path. That looks harsh but it is the only safe behaviour: a
+    /// silent fallback would send a run that asked for a throwaway store
+    /// straight at the live one, which is precisely the accident the override
+    /// is meant to prevent. Failing to launch touches nobody's data.
+    private static func resolveStoreURL(default defaultURL: URL) -> URL {
+        #if DEBUG
+        // Reuses AppConfig's placeholder guard (#308) rather than writing a
+        // second one: an unexpanded `${DEXTER_STORE_PATH}` is a non-empty
+        // string and would otherwise be taken for a real path.
+        guard let raw = AppConfig.resolved(ProcessInfo.processInfo.environment["DEXTER_STORE_PATH"]) else {
+            return defaultURL
+        }
+        let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
+        // Require an existing parent directory. Without this check a typo'd
+        // path yields a brand-new empty store, the app opens with no data, and
+        // the obvious conclusion is that the data is gone.
+        let parent = url.deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            fatalError(
+                """
+                DEXTER_STORE_PATH is set to \(url.path) but its parent directory \
+                does not exist. Refusing to launch rather than creating an empty \
+                store, and refusing to fall back to the real store so this run \
+                cannot touch live data. Create the directory or unset the variable.
+                """
+            )
+        }
+        guard url.pathExtension.lowercased() == "sqlite" else {
+            fatalError(
+                """
+                DEXTER_STORE_PATH must end in .sqlite (got \(url.lastPathComponent)). \
+                SwiftData writes -wal and -shm siblings alongside it, so the \
+                extension is load-bearing for copying a store correctly.
+                """
+            )
+        }
+        NSLog("SwiftDataStore: using OVERRIDE store at %@ (DEXTER_STORE_PATH)", url.path)
+        return url
+        #else
+        // Release builds ignore the variable entirely.
+        return defaultURL
+        #endif
+    }
+
     private init() {
         do {
             let schema = Schema([
@@ -49,7 +111,9 @@ final class SwiftDataStore {
                 appropriateFor: nil,
                 create: true
             )
-            let storeURL = supportDir.appendingPathComponent("PersonalDashboard.sqlite")
+            let defaultURL = supportDir.appendingPathComponent("PersonalDashboard.sqlite")
+            let storeURL = Self.resolveStoreURL(default: defaultURL)
+            Self.isUsingOverrideStore = (storeURL != defaultURL)
             let configuration = ModelConfiguration(
                 schema: schema,
                 url: storeURL
