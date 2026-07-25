@@ -14,6 +14,30 @@ import SwiftData
 /// milestone, after all features are ported — issue #281).
 @main
 struct DexterMacApp: App {
+    /// Forces the SwiftData store to bootstrap at process start, in DEBUG only.
+    ///
+    /// `SwiftDataStore.shared` is a `static let`, so it is lazy, and both the
+    /// debug launch hooks and #318's store-path override guards run inside its
+    /// `init()`. A launch that never gets as far as building the store produces
+    /// no hook output and no guard refusal, which is indistinguishable from the
+    /// feature being broken. That has already cost two diagnostic rounds: probes
+    /// reporting "LAUNCHED" for cases that should have refused, and hooks
+    /// believed dead that were simply never reached.
+    ///
+    /// This sits in `init()` rather than in a `.task` on the scene's root view,
+    /// which is what was requested. A `.task` only runs once a view appears, so
+    /// it cannot cover the case the request is actually about, a launch that
+    /// never renders a view. `init()` runs unconditionally at process start,
+    /// which is as close to a module initialiser as Swift offers, and it is
+    /// where the guarantee has to live to be worth anything.
+    ///
+    /// Release builds are untouched, and this file is macOS-only.
+    init() {
+        #if DEBUG
+        _ = SwiftDataStore.shared
+        #endif
+    }
+
     var body: some Scene {
         // Identified so `openWindow(id:)` can reopen a window after the last one
         // is closed. #295 takes ⌘N for record creation, which replaces the
