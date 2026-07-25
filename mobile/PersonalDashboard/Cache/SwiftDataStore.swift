@@ -295,10 +295,36 @@ final class SwiftDataStore {
         // transport kind (#238). Guarded internally.
         migrateActivitiesToTransport()
         #if DEBUG
-        // Export / import launch hooks (#319 verification). Deferred a run-loop
-        // turn so both launch migrations above have completed and the container
-        // is fully settled before an export snapshots it or an import mutates it.
-        // No-op unless DEXTER_EXPORT_TO / DEXTER_IMPORT_FROM are set.
+        // Export / import launch hooks (#319 verification). No-op unless
+        // DEXTER_EXPORT_TO / DEXTER_IMPORT_FROM are set.
+        //
+        // ⚠️ THESE FIRE ON FIRST STORE ACCESS, NOT AT LAUNCH. `shared` is a lazy
+        // `static let`, so nothing here runs until something first touches the
+        // store — which in practice means a window being constructed. A normal
+        // launch always makes a window, so this only bites env-var-driven
+        // launches, which must execute the inner Mach-O directly (LaunchServices
+        // does not inherit the shell environment, so `open` arrives with every
+        // DEXTER_* unset and each hook correctly no-ops).
+        //
+        // So an env-driven harness MUST force a window before expecting any hook
+        // output, e.g.:
+        //   osascript -e 'tell application "System Events" to tell process \
+        //     "DexterMac" to click menu item "New Window" of menu 1 of menu bar \
+        //     item "File"'
+        // Without it you observe no archive and no refusal, and the natural
+        // reading is that the hooks are broken. That misreading cost real time
+        // twice, once here and once on #318's guards, whose comments made the
+        // same mistake of describing intent ("refuses to launch") rather than
+        // behaviour ("refuses to bootstrap the store").
+        //
+        // Deferred a run-loop turn for two reasons. First, both launch
+        // migrations above complete before an export snapshots the store or an
+        // import mutates it. Second, and load-bearing: it means the hooks do NOT
+        // run during `init`, so the store is never mutated mid-construction.
+        // `init` has returned and `shared` is fully assigned by the time this
+        // block executes. Nothing in the hook path re-enters `shared` either —
+        // `runImport` reads the static `isUsingOverrideStore`, not the singleton
+        // — so there is no recursive lazy-init deadlock.
         let hookContext = container.mainContext
         DispatchQueue.main.async {
             DebugLaunchHooks.runDataHooks(context: hookContext)
