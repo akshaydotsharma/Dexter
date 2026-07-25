@@ -59,6 +59,12 @@ struct PersonalVocabularyView: View {
         }
         .activeSection(.vocabulary)
         .macSectionChrome("Vocabulary")
+        // File > New Word / Cmd-N while Vocabulary is on screen (issue #295).
+        #if os(macOS)
+        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Word") {
+            editing = .new
+        })
+        #endif
         .sheet(item: $editing) { target in
             KeywordEditorSheet(target: target)
                 .presentationDetents([.medium, .large])

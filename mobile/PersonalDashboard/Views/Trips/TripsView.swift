@@ -81,6 +81,14 @@ struct TripsView: View {
                     #endif
                     rootContent
                         .macSectionChrome("Trips")
+                        // File > New Trip / Cmd-N on the trip list. Scoped to
+                        // the root branch: inside a trip, Cmd-N would mean a new
+                        // itinerary item, which is a different action (#295).
+                        #if os(macOS)
+                        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Trip") {
+                            editingTrip = .new
+                        })
+                        #endif
                 }
             }
 

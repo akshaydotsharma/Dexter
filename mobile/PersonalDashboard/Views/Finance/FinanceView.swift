@@ -102,6 +102,14 @@ struct FinanceView: View {
         }
         .activeSection(.finance)
         .macSectionChrome("Finance")
+        // File > New Expense / Cmd-N while Finance is on screen (issue #295).
+        // Same target as the manual-entry path, so the menu and the button
+        // cannot diverge.
+        #if os(macOS)
+        .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Expense") {
+            editingTarget = .new
+        })
+        #endif
         .task {
             // Warm the chosen display currency's FX factor so month/day/
             // category totals render in it on first paint (#220). SGD is a
