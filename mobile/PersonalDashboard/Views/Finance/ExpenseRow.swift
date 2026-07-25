@@ -27,7 +27,7 @@ struct ExpenseRow: View {
             Image(systemName: expense.categoryEnum.sfSymbol)
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(Tokens.accentFinance)
-                .frame(width: 36, height: 36)
+                .frame(width: RowMetrics.iconChip, height: RowMetrics.iconChip)
                 .background(Tokens.paper2, in: Circle())
 
             VStack(alignment: .leading, spacing: 4) {
@@ -78,10 +78,24 @@ struct ExpenseRow: View {
                 }
             }
         }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm + 2)
+        .padding(.horizontal, RowMetrics.horizontalPadding)
+        .padding(.vertical, RowMetrics.verticalPadding)
+        // The row owns its own top hairline on macOS rather than the container
+        // interleaving separators between children. Two reasons: the container
+        // stays a plain `ForEach` so the iOS view tree is untouched, and every
+        // surface rendering an ExpenseRow gets separators without repeating the
+        // logic. Under a day header a leading rule is correct anyway, which is
+        // what Mail and Activity already do.
+        #if os(macOS)
+        .overlay(alignment: .top) { RowHairline() }
+        #endif
+        // macOS converges on Activity's flat row: no card, no border, hairline
+        // separators supplied by the container, and the pane background showing
+        // through. iOS keeps its gapped card, byte-for-byte (issue #303).
+        #if os(iOS)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.card)
+        #endif
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityLabel(accessibilityLabel)

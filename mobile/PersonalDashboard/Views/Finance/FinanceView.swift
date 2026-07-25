@@ -652,7 +652,10 @@ struct FinanceView: View {
                             .monospacedDigit()
                             .foregroundStyle(Tokens.muted)
                     }
-                    VStack(spacing: Space.xs) {
+                    // macOS closes the gap between rows: the hairline inside
+                    // `ExpenseRow` separates them instead. iOS keeps `Space.xs`
+                    // so its cards still float apart (issue #303).
+                    VStack(spacing: RowMetrics.interRowSpacing) {
                         ForEach(group.rows) { row in
                             ExpenseRow(expense: row) {
                                 editingTarget = .existing(row.clientUUID)

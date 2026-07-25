@@ -524,7 +524,9 @@ struct TripExpensesView: View {
     private var expenseList: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text(filterParties == [.me] ? "Expenses" : "Expenses · \(selectionShortLabel)").eyebrow()
-            VStack(spacing: Space.xs) {
+            // Same flat-row construction as the Finance list, since both render
+            // `ExpenseRow` (issue #303).
+            VStack(spacing: RowMetrics.interRowSpacing) {
                 ForEach(visibleExpenses) { expense in
                     ExpenseRow(expense: expense, showsOriginalFirst: true) {
                         onEditExpense(expense.clientUUID)
