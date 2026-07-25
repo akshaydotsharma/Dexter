@@ -573,7 +573,7 @@ private struct ListDetailContent: View {
             // listRowInsets: MacAddRow owns its own insets so its hairline
             // aligns exactly like the GhostAddRow it replaces. 44pt matches the
             // Lists row rhythm.
-            MacAddRow(label: "New Item", minHeight: 44, onCreate: { text in
+            MacAddRow(label: "New Item", minHeight: 28, onCreate: { text in
                 Task { await viewModel.addItem(to: list, text: text) }
             })
             .id("macAddItem")
