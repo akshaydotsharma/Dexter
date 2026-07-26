@@ -94,11 +94,16 @@ struct TagChipPicker: View {
     }
 
     var body: some View {
-        WrapLayout(spacing: Space.sm, lineSpacing: Space.sm) {
-            ForEach(displayTags, id: \.self) { tag in
-                chip(tag)
+        VStack(alignment: .leading, spacing: Space.md) {
+            WrapLayout(spacing: Space.sm, lineSpacing: Space.sm) {
+                ForEach(displayTags, id: \.self) { tag in
+                    chip(tag)
+                }
+                addNewChip
             }
-            addNewChip
+            // Recolour the selected tag (#338). Hidden until a tag is selected,
+            // because the control has nothing to act on before that.
+            TagColorPicker(tag: selection)
         }
     }
 
@@ -106,23 +111,28 @@ struct TagChipPicker: View {
         selection.caseInsensitiveCompare(tag) == .orderedSame && !selection.isEmpty
     }
 
+    /// Chips carry the tag's own colour (#338) rather than one shared accent,
+    /// so the picker matches the pills on the task rows behind it. Selection is
+    /// still legible without relying on hue alone: the selected chip takes a
+    /// stronger fill and a full-weight border in the same colour.
     private func chip(_ tag: String) -> some View {
         let selected = isSelected(tag)
+        let tint = TagAppearance.color(for: tag)
         return Button {
             selection = selected ? "" : tag
         } label: {
             Text(tag)
                 .font(.edFootnote)
-                .foregroundStyle(selected ? Tokens.accentTasks : Tokens.ink)
+                .foregroundStyle(tint)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(selected ? Tokens.accentTasks.opacity(0.12) : Tokens.surface)
+                        .fill(tint.opacity(selected ? 0.22 : 0.10))
                 )
                 .overlay(
                     Capsule(style: .continuous)
-                        .stroke(selected ? Tokens.accentTasks : Tokens.border,
+                        .stroke(tint.opacity(selected ? 1 : 0.3),
                                 lineWidth: selected ? 1 : 0.5)
                 )
         }

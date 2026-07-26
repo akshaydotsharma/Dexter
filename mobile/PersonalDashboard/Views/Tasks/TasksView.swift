@@ -461,7 +461,7 @@ struct TasksView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: TaskRowMetrics.listVInset, leading: Space.lg, bottom: TaskRowMetrics.listVInset, trailing: Space.rowTrailingGutter))
+                .contentRowInsets(vertical: TaskRowMetrics.listVInset)
             }
 
             // Tap-below affordance for this section (skipped for Overdue).
@@ -540,7 +540,7 @@ struct TasksView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: TaskRowMetrics.listVInset, leading: Space.lg, bottom: TaskRowMetrics.listVInset, trailing: Space.rowTrailingGutter))
+                    .contentRowInsets(vertical: TaskRowMetrics.listVInset)
                 }
             }
         } header: {
@@ -549,7 +549,7 @@ struct TasksView: View {
                 Rectangle()
                     .fill(Tokens.border)
                     .frame(height: 1)
-                    .padding(.horizontal, Space.lg)
+                    .padding(.horizontal, RowMetrics.hairlineInset)
                     .padding(.top, Space.md)
 
                 Button {
@@ -876,13 +876,9 @@ private struct TaskRow: View {
                             .foregroundStyle(dueColor(for: due))
                         }
                         if let tag = todo.tag, !tag.isEmpty {
-                            Text(tag)
-                                .font(.edCaption)
-                                .foregroundStyle(Tokens.inkSoft)
-                                .padding(.horizontal, Space.sm)
-                                .padding(.vertical, 2)
-                                .background(Tokens.paper2, in: Capsule())
-                                .overlay(Capsule().stroke(Tokens.border, lineWidth: 0.5))
+                            // Colour keyed to the tag itself (#338), shared with
+                            // the chips in the detail popover.
+                            TagPill(tag: tag)
                         }
                         if let url = todo.mapsURL {
                             Button {
@@ -921,9 +917,9 @@ private struct TaskRow: View {
                 #endif
             } label: {
                 Image(systemName: "info.circle")
-                    .font(.system(size: 18, weight: .regular))
+                    .font(.system(size: RowMetrics.rowInfoGlyph, weight: .regular))
                     .foregroundStyle(Tokens.mutedSoft)
-                    .frame(width: 32, height: 32, alignment: .trailing)
+                    .frame(width: RowMetrics.rowInfoTarget, height: RowMetrics.rowInfoTarget, alignment: .trailing)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -938,7 +934,11 @@ private struct TaskRow: View {
             .accessibilityLabel("Edit task details")
         }
         .padding(.vertical, Space.sm)
-        .padding(.horizontal, Space.md)
+        // The row now spans the pane on macOS (#339), so this padding IS the
+        // content margin and has to match the one section headers and every
+        // other flat row use. Unchanged on iOS, where `RowMetrics` resolves to
+        // the `Space.md` this line already had.
+        .padding(.horizontal, RowMetrics.horizontalPadding)
         .background(Color.clear)
         // macOS: soft inset rounded hover highlight (Reminders-style), which
         // replaces the hard system selection bar killed by
@@ -946,10 +946,14 @@ private struct TaskRow: View {
         .macRowHover()
         // Thin colored left-edge bar keyed to the task's priority. Spans the row
         // height at the leading edge; reads as a subtle accent, not a block.
+        // Held off the very edge on macOS: the row runs to the pane boundary
+        // now (#339), and a rail flush against the sidebar seam reads as a
+        // divider between the two panes rather than as part of the row.
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
                 .fill(Tokens.priorityColor(for: todo.taskPriority))
                 .frame(width: Space.xs)
+                .padding(.leading, RowMetrics.accentRailInset)
         }
         .contentShape(Rectangle())
         // iOS: the WHOLE row is tap-to-edit; the completion circle beats it with

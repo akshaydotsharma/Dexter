@@ -155,6 +155,11 @@ targets:
       # WaveformBars) is AVFoundation/Speech-coupled and gated off with
       # `#if os(iOS)` inside ChatView, so those files stay out of this target.
       - path: PersonalDashboard/App/AppConfig.swift
+      # User-supplied API key, Keychain-backed (#337). The scheme's env var is
+      # written by `xcodegen generate` from the shell, so a regenerate without
+      # the export unconfigures Chat; this is the source that survives it.
+      - path: PersonalDashboard/Services/KeychainStore.swift
+      - path: PersonalDashboard/Services/UserAPIKeys.swift
       - path: PersonalDashboard/Views/Chat/ChatView.swift
       - path: PersonalDashboard/Views/Chat/ChatInputBar.swift
       - path: PersonalDashboard/Views/Chat/ChatComponents.swift

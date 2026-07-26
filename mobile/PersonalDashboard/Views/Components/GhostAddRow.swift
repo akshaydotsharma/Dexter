@@ -34,7 +34,7 @@ struct GhostAddRow: View {
                 Rectangle()
                     .fill(Tokens.border)
                     .frame(height: 1)
-                    .padding(.horizontal, Space.lg)
+                    .padding(.horizontal, RowMetrics.hairlineInset)
 
                 HStack(spacing: Space.md) {
                     // Outline plus in the same 24×24 frame as the real checkbox,
@@ -53,10 +53,10 @@ struct GhostAddRow: View {
 
                     Spacer(minLength: 0)
                 }
-                // Leading = Space.lg (divider/base column) + Space.md (checkbox
-                // column) so the circle lands at the real checkbox x (28pt).
-                .padding(.leading, Space.lg + Space.md)
-                .padding(.trailing, Space.lg)
+                // Circle lands on the real checkbox column — same token as
+                // MacAddRow, which resolves to the old 28pt on iOS (#339).
+                .padding(.leading, RowMetrics.addRowLeading)
+                .padding(.trailing, RowMetrics.horizontalPadding)
                 .frame(maxHeight: .infinity)
             }
             .frame(minHeight: minHeight)

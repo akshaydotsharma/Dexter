@@ -72,9 +72,26 @@ enum AppConfig {
     /// the scheme carries the literal `${ANTHROPIC_API_KEY}` and `resolved`
     /// rejects it here rather than letting it reach the `x-api-key` header.
     ///
-    /// Returns nil if neither source yields a usable value, in which case AI
+    /// Returns nil if no source yields a usable value, in which case AI
     /// features surface a clear "Anthropic API key not configured" error.
-    static let anthropicAPIKey: String? = {
+    ///
+    /// A key the user entered in Settings (`UserAPIKeys`, Keychain-backed) is
+    /// checked BEFORE both build-time sources (#337). Both of those describe the
+    /// build rather than the install: on macOS the scheme's env var is written
+    /// by `xcodegen generate` from the shell, so regenerating the project
+    /// without the variable exported silently unconfigures Chat. The Keychain
+    /// value survives that, and clearing it falls back to the build's own key.
+    ///
+    /// Computed, not a `static let`: a key saved in Settings has to take effect
+    /// on the next request, not the next launch.
+    static var anthropicAPIKey: String? {
+        if let userSupplied = UserAPIKeys.anthropic { return userSupplied }
+        return buildTimeAnthropicKey
+    }
+
+    /// The env var / Info.plist key, resolved once. Separate from
+    /// `anthropicAPIKey` so Settings can report which source is in effect.
+    static let buildTimeAnthropicKey: String? = {
         if let env = resolved(ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]) {
             return env
         }

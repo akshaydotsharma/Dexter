@@ -63,6 +63,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.xl) {
                     appearanceSection
+                    aiSection
                     financeSection
                     automationSection
                     dataSection
@@ -88,6 +89,16 @@ struct SettingsView: View {
                 ThemePicker(value: $schemePref)
             }
             .padding(Space.lg)
+        }
+    }
+
+    /// Anthropic key entry (#337). The build-time key is a property of the
+    /// build, so a regenerated Xcode project or a fresh install can arrive
+    /// without one and every AI surface refuses. This is the source the user
+    /// controls, and it takes precedence over the build's own value.
+    private var aiSection: some View {
+        SettingsSection(title: "AI") {
+            AnthropicKeyRow()
         }
     }
 
@@ -298,6 +309,87 @@ private struct SettingsSection<Content: View>: View {
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
                 .paperBorder()
         }
+    }
+}
+
+/// Anthropic API key entry (#337): a status line, a secure field, and Save /
+/// Remove. Nothing here ever shows the stored key in full — the status line
+/// carries a masked preview so the user can tell which key is in effect.
+private struct AnthropicKeyRow: View {
+    @State private var draft: String = ""
+    @State private var source: UserAPIKeys.Source = UserAPIKeys.anthropicSource
+    @State private var maskedKey: String? = UserAPIKeys.anthropic.map(UserAPIKeys.masked)
+    @State private var writeFailed: Bool = false
+    @FocusState private var fieldFocused: Bool
+
+    private var canSave: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Anthropic API key")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                    Text(statusLine)
+                        .font(.edCaption)
+                        .foregroundStyle(source == .none ? Tokens.danger : Tokens.muted)
+                }
+                Spacer(minLength: Space.md)
+                if source == .keychain {
+                    Button("Remove") { save(nil) }
+                        .buttonStyle(.plain)
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.danger)
+                }
+            }
+
+            HStack(spacing: Space.sm) {
+                SecureField("sk-ant-…", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .noAutocapitalization()
+                    .autocorrectionDisabled(true)
+                    .focused($fieldFocused)
+                    .onSubmit { if canSave { save(draft) } }
+                    .padding(.horizontal, Space.md)
+                    .padding(.vertical, Space.sm)
+                    .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                    .paperBorder(Tokens.border, radius: Radius.md)
+
+                Button("Save") { save(draft) }
+                    .buttonStyle(.plain)
+                    .font(.edBodyMedium)
+                    .foregroundStyle(canSave ? Tokens.accentTasks : Tokens.muted)
+                    .disabled(!canSave)
+            }
+
+            Text(writeFailed
+                 ? "Couldn't save the key to the Keychain."
+                 : "Stored in the device Keychain and used for Chat, receipts, and statement import. It is never sent anywhere except Anthropic.")
+                .font(.edCaption)
+                .foregroundStyle(writeFailed ? Tokens.danger : Tokens.muted)
+        }
+        .padding(Space.lg)
+    }
+
+    private var statusLine: String {
+        if let maskedKey, source == .keychain {
+            return "\(source.label) · \(maskedKey)"
+        }
+        return source.label
+    }
+
+    private func save(_ value: String?) {
+        let ok = UserAPIKeys.setAnthropic(value)
+        writeFailed = !ok
+        draft = ""
+        fieldFocused = false
+        source = UserAPIKeys.anthropicSource
+        maskedKey = UserAPIKeys.anthropic.map(UserAPIKeys.masked)
     }
 }
 
