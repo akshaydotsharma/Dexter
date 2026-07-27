@@ -481,6 +481,21 @@ final class SyncEngine {
         try modelContext.save()
         if applied > 0 || deletedLocally > 0 {
             SyncLog.line("SyncEngine: APPLIED \(applied) record(s), deleted \(deletedLocally) locally")
+            // Tell the manual-fetch surfaces to re-read.
+            //
+            // Tasks, Notes and Lists cache their rows in a view model loaded by
+            // `.task`, rather than using the auto-updating `@Query` that keeps
+            // Activity, Finance and Itineraries live. So a write from outside the
+            // UI is invisible to them until the view is recreated: the row stays
+            // on screen after a peer deleted it, and only navigating away and back
+            // clears it.
+            //
+            // `localStoreDidChange` exists for exactly this, and those three views
+            // already observe it — `ExecuteDraftAction` posts it after AI capture
+            // and chat writes for the same reason. Sync is the same shape and
+            // simply failed to post it. Posted once per pass rather than per
+            // segment, so a multi-segment catch-up triggers one reload.
+            NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
         }
         return totalDecoded
     }
