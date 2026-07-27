@@ -66,13 +66,20 @@ extension View {
                 ToolbarItem(placement: .primaryAction) { trailing() }
                 ToolbarItem(placement: .primaryAction) { MacProfilePip() }
             }
-            // Consistent transparent title-bar across every section (issue
-            // #285). Some sections lit the toolbar's scrolled-material band (a
-            // grey stripe under the traffic lights) while others stayed clear,
-            // depending on whether their content scrolled under the title bar.
-            // Hiding the window-toolbar background everywhere makes the paper
-            // canvas read straight up to the window edge in all sections.
-            .toolbarBackground(.hidden, for: .windowToolbar)
+            // NO `.toolbarBackground(.hidden, for: .windowToolbar)` here.
+            //
+            // #285 hid it to stop a grey stripe appearing under the traffic
+            // lights in some sections and not others. That also switched off
+            // the scroll-edge effect, so scrolling content ran straight over
+            // the title with nothing behind it — visible in Chat as messages
+            // colliding with the word "Chat" (issue #345).
+            //
+            // The default (`.automatic`) is the behaviour we actually want on
+            // Tahoe: clear while the content sits below the title bar, Liquid
+            // Glass once content scrolls under it. The #285 "inconsistency" was
+            // that effect working correctly — static sections have nothing to
+            // scroll under the bar, so they stay clear. Reminders and Notes
+            // both read this way.
         #else
         self
         #endif
@@ -116,7 +123,9 @@ extension View {
                     MacProfilePip()
                 }
             }
-            .toolbarBackground(.hidden, for: .windowToolbar)
+            // Left on `.automatic` for the same reason as `macSectionChrome`
+            // (issue #345): an open note or list scrolls under this title bar
+            // too, and the scroll-edge glass is what keeps the title legible.
         #else
         self
         #endif

@@ -131,7 +131,21 @@ struct ChatView: View {
                 conversation
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        // The composer docks here, and the conversation keeps scrolling BEHIND
+        // it — that is what a safe-area inset is for. So the inset has to be
+        // opaque to the eye or message bubbles read straight through the gaps
+        // around and below the bar (issue #345).
+        //
+        // `spacing: 0` because the default inset spacing leaves an unpainted
+        // strip between the scroll content and this band, which is exactly the
+        // seam the bubbles were showing through.
+        //
+        // `.ultraThinMaterial` rather than a flat `Tokens.paper` fill: the band
+        // should blur what passes under it, matching the scroll-edge glass the
+        // window toolbar draws at the top of the same view. The material tracks
+        // the effective colour scheme, which the app root pins via
+        // `preferredColorScheme`, so it stays dark under the dark paper theme.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             ChatInputBar(
                 text: $viewModel.draftInput,
                 isSending: viewModel.isSending,
@@ -143,6 +157,8 @@ struct ChatView: View {
             .padding(.horizontal, Space.lg)
             .padding(.top, Space.sm)
             .padding(.bottom, Space.lg)
+            .frame(maxWidth: .infinity)
+            .background(.ultraThinMaterial)
         }
         .background(Tokens.paper)
         .macSectionChrome("Chat")
