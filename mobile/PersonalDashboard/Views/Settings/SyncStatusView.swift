@@ -143,6 +143,11 @@ struct SyncStatusView: View {
             }
             Toggle("Sync automatically", isOn: $enabled)
                 .disabled(!snapshot.health.isUsable)
+            if snapshot.hasLegacyFolder {
+                Text("An old \"DexterSync\" folder is still in there from before the layout changed. Sync no longer uses it and you can delete it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -53,6 +53,11 @@ struct SyncStatusSnapshot {
     var tombstoneCount: Int = 0
     var shadowCount: Int = 0
 
+    /// A pre-#353 `DexterSync/` tree is still present in the folder. Dead weight,
+    /// never read, but worth telling the user they can delete it: while it exists
+    /// it looks like sync data and invites the conclusion that sync is confused.
+    var hasLegacyFolder: Bool = false
+
     var pendingTotal: Int { pendingUpserts + pendingDeletes }
 }
 
@@ -512,6 +517,8 @@ final class SyncEngine {
         let folder = try? SyncFolder.resolve()
         let didAccess = folder?.beginAccess() ?? false
         defer { if didAccess { folder?.endAccess() } }
+
+        snapshot.hasLegacyFolder = (didAccess ? folder?.hasLegacyLayout() : false) ?? false
 
         snapshot.peers = cursors.map { cursor in
             let available = folder.flatMap { try? $0.segmentSequences(for: cursor.peerDeviceUUID) } ?? []

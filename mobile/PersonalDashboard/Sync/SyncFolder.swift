@@ -12,18 +12,33 @@ import Foundation
 //
 //   <picked folder>/
 //     Dexter-Backup.zip              <- BackupService, untouched by sync
-//     DexterSync/
-//       devices/
-//         <deviceUUID>/
-//           meta.json                <- mutable HINT, may fork, never trusted
-//           seg-000001.json          <- sealed, immutable
-//           seg-000002.json
+//     DexterSync-<deviceUUID>/       <- created ONLY by the device it names
+//       meta.json                    <- mutable HINT, may fork, never trusted
+//       seg-000001.json              <- sealed, immutable
+//       seg-000002.json
 //
-// The one rule that matters: A DEVICE WRITES ONLY INSIDE ITS OWN DIRECTORY, and
-// never reopens a sealed segment. iCloud Drive resolves two writers on one file
-// by silently minting a conflict copy, which would fork the log. Per-device
-// directories plus immutable segments mean iCloud only ever has new files to
-// upload and never a merge to attempt.
+// THE RULE: A DEVICE NEVER CREATES A PATH THAT ANOTHER DEVICE ALSO CREATES.
+// Not just files. Directories too.
+//
+// ⚠️ The layout is flat because the obvious nested one is broken (#353). The first
+// version used `DexterSync/devices/<deviceUUID>/`, on the reasoning that
+// per-device leaf directories meant iCloud only ever had new files to upload and
+// never a merge to attempt. That was right about files and wrong about
+// directories: `createDirectory(withIntermediateDirectories: true)` had BOTH
+// devices independently create the shared ancestors `DexterSync/` and
+// `DexterSync/devices/`, and iCloud forks two independently created directories at
+// one path exactly as it forks two files. In the field it produced:
+//
+//     DexterSync/devices/     <- the phone's branch
+//     DexterSync/devices 2/   <- the Mac's branch, holding the Mac's segments
+//
+// after which each device read only its own branch and neither ever saw a peer,
+// while both reported a healthy folder and a full op count. Worse, the Mac's log
+// split across the two branches, so even finding one branch gave a partial log.
+//
+// Putting the device id in the TOP-LEVEL directory name makes the only shared
+// ancestor the user-picked folder itself, which the user created and which sync
+// never creates. No shared path is left for iCloud to fork.
 
 // MARK: - Settings
 
@@ -129,8 +144,11 @@ struct SyncFolder {
     let usingBackupFolder: Bool
     let displayName: String
 
-    static let subdirectoryName = "DexterSync"
-    static let devicesDirectoryName = "devices"
+    /// Prefix for a device's own directory: `DexterSync-<deviceUUID>`.
+    static let deviceDirectoryPrefix = "DexterSync-"
+    /// The old nested root (#353). Never written again, only recognised so the UI
+    /// can tell the user it is dead weight and safe to delete.
+    static let legacySubdirectoryName = "DexterSync"
     static let metaFileName = "meta.json"
     private static let segmentPrefix = "seg-"
     private static let segmentSuffix = ".json"
@@ -230,11 +248,28 @@ struct SyncFolder {
 
     // MARK: Paths
 
-    var syncRoot: URL { root.appendingPathComponent(Self.subdirectoryName, isDirectory: true) }
-    var devicesRoot: URL { syncRoot.appendingPathComponent(Self.devicesDirectoryName, isDirectory: true) }
+    /// The pre-#353 nested root. Sync never reads or writes it; this exists only
+    /// so the status UI can point at what the user may delete.
+    var legacyRoot: URL { root.appendingPathComponent(Self.legacySubdirectoryName, isDirectory: true) }
+
+    static func directoryName(for deviceUUID: UUID) -> String {
+        deviceDirectoryPrefix + deviceUUID.uuidString
+    }
+
+    /// Parse a device id out of a directory name, rejecting anything that is not
+    /// exactly `DexterSync-<uuid>`.
+    ///
+    /// The strict UUID parse is what makes an iCloud conflict copy
+    /// ("DexterSync-<uuid> 2") get ignored rather than adopted as a third phantom
+    /// device. Each device now only ever creates its own directory, so a conflict
+    /// copy should not arise, but a folder that predates #353 can still hold one.
+    static func deviceUUID(fromDirectoryName name: String) -> UUID? {
+        guard name.hasPrefix(deviceDirectoryPrefix) else { return nil }
+        return UUID(uuidString: String(name.dropFirst(deviceDirectoryPrefix.count)))
+    }
 
     func deviceDirectory(_ deviceUUID: UUID) -> URL {
-        devicesRoot.appendingPathComponent(deviceUUID.uuidString, isDirectory: true)
+        root.appendingPathComponent(Self.directoryName(for: deviceUUID), isDirectory: true)
     }
 
     func metaURL(_ deviceUUID: UUID) -> URL {
@@ -332,18 +367,28 @@ struct SyncFolder {
 
     // MARK: Reading
 
-    /// Device directories present in the folder, excluding this device.
+    /// Device directories present in the picked folder, excluding this device.
+    ///
+    /// Enumerates the user-picked folder directly. There is deliberately no
+    /// intermediate directory to walk: an intermediate directory would have to be
+    /// created by every device, and that is exactly what iCloud forked in #353.
     func peerDeviceUUIDs(excluding selfUUID: UUID) throws -> [UUID] {
-        guard FileManager.default.fileExists(atPath: devicesRoot.path) else { return [] }
         let entries = try FileManager.default.contentsOfDirectory(
-            at: devicesRoot,
+            at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )
         return entries.compactMap { url in
-            guard let uuid = UUID(uuidString: url.lastPathComponent), uuid != selfUUID else { return nil }
+            guard let uuid = Self.deviceUUID(fromDirectoryName: url.lastPathComponent),
+                  uuid != selfUUID else { return nil }
             return uuid
         }.sorted { $0.uuidString < $1.uuidString }
+    }
+
+    /// Whether a pre-#353 `DexterSync/` tree is still sitting in the folder.
+    /// Surfaced so the user can delete it; sync never reads or writes it.
+    func hasLegacyLayout() -> Bool {
+        FileManager.default.fileExists(atPath: legacyRoot.path)
     }
 
     /// Sealed segment sequences present for a device, ascending.
