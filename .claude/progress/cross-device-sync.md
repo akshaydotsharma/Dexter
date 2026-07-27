@@ -1,6 +1,6 @@
 # Cross-device sync (iOS <-> macOS)
 
-**Status**: in-progress (phases 0+1 implemented, PR #350 open, awaiting review + dry-run soak)
+**Status**: in-progress (phase 1 shipped and working on both real devices; prerequisites done; phase 2 specified in #359, not started)
 **Started**: 2026-07-27
 **Last Updated**: 2026-07-27
 **Estimated Remaining**: phases 0+1 are the next unit of work; phases 2-4 follow
@@ -22,17 +22,28 @@ Give Dexter Notes/Reminders-style sync between the iPhone and the Mac: edit on e
 - [x] Verified with a two-store rig on the Mac; results on #348 and in PR #350 (2026-07-27)
 - [x] PR #350 opened (2026-07-27)
 
+## Completed since (all merged to main)
+
+- [x] #350 phases 0+1 merged; shipped to Mac and iPhone (build 916)
+- [x] #352 macOS Sync was a clipped empty modal; now an anchored popover on `Form` (#351)
+- [x] #355 iCloud forked the shared `devices/` directory, so neither device ever saw the other (#353). Layout is now flat: `DexterSync-<deviceUUID>/` at the top level, so no device creates a path another device creates. Plus republish-if-log-missing, without which the layout change deadlocks sync silently
+- [x] #357 peer cursors were never pruned, so retired devices lingered forever (#356). Plus `DEXTER_SYNC_FOLDER` so test tooling stops writing to the app's real UserDefaults
+- [x] #358 per-device backup filenames (#354), so two devices stop overwriting one `Dexter-Backup.zip`
+- [x] #349 wipe-and-restore round trip VERIFIED and closed. Recovery procedure is delete-the-store-then-import, `-wal` included
+
+**Phase 1 is working end-to-end on the real Mac and iPhone.** Each publishes its log, discovers the other, decodes its ops, and applies nothing.
+
 ## Current Step
 
-- [ ] PR #350 review, then a multi-day dry-run soak on real data
-  - Branch: `feat/cross-device-sync-phase-0-1`. Both targets build clean.
-  - The soak is the actual deliverable of phase 1: watch Settings -> Sync on both devices for a few days and confirm pending counts match what was actually changed. That is the evidence phase 2 is allowed to start.
-  - Still unverified: real two-device sync, and edit/delete driven through the UI rather than sqlite3. Neither can damage data while nothing is applied.
+- [ ] Phase 2: apply a peer's changes with record-level LWW (#359) — fully specified, NOT started
+  - This is the first code in the feature that can damage data. Everything so far was append-only into a folder.
+  - Biggest piece: an upsert mode for `DataImportService`, extending it rather than writing a second applier, since it already holds all 13 DTO-to-model mappings and a parallel copy would drift.
+  - The trap to respect: after applying a remote op, update the shadow hash in the SAME transaction, or the next local diff re-emits it and the two devices trade the record forever.
 
 ## Next Steps
 
-- [ ] Phase 2: inbound apply, tombstones, record-level LWW, behind a Settings toggle
 - [ ] Phase 3: attachments as content-addressed blobs, log compaction, new-device bootstrap
+  - Compaction interacts with the #353 republish check, which currently reads "no segments" as "never published". It will need a floor marker.
 - [ ] Phase 4 (conditional): field-level LWW, only if phase 2 clobbering proves annoying
 
 ## Blockers
@@ -75,7 +86,14 @@ See commit 9ee5180 on `feat/cross-device-sync-phase-0-1`. Shape of it:
 - `DataImportService` is **additive-only** (`where !existing.contains(dto.clientUUID)`). Correct for restore, wrong for sync. It needs an upsert path in phase 2 or 3. This is the one existing component the work genuinely changes.
 - `DataExportService` produces a self-verifying zip (manifest schema v1, per-model counts, `receipts/` and `tickets/` attachments). Reuse it as the phase 3 snapshot format for new-device bootstrap instead of inventing one.
 
-**Traps found the hard way this session (all cost a debugging round each):**
+**Field bugs that a single-device rig and code review both missed:**
+
+- **iCloud forks DIRECTORIES, not just files** (#353). Per-device leaf directories were not enough, because both devices independently created the shared ancestors via `createIntermediateDirectories`. Presented as "healthy folder, full op count, no peer" on both devices at once.
+- **Deleting a published log deadlocks sync silently.** The shadow table records what has been published, so if the log vanishes the shadow is a lie: nothing is pending, nothing is emitted, and the peer can never bootstrap. No symptom at all. Fixed by treating the folder as authoritative for what has been published.
+- **Attachments are NOT store-scoped.** Receipts live in `~/Documents/receipts/` keyed only by UUID, shared by every store. `DEXTER_STORE_PATH` isolates the database and nothing else, so "disposable store" testing still writes real attachment files.
+- **Test tooling must never use the app's UserDefaults domain.** Configuring sync via `defaults write` on the bundle id had a live app adopt the scratch folder and record scratch devices as permanent peers in a real store. Use `DEXTER_SYNC_FOLDER`.
+
+**Traps found the hard way (all cost a debugging round each):**
 
 - **Never name a stored property `entity` on a @Model.** Collides with `NSManagedObject.entity`; compiles and builds, then aborts at runtime with a message naming neither the property nor the model. Renaming to `entityName` fixed the save but the READ still aborted with "Could not cast Swift.Optional<Any> to Swift.String" despite valid data in every row. Both models now store only `key` ("Entity|recordID") and compute the parts.
 - **The #336 modal starves the whole main actor.** `NSAlert.runModal()` is a nested run loop; under automation it never returns, so async main-actor work stops at its first suspension point. Presented as a phantom SwiftData save failure.
