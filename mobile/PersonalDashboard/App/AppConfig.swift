@@ -63,14 +63,16 @@ enum AppConfig {
 
     /// Anthropic Messages API key. Source order:
     ///   1. `ANTHROPIC_API_KEY` env var (Xcode scheme for local sim runs).
-    ///   2. `ANTHROPIC_API_KEY` Info.plist key, baked at archive time by
-    ///      `mobile/ota/ship-lan.sh` so OTA-installed builds carry their own
-    ///      key without any per-device setup.
-    /// On macOS the env var is the live path: the `DexterMac` scheme injects it
-    /// via xcodegen's `${ANTHROPIC_API_KEY}` expansion, so the key is only real
-    /// if the variable was exported before `xcodegen generate`. When it wasn't,
-    /// the scheme carries the literal `${ANTHROPIC_API_KEY}` and `resolved`
-    /// rejects it here rather than letting it reach the `x-api-key` header.
+    ///   2. `ANTHROPIC_API_KEY` Info.plist key. On iOS this is baked at archive
+    ///      time by `mobile/ota/ship-lan.sh`; on macOS by the `DexterMac`
+    ///      post-build script (#343). Both read the same `server/.env`, so an
+    ///      install carries its own key with no per-device setup.
+    /// The Info.plist is the live path on macOS. The `DexterMac` scheme also
+    /// injects an env var via xcodegen's `${ANTHROPIC_API_KEY}` expansion, but
+    /// that is only real if the variable was exported before `xcodegen
+    /// generate`; when it wasn't, the scheme carries the literal
+    /// `${ANTHROPIC_API_KEY}` and `resolved` rejects it here rather than
+    /// letting it reach the `x-api-key` header, falling through to the plist.
     ///
     /// Returns nil if no source yields a usable value, in which case AI
     /// features surface a clear "Anthropic API key not configured" error.
