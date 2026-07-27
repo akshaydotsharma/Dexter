@@ -209,7 +209,48 @@ final class SyncEngine {
 
     // MARK: - Outbound
 
+    /// Re-publish everything if this device's log is missing from the folder.
+    ///
+    /// The shadow table records what this device has ALREADY PUBLISHED, so if the
+    /// published log disappears the shadow becomes a lie: the next diff finds
+    /// nothing changed, this device emits nothing, and the peer is left with no
+    /// bootstrap it can ever obtain. Nothing recovers on its own, and there is no
+    /// user-visible symptom beyond a peer that stays empty forever.
+    ///
+    /// That is not hypothetical. It is exactly the state the #353 layout change
+    /// creates: the old log is still on disk but at a path sync no longer reads,
+    /// while both devices still report 0 pending. Switching to a fresh folder, or
+    /// deleting the folder's contents by hand, produces the same dead end.
+    ///
+    /// So the FOLDER is treated as authoritative for what has been published. No
+    /// segments of ours in it means nothing of ours has been published, and the
+    /// shadow is discarded so the next diff re-emits the whole store.
+    ///
+    /// ⚠️ PHASE 3 MUST REVISIT THIS. Log compaction will legitimately remove old
+    /// segments, at which point "no segments" stops meaning "never published" and
+    /// this check would re-emit everything on every pass. Compaction has to leave
+    /// a marker (a snapshot, or a floor sequence in `meta.json`) for this to test
+    /// against instead.
+    private func republishIfLogMissing(folder: SyncFolder, state: SyncDeviceState) throws {
+        let published = (try? folder.segmentSequences(for: state.deviceUUID)) ?? []
+        guard published.isEmpty else { return }
+
+        let shadows = try modelContext.fetch(FetchDescriptor<SyncShadow>())
+        guard !shadows.isEmpty else { return }
+
+        SyncLog.line(
+            "SyncEngine: no published segments for this device but \(shadows.count) tracked records. "
+            + "Treating the log as lost and re-publishing everything."
+        )
+        for shadow in shadows { modelContext.delete(shadow) }
+        // Sequence restarts too, so the peer's cursor sees a clean log from #1
+        // rather than a gap it would refuse to read past.
+        state.nextSegmentSequence = 1
+        try modelContext.save()
+    }
+
     private func emitLocalChanges(folder: SyncFolder, state: SyncDeviceState) async throws -> Int {
+        try republishIfLogMissing(folder: folder, state: state)
         let changes = try computeLocalChanges()
         guard !changes.isEmpty else { return 0 }
 
