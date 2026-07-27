@@ -160,6 +160,18 @@ private struct MacRootView: View {
             if router.path.isEmpty && !Self.hasLaunchTarget {
                 router.go(to: .tasks)
             }
+
+            // Cross-device sync (#348). Safe to run from a per-window `.task`
+            // even though sync is process-scoped: `runForegroundPass` no-ops
+            // while another pass is in flight and `startPeriodic` no-ops when a
+            // timer already exists, so a second window costs nothing.
+            //
+            // Phase 1 cannot write to the store. macOS relies on the periodic
+            // pass rather than a filesystem watcher: in a dry run nothing is
+            // applied, so inbound latency is invisible and a watcher would be
+            // risk without benefit. Revisit with phase 2.
+            await SyncCoordinator.shared.runForegroundPass(reason: "launch")
+            SyncCoordinator.shared.startPeriodic()
         }
     }
 

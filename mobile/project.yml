@@ -197,6 +197,21 @@ targets:
       - path: PersonalDashboard/Services/ReceiptStorage.swift
       - path: PersonalDashboard/Services/MiniZip.swift
       - path: PersonalDashboard/Services/DataArchive.swift
+      # Cross-device sync (issue #348). Both targets need the whole stack: the
+      # Mac is one of the two peers, so omitting any of it would make the feature
+      # single-ended.
+      #
+      # Models/Local/SyncModels.swift is NOT listed here on purpose — this target
+      # already globs `PersonalDashboard/Models` (above), so listing it again is a
+      # duplicate source and xcodegen rejects it. The four sidecar @Models it
+      # carries are therefore already in both targets, which they must be or the
+      # two schemas diverge.
+      - path: PersonalDashboard/Sync/SyncOp.swift
+      - path: PersonalDashboard/Sync/SyncFolder.swift
+      - path: PersonalDashboard/Sync/SyncRecordMapper.swift
+      - path: PersonalDashboard/Sync/SyncEngine.swift
+      - path: PersonalDashboard/Sync/SyncCoordinator.swift
+      - path: PersonalDashboard/Views/Settings/SyncStatusView.swift
       - path: PersonalDashboard/Views/Finance/ExpenseRow.swift
       - path: PersonalDashboard/Views/Finance/PersonEventBadge.swift
       # Finance surface (issue #281). The camera capture path

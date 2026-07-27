@@ -13,6 +13,7 @@ struct SettingsView: View {
     #endif
     @State private var showingParsedFiles: Bool = false
     @State private var showingBackup: Bool = false
+    @State private var showingSync: Bool = false
 
     /// Currency all finances are DISPLAYED in (#220). SGD stays the canonical
     /// stored base — this is a display-only conversion applied at format time.
@@ -44,6 +45,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingBackup) {
             BackupSettingsView()
+        }
+        .sheet(isPresented: $showingSync) {
+            SyncStatusView()
         }
     }
 
@@ -221,6 +225,29 @@ struct SettingsView: View {
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: Space.md) {
                         Text("Backup…")
+                            .font(.edBody)
+                            .foregroundStyle(Tokens.ink)
+                        Spacer(minLength: Space.md)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Tokens.mutedSoft)
+                    }
+                    .padding(.horizontal, Space.lg)
+                    .padding(.vertical, Space.md)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+                    .padding(.leading, Space.lg)
+
+                Button {
+                    showingSync = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                        Text("Sync…")
                             .font(.edBody)
                             .foregroundStyle(Tokens.ink)
                         Spacer(minLength: Space.md)

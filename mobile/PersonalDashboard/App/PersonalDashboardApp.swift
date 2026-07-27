@@ -34,6 +34,13 @@ struct PersonalDashboardApp: App {
                     // launch value, so the launch pass lives here (the coordinator
                     // guards against overlapping cycles).
                     await RecurringExpenseCoordinator.shared.runForegroundMaterialize()
+                    // Cross-device sync pass on launch (#348). Off by default
+                    // and no-ops instantly when disabled or unconfigured. In
+                    // phase 1 this cannot write to the store at all: it records
+                    // local changes to the shared folder and only COUNTS what a
+                    // peer would change here.
+                    await SyncCoordinator.shared.runForegroundPass(reason: "launch")
+                    SyncCoordinator.shared.startPeriodic()
                 }
         }
         .modelContainer(SwiftDataStore.shared.container)
@@ -62,6 +69,25 @@ struct PersonalDashboardApp: App {
                     try? await BackupService(modelContext: SwiftDataStore.shared.context)
                         .runBackupIfDue(force: false)
                 }
+            default:
+                break
+            }
+
+            // Sync on the same phase edges as backup, for the same reason:
+            // becoming active covers cold launch and foregrounding, and entering
+            // background catches edits made during the session. The periodic
+            // timer only runs while frontmost, so the background edge is the one
+            // that gets the last change of a session out to the folder.
+            switch newPhase {
+            case .active:
+                SyncCoordinator.shared.startPeriodic()
+                Task { await SyncCoordinator.shared.runForegroundPass(reason: "foreground") }
+            case .background:
+                // iOS gives no reliable background execution here without
+                // entitlements we do not have, so this is best-effort: a pass
+                // that does not finish just runs on next foreground.
+                SyncCoordinator.shared.stopPeriodic()
+                Task { await SyncCoordinator.shared.runForegroundPass(reason: "background") }
             default:
                 break
             }

@@ -161,7 +161,15 @@ final class DataExportService {
 
     // MARK: - Payload assembly
 
-    private func buildPayload() throws -> DataArchive.Payload {
+    /// Internal rather than private since #348: `SyncEngine` calls this to
+    /// enumerate every synced record.
+    ///
+    /// Sharing it is the point. Sync and the backup archive now agree on what a
+    /// record is by construction, so a model added to the archive joins sync for
+    /// free, and a fidelity fix made for one benefits the other. The alternative
+    /// (a second parallel set of fetches and DTO mappings inside sync) would
+    /// drift the moment either side gained a field.
+    func buildPayload() throws -> DataArchive.Payload {
         let todos       = try modelContext.fetch(FetchDescriptor<LocalTodo>())
         let notes       = try modelContext.fetch(FetchDescriptor<LocalNote>())
         let folders     = try modelContext.fetch(FetchDescriptor<LocalNoteFolder>())
