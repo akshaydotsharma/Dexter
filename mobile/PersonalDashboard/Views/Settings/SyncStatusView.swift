@@ -22,16 +22,33 @@ struct SyncStatusView: View {
 
     private var snapshot: SyncStatusSnapshot { coordinator.snapshot }
 
+    /// The rows, shared by both platforms. Only the container around them differs.
+    @ViewBuilder
+    private var sections: some View {
+        dryRunBanner
+        folderSection
+        thisDeviceSection
+        pendingSection
+        peersSection
+        lastPassSection
+        actionsSection
+    }
+
     var body: some View {
+        #if os(macOS)
+        macBody
+        #else
+        iosBody
+        #endif
+    }
+
+    // MARK: - iOS
+
+    #if !os(macOS)
+    private var iosBody: some View {
         NavigationStack {
             List {
-                dryRunBanner
-                folderSection
-                thisDeviceSection
-                pendingSection
-                peersSection
-                lastPassSection
-                actionsSection
+                sections
             }
             .navigationTitle("Sync")
             .inlineNavigationTitle()
@@ -45,6 +62,52 @@ struct SyncStatusView: View {
         }
         .onAppear { coordinator.refreshStatus() }
     }
+    #endif
+
+    // MARK: - macOS
+
+    // Presented as a POPOVER by `SettingsView`, not a sheet, and built on `Form`
+    // rather than `List`. Both halves matter, and #351 was caused by getting both
+    // wrong by reusing the iOS shape unchanged:
+    //
+    // - `presentationDetents` do nothing on macOS, so a `.sheet` becomes a small
+    //   centred window that clips its own content. #341 hit this with the Finance
+    //   filter sheets and settled on an anchored popover; this follows that.
+    // - A `List` inside a macOS sheet or popover with no explicit frame collapses
+    //   to zero height, which is why #351 showed a title and a Done button and
+    //   nothing else. `Form` with `.grouped` sizes correctly and keeps the
+    //   grouped-row look the same rows have on iOS.
+    //
+    // The explicit frame is required: a popover has no intrinsic size to inherit.
+    // No Done button, because a popover dismisses by clicking away.
+    #if os(macOS)
+    static let popoverSize = CGSize(width: 460, height: 620)
+
+    private var macBody: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Sync")
+                    .font(.edHeading)
+                    .foregroundStyle(Tokens.ink)
+                Spacer()
+                if coordinator.isSyncing {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+
+            Form {
+                sections
+            }
+            .formStyle(.grouped)
+        }
+        .frame(width: Self.popoverSize.width, height: Self.popoverSize.height)
+        .onAppear { coordinator.refreshStatus() }
+    }
+    #endif
 
     // MARK: - Banner
 
