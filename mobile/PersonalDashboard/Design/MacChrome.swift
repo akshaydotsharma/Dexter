@@ -146,6 +146,33 @@ extension View {
         #endif
     }
 
+    /// Tahoe's soft scroll-edge effect on a scroll view, so content passing
+    /// under a docked bar dissolves into a progressive blur instead of meeting
+    /// a hard edge (issue #345).
+    ///
+    /// This is the correct tool for "invisible at rest, blurred once content is
+    /// underneath". A `.ultraThinMaterial` fill cannot do it: a material is a
+    /// uniform translucent slab, so it is equally visible whether or not
+    /// anything is behind it, and over the dark paper theme it reads as a
+    /// lighter grey panel with a hard top edge.
+    ///
+    /// The effect is drawn by the SCROLL VIEW over its safe-area inset region,
+    /// so it belongs on the scroll view, not on the bar. Below macOS 26 there is
+    /// no equivalent and this is a no-op; the caller supplies its own fallback.
+    /// No-op on iOS regardless, so the phone rendering is untouched.
+    @ViewBuilder
+    func macSoftScrollEdge(_ edges: Edge.Set = .bottom) -> some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            self.scrollEdgeEffectStyle(.soft, for: edges)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+
     // MARK: - Reminders-like row + control polish (issue #285)
 
     /// Disables the `List`'s built-in row selection on macOS so a click no

@@ -132,19 +132,24 @@ struct ChatView: View {
             }
         }
         // The composer docks here, and the conversation keeps scrolling BEHIND
-        // it — that is what a safe-area inset is for. So the inset has to be
-        // opaque to the eye or message bubbles read straight through the gaps
-        // around and below the bar (issue #345).
+        // it — that is what a safe-area inset is for. So something has to cover
+        // the bubbles or they read through the gaps around and below the bar
+        // (issue #345).
+        //
+        // That something is the scroll view's soft scroll-edge effect
+        // (`macSoftScrollEdge` on `conversation`), NOT a fill here. The first
+        // attempt filled this inset with `.ultraThinMaterial` and looked wrong:
+        // a material is a uniform slab, equally visible with nothing behind it,
+        // so the composer sat on a permanent lighter-grey panel with a hard top
+        // edge rather than on the paper. The scroll-edge effect is invisible at
+        // rest and ramps up only where content actually passes under.
         //
         // `spacing: 0` because the default inset spacing leaves an unpainted
-        // strip between the scroll content and this band, which is exactly the
-        // seam the bubbles were showing through.
+        // strip between the scroll content and this band.
         //
-        // `.ultraThinMaterial` rather than a flat `Tokens.paper` fill: the band
-        // should blur what passes under it, matching the scroll-edge glass the
-        // window toolbar draws at the top of the same view. The material tracks
-        // the effective colour scheme, which the app root pins via
-        // `preferredColorScheme`, so it stays dark under the dark paper theme.
+        // The background stays clear on Tahoe and falls back to the material
+        // below macOS 26, where no scroll-edge effect exists — the flat panel is
+        // the lesser evil against bubbles colliding with the input.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ChatInputBar(
                 text: $viewModel.draftInput,
@@ -158,7 +163,13 @@ struct ChatView: View {
             .padding(.top, Space.sm)
             .padding(.bottom, Space.lg)
             .frame(maxWidth: .infinity)
-            .background(.ultraThinMaterial)
+            .background {
+                if #available(macOS 26.0, *) {
+                    Color.clear
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                }
+            }
         }
         .background(Tokens.paper)
         .macSectionChrome("Chat")
@@ -475,6 +486,10 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             }
             .scrollDismissesKeyboard(.interactively)
+            // Progressive blur where the conversation passes under the docked
+            // composer, instead of the flat material panel that sat there
+            // permanently (issue #345). No-op on iOS and below macOS 26.
+            .macSoftScrollEdge(.bottom)
             .onChange(of: viewModel.turns.count) { _, _ in
                 if let last = viewModel.turns.last {
                     withAnimation(.easeOut(duration: 0.2)) {
