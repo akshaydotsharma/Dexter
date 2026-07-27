@@ -68,8 +68,54 @@ final class SyncCoordinator {
         snapshot = (try? resolvedEngine().snapshot()) ?? SyncStatusSnapshot()
     }
 
+    /// Manual refresh from iOS pull-to-refresh or the macOS toolbar / ⌘R (#363).
+    ///
+    /// Two deliberate differences from `syncNow()`:
+    ///
+    /// 1. It goes through `runForegroundPass`, so it respects `SyncSettings.enabled`.
+    ///    Pulling down in Tasks is a request to SEE current data, not consent to
+    ///    start publishing into the user's iCloud folder. `syncNow()` overrides the
+    ///    toggle because it is a button on the sync screen itself, where the intent
+    ///    is unambiguous; a gesture in an unrelated section is not that.
+    ///
+    /// 2. It posts `localStoreDidChange` UNCONDITIONALLY, where a pass posts it only
+    ///    when something actually applied. A manual refresh has to end in a visible
+    ///    re-read whether or not anything arrived, otherwise the one case the user
+    ///    reaches for it in — "I expected a change and it is not here" — is the case
+    ///    where it appears to do nothing.
+    func refreshNow(reason: String) async {
+        await runForegroundPass(reason: reason)
+        NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
+    }
+
+    /// In-flight pass, so a second caller joins it instead of being turned away.
+    private var passTask: Task<Void, Never>?
+
     private func pass(reason: String) async {
-        guard !isSyncing else { return }
+        // Coalesce rather than drop. This used to be `guard !isSyncing else
+        // { return }`, which was harmless while every caller was a timer or a
+        // launch hook that could afford to skip a beat. A manual refresh cannot:
+        // an automatic pass runs every 30 seconds, so a pull landing during one
+        // would return instantly, having done nothing, and the spinner would
+        // confirm a check that never happened. Joining the running pass makes
+        // the affordance tell the truth.
+        if let passTask {
+            await passTask.value
+            return
+        }
+        // `guard let self` rather than `await self?.…`: the optional-chained call
+        // makes the task's result `()?`, which is not the `Task<Void, Never>` the
+        // stored property needs.
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performPass(reason: reason)
+        }
+        passTask = task
+        await task.value
+        passTask = nil
+    }
+
+    private func performPass(reason: String) async {
         isSyncing = true
         defer { isSyncing = false }
         // Two different contracts, chosen by whether this pass can WRITE.

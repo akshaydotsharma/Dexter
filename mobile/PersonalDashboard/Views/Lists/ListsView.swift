@@ -204,7 +204,7 @@ struct ListsView: View {
         .scrollDismissesKeyboard(.interactively)
         // macOS: drop the hard grey row-selection bar (issue #285).
         .macTamedListSelection()
-        .refreshable { await viewModel.load() }
+        .syncRefreshable { await viewModel.load() }
     }
 }
 

@@ -163,10 +163,14 @@ struct ActivityView: View {
                     }
                     .padding(.bottom, 96) // FAB clearance
                 }
-                .refreshable {
-                    // @Query is already live; pull-to-refresh just resets the
-                    // page window so the feed snaps back to the top.
-                    visibleCount = Self.pageSize
+                // Activity's rows come from a live `@Query`, so unlike Tasks /
+                // Notes / Lists it never needs a reload to show a change. It still
+                // runs a sync pass (#363) so the gesture means the same thing in
+                // every section: "go and check". Without it, pulling here would
+                // silently be the one place the gesture does not fetch.
+                .syncRefreshable {
+                    // Reset the page window so the feed also snaps back to the top.
+                    await MainActor.run { visibleCount = Self.pageSize }
                 }
             }
         }

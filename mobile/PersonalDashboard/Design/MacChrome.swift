@@ -64,6 +64,14 @@ extension View {
             // standard inter-item spacing and their own chrome.
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { trailing() }
+                // Refresh sits in EVERY section rather than only the synced ones
+                // (#363). Sync is process-global, so the button does the same
+                // thing everywhere, and a control that appears and disappears as
+                // you change section is a worse affordance than one that is
+                // simply always where you left it. This is also the discoverable
+                // half of the pair — ⌘R alone is invisible until you go looking
+                // in a menu.
+                ToolbarItem(placement: .primaryAction) { MacSyncRefreshButton() }
                 ToolbarItem(placement: .primaryAction) { MacProfilePip() }
             }
             // NO `.toolbarBackground(.hidden, for: .windowToolbar)` here.
@@ -118,6 +126,14 @@ extension View {
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     actions()
+                }
+                // Its own item, not inside the group above: the group is the
+                // detail's OWN actions (rename, delete, share this note), and
+                // refresh belongs to the app, not to the open record. Folding it
+                // into that glass pill would read as a fourth thing you can do to
+                // this note (#363).
+                ToolbarItem(placement: .primaryAction) {
+                    MacSyncRefreshButton()
                 }
                 ToolbarItem(placement: .primaryAction) {
                     MacProfilePip()
