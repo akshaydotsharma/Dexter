@@ -160,6 +160,11 @@ struct ChatView: View {
                 isMicActive: micActive,
                 focused: $inputFocused
             )
+            // Same measure as the conversation, so the input lines up with the
+            // messages instead of running edge to edge past them (issue #345).
+            // The BAND still spans the window — only the box is constrained —
+            // so the scroll-edge blur reaches both window edges.
+            .chatReadingWidth()
             .padding(.horizontal, Space.lg)
             .padding(.top, Space.sm)
             .padding(.bottom, Space.lg)
@@ -483,8 +488,8 @@ struct ChatView: View {
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.lg)
                 .padding(.bottom, Space.xl)
-                .frame(maxWidth: 640)
-                .frame(maxWidth: .infinity, alignment: .center)
+                // Fixed 640 on iOS, window-proportional on macOS (issue #345).
+                .chatReadingWidth()
             }
             .scrollDismissesKeyboard(.interactively)
             // Progressive blur where the conversation passes under the docked

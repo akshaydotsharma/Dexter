@@ -197,6 +197,37 @@ extension View {
         #endif
     }
 
+    /// The chat reading measure (issue #345).
+    ///
+    /// iOS keeps the existing behaviour exactly: capped at 640, centred. A phone
+    /// is narrower than the cap, so it never binds there anyway.
+    ///
+    /// macOS scales the column with the window instead of pinning it to 640. On
+    /// a full-screen display that fixed cap left roughly half the width empty on
+    /// each side while the composer ran edge to edge, so the margins read as a
+    /// layout bug rather than as a measure.
+    ///
+    /// Proportional with a ceiling, not simply full width: line length is what
+    /// makes prose readable, and text run across 1700 points is about 200
+    /// characters per line, well past the point where the eye loses its place
+    /// returning to the next line. 1100 is roughly 120 characters at this size —
+    /// generous, still tracking. Raise `maxMeasure` to trade reading comfort for
+    /// density; drop the clamp entirely for true full-bleed.
+    @ViewBuilder
+    func chatReadingWidth() -> some View {
+        #if os(macOS)
+        self.containerRelativeFrame(.horizontal) { width, _ in
+            let minMeasure: CGFloat = 640
+            let maxMeasure: CGFloat = 1100
+            return min(max(width * 0.85, minMeasure), maxMeasure)
+        }
+        #else
+        self
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity, alignment: .center)
+        #endif
+    }
+
     // MARK: - Reminders-like row + control polish (issue #285)
 
     /// Disables the `List`'s built-in row selection on macOS so a click no
