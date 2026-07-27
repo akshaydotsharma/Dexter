@@ -197,30 +197,29 @@ extension View {
         #endif
     }
 
-    /// The chat reading measure (issue #345).
+    /// The chat content width (issue #345).
     ///
     /// iOS keeps the existing behaviour exactly: capped at 640, centred. A phone
     /// is narrower than the cap, so it never binds there anyway.
     ///
-    /// macOS scales the column with the window instead of pinning it to 640. On
-    /// a full-screen display that fixed cap left roughly half the width empty on
-    /// each side while the composer ran edge to edge, so the margins read as a
-    /// layout bug rather than as a measure.
+    /// macOS fills the detail pane. The 640 cap left roughly half a full-screen
+    /// window empty on each side, and Akshay asked twice for that space to be
+    /// used, so the reading-measure argument is settled: density wins. Both the
+    /// conversation and the input box run to the same edges, separated from the
+    /// window only by the standard `Space.lg` gutter their callers apply.
     ///
-    /// Proportional with a ceiling, not simply full width: line length is what
-    /// makes prose readable, and text run across 1700 points is about 200
-    /// characters per line, well past the point where the eye loses its place
-    /// returning to the next line. 1100 is roughly 120 characters at this size —
-    /// generous, still tracking. Raise `maxMeasure` to trade reading comfort for
-    /// density; drop the clamp entirely for true full-bleed.
+    /// Deliberately NOT `containerRelativeFrame`: the first attempt used it and
+    /// resolved a different container for the scroll content than for the
+    /// composer, so the two ended up different widths and the clamp did not bind
+    /// where it should have. A plain `maxWidth` inherits whatever the parent
+    /// offers, which is the same known-good mechanism the 640 cap always used.
+    ///
+    /// If long assistant replies ever read too wide, this is where a cap goes
+    /// back — one `.frame(maxWidth:)` on the macOS branch, nothing else changes.
     @ViewBuilder
     func chatReadingWidth() -> some View {
         #if os(macOS)
-        self.containerRelativeFrame(.horizontal) { width, _ in
-            let minMeasure: CGFloat = 640
-            let maxMeasure: CGFloat = 1100
-            return min(max(width * 0.85, minMeasure), maxMeasure)
-        }
+        self.frame(maxWidth: .infinity)
         #else
         self
             .frame(maxWidth: 640)
