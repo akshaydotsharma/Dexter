@@ -59,6 +59,31 @@ final class DataImportService {
 
     /// Snapshot of what an import would change. Hand back to `commit(...)`
     /// to actually mutate the store.
+    /// How an incoming record that already exists locally is treated.
+    ///
+    /// ⚠️ `.skipExisting` is the RESTORE behaviour and must not change. Restore
+    /// merges an archive into a live store and has always promised never to
+    /// overwrite anything already present; #349 verified the recovery path with
+    /// exactly these semantics, and that verification is what phase 2's safety
+    /// argument rests on. Sync opts into `.replaceMatching` explicitly.
+    enum Mode {
+        /// Insert only what is absent. Never touches an existing record.
+        case skipExisting
+        /// Delete the local record and re-insert from the incoming DTO.
+        ///
+        /// Delete-then-insert rather than field-by-field assignment, deliberately.
+        /// Assigning fields one at a time means a field added to a model later,
+        /// and forgotten here, is silently dropped on every apply — the exact class
+        /// of bug #319 existed to fix, and the worst possible failure mode for
+        /// sync because the data simply appears never to have been there. Reusing
+        /// the same constructor call the insert path already uses makes it
+        /// structurally impossible to miss a field.
+        ///
+        /// Safe here only because the schema has ZERO `@Relationship` edges, so
+        /// deleting a row cannot cascade. Revisit if a relationship is ever added.
+        case replaceMatching
+    }
+
     struct Preview {
         let manifest: DataArchive.Manifest
         let archiveURL: URL
@@ -237,19 +262,32 @@ final class DataImportService {
     /// the receipts written so far are rolled back so re-running the
     /// import after the error is still a clean no-op for the rows that
     /// did succeed.
-    func commit(preview: Preview) throws {
+    func commit(preview: Preview, mode: Mode = .skipExisting) throws {
+        let payload = preview.manifest.data
+
+        // In replace mode the matching rows are removed FIRST and saved, so the
+        // insert loops below then run against a store where nothing collides.
+        // That is what lets the identical loops serve both modes: the only
+        // difference is whether the "already here" sets are populated.
+        //
+        // A separate save is required between the delete and the inserts. The
+        // unique constraint on `clientUUID` is enforced per save, so deleting and
+        // re-inserting the same key inside one transaction trips it.
+        if mode == .replaceMatching {
+            try deleteMatching(payload: payload)
+            try modelContext.save()
+        }
+
         // Resolve existing UUIDs once up front. A second `fetch` after we
         // start `insert`ing would include the new rows.
-        let existingTodoUUIDs       = try existingUUIDs(LocalTodo.self,           keyPath: \.clientUUID)
-        let existingNoteUUIDs       = try existingUUIDs(LocalNote.self,           keyPath: \.clientUUID)
-        let existingFolderUUIDs     = try existingUUIDs(LocalNoteFolder.self,     keyPath: \.clientUUID)
-        let existingListUUIDs       = try existingUUIDs(LocalList.self,           keyPath: \.clientUUID)
-        let existingTripUUIDs       = try existingUUIDs(LocalTrip.self,           keyPath: \.clientUUID)
-        let existingItineraryUUIDs  = try existingUUIDs(LocalItineraryItem.self,  keyPath: \.clientUUID)
-        let existingExpenseUUIDs    = try existingStringUUIDs(LocalExpense.self,  keyPath: \.clientUUID)
-        let existingVocabUUIDs      = try existingUUIDs(LocalKeyword.self,        keyPath: \.clientUUID)
-
-        let payload = preview.manifest.data
+        let existingTodoUUIDs       = mode == .replaceMatching ? [] : try existingUUIDs(LocalTodo.self,           keyPath: \.clientUUID)
+        let existingNoteUUIDs       = mode == .replaceMatching ? [] : try existingUUIDs(LocalNote.self,           keyPath: \.clientUUID)
+        let existingFolderUUIDs     = mode == .replaceMatching ? [] : try existingUUIDs(LocalNoteFolder.self,     keyPath: \.clientUUID)
+        let existingListUUIDs       = mode == .replaceMatching ? [] : try existingUUIDs(LocalList.self,           keyPath: \.clientUUID)
+        let existingTripUUIDs       = mode == .replaceMatching ? [] : try existingUUIDs(LocalTrip.self,           keyPath: \.clientUUID)
+        let existingItineraryUUIDs  = mode == .replaceMatching ? [] : try existingUUIDs(LocalItineraryItem.self,  keyPath: \.clientUUID)
+        let existingExpenseUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalExpense.self,  keyPath: \.clientUUID)
+        let existingVocabUUIDs      = mode == .replaceMatching ? [] : try existingUUIDs(LocalKeyword.self,        keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
@@ -452,8 +490,8 @@ final class DataImportService {
             // inserted first so references would resolve. That was wrong twice
             // over: they are inserted after expenses, and the ordering would not
             // have mattered even if they were not.)
-            let existingPersonUUIDs    = try existingUUIDs(LocalPerson.self,  keyPath: \.clientUUID)
-            let existingEventUUIDs     = try existingUUIDs(LocalEvent.self,   keyPath: \.clientUUID)
+            let existingPersonUUIDs    = mode == .replaceMatching ? [] : try existingUUIDs(LocalPerson.self,  keyPath: \.clientUUID)
+            let existingEventUUIDs     = mode == .replaceMatching ? [] : try existingUUIDs(LocalEvent.self,   keyPath: \.clientUUID)
             for dto in (payload.persons ?? []) where !existingPersonUUIDs.contains(dto.clientUUID) {
                 let person = LocalPerson(name: dto.name, colorHex: dto.colorHex)
                 person.clientUUID = dto.clientUUID
@@ -472,7 +510,7 @@ final class DataImportService {
                 modelContext.insert(event)
             }
 
-            let existingRecurringUUIDs = try existingStringUUIDs(RecurringExpense.self, keyPath: \.clientUUID)
+            let existingRecurringUUIDs = mode == .replaceMatching ? [] : try existingStringUUIDs(RecurringExpense.self, keyPath: \.clientUUID)
             for dto in (payload.recurringExpenses ?? []) where !existingRecurringUUIDs.contains(dto.clientUUID) {
                 let template = RecurringExpense(
                     amount: dto.amount,
@@ -495,7 +533,7 @@ final class DataImportService {
                 modelContext.insert(template)
             }
 
-            let existingStatementUUIDs = try existingUUIDs(LocalStatementImport.self, keyPath: \.clientUUID)
+            let existingStatementUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalStatementImport.self, keyPath: \.clientUUID)
             for dto in (payload.statementImports ?? []) where !existingStatementUUIDs.contains(dto.clientUUID) {
                 let record = LocalStatementImport(
                     clientUUID: dto.clientUUID,
@@ -519,7 +557,7 @@ final class DataImportService {
             }
 
             // Keyed on `messageKey`, not a clientUUID.
-            let existingMessageKeys = Set(
+            let existingMessageKeys: Set<String> = mode == .replaceMatching ? [] : Set(
                 try modelContext.fetch(FetchDescriptor<LocalProcessedEmail>()).map(\.messageKey)
             )
             for dto in (payload.processedEmails ?? []) where !existingMessageKeys.contains(dto.messageKey) {
@@ -566,6 +604,50 @@ final class DataImportService {
     /// after a partial reset), the existing file wins — receipts are
     /// content-addressed by UUID, collisions on the same UUID mean the
     /// same logical image.
+    // MARK: - Replace-mode deletion
+
+    /// Remove every local record the incoming payload also carries, so the
+    /// insert loops can then re-create them from the DTOs at full fidelity.
+    ///
+    /// Only reached in `.replaceMatching`. Restore never calls this.
+    ///
+    /// Deletion is keyed on the SAME identity each model declares unique, so a
+    /// record is matched exactly as the insert loops match it. `LocalExpense` and
+    /// `RecurringExpense` key on a String `clientUUID`, and `LocalProcessedEmail`
+    /// has no `clientUUID` at all and keys on its IMAP `messageKey`; getting any
+    /// of those wrong would silently duplicate rather than replace.
+    private func deleteMatching(payload: DataArchive.Payload) throws {
+        try deleteMatching(LocalNoteFolder.self,     ids: Set(payload.noteFolders.map(\.clientUUID)),  key: \.clientUUID)
+        try deleteMatching(LocalTodo.self,           ids: Set(payload.tasks.map(\.clientUUID)),        key: \.clientUUID)
+        try deleteMatching(LocalNote.self,           ids: Set(payload.notes.map(\.clientUUID)),        key: \.clientUUID)
+        try deleteMatching(LocalList.self,           ids: Set(payload.lists.map(\.clientUUID)),        key: \.clientUUID)
+        try deleteMatching(LocalTrip.self,           ids: Set(payload.itineraries.map(\.clientUUID)),  key: \.clientUUID)
+        try deleteMatching(LocalItineraryItem.self,  ids: Set(payload.itineraryDays.map(\.clientUUID)), key: \.clientUUID)
+        try deleteMatching(LocalKeyword.self,        ids: Set(payload.vocab.map(\.clientUUID)),        key: \.clientUUID)
+        try deleteMatching(LocalPerson.self,         ids: Set((payload.persons ?? []).map(\.clientUUID)), key: \.clientUUID)
+        try deleteMatching(LocalEvent.self,          ids: Set((payload.events ?? []).map(\.clientUUID)),  key: \.clientUUID)
+        try deleteMatching(LocalStatementImport.self, ids: Set((payload.statementImports ?? []).map(\.clientUUID)), key: \.clientUUID)
+
+        // String-keyed models.
+        try deleteMatching(LocalExpense.self,   ids: Set(payload.expenses.map(\.clientUUID)), key: \.clientUUID)
+        try deleteMatching(RecurringExpense.self, ids: Set((payload.recurringExpenses ?? []).map(\.clientUUID)), key: \.clientUUID)
+        try deleteMatching(LocalProcessedEmail.self, ids: Set((payload.processedEmails ?? []).map(\.messageKey)), key: \.messageKey)
+    }
+
+    private func deleteMatching<M: PersistentModel, ID: Hashable>(
+        _ type: M.Type,
+        ids: Set<ID>,
+        key: KeyPath<M, ID>
+    ) throws {
+        guard !ids.isEmpty else { return }
+        // Fetch-all-and-filter rather than a predicate: `#Predicate` cannot
+        // capture a Set for a contains check across every one of these key types,
+        // and these are personal-scale tables.
+        for model in try modelContext.fetch(FetchDescriptor<M>()) where ids.contains(model[keyPath: key]) {
+            modelContext.delete(model)
+        }
+    }
+
     private func restoreReceipt(
         for expense: DataArchive.ExpenseDTO,
         archiveEntries: [String: Data]

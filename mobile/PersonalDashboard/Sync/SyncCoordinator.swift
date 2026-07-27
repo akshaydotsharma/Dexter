@@ -72,15 +72,26 @@ final class SyncCoordinator {
         guard !isSyncing else { return }
         isSyncing = true
         defer { isSyncing = false }
-        // Kicked off WITHOUT await. Awaiting it would make the first sync pass
-        // wait on a full archive build, which on real data is a 57 MB zip: a
-        // multi-second stall on the launch that enables sync, right where it
-        // looks like the app has frozen.
+        // Two different contracts, chosen by whether this pass can WRITE.
         //
-        // Not blocking on it is only acceptable because phase 1 cannot write to
-        // the store, so there is nothing for the backup to protect yet. Phase 2
-        // must both await this AND refuse to proceed without it.
-        startPreflightBackupIfNeeded()
+        // Applying off: publishing is append-only into a folder and cannot damage
+        // the store, so the backup is hygiene. Fire it off without awaiting,
+        // because awaiting would stall the launch that enables sync on a full
+        // archive build (a 57 MB zip on real data) and look like a freeze.
+        //
+        // Applying on: this pass can destroy data. The backup stops being hygiene
+        // and becomes the recovery path #349 verified, so it must exist BEFORE
+        // anything is applied. Awaited, and a failure blocks the pass outright.
+        // Refusing to sync is recoverable; applying with no way back is not.
+        if SyncSettings.applyEnabled {
+            guard await ensurePreflightBackup() else {
+                snapshot = (try? resolvedEngine().snapshot()) ?? snapshot
+                SyncLog.line("SyncCoordinator: pass BLOCKED — apply is on but no pre-flight backup exists")
+                return
+            }
+        } else {
+            startPreflightBackupIfNeeded()
+        }
         snapshot = await resolvedEngine().runPass(reason: reason)
     }
 
@@ -103,6 +114,30 @@ final class SyncCoordinator {
     /// backup" has to stop the pass. See #349 for verifying the restore path
     /// itself, which is the other half of this being worth anything.
     private var preflightTask: Task<Void, Never>?
+
+    /// Blocking variant used when applying is on. Returns whether a pre-flight
+    /// backup exists, running one if it has not been done yet.
+    private func ensurePreflightBackup() async -> Bool {
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: Self.didPreflightBackupKey) { return true }
+        guard BackupSettings.folderBookmark != nil else {
+            SyncLog.line("SyncCoordinator: cannot take a pre-flight backup, no backup folder configured")
+            return false
+        }
+        do {
+            try await BackupService(modelContext: SwiftDataStore.shared.context)
+                .runBackupIfDue(force: true)
+            defaults.set(true, forKey: Self.didPreflightBackupKey)
+            SyncLog.line("SyncCoordinator: pre-flight backup written before first apply")
+            return true
+        } catch {
+            SyncLog.line(
+                "SyncCoordinator: pre-flight backup FAILED, refusing to apply: "
+                + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            )
+            return false
+        }
+    }
 
     private func startPreflightBackupIfNeeded() {
         let defaults = UserDefaults.standard

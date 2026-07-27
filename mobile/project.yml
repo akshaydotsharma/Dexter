@@ -209,6 +209,7 @@ targets:
       - path: PersonalDashboard/Sync/SyncOp.swift
       - path: PersonalDashboard/Sync/SyncFolder.swift
       - path: PersonalDashboard/Sync/SyncRecordMapper.swift
+      - path: PersonalDashboard/Sync/SyncApplier.swift
       - path: PersonalDashboard/Sync/SyncEngine.swift
       - path: PersonalDashboard/Sync/SyncCoordinator.swift
       - path: PersonalDashboard/Views/Settings/SyncStatusView.swift

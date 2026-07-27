@@ -156,6 +156,34 @@ final class SyncShadow {
     var lastEmittedLamport: Int64
     var updatedAt: Date
 
+    // MARK: Phase 2 last-writer-wins (#359)
+    //
+    // BOTH OPTIONAL ON PURPOSE. These land on a model that already exists in live
+    // stores on two devices, and the project rule is that only additive, nullable
+    // fields are safe: a failed SwiftData lightweight migration does not degrade,
+    // it refuses to open the store. Optionals cannot fail, and nil reads as
+    // "never applied a remote write", which is exactly right for every row that
+    // predates phase 2.
+
+    /// Clock of the newest write known for this record, whether emitted locally or
+    /// applied from a peer. Distinct from `lastEmittedLamport`, which only ever
+    /// tracks what THIS device published, and would therefore lose to a remote
+    /// write and let the same op apply repeatedly.
+    var lastKnownLamportValue: Int64?
+
+    /// Which device produced that write. Needed for the LWW tie-break: comparing
+    /// clocks alone is not a total order, and a non-total tie-break lets the two
+    /// devices pick different winners and diverge while both think they converged.
+    var lastWriterDeviceUUID: UUID?
+
+    /// `lastKnownLamportValue` with the pre-phase-2 fallback applied. A row written
+    /// before phase 2 has no remote-write clock, so the locally emitted one is the
+    /// best available answer and keeps the comparison monotonic.
+    var lastKnownLamport: Int64 {
+        get { lastKnownLamportValue ?? lastEmittedLamport }
+        set { lastKnownLamportValue = newValue }
+    }
+
     /// Swift type name, e.g. `LocalTodo`. Computed, never stored.
     var entityName: String { SyncKey.entity(of: key) }
     /// `clientUUID` stringified. Computed, never stored.
