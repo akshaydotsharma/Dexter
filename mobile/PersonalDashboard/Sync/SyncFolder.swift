@@ -158,6 +158,7 @@ enum SyncFolderHealth: Equatable {
 enum SyncFolderError: LocalizedError {
     case notConfigured
     case accessDenied
+    case disposableStoreNeedsOverrideFolder
     case bookmarkResolveFailed(Error)
     case segmentAlreadyExists(Int)
     case decodeFailed(String, Error)
@@ -168,6 +169,10 @@ enum SyncFolderError: LocalizedError {
             return "No sync folder is configured."
         case .accessDenied:
             return "Couldn't access the sync folder. Pick it again to re-grant access."
+        case .disposableStoreNeedsOverrideFolder:
+            return "This launch uses a disposable store (DEXTER_STORE_PATH), so sync "
+                + "refuses to touch the configured folder. Set DEXTER_SYNC_FOLDER too "
+                + "if this run is meant to sync." 
         case .bookmarkResolveFailed(let error):
             return "Couldn't open the sync folder: \(error.localizedDescription)"
         case .segmentAlreadyExists(let sequence):
@@ -243,6 +248,33 @@ struct SyncFolder {
                 displayName: url.lastPathComponent,
                 isSecurityScoped: false
             )
+        }
+        #endif
+
+        #if DEBUG
+        // A DISPOSABLE STORE MUST NEVER PUBLISH TO THE REAL SHARED FOLDER.
+        //
+        // `DEXTER_STORE_PATH` declares this run's data throwaway. Sync reads its
+        // folder from persisted settings, though, so without this guard a
+        // scratch-store launch happily published into whatever folder the user has
+        // configured. It did: two phantom "MacBook Pro" device directories landed
+        // in a real iCloud folder from harness runs that set a store override but
+        // no folder override.
+        //
+        // Tidiness was the least of it. Once phase 2 applying is on, a scratch
+        // store's ops get APPLIED to real data, so a test that deletes a record
+        // would propagate that delete to the user's live device. The two dirs in
+        // question happened to carry zero delete ops; that was luck, not design.
+        //
+        // A run that wants both a scratch store and sync must say so by also
+        // setting DEXTER_SYNC_FOLDER, which is handled above. Reaching here with an
+        // override store means the caller did not, so refuse rather than guess.
+        // Read the env var rather than `SwiftDataStore.isUsingOverrideStore`:
+        // that static is main-actor isolated and `resolve()` is deliberately not,
+        // because it is all file IO. The variable is what set the override in the
+        // first place, so this is the same fact reached from a safe angle.
+        if ProcessInfo.processInfo.environment["DEXTER_STORE_PATH"] != nil {
+            throw SyncFolderError.disposableStoreNeedsOverrideFolder
         }
         #endif
 
