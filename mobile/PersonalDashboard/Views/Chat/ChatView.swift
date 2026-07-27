@@ -144,13 +144,14 @@ struct ChatView: View {
         // edge rather than on the paper. The scroll-edge effect is invisible at
         // rest and ramps up only where content actually passes under.
         //
-        // `spacing: 0` because the default inset spacing leaves an unpainted
-        // strip between the scroll content and this band.
+        // Docked as a BAR, not a plain inset: the edge effect is only drawn
+        // under bars, so with `safeAreaInset` the scroll-edge style was accepted
+        // and silently did nothing. See `macBottomBar`.
         //
         // The background stays clear on Tahoe and falls back to the material
         // below macOS 26, where no scroll-edge effect exists — the flat panel is
         // the lesser evil against bubbles colliding with the input.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .macBottomBar {
             ChatInputBar(
                 text: $viewModel.draftInput,
                 isSending: viewModel.isSending,

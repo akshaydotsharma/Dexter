@@ -173,6 +173,30 @@ extension View {
         #endif
     }
 
+    /// Dock a custom bar to the bottom edge so the scroll view draws its
+    /// scroll-edge effect under it (issue #345).
+    ///
+    /// `safeAreaInset` and `safeAreaBar` reserve the same space, but only the
+    /// bar variant registers its content AS a bar, and the edge effect is drawn
+    /// only under bars. With a plain inset, `scrollEdgeEffectStyle` is accepted
+    /// and silently does nothing — the exact symptom that made the composer look
+    /// like it had no blur at all.
+    ///
+    /// Falls back to `safeAreaInset` below macOS 26 and on iOS, which is the
+    /// pre-existing behaviour, so nothing regresses where the bar API is absent.
+    @ViewBuilder
+    func macBottomBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            self.safeAreaBar(edge: .bottom, spacing: 0, content: bar)
+        } else {
+            self.safeAreaInset(edge: .bottom, spacing: 0, content: bar)
+        }
+        #else
+        self.safeAreaInset(edge: .bottom, spacing: 0, content: bar)
+        #endif
+    }
+
     // MARK: - Reminders-like row + control polish (issue #285)
 
     /// Disables the `List`'s built-in row selection on macOS so a click no
