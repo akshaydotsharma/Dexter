@@ -406,6 +406,12 @@ final class SyncEngine {
     /// user data. Everything else is counted and discarded.
     private func readPeers(folder: SyncFolder, state: SyncDeviceState) async throws -> Int {
         let peers = try folder.peerDeviceUUIDs(excluding: state.deviceUUID)
+        // Only prune once the enumeration above has SUCCEEDED. `peerDeviceUUIDs`
+        // throws if the folder could not be read, so reaching this line means the
+        // empty-or-not answer is real rather than an access failure. Pruning on a
+        // failed read would delete the whole peer list every time the bookmark
+        // went stale, which is the moment the list matters most.
+        pruneCursors(keeping: peers)
         var totalDecoded = 0
 
         for peer in peers {
@@ -486,6 +492,25 @@ final class SyncEngine {
             }
         }
         return count
+    }
+
+    /// Drop cursors for devices that are no longer in the folder.
+    ///
+    /// Cursors used to be create-only, so the peer list was an append-only history
+    /// of every device id ever seen rather than a view of what is actually there
+    /// (#356). Retiring a device, reinstalling, or repointing sync at another
+    /// folder each left a permanent phantom peer stuck at "0 segments read", which
+    /// reads exactly like a broken sync on the surface people actually check.
+    private func pruneCursors(keeping present: [UUID]) {
+        let keep = Set(present)
+        guard let cursors = try? modelContext.fetch(FetchDescriptor<SyncPeerCursor>()) else { return }
+        var pruned: [String] = []
+        for cursor in cursors where !keep.contains(cursor.peerDeviceUUID) {
+            pruned.append("\(cursor.peerName) \(cursor.peerDeviceUUID.uuidString.prefix(8))")
+            modelContext.delete(cursor)
+        }
+        guard !pruned.isEmpty else { return }
+        SyncLog.line("SyncEngine: pruned \(pruned.count) stale peer(s): \(pruned.joined(separator: ", "))")
     }
 
     private func peerCursor(for peer: UUID) throws -> SyncPeerCursor {
