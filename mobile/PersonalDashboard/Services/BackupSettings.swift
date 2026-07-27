@@ -48,9 +48,54 @@ enum BackupSettings {
         static let lastError       = "backup.lastError"
     }
 
-    /// Rolling backup file name. One file per folder, overwritten each run,
-    /// so the iCloud-synced folder never accumulates stale snapshots.
-    static let fileName = "Dexter-Backup.zip"
+    /// Rolling backup file name, scoped to THIS device.
+    ///
+    /// One file per device per folder, overwritten each run, so a folder never
+    /// accumulates stale snapshots but two devices never fight over one name.
+    ///
+    /// ⚠️ This used to be a single shared constant, `Dexter-Backup.zip`, which was
+    /// correct only while one device wrote to the folder. Sync now encourages both
+    /// the Mac and the phone to point at the SAME folder (#348 reuses the backup
+    /// bookmark by design), and within minutes of enabling it on both, the field
+    /// showed exactly what you would expect (#354):
+    ///
+    ///     Dexter-Backup.zip
+    ///     Dexter-Backup 2.zip     <- iCloud conflict copy
+    ///
+    /// That is worse than untidy. This file is the recovery path #349 exists to
+    /// verify, and the whole phase 2 safety argument rests on it. Two devices
+    /// overwriting one name means the file may hold the OTHER device's data at any
+    /// moment, and once iCloud forks it neither the current copy nor its origin
+    /// device is knowable from the name. A restore then cannot be aimed
+    /// confidently. Per-device names make each snapshot self-identifying.
+    ///
+    /// The legacy name is still recognised on restore, because the user's existing
+    /// `Dexter-Backup.zip` is a real recovery artefact and must keep working.
+    static var fileName: String {
+        "Dexter-Backup-\(deviceFileNameComponent()).zip"
+    }
+
+    /// The pre-#354 shared name. Never written again; recognised so an existing
+    /// archive stays restorable.
+    static let legacyFileName = "Dexter-Backup.zip"
+
+    /// Device label, reduced to something safe for a filename.
+    ///
+    /// Filesystem-hostile characters are stripped rather than escaped so the name
+    /// stays readable in Finder and the Files app, which is the whole point of
+    /// making it per-device. Falls back to a fixed string if a name reduces to
+    /// nothing, so the filename can never collapse to `Dexter-Backup-.zip`.
+    static func deviceFileNameComponent() -> String {
+        let raw = SyncDeviceNaming.currentDeviceName()
+        let allowed = raw.unicodeScalars.map { scalar -> Character in
+            if CharacterSet.alphanumerics.contains(scalar) { return Character(scalar) }
+            return "-"
+        }
+        let collapsed = String(allowed)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        return collapsed.isEmpty ? "Device" : collapsed
+    }
 
     private static var defaults: UserDefaults { .standard }
 
