@@ -143,6 +143,13 @@ struct SyncFolder {
     let root: URL
     let usingBackupFolder: Bool
     let displayName: String
+    /// False for a `DEXTER_SYNC_FOLDER` override, which is a plain local path.
+    ///
+    /// `startAccessingSecurityScopedResource()` returns FALSE for a URL that was
+    /// not minted from a bookmark, and the callers treat false as access-denied.
+    /// Without this flag the debug override would resolve fine and then be
+    /// rejected as unreachable on the very next line.
+    var isSecurityScoped: Bool = true
 
     /// Prefix for a device's own directory: `DexterSync-<deviceUUID>`.
     static let deviceDirectoryPrefix = "DexterSync-"
@@ -164,6 +171,40 @@ struct SyncFolder {
     /// untouched. Refactoring the two together is a fine cleanup once sync is
     /// trusted, and a bad idea before then.
     static func resolve() throws -> SyncFolder {
+        #if DEBUG
+        // Env-only scratch folder for automated verification (#356).
+        //
+        // This exists because the alternative was actively harmful. A harness with
+        // no override has to fake a folder by writing `sync.folderBookmark` and
+        // `sync.enabled` with `defaults write` on the app's bundle id — which is
+        // the SAME preferences domain the real app reads. A running instance then
+        // adopts the scratch folder, publishes the user's real store into it, and
+        // records the harness's scratch devices as permanent peers. That happened,
+        // and it left two phantom "MacBook Pro" peers in a real store.
+        //
+        // Env-only and never persisted, so a stale value cannot outlive the run
+        // that set it. Mirrors `DEXTER_STORE_PATH`, which exists for the same
+        // reason on the store side. Inert in Release.
+        if let raw = ProcessInfo.processInfo.environment["DEXTER_SYNC_FOLDER"],
+           !raw.trimmingCharacters(in: .whitespaces).isEmpty {
+            let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                fatalError("""
+                    DEXTER_SYNC_FOLDER is set to \(url.path) but that folder does \
+                    not exist. Refusing to launch rather than silently syncing to \
+                    the real configured folder.
+                    """)
+            }
+            NSLog("SyncFolder: using OVERRIDE sync folder at %@ (DEXTER_SYNC_FOLDER)", url.path)
+            return SyncFolder(
+                root: url,
+                usingBackupFolder: false,
+                displayName: url.lastPathComponent,
+                isSecurityScoped: false
+            )
+        }
+        #endif
+
         let usingBackup = SyncSettings.folderBookmark == nil
         guard let bookmark = SyncSettings.folderBookmark ?? BackupSettings.folderBookmark else {
             throw SyncFolderError.notConfigured
@@ -206,7 +247,12 @@ struct SyncFolder {
 
     /// Non-throwing health probe for the status UI.
     static func health() -> SyncFolderHealth {
-        guard SyncSettings.folderBookmark != nil || BackupSettings.folderBookmark != nil else {
+        #if DEBUG
+        let hasOverride = ProcessInfo.processInfo.environment["DEXTER_SYNC_FOLDER"] != nil
+        #else
+        let hasOverride = false
+        #endif
+        guard hasOverride || SyncSettings.folderBookmark != nil || BackupSettings.folderBookmark != nil else {
             return .notConfigured
         }
         do {
@@ -239,10 +285,12 @@ struct SyncFolder {
     /// `BackupService` relies on the same property.
     @discardableResult
     func beginAccess() -> Bool {
-        root.startAccessingSecurityScopedResource()
+        guard isSecurityScoped else { return true }
+        return root.startAccessingSecurityScopedResource()
     }
 
     func endAccess() {
+        guard isSecurityScoped else { return }
         root.stopAccessingSecurityScopedResource()
     }
 
