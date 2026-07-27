@@ -46,9 +46,13 @@ struct SettingsView: View {
         .sheet(isPresented: $showingBackup) {
             BackupSettingsView()
         }
+        // iOS only: on macOS Sync is a popover anchored to its row (#351), so
+        // declaring the sheet here too would present it twice.
+        #if os(iOS)
         .sheet(isPresented: $showingSync) {
             SyncStatusView()
         }
+        #endif
     }
 
     // MARK: - Root
@@ -260,6 +264,16 @@ struct SettingsView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // macOS: a popover hanging off the row that opened it (#351), so
+                // it reads as local to Settings. A `.sheet` here rendered as a
+                // small centred window that clipped every row away, which is the
+                // same trap #341 hit with the Finance filters. iOS keeps the
+                // parent `.sheet` declared on the body.
+                #if os(macOS)
+                .popover(isPresented: $showingSync, arrowEdge: .bottom) {
+                    SyncStatusView()
+                }
+                #endif
 
                 Rectangle()
                     .fill(Tokens.divider)
