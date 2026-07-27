@@ -1,6 +1,6 @@
 # Cross-device sync (iOS <-> macOS)
 
-**Status**: in-progress (phase 1 shipped and working on both real devices; prerequisites done; phase 2 specified in #359, not started)
+**Status**: PHASE 2 SHIPPED and working on both real devices (2026-07-28). Applying enabled on the Mac only. Phase 3 not started.
 **Started**: 2026-07-27
 **Last Updated**: 2026-07-27
 **Estimated Remaining**: phases 0+1 are the next unit of work; phases 2-4 follow
@@ -33,16 +33,29 @@ Give Dexter Notes/Reminders-style sync between the iPhone and the Mac: edit on e
 
 **Phase 1 is working end-to-end on the real Mac and iPhone.** Each publishes its log, discovers the other, decodes its ops, and applies nothing.
 
+## Phase 2 (done, merged, shipped)
+
+- [x] #360 apply with record-level LWW (#359). Reused `DataImportService` via a new `Mode`; restore keeps `.skipExisting` unchanged. Replace is delete-then-insert so a forgotten field is structurally impossible
+- [x] #358 per-device backup filenames (#354)
+- [x] #349 restore round trip verified, then RE-verified after the importer change
+- [x] #362 a disposable store can no longer publish to the real sync folder (#361)
+- [x] #364 post `localStoreDidChange` after applying, so manual-fetch views re-read (#363)
+
+Confirmed working by Akshay on the real Mac and iPhone: a change on the phone applies on the Mac, and a delete removes it.
+
+**Current config: applying is ON for the Mac only** (`sync.applyEnabled`), so changes flow one direction and the untested concurrent-edit path cannot trigger.
+
 ## Current Step
 
-- [ ] Phase 2: apply a peer's changes with record-level LWW (#359) — fully specified, NOT started
-  - This is the first code in the feature that can damage data. Everything so far was append-only into a folder.
-  - Biggest piece: an upsert mode for `DataImportService`, extending it rather than writing a second applier, since it already holds all 13 DTO-to-model mappings and a parallel copy would drift.
-  - The trap to respect: after applying a remote op, update the shadow hash in the SAME transaction, or the next local diff re-emits it and the two devices trade the record forever.
+- [ ] Live with phase 2 one-directional for a while, then consider enabling apply on the phone too
+  - The moment both sides apply, simultaneous edits of ONE record become reachable. That path is deterministic by construction (Lamport + device-id tiebreak, total order) but has never been driven on real hardware.
+- [ ] #363 remaining half: manual refresh affordance (pull-to-refresh on iOS, toolbar / Cmd-R on macOS), which should run a real pass rather than only reloading
 
 ## Next Steps
 
 - [ ] Phase 3: attachments as content-addressed blobs, log compaction, new-device bootstrap
+  - Attachments are the visible gap now: a synced expense can reference a receipt the other device does not have.
+  - Receipts live in `~/Documents/receipts/` keyed only by UUID, shared by every store, so they are NOT store-scoped. `DEXTER_STORE_PATH` isolates the database and nothing else.
   - Compaction interacts with the #353 republish check, which currently reads "no segments" as "never published". It will need a floor marker.
 - [ ] Phase 4 (conditional): field-level LWW, only if phase 2 clobbering proves annoying
 
@@ -87,6 +100,9 @@ See commit 9ee5180 on `feat/cross-device-sync-phase-0-1`. Shape of it:
 - `DataExportService` produces a self-verifying zip (manifest schema v1, per-model counts, `receipts/` and `tickets/` attachments). Reuse it as the phase 3 snapshot format for new-device bootstrap instead of inventing one.
 
 **Field bugs that a single-device rig and code review both missed:**
+
+- **A write from outside the UI is invisible to Tasks / Notes / Lists** until the view is recreated. They cache rows in a view model loaded by `.task`, unlike Activity / Finance / Itineraries which use live `@Query`. `localStoreDidChange` exists for exactly this and those views already observe it; sync just failed to post it (#363). Anything that mutates the store outside the UI must post it.
+- **A disposable store is not disposable everywhere** (#361). `DEXTER_STORE_PATH` isolates the database only, so a scratch-store launch published into the real iCloud folder, twice. With phase 2 applying on, a test delete would have propagated to the live device. Now refused outright.
 
 - **iCloud forks DIRECTORIES, not just files** (#353). Per-device leaf directories were not enough, because both devices independently created the shared ancestors via `createIntermediateDirectories`. Presented as "healthy folder, full op count, no peer" on both devices at once.
 - **Deleting a published log deadlocks sync silently.** The shadow table records what has been published, so if the log vanishes the shadow is a lie: nothing is pending, nothing is emitted, and the peer can never bootstrap. No symptom at all. Fixed by treating the folder as authoritative for what has been published.
