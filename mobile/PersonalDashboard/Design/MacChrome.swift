@@ -66,13 +66,20 @@ extension View {
                 ToolbarItem(placement: .primaryAction) { trailing() }
                 ToolbarItem(placement: .primaryAction) { MacProfilePip() }
             }
-            // Consistent transparent title-bar across every section (issue
-            // #285). Some sections lit the toolbar's scrolled-material band (a
-            // grey stripe under the traffic lights) while others stayed clear,
-            // depending on whether their content scrolled under the title bar.
-            // Hiding the window-toolbar background everywhere makes the paper
-            // canvas read straight up to the window edge in all sections.
-            .toolbarBackground(.hidden, for: .windowToolbar)
+            // NO `.toolbarBackground(.hidden, for: .windowToolbar)` here.
+            //
+            // #285 hid it to stop a grey stripe appearing under the traffic
+            // lights in some sections and not others. That also switched off
+            // the scroll-edge effect, so scrolling content ran straight over
+            // the title with nothing behind it — visible in Chat as messages
+            // colliding with the word "Chat" (issue #345).
+            //
+            // The default (`.automatic`) is the behaviour we actually want on
+            // Tahoe: clear while the content sits below the title bar, Liquid
+            // Glass once content scrolls under it. The #285 "inconsistency" was
+            // that effect working correctly — static sections have nothing to
+            // scroll under the bar, so they stay clear. Reminders and Notes
+            // both read this way.
         #else
         self
         #endif
@@ -116,7 +123,9 @@ extension View {
                     MacProfilePip()
                 }
             }
-            .toolbarBackground(.hidden, for: .windowToolbar)
+            // Left on `.automatic` for the same reason as `macSectionChrome`
+            // (issue #345): an open note or list scrolls under this title bar
+            // too, and the scroll-edge glass is what keeps the title legible.
         #else
         self
         #endif
@@ -134,6 +143,87 @@ extension View {
         self.ignoresSafeArea(.container, edges: .bottom)
         #else
         self.ignoresSafeArea()
+        #endif
+    }
+
+    /// Tahoe's soft scroll-edge effect on a scroll view, so content passing
+    /// under a docked bar dissolves into a progressive blur instead of meeting
+    /// a hard edge (issue #345).
+    ///
+    /// This is the correct tool for "invisible at rest, blurred once content is
+    /// underneath". A `.ultraThinMaterial` fill cannot do it: a material is a
+    /// uniform translucent slab, so it is equally visible whether or not
+    /// anything is behind it, and over the dark paper theme it reads as a
+    /// lighter grey panel with a hard top edge.
+    ///
+    /// The effect is drawn by the SCROLL VIEW over its safe-area inset region,
+    /// so it belongs on the scroll view, not on the bar. Below macOS 26 there is
+    /// no equivalent and this is a no-op; the caller supplies its own fallback.
+    /// No-op on iOS regardless, so the phone rendering is untouched.
+    @ViewBuilder
+    func macSoftScrollEdge(_ edges: Edge.Set = .bottom) -> some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            self.scrollEdgeEffectStyle(.soft, for: edges)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+
+    /// Dock a custom bar to the bottom edge so the scroll view draws its
+    /// scroll-edge effect under it (issue #345).
+    ///
+    /// `safeAreaInset` and `safeAreaBar` reserve the same space, but only the
+    /// bar variant registers its content AS a bar, and the edge effect is drawn
+    /// only under bars. With a plain inset, `scrollEdgeEffectStyle` is accepted
+    /// and silently does nothing — the exact symptom that made the composer look
+    /// like it had no blur at all.
+    ///
+    /// Falls back to `safeAreaInset` below macOS 26 and on iOS, which is the
+    /// pre-existing behaviour, so nothing regresses where the bar API is absent.
+    @ViewBuilder
+    func macBottomBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            self.safeAreaBar(edge: .bottom, spacing: 0, content: bar)
+        } else {
+            self.safeAreaInset(edge: .bottom, spacing: 0, content: bar)
+        }
+        #else
+        self.safeAreaInset(edge: .bottom, spacing: 0, content: bar)
+        #endif
+    }
+
+    /// The chat content width (issue #345).
+    ///
+    /// iOS keeps the existing behaviour exactly: capped at 640, centred. A phone
+    /// is narrower than the cap, so it never binds there anyway.
+    ///
+    /// macOS fills the detail pane. The 640 cap left roughly half a full-screen
+    /// window empty on each side, and Akshay asked twice for that space to be
+    /// used, so the reading-measure argument is settled: density wins. Both the
+    /// conversation and the input box run to the same edges, separated from the
+    /// window only by the standard `Space.lg` gutter their callers apply.
+    ///
+    /// Deliberately NOT `containerRelativeFrame`: the first attempt used it and
+    /// resolved a different container for the scroll content than for the
+    /// composer, so the two ended up different widths and the clamp did not bind
+    /// where it should have. A plain `maxWidth` inherits whatever the parent
+    /// offers, which is the same known-good mechanism the 640 cap always used.
+    ///
+    /// If long assistant replies ever read too wide, this is where a cap goes
+    /// back — one `.frame(maxWidth:)` on the macOS branch, nothing else changes.
+    @ViewBuilder
+    func chatReadingWidth() -> some View {
+        #if os(macOS)
+        self.frame(maxWidth: .infinity)
+        #else
+        self
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity, alignment: .center)
         #endif
     }
 
