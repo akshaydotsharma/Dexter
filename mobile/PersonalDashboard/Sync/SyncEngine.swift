@@ -406,6 +406,8 @@ final class SyncEngine {
     /// user data. Everything else is counted and discarded.
     private func readPeers(folder: SyncFolder, state: SyncDeviceState) async throws -> Int {
         let peers = try folder.peerDeviceUUIDs(excluding: state.deviceUUID)
+        var applied = 0
+        var deletedLocally = 0
         // Only prune once the enumeration above has SUCCEEDED. `peerDeviceUUIDs`
         // throws if the folder could not be read, so reaching this line means the
         // empty-or-not answer is real rather than an access failure. Pruning on a
@@ -442,6 +444,19 @@ final class SyncEngine {
                     let segment = try folder.readSegment(deviceUUID: peer, sequence: sequence)
                     decoded += segment.ops.count
                     wouldApply += countWouldApply(segment.ops)
+                    // PHASE 2. Everything above this line is still a dry run; this
+                    // is the only place a peer's changes reach the store. Gated on
+                    // its own setting, separate from `enabled`, so publishing
+                    // outbound never implies accepting inbound.
+                    if SyncSettings.applyEnabled {
+                        let outcome = try SyncApplier(modelContext: modelContext)
+                            .apply(segment.ops, localDeviceUUID: state.deviceUUID)
+                        applied += outcome.applied
+                        deletedLocally += outcome.deleted
+                        if outcome.rejectedCorrupt > 0 || outcome.rejectedTombstoned > 0 || outcome.touchedAnything {
+                            SyncLog.line("SyncApplier: seg \(sequence) from \(peer.uuidString.prefix(8)) — \(outcome.summary)")
+                        }
+                    }
                     // Advance our clock past the peer's. This is the whole
                     // reason inbound runs before outbound.
                     state.lamport = max(state.lamport, segment.lamportHigh)
@@ -464,6 +479,9 @@ final class SyncEngine {
         }
 
         try modelContext.save()
+        if applied > 0 || deletedLocally > 0 {
+            SyncLog.line("SyncEngine: APPLIED \(applied) record(s), deleted \(deletedLocally) locally")
+        }
         return totalDecoded
     }
 

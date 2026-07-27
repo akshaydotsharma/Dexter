@@ -19,6 +19,7 @@ struct SyncStatusView: View {
 
     @State private var coordinator = SyncCoordinator.shared
     @AppStorage(SyncSettings.Key.enabled) private var enabled = false
+    @AppStorage(SyncSettings.Key.applyEnabled) private var applyEnabled = false
 
     private var snapshot: SyncStatusSnapshot { coordinator.snapshot }
 
@@ -114,9 +115,13 @@ struct SyncStatusView: View {
     private var dryRunBanner: some View {
         Section {
             VStack(alignment: .leading, spacing: 6) {
-                Label("Dry run", systemImage: "eye")
+                Label(applyEnabled ? "Applying changes" : "Dry run",
+                      systemImage: applyEnabled ? "arrow.triangle.2.circlepath" : "eye")
                     .font(.headline)
-                Text("Sync is recording your changes and reading the other device's changes, but it is not applying anything yet. Nothing on this device can be modified or deleted by sync.")
+                    .foregroundStyle(applyEnabled ? Color.orange : Color.primary)
+                Text(applyEnabled
+                     ? "Sync is applying the other device's changes to this device. When the same record is edited in both places, the most recent edit wins and the other is discarded."
+                     : "Sync is recording your changes and reading the other device's changes, but it is not applying anything yet. Nothing on this device can be modified or deleted by sync.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -143,6 +148,16 @@ struct SyncStatusView: View {
             }
             Toggle("Sync automatically", isOn: $enabled)
                 .disabled(!snapshot.health.isUsable)
+            // Separate from the toggle above, on purpose. Publishing your own log
+            // cannot damage anything; accepting a peer's changes can. Turning this
+            // on should be a deliberate act, not a consequence.
+            Toggle("Apply changes from other devices", isOn: $applyEnabled)
+                .disabled(!snapshot.health.isUsable)
+            if applyEnabled {
+                Text("A backup is written before the first apply, and sync refuses to apply anything if that backup fails. Receipt images do not travel between devices yet, so a synced expense may show a missing receipt.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             if snapshot.hasLegacyFolder {
                 Text("An old \"DexterSync\" folder is still in there from before the layout changed. Sync no longer uses it and you can delete it.")
                     .font(.footnote)

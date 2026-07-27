@@ -52,15 +52,56 @@ import Foundation
 enum SyncSettings {
     enum Key {
         static let enabled        = "sync.enabled"
+        static let applyEnabled   = "sync.applyEnabled"
         static let folderBookmark = "sync.folderBookmark"
         static let folderName     = "sync.folderName"
     }
 
     private static var defaults: UserDefaults { .standard }
 
+    /// DEBUG-only env overrides, completing the isolation `DEXTER_SYNC_FOLDER`
+    /// started (#356).
+    ///
+    /// Without these a harness still has to `defaults write` the toggles on the
+    /// app's own bundle id to test anything, which is the exact mechanism that
+    /// polluted a real store with phantom peers. Env-only, never persisted, inert
+    /// in Release. A folder override implies sync is on, since pointing a run at a
+    /// scratch folder has no other purpose.
+    #if DEBUG
+    private static func envFlag(_ name: String) -> Bool {
+        guard let raw = ProcessInfo.processInfo.environment[name] else { return false }
+        return !["0", "false", "no", ""].contains(raw.lowercased())
+    }
+    static var hasFolderOverride: Bool {
+        ProcessInfo.processInfo.environment["DEXTER_SYNC_FOLDER"] != nil
+    }
+    #endif
+
     static var enabled: Bool {
-        get { defaults.bool(forKey: Key.enabled) }
+        get {
+            #if DEBUG
+            if hasFolderOverride { return true }
+            #endif
+            return defaults.bool(forKey: Key.enabled)
+        }
         set { defaults.set(newValue, forKey: Key.enabled) }
+    }
+
+    /// Phase 2: actually apply a peer's changes (#359).
+    ///
+    /// Deliberately SEPARATE from `enabled`, and off by default. Publishing your
+    /// own log is harmless; applying someone else's changes is the first thing in
+    /// this feature that can destroy data. Keeping them apart means outbound-only
+    /// stays available, and turning applying on is an explicit, revocable act
+    /// rather than a side effect of enabling sync.
+    static var applyEnabled: Bool {
+        get {
+            #if DEBUG
+            if hasFolderOverride { return envFlag("DEXTER_SYNC_APPLY") }
+            #endif
+            return defaults.bool(forKey: Key.applyEnabled)
+        }
+        set { defaults.set(newValue, forKey: Key.applyEnabled) }
     }
 
     /// Dedicated sync folder. Nil means "use the backup folder".
