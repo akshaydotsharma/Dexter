@@ -63,7 +63,7 @@ struct MacAddRow: View {
             Rectangle()
                 .fill(Tokens.border)
                 .frame(height: 1)
-                .padding(.horizontal, Space.lg)
+                .padding(.horizontal, RowMetrics.hairlineInset)
 
             HStack(spacing: Space.md) {
                 bullet
@@ -91,11 +91,11 @@ struct MacAddRow: View {
 
                 Spacer(minLength: 0)
             }
-            // Leading = Space.lg (hairline/base column) + Space.md (checkbox
-            // column) so the bullet lands at the real checkbox x — same as
-            // GhostAddRow.
-            .padding(.leading, Space.lg + Space.md)
-            .padding(.trailing, Space.lg)
+            // Bullet lands on the real checkbox column: one content margin in
+            // on macOS now that rows are full-bleed (#339), the old
+            // inset-plus-padding sum on iOS. Same token as GhostAddRow.
+            .padding(.leading, RowMetrics.addRowLeading)
+            .padding(.trailing, RowMetrics.horizontalPadding)
             .frame(maxHeight: .infinity)
         }
         .frame(minHeight: minHeight)

@@ -229,6 +229,16 @@ struct FinanceFilterBar: View {
                         selected: dateConstrains && state.datePreset.isCustomFamily,
                         action: { customDateSheetVisible = true }
                     )
+                    // macOS: a popover hanging off the chip that opened it
+                    // (#341). `presentationDetents` do nothing on macOS, so the
+                    // sheet below rendered as a small centred window that
+                    // clipped its own content.
+                    #if os(macOS)
+                    .popover(isPresented: $customDateSheetVisible, arrowEdge: .bottom) {
+                        customDateContent
+                            .frame(width: 380, height: 360)
+                    }
+                    #endif
                 }
                 .padding(.leading, Space.lg)
                 .padding(.trailing, Space.xs)
@@ -236,36 +246,55 @@ struct FinanceFilterBar: View {
 
             filterIconButton
                 .padding(.trailing, Space.lg)
-        }
-        .sheet(isPresented: $customDateSheetVisible) {
-            CustomDateRangeSheet(
-                start: $state.customStart,
-                end: $state.customEnd,
-                onApplyCustom: {
-                    state.datePreset = .custom
-                    state.dateExplicitlySet = true
-                },
-                onSelectPreset: {
-                    state.datePreset = $0
-                    state.dateExplicitlySet = true
+                #if os(macOS)
+                .popover(isPresented: $moreFiltersSheetVisible, arrowEdge: .bottom) {
+                    moreFiltersContent
+                        .frame(width: 360, height: 460)
                 }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+                #endif
+        }
+        // iOS keeps the detented sheets; macOS uses the anchored popovers above.
+        #if os(iOS)
+        .sheet(isPresented: $customDateSheetVisible) {
+            customDateContent
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $moreFiltersSheetVisible) {
-            MoreFiltersSheet(
-                datePreset: $state.datePreset,
-                dateExplicitlySet: $state.dateExplicitlySet,
-                categories: $state.categories,
-                sources: $state.sources,
-                people: $state.people,
-                events: $state.events,
-                importSources: $state.importSources
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            moreFiltersContent
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
+        #endif
+    }
+
+    /// Shared by the iOS sheet and the macOS popover, so the two presentations
+    /// can never drift in content.
+    private var customDateContent: some View {
+        CustomDateRangeSheet(
+            start: $state.customStart,
+            end: $state.customEnd,
+            onApplyCustom: {
+                state.datePreset = .custom
+                state.dateExplicitlySet = true
+            },
+            onSelectPreset: {
+                state.datePreset = $0
+                state.dateExplicitlySet = true
+            }
+        )
+    }
+
+    private var moreFiltersContent: some View {
+        MoreFiltersSheet(
+            datePreset: $state.datePreset,
+            dateExplicitlySet: $state.dateExplicitlySet,
+            categories: $state.categories,
+            sources: $state.sources,
+            people: $state.people,
+            events: $state.events,
+            importSources: $state.importSources
+        )
     }
 
     /// Trailing icon that opens the non-date filters. Tints accent and shows a
@@ -336,6 +365,81 @@ struct FinanceFilterBar: View {
     }
 }
 
+// MARK: - Filter surface chrome (issue #341)
+
+/// Chrome for a filter surface that is a sheet on iOS and a popover on macOS.
+///
+/// A `NavigationStack` with toolbar actions is the right container inside a
+/// sheet and the wrong one inside a popover: on macOS the popover has no
+/// navigation bar to hang Cancel / Done from, and `presentationDetents` — which
+/// is what gave the sheet its height — is a no-op there, which is how the
+/// filters ended up as a centred window with its own content cut off.
+///
+/// macOS therefore gets an explicit title row and an action footer around the
+/// same content. iOS keeps the exact `NavigationStack` + toolbar it had.
+private struct FilterSurface<Content: View>: View {
+    let title: String
+    let leadingLabel: String
+    var leadingEnabled: Bool = true
+    let leadingAction: () -> Void
+    let trailingLabel: String
+    let trailingAction: () -> Void
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        #if os(macOS)
+        VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.edHeading)
+                    .foregroundStyle(Tokens.ink)
+                Spacer()
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+
+            HStack {
+                Button(leadingLabel, action: leadingAction)
+                    .disabled(!leadingEnabled)
+                Spacer()
+                Button(trailingLabel, action: trailingAction)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+        }
+        .background(Tokens.paper)
+        #else
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                content()
+            }
+            .navigationTitle(title)
+            .inlineNavigationTitle()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(leadingLabel, action: leadingAction)
+                        .foregroundStyle(Tokens.muted)
+                        .disabled(!leadingEnabled)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(trailingLabel, action: trailingAction)
+                        .foregroundStyle(Tokens.ink)
+                }
+            }
+        }
+        #endif
+    }
+}
+
 // MARK: - Custom date range sheet
 
 /// Date-range picker sheet (#211). Offers the rolling-window / year-ago quick
@@ -352,9 +456,16 @@ private struct CustomDateRangeSheet: View {
     let onSelectPreset: (FinanceDateRangePreset) -> Void
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.ignoresSafeArea()
+        FilterSurface(
+            title: "Date range",
+            leadingLabel: "Cancel",
+            leadingAction: { dismiss() },
+            trailingLabel: "Apply",
+            trailingAction: {
+                onApplyCustom()
+                dismiss()
+            }
+        ) {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     // Quick presets — one tap applies + dismisses.
                     VStack(alignment: .leading, spacing: Space.sm) {
@@ -392,22 +503,6 @@ private struct CustomDateRangeSheet: View {
                     Spacer()
                 }
                 .padding(Space.lg)
-            }
-            .navigationTitle("Date range")
-            .inlineNavigationTitle()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(Tokens.muted)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Apply") {
-                        onApplyCustom()
-                        dismiss()
-                    }
-                    .foregroundStyle(Tokens.ink)
-                }
-            }
         }
     }
 }
@@ -497,9 +592,23 @@ private struct MoreFiltersSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.ignoresSafeArea()
+        FilterSurface(
+            title: "Filters",
+            leadingLabel: "Clear",
+            leadingEnabled: hasActiveFilters,
+            leadingAction: {
+                categories.removeAll()
+                sources.removeAll()
+                people.removeAll()
+                events.removeAll()
+                importSources.removeAll()
+                // Back to the default This Month landing view (#245).
+                datePreset = .thisMonth
+                dateExplicitlySet = false
+            },
+            trailingLabel: "Done",
+            trailingAction: { dismiss() }
+        ) {
                 List {
                     // Person — only when there are people to filter by.
                     if !allPeople.isEmpty {
@@ -631,29 +740,6 @@ private struct MoreFiltersSheet: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
-            }
-            .navigationTitle("Filters")
-            .inlineNavigationTitle()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Clear") {
-                        categories.removeAll()
-                        sources.removeAll()
-                        people.removeAll()
-                        events.removeAll()
-                        importSources.removeAll()
-                        // Back to the default This Month landing view (#245).
-                        datePreset = .thisMonth
-                        dateExplicitlySet = false
-                    }
-                    .foregroundStyle(Tokens.muted)
-                    .disabled(!hasActiveFilters)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Tokens.ink)
-                }
-            }
         }
     }
 

@@ -188,7 +188,7 @@ struct ListsView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                    .contentRowInsets(vertical: Space.xs)
                 }
             }
 
@@ -408,7 +408,7 @@ private struct ListDetailContent: View {
                 }
 
                 Rectangle().fill(Tokens.divider).frame(height: 0.5)
-                    .padding(.horizontal, Space.lg)
+                    .padding(.horizontal, RowMetrics.hairlineInset)
 
                 // Items list — always rendered so tap-below works even when empty.
                 // Chrome stripped to keep the editorial calm look.
@@ -530,7 +530,7 @@ private struct ListDetailContent: View {
                     .padding(.vertical, Space.lg)
                     .listRowBackground(Tokens.paper)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                    .contentRowInsets(vertical: 2)
             }
 
             // Keyed by item.id (UUID) — not array offset — so the
@@ -562,7 +562,7 @@ private struct ListDetailContent: View {
                 }
                 .listRowBackground(Tokens.paper)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.rowTrailingGutter))
+                .contentRowInsets(vertical: 2)
             }
             .onMove { source, destination in
                 Task { await viewModel.reorderItems(in: list, from: source, to: destination) }
@@ -599,7 +599,7 @@ private struct ListDetailContent: View {
                 .id("draftItemRow")
                 .listRowBackground(Tokens.paper)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: Space.lg, bottom: 2, trailing: Space.lg))
+                .contentRowInsets(vertical: 2)
             }
             // Visible ghost add-row (#268): section-level hairline +
             // outline plus.circle on the checkbox column, right after the
@@ -828,10 +828,12 @@ private struct ItemRow: View {
             // Its own tap target so it never triggers the row's inline rename.
             if !isEditing {
                 Button(action: onOpenDetails) {
+                    // Same glyph and target as the task row's ⓘ (#340); the two
+                    // were 16/30 here and 18/32 there.
                     Image(systemName: "info.circle")
-                        .font(.system(size: 16, weight: .regular))
+                        .font(.system(size: RowMetrics.rowInfoGlyph, weight: .regular))
                         .foregroundStyle(Tokens.mutedSoft)
-                        .frame(width: 30, height: 30, alignment: .trailing)
+                        .frame(width: RowMetrics.rowInfoTarget, height: RowMetrics.rowInfoTarget, alignment: .trailing)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -839,7 +841,10 @@ private struct ItemRow: View {
             }
         }
         .padding(.vertical, Space.sm)
-        .padding(.horizontal, Space.md)
+        // Full-bleed rows on macOS (#339): this padding is the content margin,
+        // so it has to be the shared one. Resolves to the previous `Space.md`
+        // on iOS.
+        .padding(.horizontal, RowMetrics.horizontalPadding)
         // macOS: soft inset rounded hover highlight (Reminders-style), which
         // replaces the hard system selection bar killed by
         // `macTamedListSelection()` on the List. No-op on iOS.

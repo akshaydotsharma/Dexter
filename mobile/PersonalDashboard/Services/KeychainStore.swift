@@ -19,6 +19,10 @@ enum KeychainStore {
     enum Account {
         /// Gmail IMAP app password for the receipts inbox.
         static let imapAppPassword = "imap.app_password"
+        /// Anthropic Messages API key entered by the user in Settings (#337).
+        /// Overrides the build-time env var / Info.plist sources, and survives
+        /// `xcodegen generate`, which the scheme-injected key does not.
+        static let anthropicAPIKey = "anthropic.api_key"
     }
 
     // MARK: - API

@@ -24,11 +24,44 @@ enum Space {
     /// info icon on task / list-item rows). Tight on macOS so the icon hugs the
     /// window edge instead of leaving a wide right-hand gap (issue #285); iOS
     /// keeps the symmetric `lg` gutter, byte-for-byte unchanged.
+    ///
+    /// Superseded on macOS by `.contentRowInsets()` (#339), which zeroes the
+    /// row inset entirely and lets the row's own padding set the margin. Kept
+    /// for any surface still setting insets by hand.
     static var rowTrailingGutter: CGFloat {
         #if os(macOS)
         Space.xs
         #else
         Space.lg
+        #endif
+    }
+}
+
+// MARK: - Row insets (issue #339)
+
+extension View {
+    /// `listRowInsets` for a row that already owns its horizontal padding.
+    ///
+    /// On macOS every list surface was paying its inset twice: a row with 16pt
+    /// of internal padding sat inside a 16pt `listRowInsets`, so content began
+    /// 32pt from the pane edge and the row's hairline stopped 16pt short of
+    /// both edges. Lists read as not reaching the right edge of the window, and
+    /// Trips rows started further in than the rule above them.
+    ///
+    /// Zeroing the horizontal inset on macOS makes the row span the pane, so
+    /// hairlines and selection run edge to edge and the single content margin
+    /// is the one the row itself declares (`RowMetrics.horizontalPadding`).
+    /// That margin is also what the section headers use, which is why headers
+    /// and rows now line up.
+    ///
+    /// iOS keeps the `Space.lg` gutter its floating cards need, unchanged.
+    ///
+    /// - Parameter vertical: the row's existing vertical inset, per surface.
+    func contentRowInsets(vertical: CGFloat = 0) -> some View {
+        #if os(macOS)
+        return listRowInsets(EdgeInsets(top: vertical, leading: 0, bottom: vertical, trailing: 0))
+        #else
+        return listRowInsets(EdgeInsets(top: vertical, leading: Space.lg, bottom: vertical, trailing: Space.lg))
         #endif
     }
 }
@@ -76,6 +109,75 @@ enum RowMetrics {
         36
         #endif
     }
+
+    /// Horizontal padding for a block of flat rows laid out in a `ScrollView`
+    /// rather than a `List` (Finance's day groups, recurring expenses). The
+    /// `List` surfaces get the same effect from `.contentRowInsets()`; this is
+    /// the hand-rolled equivalent, and it exists so those rows reach the pane
+    /// edge on macOS like every other row does (#339).
+    static var rowBlockPadding: CGFloat {
+        #if os(macOS)
+        0
+        #else
+        Space.lg
+        #endif
+    }
+
+    /// Horizontal padding for a header sitting above such a block. It has to
+    /// line up with the row CONTENT, not the row edge, so it carries the
+    /// content margin on macOS and nothing on iOS, where the block's own
+    /// padding already positions it.
+    static var rowBlockHeaderPadding: CGFloat {
+        #if os(macOS)
+        RowMetrics.horizontalPadding
+        #else
+        0
+        #endif
+    }
+
+    /// Inset for a row's leading accent rail (the task priority bar), so it
+    /// doesn't sit flush against the sidebar seam once rows are full-bleed.
+    static var accentRailInset: CGFloat {
+        #if os(macOS)
+        Space.xs
+        #else
+        0
+        #endif
+    }
+
+    /// Horizontal inset of a rule that separates rows in a list (the Completed
+    /// divider, an add-row's section hairline, a detail header's underline).
+    ///
+    /// Zero on macOS, where rows are full-bleed (#339) and a rule that stopped
+    /// short of the window edge would contradict the row hairlines around it.
+    /// iOS keeps the `lg` inset its carded rows sit within.
+    static var hairlineInset: CGFloat {
+        #if os(macOS)
+        0
+        #else
+        Space.lg
+        #endif
+    }
+
+    /// Leading offset for an add-row's bullet, so it lands on the same x as the
+    /// completion circle of the real rows above it. That column is one content
+    /// margin in on macOS, and the old inset-plus-padding sum on iOS.
+    static var addRowLeading: CGFloat {
+        #if os(macOS)
+        RowMetrics.horizontalPadding
+        #else
+        Space.lg + Space.md
+        #endif
+    }
+
+    /// The ⓘ glyph that opens a row's detail view (issue #340). Task rows drew
+    /// it at 18pt in a 32pt target and list-item rows at 16pt in a 30pt one, a
+    /// difference visible side by side and invisible in either file on its own.
+    /// Tokenised so the two cannot drift again; the larger of the two wins,
+    /// since it was already the more comfortable target.
+    static let rowInfoGlyph: CGFloat = 18
+    /// Hit target around `rowInfoGlyph`.
+    static let rowInfoTarget: CGFloat = 32
 
     /// Gap between rows. Zero on macOS, where a hairline does the separating;
     /// iOS keeps the gap that its cards float in.

@@ -593,8 +593,10 @@ struct FinanceView: View {
                     noResultsState
                         .padding(.top, Space.xl)
                 } else {
+                    // Zero on macOS: the rows are full-bleed there and their own
+                    // padding carries the margin (#339). `Space.lg` on iOS.
                     expenseList(filtered: filtered)
-                        .padding(.horizontal, Space.lg)
+                        .padding(.horizontal, RowMetrics.rowBlockPadding)
                 }
 
                 Color.clear.frame(height: 96)
@@ -652,6 +654,9 @@ struct FinanceView: View {
                             .monospacedDigit()
                             .foregroundStyle(Tokens.muted)
                     }
+                    // Line the day header up with the row content, now that the
+                    // rows themselves run to the pane edge on macOS (#339).
+                    .padding(.horizontal, RowMetrics.rowBlockHeaderPadding)
                     // macOS closes the gap between rows: the hairline inside
                     // `ExpenseRow` separates them instead. iOS keeps `Space.xs`
                     // so its cards still float apart (issue #303).

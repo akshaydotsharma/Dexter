@@ -188,7 +188,7 @@ struct TripsView: View {
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                .contentRowInsets(vertical: Space.xs)
             }
 
             Color.clear

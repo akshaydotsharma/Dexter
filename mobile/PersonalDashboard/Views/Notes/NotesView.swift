@@ -225,7 +225,7 @@ struct NotesView: View {
                         }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                        .contentRowInsets(vertical: Space.xs)
                     }
                 } header: {
                     sectionEyebrow("Folders")
@@ -242,7 +242,7 @@ struct NotesView: View {
                             }
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                            .contentRowInsets(vertical: Space.xs)
                     }
                 } header: {
                     sectionEyebrow("Unfiled")
@@ -292,7 +292,7 @@ struct NotesView: View {
                         }
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: Space.xs, leading: Space.lg, bottom: Space.xs, trailing: Space.lg))
+                        .contentRowInsets(vertical: Space.xs)
                 }
             }
 
