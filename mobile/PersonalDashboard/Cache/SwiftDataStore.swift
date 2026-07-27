@@ -164,10 +164,33 @@ final class SwiftDataStore {
     ///
     /// Deferred to the next run-loop turn: this runs during container bootstrap,
     /// which can precede `NSApplication` being ready to present modally.
+    /// Automation opt-out: `DEXTER_STORE_PATH_ACK` (#336).
+    ///
+    /// `runModal()` blocks the main thread until a human clicks the button. A
+    /// script cannot, so under automation it blocks FOREVER, and because it is a
+    /// nested modal run loop it also starves every main-actor continuation in the
+    /// process. That is the bug #336 describes as "the alert blocks the debug
+    /// hooks it exists to protect", and on #348 it presented as a phantom
+    /// SwiftData failure: a sync pass completed its file write on a background
+    /// task, then never resumed on the main actor to save, so it looked exactly
+    /// like `save()` was throwing. Nothing was wrong with the save.
+    ///
+    /// The safety property survives because the opt-out is EXPLICIT and env-only.
+    /// A human who has forgotten the override is active has not set this, so they
+    /// still get the unmissable modal that #318 added. Only a caller that states
+    /// "I know" is let through, and it still gets the log line.
+    private static var overrideModalAcknowledged: Bool {
+        ProcessInfo.processInfo.environment["DEXTER_STORE_PATH_ACK"] != nil
+    }
+
     private static func warnIfOverrideStore(_ url: URL) {
         #if DEBUG && canImport(AppKit)
         guard isUsingOverrideStore else { return }
         NSLog("SwiftDataStore: OVERRIDE store active at %@", url.path)
+        if overrideModalAcknowledged {
+            NSLog("SwiftDataStore: override-store modal suppressed by DEXTER_STORE_PATH_ACK")
+            return
+        }
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.alertStyle = .critical
@@ -246,25 +269,44 @@ final class SwiftDataStore {
         #endif
     }
 
+    /// Single source of truth for the schema.
+    ///
+    /// Both the on-disk container and `makeInMemory()` read this list. They used
+    /// to carry two hand-maintained copies, which is a standing invitation to
+    /// register a new model in one and not the other: the app would work and
+    /// only tests or previews would fail, with an error that points at the model
+    /// rather than at the missing registration.
+    ///
+    /// The four `Sync*` types are sidecars added for cross-device sync (#348).
+    /// They exist precisely so sync does not have to touch the 15 models above
+    /// them. Adding a model type is a safe lightweight migration; altering a
+    /// live one is not.
+    static let schemaModels: [any PersistentModel.Type] = [
+        LocalTodo.self,
+        LocalNoteFolder.self,
+        LocalNote.self,
+        LocalList.self,
+        LocalKeyword.self,
+        LocalTrip.self,
+        LocalItineraryItem.self,
+        LocalExpense.self,
+        RecurringExpense.self,
+        LocalPerson.self,
+        LocalEvent.self,
+        LocalFXRate.self,
+        LocalProcessedEmail.self,
+        LocalEmailIngestLog.self,
+        LocalStatementImport.self,
+        // MARK: Sync sidecars (#348)
+        SyncDeviceState.self,
+        SyncShadow.self,
+        SyncTombstone.self,
+        SyncPeerCursor.self,
+    ]
+
     private init() {
         do {
-            let schema = Schema([
-                LocalTodo.self,
-                LocalNoteFolder.self,
-                LocalNote.self,
-                LocalList.self,
-                LocalKeyword.self,
-                LocalTrip.self,
-                LocalItineraryItem.self,
-                LocalExpense.self,
-                RecurringExpense.self,
-                LocalPerson.self,
-                LocalEvent.self,
-                LocalFXRate.self,
-                LocalProcessedEmail.self,
-                LocalEmailIngestLog.self,
-                LocalStatementImport.self,
-            ])
+            let schema = Schema(Self.schemaModels)
             // SwiftData defaults the store URL to Application Support, but
             // on a fresh simulator that directory doesn't exist yet and
             // CoreData logs a noisy stat failure on first run. Pre-creating
@@ -487,23 +529,7 @@ final class SwiftDataStore {
     /// Build an in-memory container for tests or previews.
     static func makeInMemory() -> ModelContainer {
         do {
-            let schema = Schema([
-                LocalTodo.self,
-                LocalNoteFolder.self,
-                LocalNote.self,
-                LocalList.self,
-                LocalKeyword.self,
-                LocalTrip.self,
-                LocalItineraryItem.self,
-                LocalExpense.self,
-                RecurringExpense.self,
-                LocalPerson.self,
-                LocalEvent.self,
-                LocalFXRate.self,
-                LocalProcessedEmail.self,
-                LocalEmailIngestLog.self,
-                LocalStatementImport.self,
-            ])
+            let schema = Schema(Self.schemaModels)
             let configuration = ModelConfiguration(
                 schema: schema,
                 isStoredInMemoryOnly: true
