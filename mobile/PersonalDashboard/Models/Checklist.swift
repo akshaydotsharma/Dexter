@@ -82,6 +82,15 @@ struct Checklist: Codable, Identifiable, Hashable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
+    /// When the list was archived, nil while it is active (#374). Read-only
+    /// here like `deletedAt` — the archive state is changed through
+    /// `ChecklistService.setArchived`, not by mutating a DTO.
+    ///
+    /// Optional, so the synthesized decoder uses `decodeIfPresent` and JSON
+    /// persisted before this field existed still decodes to nil.
+    let archivedAt: Date?
+
+    var isArchived: Bool { archivedAt != nil }
 
     private enum CodingKeys: String, CodingKey {
         case id = "clientUuid"
@@ -94,6 +103,7 @@ struct Checklist: Codable, Identifiable, Hashable, Sendable {
         case createdAt
         case updatedAt
         case deletedAt
+        case archivedAt
     }
 }
 

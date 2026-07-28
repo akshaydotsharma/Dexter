@@ -451,6 +451,10 @@ final class DataImportService {
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt,
                     deletedAt: dto.deletedAt,
+                    // Restore the archive state (#374). Nil for archives written
+                    // before the field existed, which correctly restores those
+                    // notes as active.
+                    archivedAt: dto.archivedAt,
                     needsSync: false
                 ))
             }
@@ -475,6 +479,8 @@ final class DataImportService {
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt,
                     deletedAt: dto.deletedAt,
+                    // Restore the archive state (#374).
+                    archivedAt: dto.archivedAt,
                     needsSync: false
                 ))
             }

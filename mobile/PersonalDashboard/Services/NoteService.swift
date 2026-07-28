@@ -55,19 +55,39 @@ struct NoteService {
 
     // MARK: - Notes
 
+    /// The ACTIVE notes: not deleted and not archived (#374).
+    ///
+    /// `archivedAt == nil` is what keeps archived notes out of the Notes index,
+    /// out of each folder's note list, and out of the Today card, all of which
+    /// read through `NotesViewModel.notes`. The archive has its own accessor.
     func list(folderId: UUID? = nil) async throws -> [Note] {
         let descriptor: FetchDescriptor<LocalNote>
         if let folderId {
             descriptor = FetchDescriptor<LocalNote>(
-                predicate: #Predicate { $0.deletedAt == nil && $0.folderClientUUID == folderId },
+                predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt == nil && $0.folderClientUUID == folderId },
                 sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
             )
         } else {
             descriptor = FetchDescriptor<LocalNote>(
-                predicate: #Predicate { $0.deletedAt == nil },
+                predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt == nil },
                 sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
             )
         }
+        let rows = try store.context.fetch(descriptor)
+        return rows.map { $0.toDTO() }
+    }
+
+    /// The archived notes, most recently archived first (#374).
+    ///
+    /// Flat across folders on purpose: the archive is one place you go to find
+    /// something you put away, not a second copy of the folder tree. A note
+    /// keeps its `folderClientUUID` while archived, so unarchiving returns it to
+    /// the folder it came from.
+    func listArchived() async throws -> [Note] {
+        let descriptor = FetchDescriptor<LocalNote>(
+            predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt != nil },
+            sortBy: [SortDescriptor(\.archivedAt, order: .reverse)]
+        )
         let rows = try store.context.fetch(descriptor)
         return rows.map { $0.toDTO() }
     }
@@ -94,6 +114,16 @@ struct NoteService {
         row.updatedAt = Date()
         try store.context.save()
         return row.toDTO()
+    }
+
+    /// Archive or restore a note (#374). Touches `archivedAt` only, rather than
+    /// going through `update(_:_:)` — see `ChecklistService.setArchived` for the
+    /// reasoning.
+    func setArchived(_ note: Note, _ archived: Bool) async throws {
+        let row = try fetchLocalNote(uuid: note.id)
+        row.archivedAt = archived ? Date() : nil
+        row.updatedAt = Date()
+        try store.context.save()
     }
 
     func delete(_ note: Note) async throws {

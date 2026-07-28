@@ -35,6 +35,14 @@ struct Note: Codable, Identifiable, Hashable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
+    /// When the note was archived, nil while it is active (#374). Read-only
+    /// here like `deletedAt` — changed through `NoteService.setArchived`.
+    /// Optional, so JSON persisted before this field existed decodes to nil.
+    ///
+    /// `NoteFolder` above has no equivalent: folders are not archivable.
+    let archivedAt: Date?
+
+    var isArchived: Bool { archivedAt != nil }
 
     private enum CodingKeys: String, CodingKey {
         case id = "clientUuid"
@@ -46,6 +54,7 @@ struct Note: Codable, Identifiable, Hashable, Sendable {
         case createdAt
         case updatedAt
         case deletedAt
+        case archivedAt
     }
 }
 

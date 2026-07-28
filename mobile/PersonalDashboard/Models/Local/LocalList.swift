@@ -22,6 +22,18 @@ final class LocalList {
     var createdAt: Date
     var updatedAt: Date
     var deletedAt: Date?
+    /// Archive marker (#374). A TIMESTAMP rather than a Bool, for the same
+    /// reasons `deletedAt` is one: it records when the list left the index (so
+    /// the archive can sort most-recently-archived first) and it keeps the two
+    /// hidden states reading the same way. Optional with no non-nil default so
+    /// the SwiftData lightweight migration on existing installs cannot fail
+    /// (project rule: only ADD fields). Nil on every pre-existing list, which
+    /// is exactly right — nothing was archived before this shipped.
+    ///
+    /// Distinct from `deletedAt`: archived rows are hidden but reachable and
+    /// restorable from the Archive section, deleted rows are gone from the UI
+    /// entirely. A row should never carry both.
+    var archivedAt: Date?
     var needsSync: Bool
 
     init(
@@ -35,6 +47,7 @@ final class LocalList {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         deletedAt: Date? = nil,
+        archivedAt: Date? = nil,
         needsSync: Bool = true
     ) {
         self.clientUUID = clientUUID
@@ -47,6 +60,7 @@ final class LocalList {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
+        self.archivedAt = archivedAt
         self.needsSync = needsSync
     }
 
@@ -69,7 +83,8 @@ final class LocalList {
             version: version,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            deletedAt: deletedAt
+            deletedAt: deletedAt,
+            archivedAt: archivedAt
         )
     }
 

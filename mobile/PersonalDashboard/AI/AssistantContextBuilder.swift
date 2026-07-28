@@ -64,9 +64,13 @@ struct AssistantContextBuilder {
         }
 
         // Notes: 50 most recent, sorted by updatedAt desc, with content preview.
+        // Archived notes are excluded (#374): the assistant should only see and
+        // act on what is live. Feeding it archived notes would let it edit or
+        // delete something the user has explicitly put away, and would burn
+        // context on records the user is not working with.
         if let notes = try? context.fetch(
             FetchDescriptor<LocalNote>(
-                predicate: #Predicate { $0.deletedAt == nil },
+                predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt == nil },
                 sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
             )
         ).prefix(50), !notes.isEmpty {
@@ -91,9 +95,10 @@ struct AssistantContextBuilder {
 
         // Lists: 50 most recent. Items are emitted with their indices so the
         // model can target edit_list_item / remove_list_item by index.
+        // Archived lists excluded, same reasoning as notes above (#374).
         if let lists = try? context.fetch(
             FetchDescriptor<LocalList>(
-                predicate: #Predicate { $0.deletedAt == nil },
+                predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt == nil },
                 sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
             )
         ).prefix(50), !lists.isEmpty {

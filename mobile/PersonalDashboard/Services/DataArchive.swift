@@ -101,6 +101,13 @@ enum DataArchive {
         let createdAt: Date
         let updatedAt: Date
         let deletedAt: Date?
+
+        // MARK: Added in #374 — the archive flag.
+        // Optional with a nil default, the same shape the #319 additions use, so
+        // archives written before this field existed still decode and restore
+        // their notes as active. Dropping it would silently un-archive every
+        // note on the next restore.
+        var archivedAt: Date? = nil
     }
 
     struct NoteFolderDTO: Codable {
@@ -123,6 +130,9 @@ enum DataArchive {
         // MARK: Added in #319 — list styling was previously dropped.
         let iconName: String?
         let colorHex: String?
+
+        // MARK: Added in #374 — the archive flag. See `NoteDTO.archivedAt`.
+        var archivedAt: Date? = nil
     }
 
     /// Lists store their checklist items as a JSON blob inside the
