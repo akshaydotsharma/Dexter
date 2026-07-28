@@ -1,9 +1,9 @@
 # Cross-device sync (iOS <-> macOS)
 
-**Status**: PHASE 2 SHIPPED and working on both real devices (2026-07-28). Applying enabled on the Mac only. Phase 3 not started.
+**Status**: PHASE 2 SHIPPED and working on both real devices (2026-07-28), including the #363 manual refresh affordance. Applying enabled on the Mac only. Phase 3 not started.
 **Started**: 2026-07-27
-**Last Updated**: 2026-07-27
-**Estimated Remaining**: phases 0+1 are the next unit of work; phases 2-4 follow
+**Last Updated**: 2026-07-28
+**Estimated Remaining**: phase 3 (attachments, compaction, bootstrap) is the next unit of work
 
 ## Objective
 
@@ -40,6 +40,7 @@ Give Dexter Notes/Reminders-style sync between the iPhone and the Mac: edit on e
 - [x] #349 restore round trip verified, then RE-verified after the importer change
 - [x] #362 a disposable store can no longer publish to the real sync folder (#361)
 - [x] #364 post `localStoreDidChange` after applying, so manual-fetch views re-read (#363)
+- [x] #365 manual refresh affordance, closing #363: `syncRefreshable` runs a real pass before reloading on iOS; macOS gets a toolbar button plus Refresh Cmd-R in a new Sync menu. Also made `pass()` coalesce instead of dropping, and gave Today the `localStoreDidChange` observer it was missing
 
 Confirmed working by Akshay on the real Mac and iPhone: a change on the phone applies on the Mac, and a delete removes it.
 
@@ -49,7 +50,9 @@ Confirmed working by Akshay on the real Mac and iPhone: a change on the phone ap
 
 - [ ] Live with phase 2 one-directional for a while, then consider enabling apply on the phone too
   - The moment both sides apply, simultaneous edits of ONE record become reachable. That path is deterministic by construction (Lamport + device-id tiebreak, total order) but has never been driven on real hardware.
-- [ ] #363 remaining half: manual refresh affordance (pull-to-refresh on iOS, toolbar / Cmd-R on macOS), which should run a real pass rather than only reloading
+- [ ] Hands-on pass on #365's two macOS controls (the toolbar button and Cmd-R). Neither could be driven autonomously: with Akshay's own DexterMac running, System Events resolves `application process "DexterMac"` to the wrong instance, and the test window opened on another Space. Rendering and the menu's existence WERE verified.
+
+Decided and closed (2026-07-28): **no hand-rolled pull-to-refresh on macOS.** Akshay asked why the Mac got a button instead of the gesture he originally described. macOS has no system pull-to-refresh (`.refreshable` was already on those views for both platforms and gave the Mac nothing), so it would mean bridging into `NSScrollView` to track elastic overscroll, twice over for `List` and `ScrollView` surfaces. Three reasons not to: overscroll needs something to scroll, so it dies in exactly the empty-state case where you most want to check for incoming data; an invisible gesture cannot show that a pass is running, where the button becomes a spinner; and no Mac app does it, so it is not a gesture anyone tries. Cmd-R is the real Mac equivalent of the ask. He accepted this. Revisit only if he raises it again.
 
 ## Next Steps
 
