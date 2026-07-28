@@ -651,8 +651,7 @@ private struct TripEditorSheet: View {
                     Text("Anything to remember about this trip…")
                         .font(.edBody)
                         .foregroundStyle(Tokens.mutedSoft)
-                        .padding(.horizontal, Space.md + 4)
-                        .padding(.vertical, Space.md + 8)
+                        .textEditorPlaceholderInset(horizontal: Space.md, vertical: Space.sm)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $notes)

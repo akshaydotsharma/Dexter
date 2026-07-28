@@ -1732,8 +1732,7 @@ struct ItineraryItemEditorSheet: View {
                     Text("Address, time, anything to remember…")
                         .font(.edBody)
                         .foregroundStyle(Tokens.mutedSoft)
-                        .padding(.horizontal, Space.md + 4)
-                        .padding(.vertical, Space.md + 8)
+                        .textEditorPlaceholderInset(horizontal: Space.md, vertical: Space.sm)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $notes)
