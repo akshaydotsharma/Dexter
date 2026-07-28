@@ -178,6 +178,7 @@ struct NotesView: View {
         }
         .alert("Rename folder", isPresented: $renamingFolder) {
             TextField("Folder name", text: $folderRenameDraft)
+                .paperFieldOnMac()
             Button("Cancel", role: .cancel) {}
             Button("Rename") {
                 guard let folder = selectedFolder else { return }
@@ -371,6 +372,7 @@ private struct FolderDetailHeader: View {
             Spacer()
             if isEditing {
                 TextField("", text: $draft)
+                    .paperFieldOnMac()
                     .font(.edTitle)
                     .foregroundStyle(Tokens.ink)
                     .multilineTextAlignment(.center)
@@ -493,6 +495,7 @@ private struct NewFolderSheet: View {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     Text("Folder name").eyebrow()
                     TextField("Name", text: $name)
+                        .paperFieldOnMac()
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)
                         .padding(Space.md)
@@ -553,6 +556,7 @@ private struct NoteDetailContent: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     TextField("Untitled", text: $title, axis: .vertical)
+                        .paperFieldOnMac()
                         .font(.edDisplay)
                         .foregroundStyle(Tokens.ink)
                         .textFieldStyle(.plain)

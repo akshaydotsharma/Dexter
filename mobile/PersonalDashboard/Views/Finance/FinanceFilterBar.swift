@@ -495,8 +495,10 @@ private struct CustomDateRangeSheet: View {
                         Text("Custom range")
                             .eyebrow()
                         DatePicker("From", selection: $start, in: ...Date(), displayedComponents: .date)
+                            .paperDatePickerOnMac()
                             .tint(Tokens.accentFinance)
                         DatePicker("To", selection: $end, in: start...Date(), displayedComponents: .date)
+                            .paperDatePickerOnMac()
                             .tint(Tokens.accentFinance)
                     }
 

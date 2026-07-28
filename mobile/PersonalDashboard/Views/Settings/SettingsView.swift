@@ -389,7 +389,7 @@ private struct AnthropicKeyRow: View {
 
             HStack(spacing: Space.sm) {
                 SecureField("sk-ant-…", text: $draft)
-                    .textFieldStyle(.plain)
+                    .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .noAutocapitalization()

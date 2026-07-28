@@ -309,7 +309,85 @@ extension View {
         self
         #endif
     }
+
+    /// Everything a text input needs on macOS to show NOTHING but the paper
+    /// surface it sits in (#368): no default bordered box at rest, and no blue
+    /// focus ring while editing. No-op on iOS.
+    ///
+    /// Apply this at the CALL SITE, not once at the window root. Setting
+    /// `.textFieldStyle` on the root content covers the main hierarchy but does
+    /// NOT cross a sheet presentation, so every field in Add Expense, the trip
+    /// editors and the settings sheets kept its bezel when only the root was
+    /// styled.
+    @ViewBuilder
+    func paperFieldOnMac() -> some View {
+        #if os(macOS)
+        self.textFieldStyle(.plain).focusEffectDisabled()
+        #else
+        self
+        #endif
+    }
+
+    /// The date-picker equivalent of `paperFieldOnMac()` (#368). A `DatePicker`
+    /// is an `NSDatePicker`, not a text field, so no SwiftUI style reaches its
+    /// bezel — it keeps drawing the same grey slab the text fields used to.
+    /// This reaches the AppKit view directly and turns the chrome off.
+    /// No-op on iOS.
+    @ViewBuilder
+    func paperDatePickerOnMac() -> some View {
+        #if os(macOS)
+        self.background(DatePickerChromeStripper())
+        #else
+        self
+        #endif
+    }
 }
+
+#if os(macOS)
+/// Zero-size probe planted in a `DatePicker`'s background. On every layout pass
+/// it walks up to the enclosing hosting view and strips the bezel, background
+/// and focus ring off any `NSDatePicker` it finds.
+///
+/// Re-applying on `updateNSView` matters: AppKit restores the bezel when the
+/// control is re-created (theme change, sheet re-presentation), and a one-shot
+/// pass in `makeNSView` would silently stop working there.
+private struct DatePickerChromeStripper: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let probe = NSView(frame: .zero)
+        DispatchQueue.main.async { strip(from: probe) }
+        return probe
+    }
+
+    func updateNSView(_ probe: NSView, context: Context) {
+        DispatchQueue.main.async { strip(from: probe) }
+    }
+
+    /// Climb a few levels so the search covers the picker's own container
+    /// rather than only the background layer the probe sits in.
+    private func strip(from probe: NSView) {
+        var root: NSView? = probe.superview
+        for _ in 0..<3 {
+            guard let next = root?.superview else { break }
+            root = next
+        }
+        guard let root else { return }
+        apply(in: root)
+    }
+
+    private func apply(in view: NSView) {
+        for sub in view.subviews {
+            if let picker = sub as? NSDatePicker {
+                picker.isBezeled = false
+                picker.isBordered = false
+                picker.drawsBackground = false
+                picker.backgroundColor = .clear
+                picker.focusRingType = .none
+            }
+            apply(in: sub)
+        }
+    }
+}
+#endif
 
 #if os(macOS)
 /// Row hover behaviour for a macOS List row. The background tint is gone

@@ -616,6 +616,7 @@ struct FinanceView: View {
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Tokens.muted)
             TextField("Search merchant or description", text: $searchText)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .autocorrectionDisabled(true)

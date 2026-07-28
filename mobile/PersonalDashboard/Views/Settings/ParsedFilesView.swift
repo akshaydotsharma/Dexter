@@ -95,6 +95,7 @@ struct ParsedFilesView: View {
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Tokens.muted)
             TextField("Search file, subject, or sender", text: $searchText)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .autocorrectionDisabled(true)

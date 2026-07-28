@@ -386,6 +386,7 @@ struct AddExpenseSheet: View {
             Text("Amount").eyebrow()
             HStack(spacing: Space.sm) {
                 TextField("0.00", text: $amountText)
+                    .paperFieldOnMac()
                     .decimalKeyboard()
                     .font(.edDisplay)
                     .foregroundStyle(Tokens.ink)
@@ -460,6 +461,7 @@ struct AddExpenseSheet: View {
                     .foregroundStyle(Tokens.inkSoft)
                 Spacer()
                 DatePicker("", selection: $date, in: ...Date(), displayedComponents: .date)
+                    .paperDatePickerOnMac()
                     .labelsHidden()
                     .tint(Tokens.accentFinance)
             }
@@ -479,6 +481,7 @@ struct AddExpenseSheet: View {
                     .foregroundStyle(Tokens.mutedSoft)
             }
             TextField("e.g. Starbucks", text: $merchant)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
@@ -497,6 +500,7 @@ struct AddExpenseSheet: View {
                     .foregroundStyle(Tokens.mutedSoft)
             }
             TextField("Lunch with Sarah", text: $descriptionField)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
@@ -515,6 +519,7 @@ struct AddExpenseSheet: View {
                     .foregroundStyle(Tokens.mutedSoft)
             }
             TextField("Cash, Visa **1234, …", text: $paymentMethod)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
@@ -1347,6 +1352,7 @@ struct PersonPickerSheet: View {
     private var newPersonRow: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             TextField("Name", text: $newName)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .focused($nameFocused)
@@ -1478,6 +1484,7 @@ struct EventPickerSheet: View {
     private var newEventSection: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             TextField("Event name", text: $newName)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .focused($nameFocused)
@@ -1490,9 +1497,11 @@ struct EventPickerSheet: View {
 
             if useDates {
                 DatePicker("From", selection: $startDate, displayedComponents: .date)
+                    .paperDatePickerOnMac()
                     .font(.edFootnote)
                     .tint(Tokens.accentFinance)
                 DatePicker("To", selection: $endDate, in: startDate..., displayedComponents: .date)
+                    .paperDatePickerOnMac()
                     .font(.edFootnote)
                     .tint(Tokens.accentFinance)
             }

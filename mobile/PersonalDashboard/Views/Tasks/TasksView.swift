@@ -744,6 +744,7 @@ private struct DraftTaskRow: View {
             .accessibilityLabel("New task")
             #else
             TextField("New task", text: $text)
+                .paperFieldOnMac()
                 .font(TaskRowMetrics.titleFont)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
@@ -823,6 +824,7 @@ private struct TaskRow: View {
                     )
                     #else
                     TextField("", text: $editText)
+                        .paperFieldOnMac()
                         .font(TaskRowMetrics.titleFont)
                         .foregroundStyle(Tokens.ink)
                         .submitLabel(.done)
@@ -1103,6 +1105,7 @@ private struct TaskEditorSheet: View {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         labeled("Title") {
                             TextField("What needs to be done?", text: $title, axis: .vertical)
+                                .paperFieldOnMac()
                                 .lineLimit(1...3)
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
@@ -1112,6 +1115,7 @@ private struct TaskEditorSheet: View {
                         }
                         labeled("Notes") {
                             TextField("Optional notes", text: $descriptionText, axis: .vertical)
+                                .paperFieldOnMac()
                                 .lineLimit(2...6)
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
@@ -1136,6 +1140,7 @@ private struct TaskEditorSheet: View {
                                     Divider().background(Tokens.divider)
                                     HStack {
                                         DatePicker("", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
+                                            .paperDatePickerOnMac()
                                             .labelsHidden()
                                             .tint(Tokens.accentTasks)
                                         Spacer(minLength: 0)
@@ -1168,6 +1173,7 @@ private struct TaskEditorSheet: View {
                                 }
                             }
                             TextField("Street address or area", text: $address, axis: .vertical)
+                                .paperFieldOnMac()
                                 .lineLimit(1...3)
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
@@ -1178,6 +1184,7 @@ private struct TaskEditorSheet: View {
                         labeled("Google Maps link") {
                             HStack(spacing: Space.sm) {
                                 TextField("Paste a Google Maps link", text: $googleMapsLink)
+                                    .paperFieldOnMac()
                                     .noAutocapitalization()
                                     .autocorrectionDisabled(true)
                                     .urlKeyboard()
@@ -1267,7 +1274,7 @@ private struct TaskEditorSheet: View {
                     // Title + Notes — first grouped card, no icons (Reminders).
                     macGroup {
                         TextField("Title", text: $title, axis: .vertical)
-                            .textFieldStyle(.plain)
+                            .paperFieldOnMac()
                             .lineLimit(1...3)
                             .font(.edBodyMedium)
                             .foregroundStyle(Tokens.ink)
@@ -1275,7 +1282,7 @@ private struct TaskEditorSheet: View {
                             .padding(.vertical, Space.sm)
                         macRowDivider
                         TextField("Notes", text: $descriptionText, axis: .vertical)
-                            .textFieldStyle(.plain)
+                            .paperFieldOnMac()
                             .lineLimit(2...6)
                             .font(.edBody)
                             .foregroundStyle(Tokens.inkSoft)
@@ -1302,6 +1309,7 @@ private struct TaskEditorSheet: View {
                             HStack(spacing: Space.md) {
                                 macIconTile("clock", Tokens.accentTasks)
                                 DatePicker("", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
+                                    .paperDatePickerOnMac()
                                     .labelsHidden()
                                     .datePickerStyle(.compact)
                                     .tint(Tokens.accentTasks)
@@ -1368,7 +1376,7 @@ private struct TaskEditorSheet: View {
                                 Spacer()
                             }
                             TextField("Street address or area", text: $address, axis: .vertical)
-                                .textFieldStyle(.plain)
+                                .paperFieldOnMac()
                                 .lineLimit(1...3)
                                 .font(.edSubheadline)
                                 .foregroundStyle(Tokens.inkSoft)
@@ -1381,7 +1389,7 @@ private struct TaskEditorSheet: View {
                         HStack(spacing: Space.sm) {
                             macIconTile("map.fill", Tokens.accentTasks)
                             TextField("Google Maps link", text: $googleMapsLink)
-                                .textFieldStyle(.plain)
+                                .paperFieldOnMac()
                                 .autocorrectionDisabled(true)
                                 .font(.edSubheadline)
                                 .foregroundStyle(Tokens.inkSoft)
