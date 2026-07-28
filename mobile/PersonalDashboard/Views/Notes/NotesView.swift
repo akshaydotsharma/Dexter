@@ -103,9 +103,14 @@ struct NotesView: View {
                             } label: {
                                 Image(systemName: "folder.badge.plus")
                             }
-                            // Bare glyph, not a bordered box, so it reads as a
-                            // separate control from the round AS coin (issue #289).
-                            .macPlainButtonStyle()
+                            // Default toolbar button style, NOT `.plain`. #289
+                            // used a bare glyph so it would not read as merged
+                            // with the round AS coin, but `.plain` also strips
+                            // the padding macOS puts inside a toolbar control,
+                            // so the icon sat flush against the leading curve of
+                            // the grouped Liquid Glass pill while the refresh
+                            // icon beside it was inset (#368). Matching refresh
+                            // gives both the same breathing room.
                             .accessibilityLabel("New folder")
                         }
                         // File > New Note / Cmd-N on the notes root, creating an
