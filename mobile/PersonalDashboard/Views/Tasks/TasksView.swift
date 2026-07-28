@@ -394,8 +394,8 @@ struct TasksView: View {
     /// ("next event first"), later times below. Tasks without a due date (the
     /// "No Date" bucket) order among themselves by creation time, oldest first;
     /// createdAt (ascending) is also the tiebreaker when two tasks share a due
-    /// time. The colored priority bar still renders on each row — it no longer
-    /// affects ordering.
+    /// time. Priority still renders on each row (as the row's colored wash,
+    /// #376) — it no longer affects ordering.
     private func chronoSorted(_ todos: [Todo]) -> [Todo] {
         todos.sorted { a, b in
             switch (a.dueDate, b.dueDate) {
@@ -942,22 +942,15 @@ private struct TaskRow: View {
         // other flat row use. Unchanged on iOS, where `RowMetrics` resolves to
         // the `Space.md` this line already had.
         .padding(.horizontal, RowMetrics.horizontalPadding)
-        .background(Color.clear)
+        // Priority now reads as a glass-like wash over the whole row rather
+        // than a rail at its leading edge (#376) — the row carries the signal,
+        // and the leading edge is left to the completion circle. `.none` rows
+        // come back untinted. See `PriorityWash`.
+        .priorityWash(todo.taskPriority, dimmed: todo.completed)
         // macOS: soft inset rounded hover highlight (Reminders-style), which
         // replaces the hard system selection bar killed by
         // `macTamedListSelection()` on the List. No-op on iOS.
         .macRowHover()
-        // Thin colored left-edge bar keyed to the task's priority. Spans the row
-        // height at the leading edge; reads as a subtle accent, not a block.
-        // Held off the very edge on macOS: the row runs to the pane boundary
-        // now (#339), and a rail flush against the sidebar seam reads as a
-        // divider between the two panes rather than as part of the row.
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-                .fill(Tokens.priorityColor(for: todo.taskPriority))
-                .frame(width: Space.xs)
-                .padding(.leading, RowMetrics.accentRailInset)
-        }
         .contentShape(Rectangle())
         // iOS: the WHOLE row is tap-to-edit; the completion circle beats it with
         // a high-priority gesture (see `completionButton`). On macOS a full-row

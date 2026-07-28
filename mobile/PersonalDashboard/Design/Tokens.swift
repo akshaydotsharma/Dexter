@@ -162,6 +162,20 @@ enum Tokens {
         }
     }
 
+    /// Hue for a task row's priority wash (#376), or `nil` when the row should
+    /// stay untinted. Same three hues as the (now retired on Tasks) edge bar,
+    /// except `.none` opts out: a wash on every row would make priority
+    /// invisible, where a bar on every row still separated by colour.
+    /// See `PriorityWash` for the alpha budget applied on top of this.
+    static func priorityWashHue(for p: TaskPriority) -> Color? {
+        switch p {
+        case .p0:   return priorityRed
+        case .p1:   return priorityYellow
+        case .p2:   return priorityGreen
+        case .none: return nil
+        }
+    }
+
     static func accent(for section: AppSection) -> Color {
         switch section {
         case .chat:        return accentChat

@@ -145,6 +145,18 @@ enum RowMetrics {
         #endif
     }
 
+    /// Horizontal inset of a task row's priority wash (#376), so the tinted
+    /// pill floats instead of running into the pane edge. Same reasoning as
+    /// `accentRailInset` — full-bleed rows on macOS (#339) put the row edge on
+    /// the sidebar seam, and colour landing there reads as a second pane.
+    static var priorityWashInset: CGFloat {
+        #if os(macOS)
+        Space.xs
+        #else
+        0
+        #endif
+    }
+
     /// Horizontal inset of a rule that separates rows in a list (the Completed
     /// divider, an add-row's section hairline, a detail header's underline).
     ///

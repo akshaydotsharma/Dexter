@@ -61,6 +61,7 @@ Long-lived notes about this codebase live at:
 - `mobile/PersonalDashboard/Intents/DashboardAppShortcuts.swift` — `AppShortcutsProvider` registry
 - `mobile/PersonalDashboard/App/AppConfig.swift` — `apiBaseURL` (legacy, server-bound features only) + `anthropicAPIKey` resolver
 - `mobile/ota/ship-lan.sh` — archive + sign + Cloudflare-tunneled IPA + ANTHROPIC_API_KEY injection
+- `mobile/scripts/mac-open-for-verification.sh` — macOS last mile: build → quit stale instance → launch THIS worktree's build on the real store at a given section → assert window title → screenshot. The Mac counterpart of `build-to-phone`
 
 ### macOS target (`DexterMac`)
 
@@ -104,6 +105,7 @@ Forward-looking rules live in `.claude/rules/`. Read every file in that director
 - **No CloudKit on free signing → the Mac has its own separate local SwiftData store.** Same 15-model schema, different DB file. There is no live sync yet; the file-based backup restore is the planned bridge.
 - **macOS SwiftUI ignores synthetic accessibility clicks** on tap-gesture / List-selection controls, so autonomous QA can drive create-flow Buttons but NOT complete/edit/delete tap rows or swipe-delete. Those need a hands-on pass; build-verified ≠ QA'd (same framing as iOS — see project memory `feedback_qa_framing.md`).
 - **Build both targets after any shared-file change.** SourceKit "cannot find X" for cross-file refs is STALE/false; only `xcodebuild` is authoritative.
+- **The user's running Mac app is built from a DIFFERENT worktree's DerivedData**, so a change built on a branch will never appear in it. Finish every macOS change by opening your build for them: `bash mobile/scripts/mac-open-for-verification.sh <section>`. Never hand over a path to `open` or a "run the scheme in Xcode" instruction — see `.claude/rules/dev-workflow.md`.
 
 ## Dev workflow
 
@@ -121,7 +123,8 @@ xcrun devicectl device install app \
 # --- macOS (build + run) ---
 xcodebuild -project PersonalDashboard.xcodeproj -scheme DexterMac \
     -destination 'platform=macOS' -configuration Debug build
-open PersonalDashboard.xcodeproj             # run DexterMac scheme from Xcode
+bash scripts/mac-open-for-verification.sh tasks   # build + put it on screen for the user (do this, don't hand off)
+open PersonalDashboard.xcodeproj                   # only when the user wants to drive Xcode themselves
 
 # --- verify no iOS regression after a shared-file change ---
 xcodebuild -project PersonalDashboard.xcodeproj -scheme PersonalDashboard \
