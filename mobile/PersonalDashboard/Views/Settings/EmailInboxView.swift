@@ -105,6 +105,7 @@ struct EmailInboxView: View {
                 }
             }
             SecureField(hasStoredPassword ? "Enter to replace" : "16-char app password", text: $appPassword)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .textInputAutocapitalization(.never)
@@ -205,6 +206,7 @@ struct EmailInboxView: View {
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.muted)
             TextField(placeholder, text: text)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .keyboardType(keyboard)

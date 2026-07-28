@@ -487,6 +487,7 @@ private struct TripEditorSheet: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text("Destination").eyebrow()
             TextField("e.g. Vietnam", text: $name)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
@@ -511,6 +512,7 @@ private struct TripEditorSheet: View {
                     Text("Start").font(.edBody).foregroundStyle(Tokens.inkSoft)
                     Spacer()
                     DatePicker("", selection: $startDate, displayedComponents: .date)
+                        .paperDatePickerOnMac()
                         .labelsHidden()
                         .tint(Tokens.accent(for: .itineraries))
                 }
@@ -519,6 +521,7 @@ private struct TripEditorSheet: View {
                     Text("End").font(.edBody).foregroundStyle(Tokens.inkSoft)
                     Spacer()
                     DatePicker("", selection: $endDate, in: startDate..., displayedComponents: .date)
+                        .paperDatePickerOnMac()
                         .labelsHidden()
                         .tint(Tokens.accent(for: .itineraries))
                 }
@@ -653,6 +656,7 @@ private struct TripEditorSheet: View {
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $notes)
+                    .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .scrollContentBackground(.hidden)

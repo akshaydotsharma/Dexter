@@ -90,6 +90,7 @@ struct RecurringExpenseEditorSheet: View {
             Text("Monthly amount").eyebrow()
             HStack(spacing: Space.sm) {
                 TextField("0.00", text: $amountText)
+                    .paperFieldOnMac()
                     .decimalKeyboard()
                     .font(.edDisplay)
                     .foregroundStyle(Tokens.ink)
@@ -234,6 +235,7 @@ struct RecurringExpenseEditorSheet: View {
                     .tint(Tokens.accentFinance)
                 if hasEndDate {
                     DatePicker("Last posting on or before", selection: $endDate, displayedComponents: .date)
+                        .paperDatePickerOnMac()
                         .font(.edFootnote)
                         .foregroundStyle(Tokens.inkSoft)
                         .tint(Tokens.accentFinance)
@@ -270,6 +272,7 @@ struct RecurringExpenseEditorSheet: View {
                 }
             }
             TextField(placeholder, text: text)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)

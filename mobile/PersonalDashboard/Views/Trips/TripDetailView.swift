@@ -1537,6 +1537,7 @@ struct ItineraryItemEditorSheet: View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Title").eyebrow()
             TextField(placeholder(for: kind), text: $title)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
@@ -1568,6 +1569,7 @@ struct ItineraryItemEditorSheet: View {
                         selection: $dayDate,
                         displayedComponents: hasTime ? [.date, .hourAndMinute] : .date
                     )
+                    .paperDatePickerOnMac()
                     .labelsHidden()
                     .tint(Tokens.accent(for: .itineraries))
                     Spacer(minLength: 0)
@@ -1603,6 +1605,7 @@ struct ItineraryItemEditorSheet: View {
                         in: Calendar.current.startOfDay(for: dayDate)...,
                         displayedComponents: hasEndTime ? [.date, .hourAndMinute] : .date
                     )
+                    .paperDatePickerOnMac()
                     .labelsHidden()
                     .tint(Tokens.accent(for: .itineraries))
                     Spacer(minLength: 0)
@@ -1652,6 +1655,7 @@ struct ItineraryItemEditorSheet: View {
                             selection: $arrivalTime,
                             displayedComponents: .hourAndMinute
                         )
+                        .paperDatePickerOnMac()
                         .labelsHidden()
                         .tint(Tokens.accent(for: .itineraries))
                         Spacer(minLength: 0)
@@ -1733,6 +1737,7 @@ struct ItineraryItemEditorSheet: View {
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $notes)
+                    .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .scrollContentBackground(.hidden)
@@ -1770,6 +1775,7 @@ struct ItineraryItemEditorSheet: View {
                     .foregroundStyle(Tokens.mutedSoft)
             }
             TextField("Street address or area", text: $address, axis: .vertical)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1...3)
@@ -1801,6 +1807,7 @@ struct ItineraryItemEditorSheet: View {
             }
             HStack(spacing: Space.sm) {
                 TextField("Paste a Google Maps link", text: $googleMapsLink)
+                    .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .noAutocapitalization()

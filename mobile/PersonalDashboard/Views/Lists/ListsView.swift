@@ -238,8 +238,9 @@ private struct ListDetailHeader: View {
             Spacer()
             if isEditing {
                 TextField("", text: $draft)
-                    // macOS: no default bordered field box (issue #285).
-                    .plainFieldStyleOnMac()
+                    // macOS: no default bordered field box (issue #285), and no
+                    // focus ring (#368).
+                    .paperFieldOnMac()
                     .font(.edTitle)
                     .foregroundStyle(Tokens.ink)
                     .multilineTextAlignment(.center)
@@ -714,6 +715,7 @@ private struct DraftItemRow: View {
             .accessibilityLabel("New item")
             #else
             TextField("New item", text: $text)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .submitLabel(.return)
@@ -775,6 +777,7 @@ private struct ItemRow: View {
                 .accessibilityLabel("Rename item")
                 #else
                 TextField("", text: $draft)
+                    .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .submitLabel(.done)
@@ -987,6 +990,7 @@ private struct ItemDetailsSheet: View {
                             Text("Item").eyebrow()
                             if nameEditable {
                                 TextField("Type item name…", text: $nameText)
+                                    .paperFieldOnMac()
                                     .focused($nameFocused)
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
@@ -1008,6 +1012,7 @@ private struct ItemDetailsSheet: View {
                             Text("Link (URL)").eyebrow()
                             HStack(spacing: Space.sm) {
                                 TextField("Paste a link", text: $urlText)
+                                    .paperFieldOnMac()
                                     .noAutocapitalization()
                                     .autocorrectionDisabled(true)
                                     .urlKeyboard()
@@ -1123,6 +1128,7 @@ private struct NewListSheet: View {
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             Text("Title").eyebrow()
                             TextField("List title", text: $title)
+                                .paperFieldOnMac()
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
                                 .padding(Space.md)
@@ -1187,6 +1193,7 @@ private struct ListPropertiesSheet: View {
                             VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                                 Text("Name").eyebrow()
                                 TextField("List name", text: $name)
+                                    .paperFieldOnMac()
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
                                     .padding(Space.md)

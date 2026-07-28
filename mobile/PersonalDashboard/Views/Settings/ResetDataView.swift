@@ -232,6 +232,7 @@ struct ResetDataView: View {
                         .foregroundStyle(Tokens.inkSoft)
 
                     TextField("reset", text: $confirmText)
+                        .paperFieldOnMac()
                         .noAutocapitalization()
                         .autocorrectionDisabled()
                         .font(.edBody)

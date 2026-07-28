@@ -250,6 +250,7 @@ private struct KeywordEditorSheet: View {
             Text("Term").eyebrow()
 
             TextField("e.g. Envisso", text: $term)
+                .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
@@ -288,6 +289,7 @@ private struct KeywordEditorSheet: View {
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $notes)
+                    .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .scrollContentBackground(.hidden)

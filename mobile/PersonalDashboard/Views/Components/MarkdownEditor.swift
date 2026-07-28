@@ -619,6 +619,7 @@ struct MarkdownEditor: View {
                     .allowsHitTesting(false)
             }
             TextEditor(text: $text)
+                .paperFieldOnMac()
                 .focused($isFocused)
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
