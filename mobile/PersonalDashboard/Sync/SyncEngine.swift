@@ -21,12 +21,18 @@ struct SyncStatusSnapshot {
         let name: String
         let lastSeenAt: Date?
         let highestSegmentRead: Int
+        let highestSegmentInspected: Int
         let highestSegmentAvailable: Int
         let opsDecoded: Int
         let opsWouldApply: Int
         let lastError: String?
 
         var isBehind: Bool { highestSegmentAvailable > highestSegmentRead }
+
+        /// Segments decoded but never applied, because they were read while
+        /// applying was off. Surfaced because the old behaviour reported this state
+        /// as a fully caught-up cursor, which is how #380 stayed invisible.
+        var unappliedSegmentCount: Int { max(0, highestSegmentInspected - highestSegmentRead) }
     }
 
     var health: SyncFolderHealth = .notConfigured
@@ -46,6 +52,10 @@ struct SyncStatusSnapshot {
     var lastPassDurationMS: Int = 0
     var lastPassOpsOut: Int = 0
     var lastPassOpsIn: Int = 0
+    /// Records the applier wrote or removed in the pass that produced this
+    /// snapshot. Not persisted, so it is zero for a snapshot rebuilt without a
+    /// pass; the replay action is the only reader.
+    var lastPassOpsApplied: Int = 0
     var lastPassOutcome: String = ""
 
     var peers: [Peer] = []
@@ -157,6 +167,10 @@ final class SyncEngine {
         let started = Date()
         var opsOut = 0
         var opsIn = 0
+        /// Records the applier actually wrote or removed this pass. Not persisted:
+        /// it answers "did the thing I just asked for do anything", which only
+        /// matters until the next pass.
+        var opsApplied = 0
         var outcome = "OK (\(reason))"
 
         let health = SyncFolder.health()
@@ -180,7 +194,9 @@ final class SyncEngine {
             // so ops we emit below sort after theirs. Emitting first would mint
             // ops with a clock that appears concurrent with changes we had in
             // fact already observed.
-            opsIn = try await readPeers(folder: folder, state: state)
+            let inbound = try await readPeers(folder: folder, state: state)
+            opsIn = inbound.decoded
+            opsApplied = inbound.applied
 
             opsOut = try await emitLocalChanges(folder: folder, state: state)
 
@@ -204,7 +220,9 @@ final class SyncEngine {
         }
 
         recordPass(started: started, opsOut: opsOut, opsIn: opsIn, outcome: outcome)
-        return (try? snapshot()) ?? SyncStatusSnapshot()
+        var result = (try? snapshot()) ?? SyncStatusSnapshot()
+        result.lastPassOpsApplied = opsApplied
+        return result
     }
 
     // MARK: - Outbound
@@ -362,14 +380,29 @@ final class SyncEngine {
             if let shadow = existing[key] {
                 shadow.contentHash = record.contentHash
                 shadow.lastEmittedLamport = lamport
+                // The LWW clock and writer move too, not just the emitted clock.
+                // Bumping only `lastEmittedLamport` left a record that had once
+                // been applied from a peer pinned to that peer's older clock, so
+                // the next comparison read stale and a superseded peer op could
+                // win over this newer local write (#380). `lastKnownLamport` now
+                // also takes the max on read, so this is belt and braces, but the
+                // stored state should be honest on its own.
+                shadow.lastKnownLamport = lamport
+                shadow.lastWriterDeviceUUID = deviceUUID
                 shadow.updatedAt = Date()
             } else {
-                modelContext.insert(SyncShadow(
+                let shadow = SyncShadow(
                     entity: record.entity,
                     recordID: record.recordID,
                     contentHash: record.contentHash,
                     lastEmittedLamport: lamport
-                ))
+                )
+                // Named writer from the start, so the LWW tie-break is a total
+                // order. Left nil, `beatsLocal` hands an equal-clock tie to the
+                // peer by default, and Lamport values from two devices do collide.
+                shadow.lastKnownLamport = lamport
+                shadow.lastWriterDeviceUUID = deviceUUID
+                modelContext.insert(shadow)
             }
         }
 
@@ -404,7 +437,10 @@ final class SyncEngine {
     /// Two things happen for real here, and only two: our Lamport clock advances
     /// past what the peer has said, and the peer cursor moves. Neither touches
     /// user data. Everything else is counted and discarded.
-    private func readPeers(folder: SyncFolder, state: SyncDeviceState) async throws -> Int {
+    private func readPeers(
+        folder: SyncFolder,
+        state: SyncDeviceState
+    ) async throws -> (decoded: Int, applied: Int) {
         let peers = try folder.peerDeviceUUIDs(excluding: state.deviceUUID)
         var applied = 0
         var deletedLocally = 0
@@ -414,12 +450,34 @@ final class SyncEngine {
         // failed read would delete the whole peer list every time the bookmark
         // went stale, which is the moment the list matters most.
         pruneCursors(keeping: peers)
-        var totalDecoded = 0
+        // What this pass actually decoded, including segments a replay is reading
+        // for the second time. Drives the "Read" stat, which would otherwise show
+        // zero for the one pass that did the most work. The cursor's own cumulative
+        // counter takes only newly inspected ops, further down.
+        var decodedThisPass = 0
+
+        // Read once per pass, not per segment: a toggle flipped mid-pass would
+        // otherwise leave one peer's cursors advanced under one rule and the
+        // next peer's under the other.
+        let applying = SyncSettings.applyEnabled
 
         for peer in peers {
             let cursor = try peerCursor(for: peer)
             let available = (try? folder.segmentSequences(for: peer)) ?? []
-            let pending = available.filter { $0 > cursor.highestSegmentRead }
+            // WHICH CURSOR GATES THE WORK DEPENDS ON WHAT THIS PASS CAN DO (#380).
+            //
+            // Applying: start from the apply cursor, which means segments already
+            // inspected during a dry run get decoded again and actually applied.
+            // That re-read is the entire fix. Replaying them is safe by
+            // construction: a tombstone outranks a stale op, record-level LWW
+            // rejects anything older than the local copy, and identical content is
+            // skipped.
+            //
+            // Not applying: start from the inspection mark, so a dry run does not
+            // re-decode a multi-megabyte baseline every 30 seconds to recount ops
+            // it has already counted.
+            let floor = applying ? cursor.highestSegmentRead : cursor.highestSegmentInspected
+            let pending = available.filter { $0 > floor }
 
             if let meta = folder.readMeta(deviceUUID: peer) {
                 cursor.peerName = meta.deviceName
@@ -427,6 +485,7 @@ final class SyncEngine {
             cursor.lastSeenAt = Date()
 
             var highestRead = cursor.highestSegmentRead
+            var highestInspected = cursor.highestSegmentInspected
             var decoded = 0
             var wouldApply = 0
             var failure: String?
@@ -442,13 +501,20 @@ final class SyncEngine {
                 }
                 do {
                     let segment = try folder.readSegment(deviceUUID: peer, sequence: sequence)
-                    decoded += segment.ops.count
-                    wouldApply += countWouldApply(segment.ops)
+                    // Count each segment once ever, even when a replay decodes it a
+                    // second time. These are cumulative counters on the cursor, so
+                    // recounting a replayed baseline would inflate "ops decoded"
+                    // into a number that no longer means anything.
+                    decodedThisPass += segment.ops.count
+                    if sequence > highestInspected {
+                        decoded += segment.ops.count
+                        wouldApply += countWouldApply(segment.ops)
+                    }
                     // PHASE 2. Everything above this line is still a dry run; this
                     // is the only place a peer's changes reach the store. Gated on
                     // its own setting, separate from `enabled`, so publishing
                     // outbound never implies accepting inbound.
-                    if SyncSettings.applyEnabled {
+                    if applying {
                         let outcome = try SyncApplier(modelContext: modelContext)
                             .apply(segment.ops, localDeviceUUID: state.deviceUUID)
                         applied += outcome.applied
@@ -456,15 +522,19 @@ final class SyncEngine {
                         if outcome.rejectedCorrupt > 0 || outcome.rejectedTombstoned > 0 || outcome.touchedAnything {
                             SyncLog.line("SyncApplier: seg \(sequence) from \(peer.uuidString.prefix(8)) — \(outcome.summary)")
                         }
+                        // Only advance the APPLY cursor here, inside the branch that
+                        // actually applied. Advancing it on a bare decode is what
+                        // made a dry run silently consume a peer's baseline (#380).
+                        highestRead = sequence
                     }
                     // Advance our clock past the peer's. This is the whole
                     // reason inbound runs before outbound.
                     state.lamport = max(state.lamport, segment.lamportHigh)
-                    // Only advance on a clean decode, and stop at the first
-                    // failure so segments are consumed strictly in order. A gap
-                    // would let a later op win over an earlier one it should
-                    // have lost to.
-                    highestRead = sequence
+                    // Inspection advances on any clean decode. Stop at the first
+                    // failure either way, so segments are consumed strictly in
+                    // order: a gap would let a later op win over an earlier one it
+                    // should have lost to.
+                    highestInspected = max(highestInspected, sequence)
                 } catch {
                     failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     break
@@ -472,10 +542,10 @@ final class SyncEngine {
             }
 
             cursor.highestSegmentRead = highestRead
+            cursor.highestSegmentInspected = highestInspected
             cursor.opsDecoded += decoded
             cursor.opsWouldApply += wouldApply
             cursor.lastError = failure
-            totalDecoded += decoded
         }
 
         try modelContext.save()
@@ -497,7 +567,7 @@ final class SyncEngine {
             // segment, so a multi-segment catch-up triggers one reload.
             NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
         }
-        return totalDecoded
+        return (decoded: decodedThisPass, applied: applied + deletedLocally)
     }
 
     /// How many of these ops would change something locally.
@@ -525,6 +595,46 @@ final class SyncEngine {
             }
         }
         return count
+    }
+
+    // MARK: - Replay
+
+    /// Rewind every peer's APPLY cursor to zero, so the next pass re-reads each
+    /// peer's log from the first segment and applies it.
+    ///
+    /// This exists because the #380 fix cannot repair a device that already has
+    /// the damage. A cursor that advanced during the dry run is indistinguishable
+    /// from one that advanced legitimately: both are just an integer. The device
+    /// cannot know which segments it skipped, and the peer will never re-emit
+    /// them, so the only way back is to read the whole log again.
+    ///
+    /// Rewinding is safe because the applier does not trust the log's order for
+    /// correctness, only for determinism. A replayed op has to beat a tombstone
+    /// and beat the local record's clock before it writes anything, and identical
+    /// content is skipped outright. The one thing a replay CAN do is recreate a
+    /// record that was deleted here before sync ever ran, because such a record
+    /// has neither a shadow nor a tombstone to defend it while the peer's copy is
+    /// still legitimately present. That is the same "absence never means delete"
+    /// invariant the whole design rests on, not a new hazard, but it is the reason
+    /// the caller confirms with the user first and takes a fresh backup.
+    ///
+    /// The inspection mark is deliberately left where it is: it only feeds the
+    /// stats, and resetting it would recount every op in the log.
+    @discardableResult
+    func resetPeerApplyCursors() throws -> Int {
+        let cursors = try modelContext.fetch(FetchDescriptor<SyncPeerCursor>())
+        var rewound = 0
+        for cursor in cursors where cursor.highestSegmentRead > 0 {
+            SyncLog.line(
+                "SyncEngine: rewinding apply cursor for \(cursor.peerName) "
+                + "\(cursor.peerDeviceUUID.uuidString.prefix(8)) from segment \(cursor.highestSegmentRead) to 0"
+            )
+            cursor.highestSegmentRead = 0
+            cursor.lastError = nil
+            rewound += 1
+        }
+        try modelContext.save()
+        return rewound
     }
 
     /// Drop cursors for devices that are no longer in the folder.
@@ -626,6 +736,7 @@ final class SyncEngine {
                 name: cursor.peerName,
                 lastSeenAt: cursor.lastSeenAt,
                 highestSegmentRead: cursor.highestSegmentRead,
+                highestSegmentInspected: cursor.highestSegmentInspected,
                 highestSegmentAvailable: available.max() ?? 0,
                 opsDecoded: cursor.opsDecoded,
                 opsWouldApply: cursor.opsWouldApply,

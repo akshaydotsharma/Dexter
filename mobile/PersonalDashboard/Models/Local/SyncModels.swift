@@ -176,11 +176,24 @@ final class SyncShadow {
     /// devices pick different winners and diverge while both think they converged.
     var lastWriterDeviceUUID: UUID?
 
-    /// `lastKnownLamportValue` with the pre-phase-2 fallback applied. A row written
-    /// before phase 2 has no remote-write clock, so the locally emitted one is the
-    /// best available answer and keeps the comparison monotonic.
+    /// Clock of the newest write known for this record, from either source.
+    ///
+    /// `max`, not `??`. A row written before phase 2 has no remote-write clock, so
+    /// the emitted one is the best available answer, which is what the original
+    /// `?? lastEmittedLamport` fallback expressed. But the same is true whenever
+    /// the stored remote clock is BEHIND what this device has since published, and
+    /// that case is reachable: the outbound path used to bump only
+    /// `lastEmittedLamport`, so a record applied from a peer and then edited
+    /// locally kept the peer's older clock here forever. The comparison then read
+    /// stale and a peer's superseded op could beat newer local content. Seen in the
+    /// field on a checklist: emitted at 9007, this field frozen at 9000, and the
+    /// peer's op at 9003 won (#380).
+    ///
+    /// A write this device published IS a write it knows about, so taking the
+    /// larger of the two is both correct and monotonic. It also repairs rows
+    /// already carrying a stale value, with no migration.
     var lastKnownLamport: Int64 {
-        get { lastKnownLamportValue ?? lastEmittedLamport }
+        get { max(lastKnownLamportValue ?? 0, lastEmittedLamport) }
         set { lastKnownLamportValue = newValue }
     }
 
@@ -228,23 +241,60 @@ final class SyncTombstone {
 
 /// How far this device has read into each peer's log.
 ///
-/// In phase 1 this tracks READ progress only, because nothing is applied. The
-/// field name says `Read` rather than `Applied` deliberately: phase 2 adds a
-/// separate applied cursor, and conflating the two would make a dry run look
-/// like it had already caught up.
+/// TWO CURSORS, AND KEEPING THEM APART IS THE WHOLE POINT (#380).
+///
+/// Phase 1's comment here said "phase 2 adds a separate applied cursor, and
+/// conflating the two would make a dry run look like it had already caught up".
+/// Phase 2 (#359) never added it, so `highestSegmentRead` kept advancing on a
+/// clean DECODE while applying was off. Every segment a device inspected during
+/// the dry run was therefore skipped forever once applying was turned on: the
+/// peer's shadow table already marks those records as published, so nothing
+/// re-emits them, and there is no error anywhere. It cost the phone a whole trip
+/// and two notes that only ever existed in the Mac's baseline segment, while the
+/// status screen read "segments read 21 of 21".
+///
+/// So: `highestSegmentRead` is the APPLY cursor and only moves when an applier
+/// actually ran. `highestSegmentInspected` is the stats high-water mark and moves
+/// on every decode. When the two disagree, this device has seen ops it never
+/// applied, which is a repairable state rather than a healthy one.
 @Model
 final class SyncPeerCursor {
     @Attribute(.unique) var peerDeviceUUID: UUID
     var peerName: String
     var firstSeenAt: Date
     var lastSeenAt: Date
-    /// Highest sealed segment sequence fully decoded from this peer.
+    /// Highest sealed segment sequence from this peer whose ops have been through
+    /// `SyncApplier`. Advances ONLY while `SyncSettings.applyEnabled` is on.
     var highestSegmentRead: Int
     var opsDecoded: Int
     /// Phase 1: how many decoded ops WOULD have been applied. Phase 2 turns
     /// this into the actual applied count.
     var opsWouldApply: Int
     var lastError: String?
+
+    // MARK: Inspection cursor (#380)
+    //
+    // Optional for the same reason the phase 2 fields on `SyncShadow` are: this
+    // lands on a model that already exists in live stores on two devices, and only
+    // additive nullable fields are safe here. A failed SwiftData lightweight
+    // migration does not degrade, it refuses to open the store.
+
+    /// Highest sealed segment sequence decoded from this peer at all, applied or
+    /// not. Kept so a dry run does not re-decode the peer's entire log on every
+    /// pass just to recount the same ops.
+    var highestSegmentInspectedValue: Int?
+
+    /// `highestSegmentInspectedValue` with the pre-#380 fallback applied. A cursor
+    /// written before this split has no separate inspection mark, and whatever it
+    /// read is exactly what `highestSegmentRead` holds.
+    var highestSegmentInspected: Int {
+        get { highestSegmentInspectedValue ?? highestSegmentRead }
+        set { highestSegmentInspectedValue = newValue }
+    }
+
+    /// Segments this device decoded but never applied. Non-zero means ops were
+    /// consumed while applying was off and are now unreachable without a replay.
+    var unappliedSegmentCount: Int { max(0, highestSegmentInspected - highestSegmentRead) }
 
     init(
         peerDeviceUUID: UUID,
