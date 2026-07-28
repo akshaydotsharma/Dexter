@@ -52,10 +52,10 @@ struct PriorityWash: ViewModifier {
                         endPoint: .trailing
                     )
                 )
-                .overlay {
-                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                        .strokeBorder(hue.opacity(strokeAlpha), lineWidth: 0.5)
-                }
+                // No border. The hairline gave the wash a defined edge, but it
+                // also drew the row as a tile — a bordered box the eye reads
+                // before it reads the text. Fill only: the tint has to hold the
+                // shape on its own.
                 // Held off the row's horizontal edges so the pill floats. On
                 // macOS rows run to the pane boundary (#339), and a wash flush
                 // against the sidebar seam would read as a second pane rather
@@ -84,12 +84,8 @@ struct PriorityWash: ViewModifier {
         return dimmed ? base * 0.4 : base
     }
 
-    /// Perimeter hairline. Just enough to give the pill an edge — push this and
-    /// the row stops reading as glass and starts reading as a bordered box.
-    private var strokeAlpha: Double {
-        let base = isDark ? 0.14 : 0.13
-        return dimmed ? base * 0.4 : base
-    }
+    // No stroke alpha: the wash is fill-only. A perimeter hairline was tried and
+    // dropped — it turned the row into a bordered tile.
 }
 
 extension View {
