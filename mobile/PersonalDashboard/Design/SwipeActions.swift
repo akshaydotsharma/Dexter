@@ -231,6 +231,12 @@ private struct SwipeRevealActions: ViewModifier {
         let linear = min(1.0, max(0.0, Double(dragDistance / revealedWidth)))
         let progress = 0.5 - 0.5 * cos(.pi * linear)
         let commitThreshold = UIScreen.main.bounds.width * 0.55
+        // How much of the trailing strip the row has actually slid clear of.
+        // Every pixel of every button is masked to this width, so a button can
+        // only ever paint into the gap the row has left behind and never on top
+        // of the row's own content (#378). Clamped at the reveal width so the
+        // rubber-band overshoot doesn't keep extending the mask.
+        let uncovered = max(0, min(dragDistance, revealedWidth))
 
         // Z-order matters: the trash button is drawn IN FRONT of the
         // pan-capture wrapper so that its 52pt frame at the trailing
@@ -311,22 +317,47 @@ private struct SwipeRevealActions: ViewModifier {
             // One 60pt slot per action, laid out in `actions` order so the last
             // element ends up against the trailing edge. A single action
             // collapses to exactly the previous layout.
-            HStack(spacing: 0) {
-                ForEach(actions) { action in
-                    Button { commit(action) } label: {
-                        Image(systemName: action.icon)
-                            .font(.system(size: 18, weight: .regular))
-                            .foregroundStyle(.white)
-                            .frame(width: buttonSize, height: buttonSize)
-                            .background(Circle().fill(action.tint))
-                            .scaleEffect(0.85 + 0.15 * progress)
+            //
+            // The strip is revealed BY the row rather than fading in underneath
+            // it (#378). Three things cooperate:
+            //
+            //  * the trailing-aligned mask, which is the hard guarantee — the
+            //    strip simply does not render outside the vacated gap, so no
+            //    icon can overlap the row's text or chevron the way it did when
+            //    the whole strip fanned in on the global drag progress;
+            //  * per-slot opacity and scale, so each button eases in over the
+            //    60pt that uncovers IT (trash first, archive only once the row
+            //    clears the trailing slot) instead of every button tracking the
+            //    same number;
+            //  * a partial slide, so the strip travels with the row's trailing
+            //    edge and the reveal reads as the row dragging the buttons out
+            //    rather than a wipe over static content.
+            ZStack(alignment: .trailing) {
+                HStack(spacing: 0) {
+                    ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
+                        let reveal = slotReveal(index, uncovered: uncovered)
+                        Button { commit(action) } label: {
+                            Image(systemName: action.icon)
+                                .font(.system(size: 18, weight: .regular))
+                                .foregroundStyle(.white)
+                                .frame(width: buttonSize, height: buttonSize)
+                                .background(Circle().fill(action.tint))
+                                .scaleEffect(0.7 + 0.3 * reveal)
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: slotWidth)
+                        .opacity(reveal)
+                        .accessibilityLabel(action.label)
                     }
-                    .buttonStyle(.plain)
-                    .frame(width: slotWidth)
-                    .accessibilityLabel(action.label)
                 }
+                // Inside the masked container, so the slide can never push a
+                // circle out past the trailing edge and into the row's margin.
+                .offset(x: (revealedWidth - uncovered) * 0.4)
             }
-            .opacity(progress)
+            .frame(width: revealedWidth)
+            .mask(alignment: .trailing) {
+                Rectangle().frame(width: uncovered)
+            }
             // Only intercept taps once the swipe has clearly revealed
             // the buttons. Below that threshold we leave hit testing to
             // the underlying content so partial drags / scroll handoff
@@ -342,6 +373,21 @@ private struct SwipeRevealActions: ViewModifier {
                 .contentShape(Rectangle())
                 .onTapGesture { close() }
         }
+    }
+
+    /// How far along its own reveal a single button is, 0…1 eased.
+    ///
+    /// Slots are measured as distance leftward from the trailing edge, so slot
+    /// `n-1` (the last element, e.g. delete) occupies the first 60pt and starts
+    /// easing in immediately, while slot 0 (e.g. archive) doesn't begin until the
+    /// row has already cleared every slot outboard of it. That staggering is what
+    /// makes a slow swipe read the way Reminders does: one button at a time,
+    /// each one appearing in space the row has genuinely left behind (#378).
+    private func slotReveal(_ index: Int, uncovered: CGFloat) -> Double {
+        let count = max(1, actions.count)
+        let slotStart = CGFloat(count - 1 - index) * slotWidth
+        let linear = min(1.0, max(0.0, Double((uncovered - slotStart) / slotWidth)))
+        return 0.5 - 0.5 * cos(.pi * linear)
     }
 
     // Loose asymptotic rubber-band — `f(x) = x / (1 + 0.005·x)`. f'(0)
