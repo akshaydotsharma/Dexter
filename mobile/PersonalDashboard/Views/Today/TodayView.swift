@@ -339,7 +339,10 @@ private struct TodayTaskRow: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
-        // Thin colored left-edge bar keyed to priority, matching the Tasks screen.
+        // Thin colored left-edge bar keyed to priority. Tasks moved to a row-wide
+        // wash for this (#376); the dashboard card keeps the rail for now, since
+        // these rows sit inside a tinted card where a second wash would fight
+        // the card's own surface.
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
                 .fill(Tokens.priorityColor(for: todo.taskPriority))
