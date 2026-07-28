@@ -269,7 +269,7 @@ struct NotesView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
-        .refreshable { await viewModel.load() }
+        .syncRefreshable { await viewModel.load() }
     }
 
     private func folderNotesList(_ folder: NoteFolder) -> some View {
@@ -305,7 +305,7 @@ struct NotesView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
-        .refreshable { await viewModel.load() }
+        .syncRefreshable { await viewModel.load() }
     }
 
     // MARK: - Note actions

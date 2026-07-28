@@ -32,11 +32,20 @@ struct TodayView: View {
                     .padding(.top, Space.lg)
                     .padding(.bottom, 96)
                 }
-                .refreshable { await loadAll() }
+                .syncRefreshable { await loadAll() }
             }
         }
         .activeSection(.today)
         .macSectionChrome("Today")
+        // Today aggregates three manual-fetch view models, so it has exactly the
+        // staleness #363 describes in Tasks / Notes / Lists — a write from outside
+        // the UI (AI capture, chat, or a synced peer) left these cards stale until
+        // the view was rebuilt. Those three already observed this notification;
+        // Today was simply missed, and nobody had reported it because Today is
+        // usually arrived at fresh rather than sat on.
+        .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
+            Task { await loadAll() }
+        }
         .task { await loadAll() }
     }
 

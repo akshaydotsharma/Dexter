@@ -58,7 +58,8 @@ struct TasksView: View {
                     // selection/edit highlight behind a focused inline-edit row
                     // (issue #285). Rows carry their own tap gestures + buttons.
                     .macTamedListSelection()
-                    .refreshable { await viewModel.load() }
+                    // Pull-to-refresh runs a sync pass, then reloads (#363).
+                    .syncRefreshable { await viewModel.load() }
                     // When the inline draft gains focus, scroll it clear of the keyboard.
                     .onChange(of: draftFocused) { _, focused in
                         guard focused else { return }

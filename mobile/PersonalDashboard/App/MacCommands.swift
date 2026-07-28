@@ -109,6 +109,37 @@ struct DexterCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
         }
 
+        // ⌘R, the key every Mac user already tries when a view looks out of date
+        // (#363).
+        //
+        // ## Why its own menu rather than the View menu
+        //
+        // The obvious home is View, next to Reload in Safari and Refresh in
+        // Finder, via `CommandGroup(after: .toolbar)`. That was the first attempt
+        // and it renders NOTHING: `.toolbar` and `.sidebar` identify sections of
+        // the View menu that exist only when the app contributes "Show Toolbar" /
+        // "Show Sidebar" items, and this app contributes neither — the sidebar
+        // toggle is a toolbar button, and the window's toolbar is not
+        // customizable. With no anchor group to position against, SwiftUI drops
+        // the item silently. Verified by dumping the View menu's accessibility
+        // tree: Show Tab Bar, Show All Tabs, Enter Full Screen, and nothing else.
+        //
+        // `CommandMenu` needs no anchor, so it always renders. It also gives sync
+        // an honest home in the menu bar, which the feature earns: it has its own
+        // settings screen, two toggles, and a status surface. Mail does the same
+        // thing with its Mailbox menu.
+        //
+        // NOT gated on a focused router, unlike the Go menu below: refresh acts on
+        // the process-global `SyncCoordinator`, so there is no per-window state it
+        // could be missing, and disabling it would misreport why nothing happened.
+        // The toolbar button in `macSectionChrome` invokes the same action.
+        CommandMenu("Sync") {
+            Button("Refresh") {
+                Task { await SyncCoordinator.shared.refreshNow(reason: "menu") }
+            }
+            .keyboardShortcut("r", modifiers: .command)
+        }
+
         CommandMenu("Go") {
             ForEach(Array(Self.sections.enumerated()), id: \.element) { index, section in
                 Button(section.displayName) {
