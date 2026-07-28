@@ -67,31 +67,9 @@ BIN="$APP/Contents/MacOS/DexterMac"
 [ -x "$BIN" ] || { echo "FAIL: no binary at $BIN"; exit 1; }
 echo "==> built: $APP"
 
-# --- quit any running instance, gracefully, by pid ---
-for pid in $(pgrep -x DexterMac || true); do
-    where="$(ps -o command= -p "$pid" | grep -o 'DerivedData/[^/]*' | head -1 || true)"
-    echo "==> quitting running instance pid=$pid ${where:+($where)}"
-    /usr/bin/swift - "$pid" <<'SWIFT' 2>/dev/null || true
-import AppKit
-NSRunningApplication(processIdentifier: Int32(CommandLine.arguments[1])!)?.terminate()
-SWIFT
-done
-for _ in $(seq 1 20); do
-    pgrep -x DexterMac >/dev/null || break
-    sleep 1
-done
-if pgrep -x DexterMac >/dev/null; then
-    echo "FAIL: a running instance would not quit (modal or unsaved sheet open). Left it alone."
-    exit 1
-fi
-
-# --- launch this worktree's build on the real store ---
-LAUNCH_SECTION="$SECTION" nohup "$BIN" >"$OUT_DIR/app.log" 2>&1 &
-PID=$!
-disown 2>/dev/null || true
-echo "==> launched pid=$PID section=$SECTION"
-
-# --- identity assertion + capture ---
+# Window probe, used both to assert identity after launch and to decide how hard
+# we are allowed to push on a stubborn instance below.
+#
 # System Events / Accessibility is not reliably granted to a shell here, so use
 # the CG window list, which honours the owner pid. On-screen first, then the full
 # list: a window that has not been raised yet (or sits on another Space) is
@@ -115,6 +93,61 @@ for w in wins {
 }
 SWIFT
 
+# --- quit any running instance, by pid ---
+#
+# Escalation policy, and the window count is what licenses it. A polite
+# `terminate()` goes first always, because it is the only path that runs the
+# app's own quit handling. If it is ignored, WHY decides what happens next:
+#
+#   * still has windows -> stop. That is a modal or a sheet with the user's
+#     unsaved text in it, and no screenshot is worth discarding that.
+#   * no windows at all -> it cannot be showing the user anything and has no
+#     interactive state to lose, so escalate SIGTERM then SIGKILL.
+#
+# The second case is not hypothetical: it is where a leftover instance lands
+# after its worktree is cleaned up while it runs, and on this script's first real
+# use (2026-07-28) such an orphan ignored `terminate()` for 20s and blocked the
+# whole handoff, which is the one thing this script exists to prevent.
+quit_instance() {
+    local pid="$1"
+    local where windows
+    where="$(ps -o command= -p "$pid" | grep -o 'DerivedData/[^/]*' | head -1 || true)"
+    echo "==> quitting running instance pid=$pid ${where:+($where)}"
+    /usr/bin/swift - "$pid" <<'SWIFT' 2>/dev/null || true
+import AppKit
+NSRunningApplication(processIdentifier: Int32(CommandLine.arguments[1])!)?.terminate()
+SWIFT
+    for _ in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done
+
+    windows="$(swift "$OUT_DIR/winid.swift" "$pid" 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$windows" != "0" ]; then
+        echo "    pid=$pid ignored the quit and still has $windows window(s) — modal or unsaved sheet. Leaving it alone."
+        return 1
+    fi
+    echo "    pid=$pid ignored the quit and has no windows (orphan — e.g. its worktree was removed). Escalating."
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 1 5); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done
+    kill -9 "$pid" 2>/dev/null || true
+    for _ in $(seq 1 5); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done
+    return 1
+}
+
+blocked=0
+for pid in $(pgrep -x DexterMac || true); do
+    quit_instance "$pid" || blocked=1
+done
+if [ "$blocked" != "0" ] || pgrep -x DexterMac >/dev/null; then
+    echo "FAIL: a running instance would not quit. Left it alone — close its sheet/modal by hand, then re-run."
+    exit 1
+fi
+
+# --- launch this worktree's build on the real store ---
+LAUNCH_SECTION="$SECTION" nohup "$BIN" >"$OUT_DIR/app.log" 2>&1 &
+PID=$!
+disown 2>/dev/null || true
+echo "==> launched pid=$PID section=$SECTION"
+
+# --- identity assertion + capture ---
 WIN=""
 for _ in $(seq 1 30); do
     sleep 1
