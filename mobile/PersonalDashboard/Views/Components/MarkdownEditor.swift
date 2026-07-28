@@ -608,14 +608,24 @@ struct MarkdownEditor: View {
     var minHeight: CGFloat = 320
     var placeholder: String = ""
 
+    /// Horizontal padding applied to the `TextEditor` itself.
+    private static let editorInset: CGFloat = 2
+    /// `TextEditor` is an `NSTextView`, and its text container adds a 5pt
+    /// `lineFragmentPadding` on each side (and no vertical inset). So the first
+    /// glyph — and the caret — actually lands at `editorInset + 5` from the
+    /// leading edge, flush with the top. The placeholder has to use exactly
+    /// that origin, otherwise the caret floats above and left of the
+    /// placeholder text on an empty note (#370).
+    private static let textOrigin = CGPoint(x: editorInset + 5, y: 0)
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             if text.isEmpty {
                 Text(placeholder)
                     .font(.edBody)
                     .foregroundStyle(Tokens.muted)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 10)
+                    .padding(.leading, Self.textOrigin.x)
+                    .padding(.top, Self.textOrigin.y)
                     .allowsHitTesting(false)
             }
             TextEditor(text: $text)
@@ -624,7 +634,7 @@ struct MarkdownEditor: View {
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .scrollContentBackground(.hidden)
-                .padding(.horizontal, 2)
+                .padding(.horizontal, Self.editorInset)
                 .frame(minHeight: minHeight)
         }
     }
