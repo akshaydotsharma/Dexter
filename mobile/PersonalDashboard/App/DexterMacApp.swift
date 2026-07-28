@@ -50,6 +50,15 @@ struct DexterMacApp: App {
             // evaluates its content once per window but `@State` on the `App`
             // is created once per process.
             MacRootView()
+                // Every input in this app sits inside its own paper surface
+                // (`Tokens.surface` + `paperBorder`), so AppKit's default
+                // bordered field is always a box inside a box — most visible as
+                // the grey slab behind the Finance search placeholder (#368).
+                // `.textFieldStyle` is environment-propagated, so setting it
+                // once on the window's root content reaches every descendant,
+                // including sheets, instead of 40-odd per-call-site modifiers.
+                // This file is macOS-only, so iOS cannot be affected.
+                .textFieldStyle(.plain)
                 .modelContainer(SwiftDataStore.shared.container)
                 .frame(minWidth: 900, minHeight: 600)
         }
