@@ -284,8 +284,7 @@ private struct KeywordEditorSheet: View {
                     Text("What it means, when to prefer it…")
                         .font(.edBody)
                         .foregroundStyle(Tokens.mutedSoft)
-                        .padding(.horizontal, Space.md + 4)
-                        .padding(.vertical, Space.md + 8)
+                        .textEditorPlaceholderInset(horizontal: Space.md, vertical: Space.sm)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $notes)
