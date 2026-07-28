@@ -26,12 +26,22 @@ struct DataExportImportView: View {
         case importing
         case importPreview(DataImportService.Preview)
         case importCommitting(DataImportService.Preview)
-        case importSucceeded(newRowCount: Int)
+        case importSucceeded(newRowCount: Int, repairedRowCount: Int)
     }
 
     @State private var phase: Phase = .idle
     @State private var errorMessage: String? = nil
     @State private var showFileImporter: Bool = false
+
+    /// Opt-in repair (#366). OFF by default, and deliberately reset on every
+    /// new file pick rather than remembered: overwriting existing records is a
+    /// decision about ONE archive, and a sticky switch would silently apply it
+    /// to the next, unrelated import.
+    @State private var repairExisting: Bool = false
+
+    private var importMode: DataImportService.Mode {
+        repairExisting ? .replaceMatching : .skipExisting
+    }
 
     var body: some View {
         NavigationStack {
@@ -105,8 +115,8 @@ struct DataExportImportView: View {
             previewScreen(preview: preview, isCommitting: false)
         case .importCommitting(let preview):
             previewScreen(preview: preview, isCommitting: true)
-        case .importSucceeded(let count):
-            successScreen(newRowCount: count)
+        case .importSucceeded(let count, let repaired):
+            successScreen(newRowCount: count, repairedRowCount: repaired)
         }
     }
 
@@ -206,7 +216,7 @@ struct DataExportImportView: View {
                 .paperBorder()
 
                 VStack(alignment: .leading, spacing: Space.sm) {
-                    Text("What will be added")
+                    Text(repairExisting ? "What will be written" : "What will be added")
                         .eyebrow()
                         .padding(.horizontal, Space.xs)
 
@@ -215,7 +225,7 @@ struct DataExportImportView: View {
                         ForEach(entities, id: \.1.id) { idx, entity in
                             PreviewRow(
                                 entity: entity,
-                                counts: preview.counts[entity] ?? .zero
+                                counts: preview.counts(for: importMode)[entity] ?? .zero
                             )
                             if idx < entities.count - 1 {
                                 Rectangle()
@@ -229,8 +239,12 @@ struct DataExportImportView: View {
                     .paperBorder()
                 }
 
-                if !preview.hasAnythingToImport {
-                    Text("Everything in this archive is already on this device. Nothing new to add.")
+                repairToggle(preview: preview)
+
+                if !preview.hasAnythingToImport(for: importMode) {
+                    Text(repairExisting
+                         ? "This archive has no records in common with this device, and nothing new to add."
+                         : "Everything in this archive is already on this device. Nothing new to add.")
                         .font(.edFootnote)
                         .foregroundStyle(Tokens.muted)
                         .padding(.horizontal, Space.xs)
@@ -272,30 +286,79 @@ struct DataExportImportView: View {
         }
     }
 
+    /// The #366 opt-in. Only offered when this archive actually shares records
+    /// with the device: on an archive with nothing in common the switch would do
+    /// nothing, and offering a destructive-sounding option that has no effect
+    /// just invites the user to worry about it.
+    @ViewBuilder
+    private func repairToggle(preview: DataImportService.Preview) -> some View {
+        let overlap = preview.totalRepaired(for: .replaceMatching)
+        if overlap > 0 {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                Toggle(isOn: $repairExisting.animation(.easeOut(duration: 0.18))) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Overwrite records already here")
+                            .font(.edBody)
+                            .foregroundStyle(Tokens.ink)
+                        Text("Repairs rows restored from an older, incomplete backup.")
+                            .font(.edFootnote)
+                            .foregroundStyle(Tokens.muted)
+                    }
+                }
+                .tint(Tokens.ink)
+
+                if repairExisting {
+                    Text("\(overlap) record\(overlap == 1 ? "" : "s") on this device will be replaced by the version in this archive. Any change you made to them since \(Self.archiveDateLabel(preview.manifest.exportedAt)) is lost. Records missing from the archive are left alone.")
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.danger)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Space.md)
+                        .background(Tokens.dangerSoft, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                }
+            }
+            .padding(Space.lg)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
+            .paperBorder()
+        }
+    }
+
+    private static func archiveDateLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f.string(from: date)
+    }
+
     private func canCommit(preview: DataImportService.Preview) -> Bool {
-        preview.hasAnythingToImport
+        preview.hasAnythingToImport(for: importMode)
     }
 
     private func commitButtonLabel(preview: DataImportService.Preview) -> String {
-        let count = preview.totalNew
-        if count == 0 { return "Nothing to import" }
-        if count == 1 { return "Import 1 new row" }
-        return "Import \(count) new rows"
+        let new = preview.totalNew(for: importMode)
+        let repaired = preview.totalRepaired(for: importMode)
+        if new + repaired == 0 { return "Nothing to import" }
+        if repaired == 0 {
+            return new == 1 ? "Import 1 new row" : "Import \(new) new rows"
+        }
+        if new == 0 {
+            return repaired == 1 ? "Repair 1 row" : "Repair \(repaired) rows"
+        }
+        return "Import \(new) and repair \(repaired)"
     }
 
     // MARK: - Success screen
 
-    private func successScreen(newRowCount: Int) -> some View {
+    private func successScreen(newRowCount: Int, repairedRowCount: Int) -> some View {
         VStack(spacing: Space.lg) {
             Spacer()
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 56, weight: .regular))
                 .foregroundStyle(Tokens.success)
             VStack(spacing: Space.xs) {
-                Text(newRowCount == 0 ? "Nothing new to add" : "Import complete")
+                Text(newRowCount + repairedRowCount == 0 ? "Nothing new to add" : "Import complete")
                     .font(.edTitle)
                     .foregroundStyle(Tokens.ink)
-                Text(successDetail(newRowCount: newRowCount))
+                Text(successDetail(newRowCount: newRowCount, repairedRowCount: repairedRowCount))
                     .font(.edBody)
                     .foregroundStyle(Tokens.muted)
                     .multilineTextAlignment(.center)
@@ -318,14 +381,21 @@ struct DataExportImportView: View {
         }
     }
 
-    private func successDetail(newRowCount: Int) -> String {
+    private func successDetail(newRowCount: Int, repairedRowCount: Int) -> String {
+        let added = newRowCount == 1 ? "Added 1 new row" : "Added \(newRowCount) new rows"
+        if repairedRowCount == 0 {
+            if newRowCount == 0 {
+                return "Every row in that archive was already on this device."
+            }
+            return "\(added). Existing rows were left untouched."
+        }
+        let repaired = repairedRowCount == 1
+            ? "repaired 1 existing row"
+            : "repaired \(repairedRowCount) existing rows"
         if newRowCount == 0 {
-            return "Every row in that archive was already on this device."
+            return "\(repaired.prefix(1).uppercased())\(repaired.dropFirst()) from the archive. Rows missing from it were left alone."
         }
-        if newRowCount == 1 {
-            return "Added 1 new row. Existing rows were left untouched."
-        }
-        return "Added \(newRowCount) new rows. Existing rows were left untouched."
+        return "\(added) and \(repaired). Rows missing from the archive were left alone."
     }
 
     // MARK: - Actions
@@ -368,6 +438,8 @@ struct DataExportImportView: View {
 
     private func performImportPreview(url: URL) async {
         phase = .importing
+        // Never carry a previous file's repair choice onto this one (#366).
+        repairExisting = false
         let service = DataImportService(modelContext: modelContext)
         do {
             let preview = try service.preview(url: url)
@@ -382,9 +454,18 @@ struct DataExportImportView: View {
         errorMessage = nil
         phase = .importCommitting(preview)
         let service = DataImportService(modelContext: modelContext)
+        let mode = importMode
         do {
-            try service.commit(preview: preview)
-            phase = .importSucceeded(newRowCount: preview.totalNew)
+            try service.commit(preview: preview, mode: mode)
+            // A repair rewrites rows in place from outside the normal UI path,
+            // and Tasks / Notes / Lists cache their rows in a view model rather
+            // than a live `@Query`, so they show stale content until recreated.
+            // Same reason sync posts this after applying a peer's changes (#364).
+            NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
+            phase = .importSucceeded(
+                newRowCount: preview.totalNew(for: mode),
+                repairedRowCount: preview.totalRepaired(for: mode)
+            )
         } catch {
             phase = .importPreview(preview)
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

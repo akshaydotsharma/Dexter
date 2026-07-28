@@ -49,23 +49,46 @@ final class DataImportService {
     }
 
     /// Per-entity counts shown on the preview screen.
+    ///
+    /// `new` + `repaired` + `skipped` always equals `total`. Which of `repaired`
+    /// and `skipped` an already-present record lands in depends entirely on the
+    /// `Mode` the counts were computed for: insert-only skips it, repair
+    /// overwrites it. Keeping both fields (rather than a single "will be
+    /// written" number) is what lets the preview screen say which of the two is
+    /// about to happen, since that is the whole distinction the user is
+    /// choosing between.
     struct EntityCounts: Equatable {
         var total: Int
         var new: Int
+        var repaired: Int
         var skipped: Int
 
-        static let zero = EntityCounts(total: 0, new: 0, skipped: 0)
+        /// Records this mode will actually write.
+        var written: Int { new + repaired }
+
+        static let zero = EntityCounts(total: 0, new: 0, repaired: 0, skipped: 0)
     }
 
     /// Snapshot of what an import would change. Hand back to `commit(...)`
     /// to actually mutate the store.
     /// How an incoming record that already exists locally is treated.
     ///
-    /// ⚠️ `.skipExisting` is the RESTORE behaviour and must not change. Restore
-    /// merges an archive into a live store and has always promised never to
-    /// overwrite anything already present; #349 verified the recovery path with
-    /// exactly these semantics, and that verification is what phase 2's safety
-    /// argument rests on. Sync opts into `.replaceMatching` explicitly.
+    /// ⚠️ `.skipExisting` is the DEFAULT restore behaviour and must not change.
+    /// Restore merges an archive into a live store and has always promised never
+    /// to overwrite anything already present; #349 verified the recovery path
+    /// with exactly these semantics, and that verification is what phase 2's
+    /// safety argument rests on. Sync opts into `.replaceMatching` explicitly.
+    ///
+    /// #366 added a second explicit opt-in: the restore screen can now request
+    /// `.replaceMatching` too, behind an off-by-default switch. That is a
+    /// deliberate user choice on a per-import basis, not a change to the
+    /// default, so the guarantee above is intact. It exists because insert-only
+    /// merge has no way to heal a record that was inserted from a LOSSY archive
+    /// (the pre-#335 exports, which dropped `tripUUID`, the per-surface hide
+    /// flags, splits and the statement metadata). Those rows are present, so
+    /// merge skips them forever, and the only other route back to correct data
+    /// is wiping the store — which throws away anything the device holds that
+    /// the archive does not.
     enum Mode {
         /// Insert only what is absent. Never touches an existing record.
         case skipExisting
@@ -88,16 +111,68 @@ final class DataImportService {
         let manifest: DataArchive.Manifest
         let archiveURL: URL
         let entries: [String: Data]      // path -> bytes (for receipts)
-        let counts: [Entity: EntityCounts]
 
-        var totalNew: Int {
-            Entity.allCases.reduce(0) { $0 + (counts[$1]?.new ?? 0) }
+        /// Counts under `.skipExisting`, the default restore.
+        let counts: [Entity: EntityCounts]
+        /// Counts under `.replaceMatching`, the opt-in repair (#366).
+        ///
+        /// Held alongside rather than recomputed on demand: the preview is built
+        /// once when the file is picked, but the mode toggle lives on the preview
+        /// screen and flips afterwards. Recomputing would mean re-fetching the
+        /// whole store on every tap of a switch.
+        let repairCounts: [Entity: EntityCounts]
+
+        init(
+            manifest: DataArchive.Manifest,
+            archiveURL: URL,
+            entries: [String: Data],
+            counts: [Entity: EntityCounts],
+            repairCounts: [Entity: EntityCounts]? = nil
+        ) {
+            self.manifest = manifest
+            self.archiveURL = archiveURL
+            self.entries = entries
+            self.counts = counts
+            self.repairCounts = repairCounts ?? counts
         }
-        var hasAnythingToImport: Bool { totalNew > 0 }
+
+        func counts(for mode: Mode) -> [Entity: EntityCounts] {
+            mode == .replaceMatching ? repairCounts : counts
+        }
+
+        /// Records the given mode will write: inserts plus, in repair mode,
+        /// overwrites. This is what gates the commit button, so it MUST be
+        /// mode-aware. Keying it to inserts alone is exactly the bug in #366: an
+        /// archive whose every UUID is already present reported nothing to do
+        /// and disabled the button, at precisely the moment a repair was needed.
+        func totalWrites(for mode: Mode) -> Int {
+            let table = counts(for: mode)
+            return Entity.allCases.reduce(0) { $0 + (table[$1]?.written ?? 0) }
+        }
+
+        func totalNew(for mode: Mode) -> Int {
+            let table = counts(for: mode)
+            return Entity.allCases.reduce(0) { $0 + (table[$1]?.new ?? 0) }
+        }
+
+        func totalRepaired(for mode: Mode) -> Int {
+            let table = counts(for: mode)
+            return Entity.allCases.reduce(0) { $0 + (table[$1]?.repaired ?? 0) }
+        }
+
+        func hasAnythingToImport(for mode: Mode) -> Bool { totalWrites(for: mode) > 0 }
     }
 
     /// Display-order entities for the preview. Matches the order the
     /// user sees in the side drawer.
+    /// Everything the preview screen reports on.
+    ///
+    /// The last five were added in #366. They were already being WRITTEN by
+    /// `commit` (they joined the archive in #319) but were absent here, so they
+    /// contributed nothing to the counts and nothing to the commit gate. An
+    /// archive carrying only side models therefore reported "nothing to import"
+    /// and refused to restore them. This list must stay in step with what
+    /// `commit` inserts.
     enum Entity: String, CaseIterable, Hashable, Identifiable {
         case tasks
         case notes
@@ -107,32 +182,47 @@ final class DataImportService {
         case itineraryDays
         case expenses
         case vocab
+        case persons
+        case events
+        case statementImports
+        case recurringExpenses
+        case processedEmails
 
         var id: String { rawValue }
 
         var label: String {
             switch self {
-            case .tasks:         return "Tasks"
-            case .notes:         return "Notes"
-            case .noteFolders:   return "Note folders"
-            case .lists:         return "Lists"
-            case .itineraries:   return "Itineraries"
-            case .itineraryDays: return "Itinerary items"
-            case .expenses:      return "Expenses"
-            case .vocab:         return "Vocabulary"
+            case .tasks:             return "Tasks"
+            case .notes:             return "Notes"
+            case .noteFolders:       return "Note folders"
+            case .lists:             return "Lists"
+            case .itineraries:       return "Itineraries"
+            case .itineraryDays:     return "Itinerary items"
+            case .expenses:          return "Expenses"
+            case .vocab:             return "Vocabulary"
+            case .persons:           return "People"
+            case .events:            return "Events"
+            case .statementImports:  return "Statement imports"
+            case .recurringExpenses: return "Recurring expenses"
+            case .processedEmails:   return "Processed emails"
             }
         }
 
         var icon: String {
             switch self {
-            case .tasks:         return "checkmark.square"
-            case .notes:         return "doc.text"
-            case .noteFolders:   return "folder"
-            case .lists:         return "list.bullet"
-            case .itineraries:   return "airplane"
-            case .itineraryDays: return "mappin.and.ellipse"
-            case .expenses:      return "dollarsign.circle"
-            case .vocab:         return "character.book.closed"
+            case .tasks:             return "checkmark.square"
+            case .notes:             return "doc.text"
+            case .noteFolders:       return "folder"
+            case .lists:             return "list.bullet"
+            case .itineraries:       return "airplane"
+            case .itineraryDays:     return "mappin.and.ellipse"
+            case .expenses:          return "dollarsign.circle"
+            case .vocab:             return "character.book.closed"
+            case .persons:           return "person.2"
+            case .events:            return "calendar"
+            case .statementImports:  return "doc.text.magnifyingglass"
+            case .recurringExpenses: return "arrow.clockwise.circle"
+            case .processedEmails:   return "envelope"
             }
         }
     }
@@ -208,16 +298,24 @@ final class DataImportService {
         // which would reject every backup the user already holds as corrupt.
         try verifyManifestClaims(manifest)
 
-        let counts = try computeCounts(payload: manifest.data)
+        let (skipCounts, repairCounts) = try computeCounts(payload: manifest.data)
         return Preview(
             manifest: manifest,
             archiveURL: url,
             entries: byPath,
-            counts: counts
+            counts: skipCounts,
+            repairCounts: repairCounts
         )
     }
 
-    private func computeCounts(payload: DataArchive.Payload) throws -> [Entity: EntityCounts] {
+    /// Counts for BOTH modes off a single pass over the store.
+    ///
+    /// The two tables differ only in where an already-present record is filed
+    /// (`skipped` vs `repaired`), so fetching twice would be pure waste — and on
+    /// a store with 1500+ expenses the fetch is the expensive part.
+    private func computeCounts(
+        payload: DataArchive.Payload
+    ) throws -> (skip: [Entity: EntityCounts], repair: [Entity: EntityCounts]) {
         let existingTodoUUIDs       = try existingUUIDs(LocalTodo.self,           keyPath: \.clientUUID)
         let existingNoteUUIDs       = try existingUUIDs(LocalNote.self,           keyPath: \.clientUUID)
         let existingFolderUUIDs     = try existingUUIDs(LocalNoteFolder.self,     keyPath: \.clientUUID)
@@ -227,22 +325,40 @@ final class DataImportService {
         let existingExpenseUUIDs    = try existingStringUUIDs(LocalExpense.self,  keyPath: \.clientUUID)
         let existingVocabUUIDs      = try existingUUIDs(LocalKeyword.self,        keyPath: \.clientUUID)
 
-        return [
-            .tasks:         counts(payload.tasks.map(\.clientUUID),         existing: existingTodoUUIDs),
-            .notes:         counts(payload.notes.map(\.clientUUID),         existing: existingNoteUUIDs),
-            .noteFolders:   counts(payload.noteFolders.map(\.clientUUID),   existing: existingFolderUUIDs),
-            .lists:         counts(payload.lists.map(\.clientUUID),         existing: existingListUUIDs),
-            .itineraries:   counts(payload.itineraries.map(\.clientUUID),   existing: existingTripUUIDs),
-            .itineraryDays: counts(payload.itineraryDays.map(\.clientUUID), existing: existingItineraryUUIDs),
-            .expenses:      counts(payload.expenses.map(\.clientUUID),      existing: existingExpenseUUIDs),
-            .vocab:         counts(payload.vocab.map(\.clientUUID),         existing: existingVocabUUIDs),
-        ]
-    }
+        // Side models (#319 archive additions, counted here since #366).
+        let existingPersonUUIDs    = try existingUUIDs(LocalPerson.self,            keyPath: \.clientUUID)
+        let existingEventUUIDs     = try existingUUIDs(LocalEvent.self,             keyPath: \.clientUUID)
+        let existingStatementUUIDs = try existingUUIDs(LocalStatementImport.self,   keyPath: \.clientUUID)
+        let existingRecurringUUIDs = try existingStringUUIDs(RecurringExpense.self, keyPath: \.clientUUID)
+        let existingMessageKeys    = try existingStringUUIDs(LocalProcessedEmail.self, keyPath: \.messageKey)
 
-    private func counts<ID: Hashable>(_ incoming: [ID], existing: Set<ID>) -> EntityCounts {
-        var new = 0
-        for id in incoming where !existing.contains(id) { new += 1 }
-        return EntityCounts(total: incoming.count, new: new, skipped: incoming.count - new)
+        var skip: [Entity: EntityCounts] = [:]
+        var repair: [Entity: EntityCounts] = [:]
+
+        func record<ID: Hashable>(_ entity: Entity, _ incoming: [ID], existing: Set<ID>) {
+            let total = incoming.count
+            var new = 0
+            for id in incoming where !existing.contains(id) { new += 1 }
+            let present = total - new
+            skip[entity]   = EntityCounts(total: total, new: new, repaired: 0,       skipped: present)
+            repair[entity] = EntityCounts(total: total, new: new, repaired: present, skipped: 0)
+        }
+
+        record(.tasks,             payload.tasks.map(\.clientUUID),                    existing: existingTodoUUIDs)
+        record(.notes,             payload.notes.map(\.clientUUID),                    existing: existingNoteUUIDs)
+        record(.noteFolders,       payload.noteFolders.map(\.clientUUID),              existing: existingFolderUUIDs)
+        record(.lists,             payload.lists.map(\.clientUUID),                    existing: existingListUUIDs)
+        record(.itineraries,       payload.itineraries.map(\.clientUUID),              existing: existingTripUUIDs)
+        record(.itineraryDays,     payload.itineraryDays.map(\.clientUUID),            existing: existingItineraryUUIDs)
+        record(.expenses,          payload.expenses.map(\.clientUUID),                 existing: existingExpenseUUIDs)
+        record(.vocab,             payload.vocab.map(\.clientUUID),                    existing: existingVocabUUIDs)
+        record(.persons,           (payload.persons ?? []).map(\.clientUUID),          existing: existingPersonUUIDs)
+        record(.events,            (payload.events ?? []).map(\.clientUUID),           existing: existingEventUUIDs)
+        record(.statementImports,  (payload.statementImports ?? []).map(\.clientUUID), existing: existingStatementUUIDs)
+        record(.recurringExpenses, (payload.recurringExpenses ?? []).map(\.clientUUID), existing: existingRecurringUUIDs)
+        record(.processedEmails,   (payload.processedEmails ?? []).map(\.messageKey),  existing: existingMessageKeys)
+
+        return (skip, repair)
     }
 
     private func existingUUIDs<M: PersistentModel>(_ model: M.Type, keyPath: KeyPath<M, UUID>) throws -> Set<UUID> {
