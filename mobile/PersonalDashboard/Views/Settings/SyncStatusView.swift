@@ -21,6 +21,10 @@ struct SyncStatusView: View {
     @AppStorage(SyncSettings.Key.enabled) private var enabled = false
     @AppStorage(SyncSettings.Key.applyEnabled) private var applyEnabled = false
 
+    @State private var showReplayConfirm = false
+    @State private var isReplaying = false
+    @State private var replayMessage: String?
+
     private var snapshot: SyncStatusSnapshot { coordinator.snapshot }
 
     /// The rows, shared by both platforms. Only the container around them differs.
@@ -276,7 +280,7 @@ struct SyncStatusView: View {
         } header: {
             Text("Other devices")
         } footer: {
-            Text("\"Would apply\" is what sync would change here once phase 2 turns on applying. During the dry run it changes nothing.")
+            Text("\"Segments applied\" counts only what has been through the applier. Segments read while applying was switched off are counted separately and called out, because they are not picked up on their own.")
         }
     }
 
@@ -308,6 +312,7 @@ struct SyncStatusView: View {
                 Text(progressLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                unappliedLine
                 Text("Last seen \(lastSeen)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -321,7 +326,19 @@ struct SyncStatusView: View {
         }
 
         private var progressLine: String {
-            "Segments read \(peer.highestSegmentRead) of \(peer.highestSegmentAvailable) · \(peer.opsDecoded) ops decoded · \(peer.opsWouldApply) would apply"
+            "Segments applied \(peer.highestSegmentRead) of \(peer.highestSegmentAvailable) · \(peer.opsDecoded) ops decoded · \(peer.opsWouldApply) would apply"
+        }
+
+        /// The #380 diagnostic. Segments read while applying was off used to look
+        /// exactly like segments that had been applied, so a device could sit on a
+        /// permanently skipped baseline while this row said it was caught up.
+        @ViewBuilder
+        private var unappliedLine: some View {
+            if peer.unappliedSegmentCount > 0 {
+                Text("\(peer.unappliedSegmentCount) segment\(peer.unappliedSegmentCount == 1 ? "" : "s") read before applying was on, never applied. Use \"Re-apply everything\" below to pick them up.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
     }
 
@@ -364,6 +381,64 @@ struct SyncStatusView: View {
                 }
             }
             .disabled(coordinator.isSyncing || !snapshot.health.isUsable)
+
+            replayButton
+            if let replayMessage {
+                Text(replayMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } footer: {
+            Text("Re-apply reads every segment the other device has ever written, from the first one, instead of only new ones. It is the way to recover changes that were read while applying was switched off. A backup is written first, and anything newer on this device still wins.")
+        }
+    }
+
+    /// The #380 repair. Deliberately a separate, confirmed action rather than
+    /// something a pass does on its own: replaying a whole log is the largest write
+    /// sync can make, and the one case it gets wrong (recreating a record deleted
+    /// here before sync ever ran) is worth a sentence of warning first.
+    private var replayButton: some View {
+        Button(role: .destructive) {
+            showReplayConfirm = true
+        } label: {
+            HStack {
+                Text("Re-apply everything")
+                if isReplaying {
+                    Spacer()
+                    ProgressView().controlSize(.small)
+                }
+            }
+        }
+        .disabled(coordinator.isSyncing || isReplaying || !snapshot.health.isUsable || !applyEnabled)
+        .confirmationDialog(
+            "Re-apply everything from other devices?",
+            isPresented: $showReplayConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Re-apply everything", role: .destructive) {
+                Task { await runReplay() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every change the other device has ever published gets read again. Newer edits on this device are kept, and deletions made here since sync started stay deleted. Something you deleted here before sync was set up can come back if the other device still has it. A backup is written before anything is applied.")
+        }
+    }
+
+    private func runReplay() async {
+        isReplaying = true
+        let outcome = await coordinator.replayPeerLogs()
+        isReplaying = false
+        switch outcome {
+        case .done(let peersRewound, let applied):
+            replayMessage = peersRewound == 0
+                ? "Nothing to re-read: no other device has been read yet."
+                : "Re-read \(peersRewound) device\(peersRewound == 1 ? "" : "s") and applied \(applied) record\(applied == 1 ? "" : "s")."
+        case .blockedApplyOff:
+            replayMessage = "Turn on \"Apply changes from other devices\" first, or this would read the log again and change nothing."
+        case .blockedNoBackup:
+            replayMessage = "Pick a backup folder first. Re-applying is only allowed with a backup behind it."
+        case .failed(let message):
+            replayMessage = "Could not re-apply: \(message)"
         }
     }
 

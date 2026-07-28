@@ -88,6 +88,66 @@ final class SyncCoordinator {
         NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
     }
 
+    // MARK: - Replay
+
+    /// Outcome of a replay request, so the settings screen can report what happened
+    /// rather than silently finishing.
+    enum ReplayOutcome {
+        case done(peersRewound: Int, applied: Int)
+        case blockedNoBackup
+        case blockedApplyOff
+        case failed(String)
+    }
+
+    /// Re-read every peer's log from the first segment and apply it (#380).
+    ///
+    /// The repair path for a device whose apply cursor advanced during the phase 1
+    /// dry run. Those segments are unreachable otherwise: the peer's shadow table
+    /// marks their records as published, so nothing re-emits them.
+    ///
+    /// A FRESH backup is forced first, not the one-shot pre-flight one. A replay
+    /// pushes a peer's entire history through the applier in one pass, which is the
+    /// largest single write sync can make, and `sync.didPreflightBackup` may have
+    /// been satisfied days and many edits ago. A blocked replay is recoverable; an
+    /// unbounded apply with a stale archive behind it is not.
+    func replayPeerLogs() async -> ReplayOutcome {
+        // Replaying with applying off would rewind the cursor and then re-inspect
+        // the log without writing anything, which looks like the repair ran and did
+        // nothing. Refuse and say so instead.
+        guard SyncSettings.applyEnabled else { return .blockedApplyOff }
+        guard BackupSettings.folderBookmark != nil else { return .blockedNoBackup }
+
+        isSyncing = true
+        do {
+            try await BackupService(modelContext: SwiftDataStore.shared.context)
+                .runBackupIfDue(force: true)
+            SyncLog.line("SyncCoordinator: backup written before replaying peer logs")
+        } catch {
+            isSyncing = false
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            SyncLog.line("SyncCoordinator: replay BLOCKED, backup failed: \(message)")
+            return .failed(message)
+        }
+
+        let rewound: Int
+        do {
+            rewound = try resolvedEngine().resetPeerApplyCursors()
+        } catch {
+            isSyncing = false
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            SyncLog.line("SyncCoordinator: replay FAILED to rewind cursors: \(message)")
+            return .failed(message)
+        }
+        isSyncing = false
+
+        await pass(reason: "replay")
+        // Unconditional, like `refreshNow`: the surfaces that cache their rows have
+        // to re-read or the repaired records stay off screen until the view is
+        // recreated, which reads as the replay having done nothing.
+        NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
+        return .done(peersRewound: rewound, applied: snapshot.lastPassOpsApplied)
+    }
+
     /// In-flight pass, so a second caller joins it instead of being turned away.
     private var passTask: Task<Void, Never>?
 
