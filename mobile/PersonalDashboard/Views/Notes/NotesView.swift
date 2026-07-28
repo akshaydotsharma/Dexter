@@ -10,6 +10,10 @@ struct NotesView: View {
     /// by tapping the folder title in `FolderDetailHeader`.
     @State private var renamingFolder = false
     @State private var folderRenameDraft = ""
+    /// Whether the Archive is showing instead of the notes root (#374). A sibling
+    /// of `selectedNoteId` / `selectedFolder`, so a note opened from the Archive
+    /// closes back to the Archive.
+    @State private var showingArchive = false
     @State private var pendingFolderLaunchId: UUID? = {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_FOLDER_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
@@ -22,7 +26,10 @@ struct NotesView: View {
             Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
-                if let id = selectedNoteId, let note = viewModel.notes.first(where: { $0.id == id }) {
+                // `viewModel.note(id:)` rather than a search of `viewModel.notes`:
+                // the note may be archived (opened from the Archive), in which
+                // case it lives in `archivedNotes` (#374).
+                if let id = selectedNoteId, let note = viewModel.note(id: id) {
                     NoteDetailContent(
                         viewModel: viewModel,
                         note: note,
@@ -66,6 +73,15 @@ struct NotesView: View {
                                 .help("Rename folder")
                             }
                         )
+                } else if showingArchive {
+                    // The Archive: a flat list of archived notes across all
+                    // folders (#374). Same chrome split as an open folder — an
+                    // in-view back header on iOS, native toolbar on macOS.
+                    #if os(iOS)
+                    ArchiveHeader(backTitle: "Notes", onBack: closeArchive)
+                    #endif
+                    archiveList
+                        .macDetailChrome(title: "Archive", subtitle: "Notes", onBack: closeArchive)
                 } else {
                     // iOS: in-view top bar, and the create-folder affordance
                     // overlays the top-right of the list area so it doesn't
@@ -79,7 +95,18 @@ struct NotesView: View {
                     #if os(iOS)
                     TopBar(
                         title: "Notes",
-                        onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
+                        onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
+                        trailing: {
+                            // Archive goes in the top bar; folder-add keeps its
+                            // overlay position below. Two homes, but the top-bar
+                            // slot is the one shared with Lists, so "where is my
+                            // archive" has a single answer across sections (#374).
+                            TopBarIconButton(
+                                systemName: "archivebox",
+                                accessibilityLabel: "Archived notes",
+                                action: openArchive
+                            )
+                        }
                     )
                     rootList
                         .overlay(alignment: .topTrailing) {
@@ -98,6 +125,15 @@ struct NotesView: View {
                     #else
                     rootList
                         .macSectionChrome("Notes") {
+                            // Two controls in the one trailing slot. The closure
+                            // is a plain ViewBuilder feeding a single
+                            // `ToolbarItem`, so these land in the same Liquid
+                            // Glass group rather than as separate pills (#374).
+                            Button(action: openArchive) {
+                                Image(systemName: "archivebox")
+                            }
+                            .help("Archived notes")
+                            .accessibilityLabel("Archived notes")
                             Button {
                                 showingNewFolder = true
                             } label: {
@@ -129,7 +165,9 @@ struct NotesView: View {
                 }
             }
 
-            if selectedNoteId == nil {
+            // No create FAB inside the Archive: a new note is created active, so
+            // it would not appear in the list you are looking at (#374).
+            if selectedNoteId == nil && !showingArchive {
                 Button {
                     Task { await createBlankNote(folderId: selectedFolder?.id) }
                 } label: {
@@ -178,6 +216,7 @@ struct NotesView: View {
         }
         .onChange(of: selectedNoteId) { _, _ in syncBackHandler() }
         .onChange(of: selectedFolder?.id) { _, _ in syncBackHandler() }
+        .onChange(of: showingArchive) { _, _ in syncBackHandler() }
         .sheet(isPresented: $showingNewFolder) {
             NewFolderSheet(viewModel: viewModel)
         }
@@ -243,9 +282,10 @@ struct NotesView: View {
                 Section {
                     ForEach(unfiled) { note in
                         NoteRow(note: note) { open(note: note) }
-                            .swipeToDeleteTrash {
-                                Task { await viewModel.deleteNote(note) }
-                            }
+                            .swipeToArchiveOrDelete(
+                                onArchive: { Task { await viewModel.setArchived(note, true) } },
+                                onDelete: { Task { await viewModel.deleteNote(note) } }
+                            )
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .contentRowInsets(vertical: Space.xs)
@@ -293,9 +333,10 @@ struct NotesView: View {
             } else {
                 ForEach(inFolder) { note in
                     NoteRow(note: note) { open(note: note) }
-                        .swipeToDeleteTrash {
-                            Task { await viewModel.deleteNote(note) }
-                        }
+                        .swipeToArchiveOrDelete(
+                            onArchive: { Task { await viewModel.setArchived(note, true) } },
+                            onDelete: { Task { await viewModel.deleteNote(note) } }
+                        )
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .contentRowInsets(vertical: Space.xs)
@@ -335,6 +376,7 @@ struct NotesView: View {
     private func syncBackHandler() {
         let noteBinding = $selectedNoteId
         let folderBinding = $selectedFolder
+        let archiveBinding = $showingArchive
         if selectedNoteId != nil {
             router.leadingEdgeBackHandler = {
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -347,9 +389,69 @@ struct NotesView: View {
                     folderBinding.wrappedValue = nil
                 }
             }
+        } else if showingArchive {
+            // Least-nested of the three, so it is checked last: a note opened
+            // from the Archive pops to the Archive first (#374).
+            router.leadingEdgeBackHandler = {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    archiveBinding.wrappedValue = false
+                }
+            }
         } else {
             router.leadingEdgeBackHandler = nil
         }
+    }
+
+    private func openArchive() {
+        withAnimation(.easeOut(duration: 0.2)) { showingArchive = true }
+    }
+
+    private func closeArchive() {
+        withAnimation(.easeOut(duration: 0.2)) { showingArchive = false }
+    }
+
+    /// The Archive (#374). Flat across folders, using the same `NoteRow` and row
+    /// insets as the index so an archived note reads as itself.
+    private var archiveList: some View {
+        List {
+            if viewModel.archivedNotes.isEmpty {
+                Text("Nothing archived yet. Swipe a note to archive it.")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Space.xxxl)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+            } else {
+                ForEach(viewModel.archivedNotes) { note in
+                    NoteRow(note: note) { open(note: note) }
+                        .swipeToUnarchiveOrDelete(
+                            onUnarchive: { Task { await viewModel.setArchived(note, false) } },
+                            onDelete: { Task { await viewModel.deleteNote(note) } }
+                        )
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .contentRowInsets(vertical: Space.xs)
+                }
+            }
+
+            Color.clear
+                .frame(height: 96)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
+        // Intentionally NO `.macTamedListSelection()` here, even though the Lists
+        // archive has it: the Notes root list does not have it either, and the
+        // Archive is supposed to be the same view with a different data source.
+        // Adding it on one side only would make the Archive and the index render
+        // differently on macOS. Whether Notes should tame selection at all is a
+        // pre-existing question for both, not something to change on one branch.
+        .syncRefreshable { await viewModel.load() }
     }
 }
 

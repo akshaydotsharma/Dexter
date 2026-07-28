@@ -9,6 +9,12 @@ struct ListsView: View {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_LIST_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
     }()
+    /// Whether the Archive is showing instead of the active index (#374).
+    ///
+    /// A sibling of `selectedListId` rather than a wrapper around it: opening a
+    /// list from the Archive keeps this true, so closing the list returns to the
+    /// Archive rather than dumping you back on the index.
+    @State private var showingArchive = false
 
     @Bindable var router: AppRouter
 
@@ -17,7 +23,11 @@ struct ListsView: View {
             Tokens.paper.canvasIgnoresSafeArea()
 
             VStack(spacing: 0) {
-                if let id = selectedListId, let list = viewModel.lists.first(where: { $0.id == id }) {
+                // `viewModel.list(id:)` rather than a search of `viewModel.lists`:
+                // the list may be archived (opened from the Archive), in which
+                // case it is in `archivedLists` and a search of the active
+                // collection would resolve nil and bounce straight back (#374).
+                if let id = selectedListId, let list = viewModel.list(id: id) {
                     // iOS: in-view detail header row. macOS: the back button +
                     // action icons live in the native window toolbar via
                     // `.macDetailChrome` so Tahoe draws them as a Liquid Glass
@@ -67,17 +77,48 @@ struct ListsView: View {
                                 .help("Delete list")
                             }
                         )
+                } else if showingArchive {
+                    // The Archive. Same rows, same layout, over the archived
+                    // collection — it is the index with a different data source,
+                    // not a new screen (#374).
+                    //
+                    // iOS gets an in-view back header; macOS puts back in the
+                    // native window toolbar and tracks the title there, the same
+                    // section-vs-detail chrome split as an open list (issue #291).
+                    #if os(iOS)
+                    ArchiveHeader(backTitle: "Lists", onBack: closeArchive)
+                    #endif
+                    archiveList
+                        .macDetailChrome(title: "Archive", subtitle: "Lists", onBack: closeArchive)
                 } else {
                     // iOS in-view top bar; macOS uses the native window
                     // toolbar via `.macSectionChrome` below (issue #283).
                     #if os(iOS)
                     TopBar(
                         title: "Lists",
-                        onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
+                        onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } },
+                        trailing: {
+                            TopBarIconButton(
+                                systemName: "archivebox",
+                                accessibilityLabel: "Archived lists",
+                                action: openArchive
+                            )
+                        }
                     )
                     #endif
                     rootList
-                        .macSectionChrome("Lists")
+                        .macSectionChrome("Lists") {
+                            Button(action: openArchive) {
+                                Image(systemName: "archivebox")
+                            }
+                            // Default toolbar button style, NOT `.plain` — see
+                            // the note on the Notes folder-add button (#368):
+                            // `.plain` strips the padding macOS puts inside a
+                            // toolbar control and the glyph ends up flush against
+                            // the leading curve of the Liquid Glass pill.
+                            .help("Archived lists")
+                            .accessibilityLabel("Archived lists")
+                        }
                         // Publish the create action for File > New List and ⌘N
                         // while the root list is on screen. Deliberately scoped
                         // to the root branch: inside an open list ⌘N should mean
@@ -91,7 +132,10 @@ struct ListsView: View {
                 }
             }
 
-            if selectedListId == nil {
+            // No create FAB inside the Archive: a new list would be created
+            // active and so would not appear in the list you are looking at,
+            // which reads as the button doing nothing (#374).
+            if selectedListId == nil && !showingArchive {
                 Button {
                     showingNewList = true
                 } label: {
@@ -124,11 +168,12 @@ struct ListsView: View {
         .onDisappear {
             // Don't strip a back handler we didn't install — another surface
             // may have set its own when this view was off-screen.
-            if selectedListId != nil {
+            if selectedListId != nil || showingArchive {
                 router.leadingEdgeBackHandler = nil
             }
         }
         .onChange(of: selectedListId) { _, _ in syncBackHandler() }
+        .onChange(of: showingArchive) { _, _ in syncBackHandler() }
         .sheet(isPresented: $showingNewList) {
             NewListSheet(viewModel: viewModel)
         }
@@ -151,15 +196,33 @@ struct ListsView: View {
     // syncBackHandler — see that file for the rationale.
     private func syncBackHandler() {
         let listBinding = $selectedListId
+        let archiveBinding = $showingArchive
         if selectedListId != nil {
+            // One level at a time: an open list closes back to whatever it was
+            // opened from (the index, or the Archive), and a second edge-swipe
+            // then leaves the Archive (#374).
             router.leadingEdgeBackHandler = {
                 withAnimation(.easeOut(duration: 0.2)) {
                     listBinding.wrappedValue = nil
                 }
             }
+        } else if showingArchive {
+            router.leadingEdgeBackHandler = {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    archiveBinding.wrappedValue = false
+                }
+            }
         } else {
             router.leadingEdgeBackHandler = nil
         }
+    }
+
+    private func openArchive() {
+        withAnimation(.easeOut(duration: 0.2)) { showingArchive = true }
+    }
+
+    private func closeArchive() {
+        withAnimation(.easeOut(duration: 0.2)) { showingArchive = false }
     }
 
     private var rootList: some View {
@@ -183,9 +246,10 @@ struct ListsView: View {
                             selectedListId = list.id
                         }
                     }
-                    .swipeToDeleteTrash {
-                        Task { await viewModel.delete(list) }
-                    }
+                    .swipeToArchiveOrDelete(
+                        onArchive: { Task { await viewModel.setArchived(list, true) } },
+                        onDelete: { Task { await viewModel.delete(list) } }
+                    )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .contentRowInsets(vertical: Space.xs)
@@ -206,7 +270,98 @@ struct ListsView: View {
         .macTamedListSelection()
         .syncRefreshable { await viewModel.load() }
     }
+
+    /// The Archive (#374). Deliberately the same `ListSummaryRow`, row insets and
+    /// list chrome as `rootList` — Akshay's ask was "the same view as the active
+    /// list", and an archived list should look like itself, not like a tombstone.
+    /// Only the data source, the empty copy and the swipe pair differ.
+    private var archiveList: some View {
+        List {
+            if viewModel.archivedLists.isEmpty {
+                Text("Nothing archived yet. Swipe a list to archive it.")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Space.xxxl)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+            } else {
+                ForEach(viewModel.archivedLists) { list in
+                    ListSummaryRow(list: list) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            selectedListId = list.id
+                        }
+                    }
+                    .swipeToUnarchiveOrDelete(
+                        onUnarchive: { Task { await viewModel.setArchived(list, false) } },
+                        onDelete: { Task { await viewModel.delete(list) } }
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .contentRowInsets(vertical: Space.xs)
+                }
+            }
+
+            Color.clear
+                .frame(height: 96)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
+        .macTamedListSelection()
+        .syncRefreshable { await viewModel.load() }
+    }
 }
+
+#if os(iOS)
+/// In-view header for the Archive on iOS (#374).
+///
+/// Mirrors `ListDetailHeader`'s back control so leaving the Archive feels like
+/// leaving any other pushed screen. macOS has no equivalent — back and the title
+/// live in the native window toolbar via `.macDetailChrome`.
+struct ArchiveHeader: View {
+    /// The screen you go back TO, shown next to the chevron.
+    let backTitle: String
+    let onBack: () -> Void
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            Button(action: onBack) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                    Text(backTitle)
+                }
+                .font(.edBody)
+                .foregroundStyle(Tokens.muted)
+                .frame(height: 44)
+                .contentShape(Rectangle())
+            }
+            Spacer()
+            Text("Archive")
+                .font(.edTitle)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
+            Spacer()
+            // The Archive has no per-screen actions, where `ListDetailHeader`
+            // has two 44pt icon buttons on this edge. An inert 44pt block keeps
+            // the title optically centred instead of letting it drift right.
+            Color.clear.frame(width: 44, height: 44)
+        }
+        .padding(.horizontal, Space.md)
+        .frame(height: 56)
+        // Same 56pt bar, paper fill and hairline underline as `ListDetailHeader`
+        // and `TopBar`, so the Archive sits at the same visual level as the
+        // screen it replaced.
+        .background(Tokens.paper.overlay(alignment: .bottom) {
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+        })
+    }
+}
+#endif
 
 private struct ListDetailHeader: View {
     let title: String

@@ -306,7 +306,8 @@ final class DataExportService {
             position: note.position,
             createdAt: note.createdAt,
             updatedAt: note.updatedAt,
-            deletedAt: note.deletedAt
+            deletedAt: note.deletedAt,
+            archivedAt: note.archivedAt
         )
     }
 
@@ -330,7 +331,8 @@ final class DataExportService {
             updatedAt: list.updatedAt,
             deletedAt: list.deletedAt,
             iconName: list.iconName,
-            colorHex: list.colorHex
+            colorHex: list.colorHex,
+            archivedAt: list.archivedAt
         )
     }
 

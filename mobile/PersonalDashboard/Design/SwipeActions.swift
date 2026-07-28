@@ -3,9 +3,72 @@ import SwiftUI
 import UIKit
 #endif
 
-/// Swipe-left-to-delete with circular red trash + gray fade card,
-/// keyed to a UIKit-bridged horizontal-only pan recognizer so the
+/// One action revealed by a row swipe (#374).
+///
+/// Array ORDER is leading-to-trailing in the revealed strip, so the last element
+/// sits hard against the trailing edge. Delete goes last in every pair below,
+/// which is what keeps the trash exactly where muscle memory already expects it
+/// now that a second button shares the strip.
+struct RowSwipeAction: Identifiable {
+    /// SF Symbol name. Doubles as identity — no row reveals the same glyph twice.
+    let icon: String
+    let tint: Color
+    /// Accessibility label, and the `contextMenu` title on macOS.
+    let label: String
+    /// Destructive actions get the warning thump and macOS's `.destructive` role;
+    /// reversible ones get a soft impact and plain styling.
+    let isDestructive: Bool
+    let perform: () -> Void
+
+    var id: String { icon }
+
+    static func delete(_ perform: @escaping () -> Void) -> RowSwipeAction {
+        RowSwipeAction(
+            icon: "trash",
+            // The literal sRGB red rather than `Tokens.danger`: this is the value
+            // the trash circle has always used and it is deliberately the system
+            // destructive red, not the paper palette's.
+            tint: Color(.sRGB, red: 1.0, green: 0.231, blue: 0.188, opacity: 1.0),
+            label: "Delete",
+            isDestructive: true,
+            perform: perform
+        )
+    }
+
+    static func archive(_ perform: @escaping () -> Void) -> RowSwipeAction {
+        RowSwipeAction(
+            icon: "archivebox",
+            // A warm neutral from the paper palette, mid-tone in both light and
+            // dark so the white glyph stays legible either way. Reads as "put
+            // away", clearly not as "destroy", beside the red trash.
+            tint: Tokens.muted,
+            label: "Archive",
+            isDestructive: false,
+            perform: perform
+        )
+    }
+
+    static func unarchive(_ perform: @escaping () -> Void) -> RowSwipeAction {
+        RowSwipeAction(
+            icon: "tray.and.arrow.up",
+            tint: Tokens.muted,
+            label: "Unarchive",
+            isDestructive: false,
+            perform: perform
+        )
+    }
+}
+
+/// Swipe-left to reveal one or more circular action buttons over a gray fade
+/// card, keyed to a UIKit-bridged horizontal-only pan recognizer so the
 /// parent List's vertical scroll is never starved.
+///
+/// Originally delete-only; generalised to an ordered list of actions for the
+/// Lists/Notes archive (#374). `swipeToDeleteTrash` is now a one-element case of
+/// the general form, which is what guarantees every pre-existing surface keeps
+/// identical behaviour — same 60pt reveal, same red trash, same full-swipe
+/// commit — rather than relying on a second copy of the gesture code staying in
+/// sync with this one.
 ///
 /// SwiftUI gesture arbitration cannot filter by direction at the
 /// recognizer level — `DragGesture(minimumDistance: 10)` claims the
@@ -24,10 +87,42 @@ import UIKit
 /// claim a horizontal touch, `cancelsTouchesInView = true` cancels
 /// the row's onTapGesture so the same swipe doesn't ALSO navigate
 /// into the row.
+
 extension View {
+    /// Swipe-left to delete. Unchanged behaviour for every surface that already
+    /// used it (Tasks, Notes folders, Finance, Trips, Vocabulary, the side
+    /// drawer): one button, a 60pt reveal, and full-swipe still commits.
     func swipeToDeleteTrash(perform action: @escaping () -> Void) -> some View {
+        rowSwipeActions([.delete(action)])
+    }
+
+    /// Swipe-left to archive or delete, for an ACTIVE list or note row (#374).
+    /// Archive is inboard, delete keeps the trailing edge.
+    func swipeToArchiveOrDelete(
+        onArchive: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) -> some View {
+        rowSwipeActions([.archive(onArchive), .delete(onDelete)])
+    }
+
+    /// The inverse pair, for a row inside the Archive (#374).
+    func swipeToUnarchiveOrDelete(
+        onUnarchive: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) -> some View {
+        rowSwipeActions([.unarchive(onUnarchive), .delete(onDelete)])
+    }
+
+    /// The general form: reveal `actions` on a left swipe, in order.
+    ///
+    /// Full-swipe-to-commit is enabled ONLY for a single action. With two or more
+    /// buttons there is no non-arbitrary choice of what a long drag should mean,
+    /// and guessing wrong would fire an irreversible delete on a gesture the user
+    /// made to reach archive. So a multi-action row just holds open and waits for
+    /// a tap (#374).
+    func rowSwipeActions(_ actions: [RowSwipeAction]) -> some View {
         #if canImport(UIKit)
-        return modifier(SwipeToDeleteWithTint(onDelete: action))
+        return modifier(SwipeRevealActions(actions: actions))
         #else
         // macOS. Two affordances, because the swipe alone does not reach every
         // user or every container (issues #296, #297).
@@ -56,16 +151,41 @@ extension View {
         // `.contextMenu` reaches iOS, where it would bind to long-press and
         // invent a phone gesture that the standing correction
         // `feedback_inline_edit_gestures.md` forbids.
+        //
+        // `.swipeActions` renders its buttons trailing-edge-first, i.e. the
+        // REVERSE of the visual order the iOS strip uses. Reversing here means
+        // one `actions` array describes both platforms and delete lands against
+        // the window edge on each.
         return self
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive, action: action) {
-                    Image(systemName: "trash")
+            // Full swipe only for a single action, matching iOS: with two
+            // buttons a full trackpad swipe would otherwise commit whichever one
+            // SwiftUI picked first.
+            .swipeActions(edge: .trailing, allowsFullSwipe: actions.count == 1) {
+                ForEach(actions.reversed()) { action in
+                    if action.isDestructive {
+                        Button(role: .destructive, action: action.perform) {
+                            Image(systemName: action.icon)
+                        }
+                        .tint(.red)
+                    } else {
+                        Button(action: action.perform) {
+                            Image(systemName: action.icon)
+                        }
+                        .tint(action.tint)
+                    }
                 }
-                .tint(.red)
             }
             .contextMenu {
-                Button(role: .destructive, action: action) {
-                    Label("Delete", systemImage: "trash")
+                ForEach(actions) { action in
+                    if action.isDestructive {
+                        Button(role: .destructive, action: action.perform) {
+                            Label(action.label, systemImage: action.icon)
+                        }
+                    } else {
+                        Button(action: action.perform) {
+                            Label(action.label, systemImage: action.icon)
+                        }
+                    }
                 }
             }
         #endif
@@ -73,15 +193,22 @@ extension View {
 }
 
 #if canImport(UIKit)
-private struct SwipeToDeleteWithTint: ViewModifier {
-    let onDelete: () -> Void
+private struct SwipeRevealActions: ViewModifier {
+    let actions: [RowSwipeAction]
 
     @State private var offset: CGFloat = 0
     @State private var isOpen: Bool = false
     @State private var didCrossCommitThreshold: Bool = false
 
     private let buttonSize: CGFloat = 52
-    private let revealedWidth: CGFloat = 60
+    /// Per-action slot. One action gives the 60pt reveal this modifier has always
+    /// had, so single-action surfaces are pixel-identical (#374).
+    private let slotWidth: CGFloat = 60
+    private var revealedWidth: CGFloat { slotWidth * CGFloat(max(1, actions.count)) }
+
+    /// Full-swipe-to-commit is a single-action affordance only — see
+    /// `rowSwipeActions` for why.
+    private var allowsFullSwipe: Bool { actions.count == 1 }
     // Generous pill-leaning radius. On short single-line rows (~40pt
     // tall) SwiftUI clamps this to half the height and the swiped row
     // renders as a true pill; on multi-line rows it stays a strongly
@@ -92,7 +219,6 @@ private struct SwipeToDeleteWithTint: ViewModifier {
     // the dominant visible fill during the swipe.
     private let cardCornerRadius: CGFloat = 26
     private let tintColor: Color = Tokens.borderStrong
-    private let trashColor: Color = Color(.sRGB, red: 1.0, green: 0.231, blue: 0.188, opacity: 1.0)
     private let openCloseAnimation: Animation = .snappy(duration: 0.26, extraBounce: 0.04)
     // Leftward (negative) flick speed above which we treat the gesture
     // as "the user wants this open even if they didn't drag all the
@@ -122,6 +248,10 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     let raw = (isOpen ? -revealedWidth : 0) + dx
                     offset = applyRubberBand(to: raw)
 
+                    // The threshold tick only means something when crossing it
+                    // will actually commit something. On a multi-action row it
+                    // would promise a commit that never comes.
+                    guard allowsFullSwipe else { return }
                     let crossing = -offset > commitThreshold
                     if crossing && !didCrossCommitThreshold {
                         Haptics.tick()
@@ -142,8 +272,8 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     let leftFlick = vx <= -flickVelocityThreshold
                     let rightFlick = vx >= flickVelocityThreshold
 
-                    if dragMag > commitThreshold {
-                        commit()
+                    if allowsFullSwipe, dragMag > commitThreshold, let only = actions.first {
+                        commit(only)
                     } else if leftFlick && dragMag > revealedWidth * 0.25 {
                         // Strong leftward flick past a quarter of the
                         // reveal width: treat as intent to open even if
@@ -178,22 +308,30 @@ private struct SwipeToDeleteWithTint: ViewModifier {
                     .offset(x: offset)
             }
 
-            Button(action: commit) {
-                Image(systemName: "trash")
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(Circle().fill(trashColor))
-                    .scaleEffect(0.85 + 0.15 * progress)
+            // One 60pt slot per action, laid out in `actions` order so the last
+            // element ends up against the trailing edge. A single action
+            // collapses to exactly the previous layout.
+            HStack(spacing: 0) {
+                ForEach(actions) { action in
+                    Button { commit(action) } label: {
+                        Image(systemName: action.icon)
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(.white)
+                            .frame(width: buttonSize, height: buttonSize)
+                            .background(Circle().fill(action.tint))
+                            .scaleEffect(0.85 + 0.15 * progress)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: slotWidth)
+                    .accessibilityLabel(action.label)
+                }
             }
-            .buttonStyle(.plain)
             .opacity(progress)
             // Only intercept taps once the swipe has clearly revealed
-            // the trash. Below that threshold we leave hit testing to
+            // the buttons. Below that threshold we leave hit testing to
             // the underlying content so partial drags / scroll handoff
             // stay unaffected.
             .allowsHitTesting(isOpen && dragDistance >= revealedWidth * 0.6)
-            .accessibilityLabel("Delete")
         }
     }
 
@@ -238,15 +376,22 @@ private struct SwipeToDeleteWithTint: ViewModifier {
         }
     }
 
-    private func commit() {
-        // Fire delete on the same runloop tick as the tap so the
+    private func commit(_ action: RowSwipeAction) {
+        // Fire the action on the same runloop tick as the tap so the
         // List's native row-removal animation kicks in immediately.
         // The bespoke slide-off + 0.2s deferred call previously made
         // every confirmed delete feel ~250ms laggy and let the user
         // queue up a second tap mid-animation. (#94)
-        Haptics.destructive()
+        //
+        // Archive gets the soft impact rather than the warning thump: the
+        // warning is the feel of "that was destructive", and archiving is not.
+        if action.isDestructive {
+            Haptics.destructive()
+        } else {
+            Haptics.light()
+        }
         isOpen = false
-        onDelete()
+        action.perform()
     }
 }
 
