@@ -97,12 +97,19 @@ private struct MacRootView: View {
     /// navigation for screenshots and QA.
     @State private var router = AppRouter()
 
-    /// Sidebar order. Excludes the dead `dashboard` section (issue #30).
+    /// Feature sections, in sidebar order. Excludes the dead `dashboard`
+    /// section (issue #30) and the two utility sections, which are pinned to
+    /// the bottom of the sidebar instead (see `utilitySections`).
     private let sections: [AppSection] = [
         .chat, .today, .tasks, .notes, .lists,
         .itineraries, .finance, .vocabulary, .activity,
-        .settings, .helpCenter,
     ]
+
+    /// Utility destinations, pinned to the bottom-left below a separator
+    /// (issue #387). These are not places you keep work in, and running them on
+    /// after Activity read as two more feature sections. Reminders, Mail and
+    /// System Settings all park this kind of row at the foot of the sidebar.
+    private let utilitySections: [AppSection] = [.settings, .helpCenter]
 
     /// Whether the process was launched with a valid `LAUNCH_SECTION` target.
     ///
@@ -141,11 +148,14 @@ private struct MacRootView: View {
     var body: some View {
         NavigationSplitView {
             List(sections, selection: selection) { section in
-                Label(section.displayName, systemImage: section.icon)
-                    .tag(section)
+                sidebarRow(section)
             }
+            .listStyle(.sidebar)
             .navigationTitle("Dexter")
             .frame(minWidth: 210)
+            // `macBottomBar` rather than a plain inset so macOS 26 draws the
+            // sidebar's scroll-edge effect under the pinned rows.
+            .macBottomBar { utilityFooter }
         } detail: {
             detailView(for: router.currentSection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -181,6 +191,36 @@ private struct MacRootView: View {
             // risk without benefit. Revisit with phase 2.
             await SyncCoordinator.shared.runForegroundPass(reason: "launch")
             SyncCoordinator.shared.startPeriodic()
+        }
+    }
+
+    private func sidebarRow(_ section: AppSection) -> some View {
+        Label(section.displayName, systemImage: section.icon)
+            .tag(section)
+    }
+
+    /// The pinned Settings / Help center block (issue #387).
+    ///
+    /// A second `List` bound to the SAME selection, rather than hand-drawn
+    /// rows: selection styling in the sidebar is a moving target across macOS
+    /// versions (Tahoe draws it as Liquid Glass), so anything hand-rolled here
+    /// would drift out of step with the feature rows above the separator. Two
+    /// lists sharing one non-optional binding is well behaved — whichever list
+    /// does not hold the current section simply shows nothing selected.
+    ///
+    /// The height has to be stated because a `List` expands to fill whatever it
+    /// is given; there is no intrinsic content height to read back. It is
+    /// deliberately generous, since surplus space shows as padding under the
+    /// last row while a shortfall would clip it.
+    private var utilityFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+            List(utilitySections, selection: selection) { section in
+                sidebarRow(section)
+            }
+            .listStyle(.sidebar)
+            .scrollDisabled(true)
+            .frame(height: CGFloat(utilitySections.count) * 32 + 8)
         }
     }
 
