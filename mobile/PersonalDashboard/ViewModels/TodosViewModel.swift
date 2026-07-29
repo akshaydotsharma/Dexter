@@ -42,14 +42,23 @@ final class TodosViewModel {
         await load()
     }
 
-    func create(title: String, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String = "", googleMapsLink: String = "", priority: Int = 0) async {
+    /// Create a task. Returns the created `Todo`, or nil on failure.
+    ///
+    /// The return value exists for #399: attaching a ticket to a task that is
+    /// still being written has to create the task first, and the caller needs its
+    /// `clientUUID` to hang the ticket off. Discardable so every existing call
+    /// site is unchanged.
+    @discardableResult
+    func create(title: String, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String = "", googleMapsLink: String = "", priority: Int = 0) async -> Todo? {
         do {
             let request = TodoCreateRequest(title: title, description: description, dueDate: dueDate, tag: tag, address: address, googleMapsLink: googleMapsLink, priority: priority)
             let new = try await service.create(request)
             // Append so a newly created task appears below the last one (#267).
             todos.append(new)
+            return new
         } catch {
             errorMessage = error.localizedDescription
+            return nil
         }
     }
 

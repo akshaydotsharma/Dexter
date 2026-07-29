@@ -315,7 +315,7 @@ extension TaskTicketExtraction {
             "properties": .object([
                 "event_title": field("The name of the event or booking as printed (e.g. \"Coldplay · Music of the Spheres\", \"Arsenal v Chelsea\", \"Dr Tan — dental check-up\"). Omit if the ticket shows no name."),
                 "event_date": field("The date the ticket is valid, as ISO 8601 yyyy-MM-dd. Read the printed date. If the year is not printed, omit the field rather than guessing a year."),
-                "start_time_text": field("The start / entry / doors time EXACTLY as printed, verbatim, including any label (e.g. \"20:00\", \"7.30pm\", \"Doors 19:00\", \"Boards 18:20\"). Do NOT convert to 24-hour, do NOT add a timezone, do NOT reformat. Omit if no time is shown."),
+                "start_time_text": field("The time the event actually STARTS, EXACTLY as printed, verbatim (e.g. \"20:00\", \"7.30pm\", \"Boards 18:20\"). When BOTH a doors/entry time and a start/show time are printed, use the START time — prefer \"Show 20:00\" over \"Doors 18:30\" — because that is the time the person is trying to be somewhere for. Fall back to the doors time only when no start time is printed, and keep its label then. Do NOT convert to 24-hour, do NOT add a timezone, do NOT reformat. Omit if no time is shown."),
                 "venue": field("Venue or location name as printed (e.g. \"National Stadium, Singapore\", \"The O2, London\"). Omit if none."),
                 "seat": field("Seat as printed (e.g. \"12A\", \"Seat 8\"). Omit if none."),
                 "gate": field("Entry gate or door, ONLY when a real value is explicitly printed (e.g. \"Gate 3\", \"Door B\", \"14\"). Never infer it, never emit a placeholder, a dash, \"TBD\", or a lone letter — omit the field entirely if no real gate is shown."),
@@ -337,7 +337,7 @@ extension TaskTicketExtraction {
 
     Read values verbatim. Do not guess, round, translate or reformat. Omit any field you cannot read with confidence: a blank field renders as nothing, whereas a wrong one sends the person to the wrong door. Short codes like gate are especially error-prone — emit them ONLY when a real value is explicitly printed, never a lone letter, a dash or a placeholder.
 
-    The start time is a special case: return it as printed, character for character, including any label like "Doors". Never normalise it and never attach a timezone.
+    The start time is a special case: return it as printed, character for character. Never normalise it and never attach a timezone. When a ticket prints both a doors time and a show time, the show time is the one to return.
     """
 
     static func userPrompt(taskTitle: String) -> String {

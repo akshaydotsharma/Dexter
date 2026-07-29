@@ -1148,6 +1148,10 @@ private struct TaskEditorSheet: View {
     @State private var googleMapsLink: String = ""
     @State private var isResolvingAddress = false
     @State private var addressResolveTask: Task<Void, Never>?
+    /// Set when attaching a ticket forced this new task to be created early
+    /// (#399). `save()` must then UPDATE that row rather than create a second
+    /// task, and Cancel must not orphan the ticket.
+    @State private var createdTodoId: UUID?
 
     @Environment(\.openURL) private var openURL
 
@@ -1333,25 +1337,48 @@ private struct TaskEditorSheet: View {
     /// Ticket attachments, on both the iOS and macOS editors.
     ///
     /// A ticket row is keyed on the task's `clientUUID`, which a task being
-    /// created for the first time does not have yet, so the section says to save
-    /// first rather than silently swallowing an upload that has nowhere to go.
+    /// created for the first time does not have yet. Rather than refuse until the
+    /// task is saved, the section calls `ensureTask` and the task is created at
+    /// that moment: wanting to attach a ticket to a task you are in the middle of
+    /// writing is the obvious thing, and "save it first" is the editor's problem
+    /// leaking out at the person.
     @ViewBuilder
     private var ticketsBlock: some View {
-        if let todo {
-            TaskTicketSection(todoId: todo.id, taskTitle: todo.title)
-        } else {
-            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
-                Text("Tickets").eyebrow()
-                Text("Save the task first, then attach a ticket to it.")
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(Space.md)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                    .paperBorder(Tokens.border, radius: Radius.md)
-            }
-        }
+        TaskTicketSection(
+            todoId: todo?.id,
+            taskTitle: currentTitleForTickets,
+            ensureTask: ensureTaskExists
+        )
+    }
+
+    /// What the ticket card falls back to for its headline. Uses the live field so
+    /// a card attached mid-compose is titled with what has been typed, not "".
+    private var currentTitleForTickets: String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? (todo?.title ?? "") : trimmed
+    }
+
+    /// Create the task being composed so an attachment has something to attach to,
+    /// returning its id. Nil when there is no title yet — that is the one case
+    /// where we genuinely cannot proceed, and the section says so inline.
+    ///
+    /// Deliberately does NOT dismiss: the person is still editing, and the ticket
+    /// ingest continues against the returned id.
+    private func ensureTaskExists() async -> UUID? {
+        if let todo { return todo.id }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let created = await viewModel.create(
+            title: trimmed,
+            description: descriptionText.isEmpty ? nil : descriptionText,
+            dueDate: hasDueDate ? dueDate : nil,
+            tag: tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag,
+            address: address.trimmingCharacters(in: .whitespacesAndNewlines),
+            googleMapsLink: googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines),
+            priority: priority.rawValue
+        )
+        if let created { createdTodoId = created.id }
+        return created?.id
     }
 
     // MARK: - macOS editor (Reminders-style inspector popover, issue #287)
@@ -1402,6 +1429,13 @@ private struct TaskEditorSheet: View {
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.sm)
                     }
+
+                    // Tickets sits high on the Mac deliberately. This editor is a
+                    // 360x520 popover, so a section at the bottom is below the
+                    // fold and effectively invisible — you cannot drop a file on
+                    // something you have to go looking for. iOS keeps it last,
+                    // where a full-height sheet makes scrolling to it natural.
+                    ticketsBlock
 
                     // Date & Time
                     macSectionHeader("Date & Time")
@@ -1525,13 +1559,6 @@ private struct TaskEditorSheet: View {
                         .padding(.vertical, Space.sm)
                     }
 
-                    // Tickets (#399). The Mac can view, edit and remove a ticket
-                    // and add one from the open panel; there is no camera and no
-                    // present-to-scan surface, both of which are iOS-gated inside
-                    // the section itself. No `macSectionHeader` here: the section
-                    // carries its own eyebrow, because that is where the Add
-                    // control lives.
-                    ticketsBlock
                 }
                 .padding(Space.lg)
             }
@@ -1628,7 +1655,13 @@ private struct TaskEditorSheet: View {
         let finalDue = hasDueDate ? dueDate : nil
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let existing = todo {
+        // `createdTodoId` means attaching a ticket already created this task
+        // (#399). Updating it is essential: creating again would leave two tasks,
+        // one of them holding the ticket.
+        let existingToUpdate = todo ?? createdTodoId.flatMap { id in
+            viewModel.todos.first { $0.id == id }
+        }
+        if let existing = existingToUpdate {
             await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
         } else {
             await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)

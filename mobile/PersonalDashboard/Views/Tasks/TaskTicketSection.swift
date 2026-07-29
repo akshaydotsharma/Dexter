@@ -1,11 +1,12 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if os(iOS)
 // For the camera-availability gate on the add menu.
 import UIKit
 #endif
 
 /// Ticket attachments for a task, shown as a stack of wallet cards inside the
-/// task editor with an add button (#399).
+/// task editor with an add control (#399).
 ///
 /// Owns its own reads and writes through `TaskTicketService` rather than routing
 /// them through `TasksViewModel`, for the reason `NoteImageStrip` does the same
@@ -15,25 +16,45 @@ import UIKit
 /// Cards are stacked vertically rather than in a horizontal strip, because a
 /// wallet card is a portrait object and the point of the feature is that it is
 /// legible at a glance.
+///
+/// ## Getting a file in
+///
+/// Three ways, in the order people reach for them: drop a file on the section,
+/// pick one from Finder / Files, or take a photo (iPhone only). There is no
+/// separate "image" and "PDF" entry — one file picker accepts either, because the
+/// distinction is not a choice worth surfacing. See `TicketFilePicker`.
 struct TaskTicketSection: View {
-    let todoId: UUID
+    /// The owning task, or `nil` when the editor is for a task that has not been
+    /// saved yet.
+    let todoId: UUID?
     let taskTitle: String
+    /// Creates the task and returns its id, for an attachment that arrives before
+    /// the task exists. Returns nil when it cannot (an empty title). The section
+    /// never blocks on "save first" — see `ingest`.
+    let ensureTask: () async -> UUID?
 
     @State private var tickets: [TaskTicket] = []
     @State private var selected: TaskTicket?
     @State private var isIngesting = false
+    @State private var isTargetedForDrop = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    /// Set once a task has been created on demand, so subsequent attachments in
+    /// the same editor session reuse it instead of creating another.
+    @State private var createdTodoId: UUID?
 
     #if os(iOS)
     @State private var showingCamera = false
-    #endif
     @State private var showingPhotoLibrary = false
-    @State private var showingPDFPicker = false
+    #endif
+    @State private var showingFilePicker = false
 
     private let service = TaskTicketService()
 
     private var accent: Color { Tokens.accent(for: .tasks) }
+
+    /// The task these tickets belong to, once known.
+    private var effectiveTodoId: UUID? { todoId ?? createdTodoId }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
@@ -46,7 +67,7 @@ struct TaskTicketSection: View {
                         .foregroundStyle(Tokens.muted)
                 }
                 Spacer(minLength: 0)
-                addMenu
+                addControl
             }
 
             if tickets.isEmpty && !isIngesting {
@@ -63,13 +84,26 @@ struct TaskTicketSection: View {
                 Text(statusMessage)
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let errorMessage {
                 Text(errorMessage)
                     .font(.edCaption)
                     .foregroundStyle(Tokens.danger)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        // Drop a ticket straight onto the section. Accepting `URL` rather than
+        // `Data` is what makes a Finder drag work: the system hands over a file
+        // reference, and we read the bytes ourselves.
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first else { return false }
+            ingest(url: url)
+            return true
+        } isTargeted: { targeted in
+            isTargetedForDrop = targeted
+        }
+        .animation(.easeOut(duration: 0.15), value: isTargetedForDrop)
         .onAppear(perform: reload)
         .sheet(item: $selected) { ticket in
             TaskTicketDetailSheet(
@@ -84,20 +118,25 @@ struct TaskTicketSection: View {
                 ingest(data: data, isPDF: false)
             }
         }
-        #endif
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
             ingest(data: data, isPDF: false)
         }
-        .pdfPicker(isPresented: $showingPDFPicker) { data, _ in
-            ingest(data: data, isPDF: true)
+        #endif
+        .ticketFilePicker(isPresented: $showingFilePicker) { data, isPDF in
+            ingest(data: data, isPDF: isPDF)
         }
     }
 
     // MARK: - Pieces
 
-    private var addMenu: some View {
+    /// On macOS this is a single button, because there is exactly one sensible
+    /// source: a file. On iPhone it stays a menu, because camera and photo library
+    /// are genuinely different places a ticket lives and neither is reachable
+    /// through the file picker.
+    @ViewBuilder
+    private var addControl: some View {
+        #if os(iOS)
         Menu {
-            #if os(iOS)
             // Same gate the trip ticket menu uses: a simulator has no camera and
             // the row would otherwise present an empty picker.
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -105,52 +144,80 @@ struct TaskTicketSection: View {
                     Haptics.light()
                     showingCamera = true
                 } label: {
-                    Label("Scan with camera", systemImage: "camera")
+                    Label("Take a photo", systemImage: "camera")
                 }
             }
-            #endif
             Button {
                 Haptics.light()
                 showingPhotoLibrary = true
             } label: {
-                Label("Choose a photo", systemImage: "photo.on.rectangle")
+                Label("Choose from Photos", systemImage: "photo.on.rectangle")
             }
             Button {
                 Haptics.light()
-                showingPDFPicker = true
+                showingFilePicker = true
             } label: {
-                Label("Choose a PDF", systemImage: "doc.richtext")
+                Label("Choose a file", systemImage: "folder")
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Add")
-                    .font(.edEyebrow)
-                    .textCase(.uppercase)
-                    .tracking(1.2)
-            }
-            .foregroundStyle(accent)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(accent.opacity(0.12), in: Capsule(style: .continuous))
-            .contentShape(Capsule())
+            addLabel
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(isIngesting)
         .accessibilityLabel("Add a ticket to this task")
+        #else
+        Button {
+            showingFilePicker = true
+        } label: {
+            addLabel
+        }
+        .buttonStyle(.plain)
+        .disabled(isIngesting)
+        .accessibilityLabel("Choose a ticket image or PDF")
+        #endif
+    }
+
+    private var addLabel: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Add")
+                .font(.edEyebrow)
+                .textCase(.uppercase)
+                .tracking(1.2)
+        }
+        .foregroundStyle(accent)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(accent.opacity(0.12), in: Capsule(style: .continuous))
+        .contentShape(Capsule())
     }
 
     private var emptyHint: some View {
-        Text("Attach a ticket, pass or booking confirmation. Dexter reads the details off it and gives you a card you can scan at the door.")
-            .font(.edCaption)
-            .foregroundStyle(Tokens.muted)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(Space.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.md)
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text("Drop a ticket here, or use Add.")
+                .font(.edCaption)
+                .foregroundStyle(isTargetedForDrop ? accent : Tokens.inkSoft)
+            Text("An image or a PDF. Dexter reads the details off it and gives you a card you can scan at the door.")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            isTargetedForDrop ? accent.opacity(0.10) : Tokens.surface2,
+            in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .strokeBorder(
+                    isTargetedForDrop ? accent : Tokens.border,
+                    style: StrokeStyle(lineWidth: isTargetedForDrop ? 1.5 : 0.5,
+                                       dash: isTargetedForDrop ? [] : [4, 3])
+                )
+        )
     }
 
     private func cardButton(for ticket: TaskTicket) -> some View {
@@ -171,12 +238,28 @@ struct TaskTicketSection: View {
     // MARK: - Actions
 
     private func reload() {
+        guard let id = effectiveTodoId else {
+            tickets = []
+            return
+        }
         do {
-            tickets = try service.list(todoId: todoId)
+            tickets = try service.list(todoId: id)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Read a dropped file and ingest it. Mirrors the picker's own read so a drop
+    /// and a pick land in exactly the same place.
+    private func ingest(url: URL) {
+        let needsRelease = url.startAccessingSecurityScopedResource()
+        defer { if needsRelease { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            errorMessage = "Couldn't read that file."
+            return
+        }
+        ingest(data: data, isPDF: TicketFilePickerModifier.isPDF(url))
     }
 
     /// Run one upload through the pipeline. A failed LLM read is not an error:
@@ -189,9 +272,23 @@ struct TaskTicketSection: View {
         errorMessage = nil
 
         Task {
+            // A ticket needs a task to hang off. Rather than refusing until the
+            // person saves, create the task now — attaching a ticket to a task
+            // you are in the middle of writing is the obvious thing to want.
+            // Written out rather than with `??` because the right-hand side is
+            // async, which `??` cannot host.
+            var resolved = effectiveTodoId
+            if resolved == nil { resolved = await ensureTask() }
+            guard let id = resolved else {
+                isIngesting = false
+                errorMessage = "Give the task a title first, then attach the ticket."
+                return
+            }
+            if todoId == nil { createdTodoId = id }
+
             do {
                 let result = try await service.add(
-                    todoId: todoId,
+                    todoId: id,
                     taskTitle: taskTitle,
                     data: data,
                     isPDF: isPDF
@@ -232,8 +329,13 @@ struct TaskTicketsSheet: View {
                 Tokens.paper.ignoresSafeArea()
 
                 ScrollView {
-                    TaskTicketSection(todoId: todoId, taskTitle: taskTitle)
-                        .padding(Space.lg)
+                    TaskTicketSection(
+                        todoId: todoId,
+                        taskTitle: taskTitle,
+                        // The task already exists here, so this is never called.
+                        ensureTask: { todoId }
+                    )
+                    .padding(Space.lg)
                 }
             }
             .navigationTitle(taskTitle)
@@ -245,5 +347,8 @@ struct TaskTicketsSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 460, minHeight: 560)
+        #endif
     }
 }
