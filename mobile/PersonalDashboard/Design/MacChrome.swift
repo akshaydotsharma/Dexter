@@ -35,6 +35,26 @@ struct MacProfilePip: View {
             .accessibilityLabel("Akshay")
     }
 }
+
+/// Breaks the trailing toolbar run so the operations before it and the profile
+/// coin after it get separate Liquid Glass backgrounds (issue #391).
+///
+/// `.fixed`, not `.flexible`: these items are already pinned to the trailing
+/// edge, so a flexible spacer would eat all the slack between the actions and
+/// the coin and fling them to opposite ends of the title bar. Fixed inserts the
+/// system's standard inter-group gap, which is the Reminders/Notes measure.
+///
+/// `ToolbarSpacer` is macOS 26+ and the deployment target is 14.0, so on older
+/// systems this contributes nothing and the toolbar renders exactly as it did
+/// before — those systems don't draw the merged glass run in the first place, so
+/// there is nothing to split. `ToolbarContentBuilder.buildLimitedAvailability`
+/// is what makes the bare `if #available` legal in a toolbar builder.
+@ToolbarContentBuilder
+func macProfileSpacer() -> some ToolbarContent {
+    if #available(macOS 26.0, *) {
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+    }
+}
 #endif
 
 extension View {
@@ -58,10 +78,6 @@ extension View {
         #if os(macOS)
         self
             .navigationTitle(title)
-            // Two DISTINCT toolbar items, not one group: a group renders the
-            // secondary control and the AS coin inside a single bordered pill,
-            // so they read as merged (issue #285). Separate items get macOS's
-            // standard inter-item spacing and their own chrome.
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { trailing() }
                 // Refresh sits in EVERY section rather than only the synced ones
@@ -72,6 +88,19 @@ extension View {
                 // half of the pair — ⌘R alone is invisible until you go looking
                 // in a menu.
                 ToolbarItem(placement: .primaryAction) { MacSyncRefreshButton() }
+                // Ends the operations' glass pill so the AS coin gets its own
+                // background (issue #391).
+                //
+                // #285 tried to achieve this by emitting DISTINCT `ToolbarItem`s
+                // rather than one `ToolbarItemGroup`, on the theory that a group
+                // is what fuses items into a single pill. That is true pre-Tahoe;
+                // on macOS 26 the toolbar draws ONE Liquid Glass background
+                // across every adjacent trailing item whether or not they are
+                // grouped, so the avatar came out looking like the third button
+                // in an action cluster. A spacer is the only thing that breaks
+                // the run, which is why the separate items are kept AND this is
+                // needed.
+                macProfileSpacer()
                 ToolbarItem(placement: .primaryAction) { MacProfilePip() }
             }
             // NO `.toolbarBackground(.hidden, for: .windowToolbar)` here.
@@ -135,6 +164,9 @@ extension View {
                 ToolbarItem(placement: .primaryAction) {
                     MacSyncRefreshButton()
                 }
+                // Same split as `macSectionChrome`: the operations keep one glass
+                // pill, the account coin stands on its own (issue #391).
+                macProfileSpacer()
                 ToolbarItem(placement: .primaryAction) {
                     MacProfilePip()
                 }
