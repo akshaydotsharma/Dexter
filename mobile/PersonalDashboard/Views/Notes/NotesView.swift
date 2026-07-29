@@ -14,10 +14,29 @@ struct NotesView: View {
     /// of `selectedNoteId` / `selectedFolder`, so a note opened from the Archive
     /// closes back to the Archive.
     @State private var showingArchive = false
+    /// Which folder the open Archive is scoped to, nil for the root Archive (#393).
+    ///
+    /// The Archive shows what was archived FROM the screen you opened it on: the
+    /// root lists archived folders plus archived unfiled notes, a folder lists its
+    /// own archived notes. Two ways in, distinguished by whether `selectedFolder`
+    /// is also set — the archive button inside an open folder (back goes to the
+    /// folder), or tapping an archived folder in the root Archive (back goes to
+    /// the Archive).
+    @State private var archiveFolder: NoteFolder?
     @State private var pendingFolderLaunchId: UUID? = {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_FOLDER_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
     }()
+    /// Launch straight into the Archive, the same input-free navigation hook
+    /// `LAUNCH_FOLDER_ID` above provides for folders (#393).
+    ///
+    /// macOS SwiftUI ignores synthetic clicks on tap-gesture rows, so without this
+    /// the archive screens are unreachable to an agent doing a screenshot pass —
+    /// getting there means swiping a row to archive something, then tapping a row
+    /// to drill in. Set alongside `LAUNCH_FOLDER_ID` to open that folder's archive
+    /// instead of the root one.
+    @State private var pendingArchiveLaunch =
+        ProcessInfo.processInfo.environment["LAUNCH_NOTES_ARCHIVE"] == "1"
 
     @Bindable var router: AppRouter
 
@@ -37,10 +56,17 @@ struct NotesView: View {
                             withAnimation(.easeOut(duration: 0.2)) { selectedNoteId = nil }
                         }
                     )
+                } else if showingArchive {
+                    // Checked BEFORE `selectedFolder` (#393): opening the archive
+                    // from inside a folder leaves that folder selected, which is
+                    // exactly what makes back land on the folder rather than the
+                    // index. Ordering here IS the navigation stack.
+                    archiveBranch
                 } else if let folder = selectedFolder {
-                    // iOS: in-view folder header (tap title to rename). macOS:
-                    // back + rename live in the native toolbar; rename opens a
-                    // small alert since there's no in-view title to tap (#291).
+                    // iOS: in-view folder header (tap title to rename, archive
+                    // button on the trailing edge). macOS: back + rename +
+                    // archive live in the native toolbar; rename opens a small
+                    // alert since there's no in-view title to tap (#291).
                     #if os(iOS)
                     FolderDetailHeader(
                         folder: folder,
@@ -54,7 +80,8 @@ struct NotesView: View {
                                     selectedFolder = updated
                                 }
                             }
-                        }
+                        },
+                        onOpenArchive: { openArchive(for: folder) }
                     )
                     #endif
                     folderNotesList(folder)
@@ -64,6 +91,11 @@ struct NotesView: View {
                                 withAnimation(.easeOut(duration: 0.2)) { selectedFolder = nil }
                             },
                             actions: {
+                                Button { openArchive(for: folder) } label: {
+                                    Image(systemName: "archivebox")
+                                }
+                                .help("Archived notes in this folder")
+                                .accessibilityLabel("Archived notes in this folder")
                                 Button {
                                     folderRenameDraft = folder.name
                                     renamingFolder = true
@@ -73,15 +105,6 @@ struct NotesView: View {
                                 .help("Rename folder")
                             }
                         )
-                } else if showingArchive {
-                    // The Archive: a flat list of archived notes across all
-                    // folders (#374). Same chrome split as an open folder — an
-                    // in-view back header on iOS, native toolbar on macOS.
-                    #if os(iOS)
-                    ArchiveHeader(backTitle: "Notes", onBack: closeArchive)
-                    #endif
-                    archiveList
-                        .macDetailChrome(title: "Archive", subtitle: "Notes", onBack: closeArchive)
                 } else {
                     // iOS: in-view top bar, and the create-folder affordance
                     // overlays the top-right of the list area so it doesn't
@@ -191,9 +214,15 @@ struct NotesView: View {
         .task {
             await viewModel.load()
             if let id = pendingFolderLaunchId,
-               let folder = viewModel.folders.first(where: { $0.id == id }) {
+               let folder = viewModel.folder(id: id) {
                 selectedFolder = folder
+                if pendingArchiveLaunch { archiveFolder = folder }
                 pendingFolderLaunchId = nil
+            }
+            if pendingArchiveLaunch {
+                showingArchive = true
+                pendingArchiveLaunch = false
+                syncBackHandler()
             }
         }
         .onAppear {
@@ -210,13 +239,14 @@ struct NotesView: View {
             // Don't strip a back handler we didn't install. NotesView appears
             // and disappears when toggled in/out of the surface stack; another
             // surface may have set its own handler in the meantime.
-            if selectedNoteId != nil || selectedFolder != nil {
+            if selectedNoteId != nil || selectedFolder != nil || showingArchive {
                 router.leadingEdgeBackHandler = nil
             }
         }
         .onChange(of: selectedNoteId) { _, _ in syncBackHandler() }
         .onChange(of: selectedFolder?.id) { _, _ in syncBackHandler() }
         .onChange(of: showingArchive) { _, _ in syncBackHandler() }
+        .onChange(of: archiveFolder?.id) { _, _ in syncBackHandler() }
         .sheet(isPresented: $showingNewFolder) {
             NewFolderSheet(viewModel: viewModel)
         }
@@ -265,9 +295,13 @@ struct NotesView: View {
                                 withAnimation(.easeOut(duration: 0.2)) { selectedFolder = folder }
                             }
                         )
-                        .swipeToDeleteTrash {
-                            Task { await viewModel.deleteFolder(folder) }
-                        }
+                        // Archive alongside delete (#393). Archiving a folder takes
+                        // its active notes with it, so a finished project goes
+                        // away in one gesture instead of note by note.
+                        .swipeToArchiveOrDelete(
+                            onArchive: { Task { await viewModel.setFolderArchived(folder, true) } },
+                            onDelete: { Task { await viewModel.deleteFolder(folder) } }
+                        )
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .contentRowInsets(vertical: Space.xs)
@@ -376,11 +410,32 @@ struct NotesView: View {
     private func syncBackHandler() {
         let noteBinding = $selectedNoteId
         let folderBinding = $selectedFolder
-        let archiveBinding = $showingArchive
         if selectedNoteId != nil {
             router.leadingEdgeBackHandler = {
                 withAnimation(.easeOut(duration: 0.2)) {
                     noteBinding.wrappedValue = nil
+                }
+            }
+        } else if showingArchive {
+            // Above the folder, matching the branch order in `body` (#393): the
+            // archive opened from inside a folder sits ON TOP of it, so back
+            // returns to the folder. The Archive itself has two levels, so the
+            // handler pops the archived folder first — same rule as note-before-
+            // folder, one level down.
+            let archiveBinding = $showingArchive
+            let scopeBinding = $archiveFolder
+            // Read now, not in the closure: `browsingArchivedFolder` depends on
+            // state, and `.onChange(of: archiveFolder?.id)` reinstalls the handler
+            // whenever it flips.
+            let drilledIntoArchivedFolder = browsingArchivedFolder
+            router.leadingEdgeBackHandler = {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    if drilledIntoArchivedFolder {
+                        scopeBinding.wrappedValue = nil
+                    } else {
+                        archiveBinding.wrappedValue = false
+                        scopeBinding.wrappedValue = nil
+                    }
                 }
             }
         } else if selectedFolder != nil {
@@ -389,50 +444,137 @@ struct NotesView: View {
                     folderBinding.wrappedValue = nil
                 }
             }
-        } else if showingArchive {
-            // Least-nested of the three, so it is checked last: a note opened
-            // from the Archive pops to the Archive first (#374).
-            router.leadingEdgeBackHandler = {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    archiveBinding.wrappedValue = false
-                }
-            }
         } else {
             router.leadingEdgeBackHandler = nil
         }
     }
 
+    /// Open the root Archive: archived folders plus archived unfiled notes.
     private func openArchive() {
-        withAnimation(.easeOut(duration: 0.2)) { showingArchive = true }
+        withAnimation(.easeOut(duration: 0.2)) {
+            archiveFolder = nil
+            showingArchive = true
+        }
+    }
+
+    /// Open the Archive scoped to one folder (#393) — the archive button inside an
+    /// open folder, which shows only that folder's archived notes.
+    private func openArchive(for folder: NoteFolder) {
+        withAnimation(.easeOut(duration: 0.2)) {
+            archiveFolder = folder
+            showingArchive = true
+        }
     }
 
     private func closeArchive() {
-        withAnimation(.easeOut(duration: 0.2)) { showingArchive = false }
+        withAnimation(.easeOut(duration: 0.2)) {
+            showingArchive = false
+            archiveFolder = nil
+        }
     }
 
-    /// The Archive (#374). Flat across folders, using the same `NoteRow` and row
-    /// insets as the index so an archived note reads as itself.
+    /// True when the open Archive is an archived FOLDER we drilled into from the
+    /// root Archive, as opposed to a folder's archive opened from the folder
+    /// itself. The distinction decides what back means and how the screen titles
+    /// itself, so it is computed once here rather than re-derived at each use.
+    private var browsingArchivedFolder: Bool {
+        archiveFolder != nil && selectedFolder == nil
+    }
+
+    /// Back out of the Archive by one level (#393).
+    private func archiveBack() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            if browsingArchivedFolder {
+                archiveFolder = nil          // → the root Archive
+            } else {
+                showingArchive = false       // → the folder we came from, or the index
+                archiveFolder = nil
+            }
+        }
+    }
+
+    /// The Archive (#374, rescoped in #393). Same chrome split as an open folder:
+    /// an in-view back header on iOS, the native toolbar on macOS.
+    @ViewBuilder
+    private var archiveBranch: some View {
+        let scopeName = archiveFolder?.name
+        #if os(iOS)
+        ArchiveHeader(
+            backTitle: browsingArchivedFolder ? "Archive" : (scopeName ?? "Notes"),
+            // Drilling into an archived folder, the screen IS that folder, so it
+            // takes the folder's name and "Archive" becomes the back label.
+            title: browsingArchivedFolder ? (scopeName ?? "Archive") : "Archive",
+            onBack: archiveBack
+        )
+        #endif
+        archiveList
+            .macDetailChrome(
+                title: browsingArchivedFolder ? (scopeName ?? "Archive") : "Archive",
+                subtitle: browsingArchivedFolder ? "Archived" : (scopeName ?? "Notes"),
+                onBack: archiveBack
+            )
+    }
+
+    /// The Archive's list, using the same `NoteRow`, `FolderRow` and row insets as
+    /// the index so an archived record reads as itself.
+    ///
+    /// Two shapes, one per scope (#393). Folder-scoped: just that folder's
+    /// archived notes, flat. Root: archived folders over archived unfiled notes,
+    /// mirroring the index's own two sections — the Archive is the same screen you
+    /// came from, over the records you put away, not a separate flat inbox.
+    @ViewBuilder
     private var archiveList: some View {
         List {
-            if viewModel.archivedNotes.isEmpty {
-                Text("Nothing archived yet. Swipe a note to archive it.")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.muted)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, Space.xxxl)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+            if let scope = archiveFolder {
+                let inFolder = viewModel.archivedNotes(in: scope)
+                if inFolder.isEmpty {
+                    archiveEmptyState("Nothing archived in \(scope.name).")
+                } else {
+                    ForEach(inFolder) { note in
+                        archivedNoteRow(note)
+                    }
+                }
             } else {
-                ForEach(viewModel.archivedNotes) { note in
-                    NoteRow(note: note) { open(note: note) }
-                        .swipeToUnarchiveOrDelete(
-                            onUnarchive: { Task { await viewModel.setArchived(note, false) } },
-                            onDelete: { Task { await viewModel.deleteNote(note) } }
-                        )
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .contentRowInsets(vertical: Space.xs)
+                let unfiled = viewModel.archivedNotes(in: nil)
+
+                if !viewModel.archivedFolders.isEmpty {
+                    Section {
+                        ForEach(viewModel.archivedFolders) { folder in
+                            FolderRow(
+                                folder: folder,
+                                // The archived count, since an archived folder's
+                                // notes are all archived. Reading `notes(in:)` here
+                                // would print 0 on every row.
+                                count: viewModel.archivedNotes(in: folder).count,
+                                onTap: {
+                                    withAnimation(.easeOut(duration: 0.2)) { archiveFolder = folder }
+                                }
+                            )
+                            .swipeToUnarchiveOrDelete(
+                                onUnarchive: { Task { await viewModel.setFolderArchived(folder, false) } },
+                                onDelete: { Task { await viewModel.deleteFolder(folder) } }
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .contentRowInsets(vertical: Space.xs)
+                        }
+                    } header: {
+                        sectionEyebrow("Folders")
+                    }
+                }
+
+                if !unfiled.isEmpty {
+                    Section {
+                        ForEach(unfiled) { note in
+                            archivedNoteRow(note)
+                        }
+                    } header: {
+                        sectionEyebrow("Unfiled")
+                    }
+                }
+
+                if viewModel.archivedFolders.isEmpty && unfiled.isEmpty {
+                    archiveEmptyState("Nothing archived yet. Swipe a note or a folder to archive it.")
                 }
             }
 
@@ -453,12 +595,38 @@ struct NotesView: View {
         // pre-existing question for both, not something to change on one branch.
         .syncRefreshable { await viewModel.load() }
     }
+
+    private func archivedNoteRow(_ note: Note) -> some View {
+        NoteRow(note: note) { open(note: note) }
+            .swipeToUnarchiveOrDelete(
+                onUnarchive: { Task { await viewModel.setArchived(note, false) } },
+                onDelete: { Task { await viewModel.deleteNote(note) } }
+            )
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .contentRowInsets(vertical: Space.xs)
+    }
+
+    private func archiveEmptyState(_ message: String) -> some View {
+        Text(message)
+            .font(.edBody)
+            .foregroundStyle(Tokens.muted)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, Space.xxxl)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: Space.lg, bottom: 0, trailing: Space.lg))
+    }
 }
 
 private struct FolderDetailHeader: View {
     let folder: NoteFolder
     let onBack: () -> Void
     let onRename: (String) -> Void
+    /// Opens this folder's archive (#393). Lives where the inert counter-weight
+    /// used to sit, so the title stays optically centred and the archive is in the
+    /// same top-right position it occupies on the Notes root.
+    let onOpenArchive: () -> Void
 
     @State private var isEditing = false
     @State private var draft = ""
@@ -504,10 +672,14 @@ private struct FolderDetailHeader: View {
                     .accessibilityLabel("Folder name, tap to rename")
             }
             Spacer()
-            // Invisible counter-weight so the folder title stays optically
-            // centered now that the inline + has moved to the floating FAB
-            // at the bottom right (consistent with every other surface).
-            Color.clear.frame(width: 44, height: 44)
+            Button(action: onOpenArchive) {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(Tokens.ink)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Archived notes in this folder")
         }
         .padding(.horizontal, Space.md)
         .frame(height: 56)
@@ -837,9 +1009,12 @@ private struct NoteDetailContent: View {
         }
     }
 
+    /// Resolved across active AND archived folders (#393). The picker below only
+    /// offers active folders — moving a note into a folder you have put away is not
+    /// a useful destination — but a note opened from an archived folder still has
+    /// to name the folder it is in rather than claiming to be unfiled.
     private var currentFolderName: String {
-        guard let id = folderId,
-              let folder = viewModel.folders.first(where: { $0.id == id }) else {
+        guard let id = folderId, let folder = viewModel.folder(id: id) else {
             return "Unfiled"
         }
         return folder.name

@@ -307,7 +307,8 @@ final class DataExportService {
             createdAt: note.createdAt,
             updatedAt: note.updatedAt,
             deletedAt: note.deletedAt,
-            archivedAt: note.archivedAt
+            archivedAt: note.archivedAt,
+            archivedWithFolderAt: note.archivedWithFolderAt
         )
     }
 
@@ -318,7 +319,8 @@ final class DataExportService {
             position: folder.position,
             createdAt: folder.createdAt,
             updatedAt: folder.updatedAt,
-            deletedAt: folder.deletedAt
+            deletedAt: folder.deletedAt,
+            archivedAt: folder.archivedAt
         )
     }
 

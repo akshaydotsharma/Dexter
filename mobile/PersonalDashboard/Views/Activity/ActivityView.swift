@@ -57,17 +57,17 @@ struct ActivityView: View {
     @Query(filter: #Predicate<LocalTodo> { $0.deletedAt == nil })
     private var todos: [LocalTodo]
 
-    // Notes and lists also exclude archived records (#374). Archiving is the
-    // user saying "stop showing me this", and a timeline entry is still showing
-    // it. Unarchiving brings the entry back, since the filter is evaluated live
-    // rather than the history being rewritten.
+    // Notes, lists and note folders all exclude archived records (#374, folders
+    // added in #393). Archiving is the user saying "stop showing me this", and a
+    // timeline entry is still showing it. Unarchiving brings the entry back, since
+    // the filter is evaluated live rather than the history being rewritten.
     @Query(filter: #Predicate<LocalNote> { $0.deletedAt == nil && $0.archivedAt == nil })
     private var notes: [LocalNote]
 
     @Query(filter: #Predicate<LocalList> { $0.deletedAt == nil && $0.archivedAt == nil })
     private var lists: [LocalList]
 
-    @Query(filter: #Predicate<LocalNoteFolder> { $0.deletedAt == nil })
+    @Query(filter: #Predicate<LocalNoteFolder> { $0.deletedAt == nil && $0.archivedAt == nil })
     private var folders: [LocalNoteFolder]
 
     // Expenses and itinerary items are hard-deleted (no `deletedAt` field —

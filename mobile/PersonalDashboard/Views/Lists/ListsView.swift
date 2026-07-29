@@ -326,6 +326,11 @@ struct ListsView: View {
 struct ArchiveHeader: View {
     /// The screen you go back TO, shown next to the chevron.
     let backTitle: String
+    /// The screen's own title. Defaults to "Archive", which is every case in
+    /// Lists and the unscoped Notes archive. Notes overrides it when you drill
+    /// into an ARCHIVED FOLDER from the archive (#393): that screen is the folder,
+    /// so it carries the folder's name and "Archive" becomes the back label.
+    var title: String = "Archive"
     let onBack: () -> Void
 
     var body: some View {
@@ -341,7 +346,7 @@ struct ArchiveHeader: View {
                 .contentShape(Rectangle())
             }
             Spacer()
-            Text("Archive")
+            Text(title)
                 .font(.edTitle)
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1)

@@ -10,6 +10,15 @@ final class LocalNoteFolder {
     var createdAt: Date
     var updatedAt: Date
     var deletedAt: Date?
+    /// Archive marker (#393). Same shape as `LocalNote.archivedAt` — a timestamp,
+    /// optional with no non-nil default so the lightweight migration on existing
+    /// installs cannot fail. Nil on every pre-existing folder.
+    ///
+    /// #374 left folders out of the archive because cascade was unresolved.
+    /// #393 settles it: archiving a folder archives the active notes inside it
+    /// and stamps each with `LocalNote.archivedWithFolderAt`, so unarchiving
+    /// restores exactly that set and leaves separately-archived notes alone.
+    var archivedAt: Date?
     var needsSync: Bool
 
     init(
@@ -20,6 +29,7 @@ final class LocalNoteFolder {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         deletedAt: Date? = nil,
+        archivedAt: Date? = nil,
         needsSync: Bool = true
     ) {
         self.clientUUID = clientUUID
@@ -29,6 +39,7 @@ final class LocalNoteFolder {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
+        self.archivedAt = archivedAt
         self.needsSync = needsSync
     }
 
@@ -40,7 +51,8 @@ final class LocalNoteFolder {
             version: version,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            deletedAt: deletedAt
+            deletedAt: deletedAt,
+            archivedAt: archivedAt
         )
     }
 }

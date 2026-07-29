@@ -12,13 +12,74 @@ struct NoteService {
 
     // MARK: - Folders
 
+    /// The ACTIVE folders: not deleted and not archived (#393).
+    ///
+    /// `archivedAt == nil` is what keeps an archived folder out of the Notes
+    /// index and out of the note detail's folder picker, the same way the note
+    /// predicate below keeps archived notes out of every active surface.
     func listFolders() async throws -> [NoteFolder] {
         let descriptor = FetchDescriptor<LocalNoteFolder>(
-            predicate: #Predicate { $0.deletedAt == nil },
+            predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt == nil },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         let rows = try store.context.fetch(descriptor)
         return rows.map { $0.toDTO() }
+    }
+
+    /// The archived folders, most recently archived first (#393).
+    func listArchivedFolders() async throws -> [NoteFolder] {
+        let descriptor = FetchDescriptor<LocalNoteFolder>(
+            predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt != nil },
+            sortBy: [SortDescriptor(\.archivedAt, order: .reverse)]
+        )
+        let rows = try store.context.fetch(descriptor)
+        return rows.map { $0.toDTO() }
+    }
+
+    /// Archive a folder and the active notes inside it, or restore both (#393).
+    ///
+    /// Cascade is the whole point of the feature: putting away a finished project
+    /// should take its notes with it, and leaving them active behind an archived
+    /// folder would make them unreachable in the index while still counting on
+    /// the Today card.
+    ///
+    /// Archiving stamps each cascaded note with `archivedWithFolderAt`, and
+    /// unarchiving restores exactly that set. A note the user had archived on its
+    /// own beforehand carries no marker, so it stays archived and shows up in the
+    /// folder's own archive rather than resurfacing in the folder.
+    func setFolderArchived(_ folder: NoteFolder, _ archived: Bool) async throws {
+        let row = try fetchLocalFolder(uuid: folder.id)
+        let now = Date()
+        let folderUUID = folder.id
+
+        if archived {
+            row.archivedAt = now
+            let activeChildren = FetchDescriptor<LocalNote>(
+                predicate: #Predicate {
+                    $0.folderClientUUID == folderUUID && $0.deletedAt == nil && $0.archivedAt == nil
+                }
+            )
+            for child in try store.context.fetch(activeChildren) {
+                child.archivedAt = now
+                child.archivedWithFolderAt = now
+                child.updatedAt = now
+            }
+        } else {
+            row.archivedAt = nil
+            let cascadedChildren = FetchDescriptor<LocalNote>(
+                predicate: #Predicate {
+                    $0.folderClientUUID == folderUUID && $0.deletedAt == nil && $0.archivedWithFolderAt != nil
+                }
+            )
+            for child in try store.context.fetch(cascadedChildren) {
+                child.archivedAt = nil
+                child.archivedWithFolderAt = nil
+                child.updatedAt = now
+            }
+        }
+
+        row.updatedAt = now
+        try store.context.save()
     }
 
     func createFolder(name: String) async throws -> NoteFolder {
@@ -122,6 +183,11 @@ struct NoteService {
     func setArchived(_ note: Note, _ archived: Bool) async throws {
         let row = try fetchLocalNote(uuid: note.id)
         row.archivedAt = archived ? Date() : nil
+        // Either direction is an individual decision about this one note, so it
+        // is no longer part of any folder cascade (#393). Clearing on archive
+        // matters: without it, a note archived by hand inside a folder that was
+        // later archived and unarchived would come back with the folder.
+        row.archivedWithFolderAt = nil
         row.updatedAt = Date()
         try store.context.save()
     }

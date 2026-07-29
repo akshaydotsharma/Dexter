@@ -124,10 +124,12 @@ struct AssistantContextBuilder {
             }.joined(separator: "\n")
         }
 
-        // Folders: 20 most recent, sorted by name.
+        // Folders: 20 most recent, sorted by name. Archived folders are excluded
+        // (#393), matching the notes and lists blocks above — the assistant should
+        // not offer to file a note into a folder the user has put away.
         if let folders = try? context.fetch(
             FetchDescriptor<LocalNoteFolder>(
-                predicate: #Predicate { $0.deletedAt == nil },
+                predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt == nil },
                 sortBy: [SortDescriptor(\.name, order: .forward)]
             )
         ).prefix(20), !folders.isEmpty {
