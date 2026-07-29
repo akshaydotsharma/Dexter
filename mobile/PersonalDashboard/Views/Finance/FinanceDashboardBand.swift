@@ -3,11 +3,12 @@ import SwiftUI
 /// Snapshot stats shown at the top of the Finance surface. Computed once
 /// per render from the live `expenses` array. Recomputing in-place keeps
 /// the data path simple: no service-layer caching for Phase A.
+///
+/// The breakdown cuts (categories, chart buckets, merchants) moved to
+/// `FinanceInsights` in #389 — this holds only the headline figures.
 struct FinanceDashboardStats {
     let monthTotal: Double
     let previousMonthTotal: Double
-    let topCategories: [(category: ExpenseCategory, total: Double)]
-    let dailyTotals: [(date: Date, total: Double)]
     /// Period total normalised to a 30.44-day month (#255), so "This year"
     /// or a custom range both read as a comparable monthly run-rate.
     let averagePerMonth: Double
@@ -18,11 +19,20 @@ struct FinanceDashboardStats {
     }
 }
 
-/// Dashboard band: month total, delta vs prior month, top-3 categories,
-/// last-30-days sparkline. Card-shaped, uses the Finance accent for the
-/// secondary indicators.
+/// Dashboard band: period total, delta vs the prior period, top-3 category
+/// bars, and an expand control that reveals the fuller `FinanceInsightsPanel`
+/// (#389). Card-shaped, uses the Finance accent for the secondary indicators.
+///
+/// The 30-day sparkline it used to carry was removed in #389: an unaxised line
+/// over spiky daily spend answered neither "which weeks were expensive" nor
+/// "where did the money go". The expanded panel answers both.
 struct FinanceDashboardBand: View {
     let stats: FinanceDashboardStats
+
+    /// Every breakdown cut over the same filtered rows as the headline. The
+    /// collapsed band reads `topCategories` from it; expanding hands the whole
+    /// thing to `FinanceInsightsPanel`.
+    let insights: FinanceInsights
 
     /// Header eyebrow reflecting the selected date-range preset (#187),
     /// e.g. "This month", "Last 30 days", or a custom span like "3 – 18 Jun".
@@ -33,13 +43,13 @@ struct FinanceDashboardBand: View {
     /// the on-screen chip stays a compact percentage.
     let deltaComparisonLabel: String
 
+    /// Owned by `FinanceView` so the expanded state survives the band being
+    /// rebuilt on every filter / search keystroke.
+    @Binding var isExpanded: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(headerLabel).eyebrow()
-                Spacer()
-                deltaChip
-            }
+            header
             Text(Self.formatMoney(stats.monthTotal))
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
@@ -50,19 +60,63 @@ struct FinanceDashboardBand: View {
                 .foregroundStyle(Tokens.muted)
                 .monospacedDigit()
 
-            if !stats.topCategories.isEmpty {
+            if isExpanded {
+                // The full breakdown replaces the top-3 bars rather than
+                // repeating them: the panel's category block IS the same list,
+                // unclipped.
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+                    .padding(.top, Space.xs)
+                FinanceInsightsPanel(insights: insights)
+                    // With the VStack's own `Space.md`, this puts 16 above and
+                    // below the seam — the same rhythm the panel uses between
+                    // its own blocks.
+                    .padding(.top, Space.xs)
+            } else if !insights.topCategories.isEmpty {
                 categoryBars
                     .padding(.top, Space.xs)
             }
-
-            sparkline
-                .frame(height: 36)
-                .padding(.top, Space.xs)
-                .accessibilityLabel("Spending over \(headerLabel.lowercased())")
         }
         .padding(Space.lg)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            Text(headerLabel).eyebrow()
+            Spacer(minLength: Space.sm)
+            deltaChip
+            expandButton
+        }
+        // The whole header row toggles, not just the 24pt chevron — the chip
+        // and the label are the obvious things to reach for.
+        .contentShape(Rectangle())
+        .onTapGesture { toggle() }
+    }
+
+    private var expandButton: some View {
+        Button {
+            toggle()
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Tokens.muted)
+                .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isExpanded ? "Hide spending breakdown" : "Show spending breakdown")
+    }
+
+    private func toggle() {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            isExpanded.toggle()
+        }
     }
 
     // MARK: - Delta chip
@@ -103,111 +157,15 @@ struct FinanceDashboardBand: View {
 
     // MARK: - Category bars
 
+    /// Top three categories in the collapsed state. Same row construction as
+    /// the expanded panel's full list (`FinanceCategoryBarRow`), so the bars sit
+    /// at identical x positions before and after expanding.
     private var categoryBars: some View {
-        let maxValue = stats.topCategories.map { $0.total }.max() ?? 1
-        return VStack(alignment: .leading, spacing: Space.sm) {
-            ForEach(stats.topCategories, id: \.category) { entry in
-                categoryBar(entry: entry, max: maxValue)
+        let maxValue = insights.topCategories.map(\.total).max() ?? 1
+        return VStack(alignment: .leading, spacing: Space.md) {
+            ForEach(insights.topCategories) { slice in
+                FinanceCategoryBarRow(slice: slice, maxTotal: maxValue)
             }
-        }
-    }
-
-    private func categoryBar(entry: (category: ExpenseCategory, total: Double), max: Double) -> some View {
-        // A net-negative category (refunds outweighed spend, #206) would give a
-        // negative ratio; clamp to 0 so the bar just empties rather than drawing
-        // a negative width. The trailing SGD label still shows the true net.
-        let ratio = max > 0 ? Swift.max(0, entry.total / max) : 0
-        return HStack(spacing: Space.sm) {
-            Image(systemName: entry.category.sfSymbol)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Tokens.accentFinance)
-                .frame(width: 18)
-            Text(entry.category.displayName)
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.inkSoft)
-                .lineLimit(1)
-                .frame(width: 110, alignment: .leading)
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Tokens.paper2)
-                    Capsule()
-                        .fill(Tokens.accentFinance.opacity(0.85))
-                        .frame(width: proxy.size.width * CGFloat(ratio))
-                }
-            }
-            .frame(height: 6)
-            Text(Self.formatMoney(entry.total))
-                .font(.edFootnote)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .foregroundStyle(Tokens.inkSoft)
-                .frame(width: 108, alignment: .trailing)
-        }
-    }
-
-    // MARK: - Sparkline
-
-    private var sparkline: some View {
-        GeometryReader { proxy in
-            let values = stats.dailyTotals.map { $0.total }
-            let maxValue = (values.max() ?? 0)
-            ZStack(alignment: .bottom) {
-                // Baseline.
-                Rectangle()
-                    .fill(Tokens.divider)
-                    .frame(height: 0.5)
-                if maxValue > 0, values.count > 1 {
-                    sparklinePath(values: values, size: proxy.size, maxValue: maxValue)
-                        .stroke(
-                            Tokens.accentFinance,
-                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
-                        )
-                    sparklineFill(values: values, size: proxy.size, maxValue: maxValue)
-                        .fill(Tokens.accentFinance.opacity(0.08))
-                } else {
-                    Text("No spending in the last 30 days")
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.mutedSoft)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-        }
-    }
-
-    private func sparklinePath(values: [Double], size: CGSize, maxValue: Double) -> Path {
-        Path { path in
-            let count = values.count
-            let step = size.width / CGFloat(count - 1)
-            for (idx, value) in values.enumerated() {
-                let x = CGFloat(idx) * step
-                // Clamp to >= 0 so a net-negative (refund) day rests on the
-                // baseline instead of drawing below the frame (#206).
-                let normalised = maxValue > 0 ? Swift.max(0, CGFloat(value / maxValue)) : 0
-                let y = size.height - (normalised * (size.height - 2)) - 1
-                if idx == 0 {
-                    path.move(to: CGPoint(x: x, y: y))
-                } else {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-        }
-    }
-
-    private func sparklineFill(values: [Double], size: CGSize, maxValue: Double) -> Path {
-        Path { path in
-            let count = values.count
-            let step = size.width / CGFloat(count - 1)
-            path.move(to: CGPoint(x: 0, y: size.height))
-            for (idx, value) in values.enumerated() {
-                let x = CGFloat(idx) * step
-                let normalised = maxValue > 0 ? Swift.max(0, CGFloat(value / maxValue)) : 0
-                let y = size.height - (normalised * (size.height - 2)) - 1
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-            path.addLine(to: CGPoint(x: size.width, y: size.height))
-            path.closeSubpath()
         }
     }
 
