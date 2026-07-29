@@ -69,6 +69,16 @@ struct MarkdownEditor: UIViewRepresentable {
         // a paste add one at the cursor.
         tv.setNoteMarkdown(text)
         tv.saveImage = saveImage
+        // Declare images acceptable, which is what makes UIKit route a dropped or
+        // pasted image through `paste(itemProviders:)`. Without it the drop is
+        // offered as text and lands as a file path.
+        if saveImage != nil {
+            tv.pasteConfiguration = UIPasteConfiguration(
+                acceptableTypeIdentifiers: [
+                    "public.image", "public.png", "public.jpeg", "public.heic", "public.text"
+                ]
+            )
+        }
         tv.onImageInserted = { [weak tv] in
             guard let tv else { return }
             context.coordinator.parent.text = tv.noteMarkdown
@@ -377,6 +387,45 @@ final class PaddedTextView: UITextView {
         return board.image?.pngData()
     }
 
+    /// Drag-and-drop, and the paste of any non-text item.
+    ///
+    /// UIKit routes both through here once `pasteConfiguration` says we accept
+    /// images. Without it a dragged image is offered as text and the drop lands in
+    /// the note as a file path rather than a picture.
+    override func paste(itemProviders: [NSItemProvider]) {
+        let imageProviders = itemProviders.filter { $0.canLoadObject(ofClass: UIImage.self) }
+        guard saveImage != nil, !imageProviders.isEmpty else {
+            super.paste(itemProviders: itemProviders)
+            return
+        }
+        Task { @MainActor in
+            for provider in imageProviders {
+                guard let data = await Self.imageData(from: provider) else { continue }
+                await insertImageAwaiting(data: data)
+            }
+        }
+    }
+
+    /// Bytes for one dropped item, preferring the original file representation
+    /// over a `UIImage` re-encode so a HEIC photo is not inflated on the way in.
+    private static func imageData(from provider: NSItemProvider) async -> Data? {
+        for identifier in ["public.png", "public.jpeg", "public.heic", "public.tiff"]
+        where provider.hasItemConformingToTypeIdentifier(identifier) {
+            let data: Data? = await withCheckedContinuation { continuation in
+                provider.loadDataRepresentation(forTypeIdentifier: identifier) { data, _ in
+                    continuation.resume(returning: data)
+                }
+            }
+            if let data { return data }
+        }
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: UIImage.self) { object, _ in
+                continuation.resume(returning: object as? UIImage)
+            }
+        }
+        return image?.pngData()
+    }
+
     /// Save the bytes, then splice an attachment in at the cursor.
     ///
     /// Insertion happens after the await, so the range is re-read at that point:
@@ -384,31 +433,35 @@ final class PaddedTextView: UITextView {
     /// must land where the cursor is NOW rather than where it was when they
     /// pressed Paste.
     func insertImage(data: Data) {
-        guard let saveImage else { return }
-        let requested = selectedRange
-        Task { @MainActor in
-            guard let relativePath = await saveImage(data) else { return }
-            let attachment = InlineImageAttachment(
-                relativePath: relativePath,
-                alt: "",
-                fileURL: ReceiptStorage.noteImages.load(relativePath: relativePath)
-            )
-            let piece = NSMutableAttributedString(attachment: attachment)
-            piece.addAttributes(
-                noteBaseAttributes, range: NSRange(location: 0, length: piece.length)
-            )
+        Task { @MainActor in await insertImageAwaiting(data: data) }
+    }
 
-            let storage = NSMutableAttributedString(attributedString: attributedText)
-            let target = NSRange(
-                location: min(requested.location, storage.length),
-                length: 0
-            )
-            storage.replaceCharacters(in: target, with: piece)
-            attributedText = storage
-            typingAttributes = noteBaseAttributes
-            selectedRange = NSRange(location: target.location + piece.length, length: 0)
-            onImageInserted?()
-        }
+    @MainActor
+    func insertImageAwaiting(data: Data) async {
+        guard let saveImage else { return }
+        guard let relativePath = await saveImage(data) else { return }
+
+        // Caret read AFTER the await: compressing a photo takes long enough for
+        // the user to keep typing, and a batch of dropped images has to land in
+        // order rather than all at the original cursor.
+        let requested = selectedRange
+        let attachment = InlineImageAttachment(
+            relativePath: relativePath,
+            alt: "",
+            fileURL: ReceiptStorage.noteImages.load(relativePath: relativePath)
+        )
+        let piece = NSMutableAttributedString(attachment: attachment)
+        piece.addAttributes(
+            noteBaseAttributes, range: NSRange(location: 0, length: piece.length)
+        )
+
+        let storage = NSMutableAttributedString(attributedString: attributedText)
+        let target = NSRange(location: min(requested.location, storage.length), length: 0)
+        storage.replaceCharacters(in: target, with: piece)
+        attributedText = storage
+        typingAttributes = noteBaseAttributes
+        selectedRange = NSRange(location: target.location + piece.length, length: 0)
+        onImageInserted?()
     }
 }
 
@@ -925,61 +978,141 @@ final class NoteTextView: NSTextView {
         )
     }
 
-    // MARK: - Image paste
+    // MARK: - Image paste and drop
+
+    /// Advertise image and file types so AppKit offers them to us at all.
+    ///
+    /// Without this, a dragged file is only ever offered as a string and the drop
+    /// lands in the note as a path.
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        Self.imageTypes + [.fileURL] + super.readablePasteboardTypes
+    }
 
     override func paste(_ sender: Any?) {
-        guard saveImage != nil, let data = Self.pasteboardImageData() else {
+        guard saveImage != nil,
+              let images = Self.imageData(from: .general), !images.isEmpty else {
             // `pasteAsPlainText` rather than `super.paste`: the view is
             // `isRichText = false`, and letting AppKit paste styled text into a
             // markdown body drags in fonts and colours the note cannot represent.
             pasteAsPlainText(sender)
             return
         }
-        insertImage(data: data)
+        insertImages(images)
     }
 
-    /// Image bytes off the pasteboard, preferring the original encoding. Also
-    /// accepts a promised file (dragging a JPEG in from Finder or Photos).
-    private static func pasteboardImageData() -> Data? {
-        let board = NSPasteboard.general
-        for type in [NSPasteboard.PasteboardType.png, .tiff] {
-            if let data = board.data(forType: type) { return data }
+    /// Drag-and-drop, and AppKit's own paste path, both funnel through here.
+    ///
+    /// This is the hook a DROP uses, and it hands over the dragging pasteboard
+    /// rather than the general one — which is why reading `NSPasteboard.general`
+    /// was never going to see a dragged image, and the drop fell through to
+    /// AppKit inserting the file's path as text.
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        if saveImage != nil, let images = Self.imageData(from: pboard), !images.isEmpty {
+            insertImages(images)
+            return true
         }
-        if let urls = board.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-           let first = urls.first,
-           let data = try? Data(contentsOf: first),
-           NSImage(data: data) != nil {
-            return data
+        return super.readSelection(from: pboard)
+    }
+
+    override func readSelection(
+        from pboard: NSPasteboard, type: NSPasteboard.PasteboardType
+    ) -> Bool {
+        if saveImage != nil, let images = Self.imageData(from: pboard), !images.isEmpty {
+            insertImages(images)
+            return true
         }
-        return nil
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    /// Encodings we accept directly, most faithful first. Screenshots arrive as
+    /// PNG, photos as HEIC or JPEG; TIFF is AppKit's lossless fallback and is last
+    /// because it is the one macOS synthesises when nothing better was offered.
+    private static let imageTypes: [NSPasteboard.PasteboardType] = [
+        NSPasteboard.PasteboardType("public.png"),
+        NSPasteboard.PasteboardType("public.jpeg"),
+        NSPasteboard.PasteboardType("public.heic"),
+        NSPasteboard.PasteboardType("com.compuserve.gif"),
+        .tiff
+    ]
+
+    /// Image bytes on `board`, preferring the original encoding over a re-encode.
+    ///
+    /// Handles both shapes a picture arrives in: raw bytes (copied out of Preview,
+    /// a screenshot, a browser) and file references (dragged from Finder or
+    /// Photos). File URLs are checked FIRST — a Finder drag carries both a
+    /// `fileURL` and a TIFF preview, and the file is the real thing while the
+    /// preview can be a downscaled thumbnail.
+    ///
+    /// Returns nil rather than an empty array when there is nothing image-shaped,
+    /// so callers can tell "not an image, handle as text" from "no images found".
+    private static func imageData(from board: NSPasteboard) -> [Data]? {
+        var out: [Data] = []
+
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] {
+            for url in urls {
+                guard let data = try? Data(contentsOf: url),
+                      NSImage(data: data) != nil else { continue }
+                out.append(data)
+            }
+        }
+        if out.isEmpty {
+            for type in imageTypes {
+                if let data = board.data(forType: type) {
+                    out.append(data)
+                    break
+                }
+            }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// Insert a batch in order, each at the cursor left by the previous one.
+    private func insertImages(_ payloads: [Data]) {
+        Task { @MainActor in
+            for data in payloads {
+                await insertImageAwaiting(data: data)
+            }
+        }
     }
 
     func insertImage(data: Data) {
-        guard let saveImage else { return }
-        let requested = selectedRange()
-        Task { @MainActor in
-            guard let relativePath = await saveImage(data) else { return }
-            let attachment = InlineImageAttachment(
-                relativePath: relativePath,
-                alt: "",
-                fileURL: ReceiptStorage.noteImages.load(relativePath: relativePath)
-            )
-            let piece = NSMutableAttributedString(attachment: attachment)
-            var base: [NSAttributedString.Key: Any] = [:]
-            if let font { base[.font] = font }
-            if let textColor { base[.foregroundColor] = textColor }
-            piece.addAttributes(base, range: NSRange(location: 0, length: piece.length))
+        Task { @MainActor in await insertImageAwaiting(data: data) }
+    }
 
-            let storage = NSMutableAttributedString(attributedString: attributedString())
-            let target = NSRange(location: min(requested.location, storage.length), length: 0)
-            storage.replaceCharacters(in: target, with: piece)
-            textStorage?.setAttributedString(storage)
-            typingAttributes = base
-            setSelectedRange(NSRange(location: target.location + piece.length, length: 0))
-            onImageInserted?()
-            refreshPlaceholder()
-            invalidateIntrinsicContentSize()
-        }
+    /// Save the bytes, then splice an attachment in at the cursor.
+    ///
+    /// The range is re-read AFTER the await, so a batch of dropped images lands in
+    /// order (each after the last) and a single image lands where the caret is now
+    /// rather than where it was when the drop started.
+    @MainActor
+    func insertImageAwaiting(data: Data) async {
+        guard let saveImage else { return }
+        guard let relativePath = await saveImage(data) else { return }
+
+        // Read the caret AFTER the await, not before. Compressing a photo takes
+        // long enough for the user to keep typing, and for a batch of dropped
+        // images each one has to land after the previous one.
+        let requested = selectedRange()
+        let attachment = InlineImageAttachment(
+            relativePath: relativePath,
+            alt: "",
+            fileURL: ReceiptStorage.noteImages.load(relativePath: relativePath)
+        )
+        let piece = NSMutableAttributedString(attachment: attachment)
+        var base: [NSAttributedString.Key: Any] = [:]
+        if let font { base[.font] = font }
+        if let textColor { base[.foregroundColor] = textColor }
+        piece.addAttributes(base, range: NSRange(location: 0, length: piece.length))
+
+        let storage = NSMutableAttributedString(attributedString: attributedString())
+        let target = NSRange(location: min(requested.location, storage.length), length: 0)
+        storage.replaceCharacters(in: target, with: piece)
+        textStorage?.setAttributedString(storage)
+        typingAttributes = base
+        setSelectedRange(NSRange(location: target.location + piece.length, length: 0))
+        onImageInserted?()
+        refreshPlaceholder()
+        invalidateIntrinsicContentSize()
     }
 }
 
