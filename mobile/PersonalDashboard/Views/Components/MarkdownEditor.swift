@@ -21,6 +21,11 @@ struct MarkdownEditor: UIViewRepresentable {
     @FocusState.Binding var isFocused: Bool
     var minHeight: CGFloat = 320
     var placeholder: String = ""
+    /// Persist pasted image bytes and return the relative path to reference
+    /// (#395). Nil means the image could not be saved, and nothing is inserted.
+    /// Absent for editors that are not note bodies, which then reject image
+    /// pastes rather than inserting a reference to a file nobody wrote.
+    var saveImage: ((Data) async -> String?)? = nil
 
     func makeUIView(context: Context) -> PaddedTextView {
         let tv = PaddedTextView()
@@ -46,7 +51,10 @@ struct MarkdownEditor: UIViewRepresentable {
         toolbar.textViewProvider = { [weak tv] in tv }
         toolbar.onChange = { [weak tv] in
             guard let tv else { return }
-            context.coordinator.parent.text = tv.text
+            // `noteMarkdown`, not `.text`: the display string carries U+FFFC
+            // object-replacement characters where images sit, which is not what
+            // the note stores (#395).
+            context.coordinator.parent.text = tv.noteMarkdown
         }
         toolbar.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44)
         toolbar.autoresizingMask = .flexibleWidth
@@ -56,14 +64,32 @@ struct MarkdownEditor: UIViewRepresentable {
         // Placeholder support
         tv.placeholderText = placeholder
 
+        // Inline images (#395). Render the stored markdown as attributed text so
+        // pictures appear in the writing surface where they were placed, then let
+        // a paste add one at the cursor.
+        tv.setNoteMarkdown(text)
+        tv.saveImage = saveImage
+        tv.onImageInserted = { [weak tv] in
+            guard let tv else { return }
+            context.coordinator.parent.text = tv.noteMarkdown
+            tv.refreshPlaceholder()
+            tv.invalidateIntrinsicContentSize()
+        }
+
         return tv
     }
 
     func updateUIView(_ uiView: PaddedTextView, context: Context) {
-        if uiView.text != text {
+        uiView.saveImage = saveImage
+        // Compare against the SERIALISED markdown, not `uiView.text` (#395).
+        // The display string holds a single U+FFFC per image where the markdown
+        // holds a whole `![](note-images/…)` token, so comparing the two would
+        // never match on a note containing an image and this would reload and
+        // reset the cursor on every SwiftUI pass.
+        if uiView.noteMarkdown != text {
             // Preserve cursor position across SwiftUI-driven re-renders.
             let savedRange = uiView.selectedRange
-            uiView.text = text
+            uiView.setNoteMarkdown(text)
             let safeLocation = min(savedRange.location, (uiView.text as NSString).length)
             uiView.selectedRange = NSRange(location: safeLocation, length: 0)
             uiView.refreshPlaceholder()
@@ -100,7 +126,7 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            parent.text = textView.text
+            parent.text = textView.noteMarkdown
             (textView as? PaddedTextView)?.refreshPlaceholder()
         }
 
@@ -133,9 +159,10 @@ struct MarkdownEditor: UIViewRepresentable {
                 cursor = range.location + (insertion as NSString).length
             }
 
-            textView.text = updated
-            textView.selectedRange = NSRange(location: cursor, length: 0)
-            parent.text = updated
+            // `applyDisplayString` rather than `.text =`: assigning a plain String
+            // discards every inline image attachment in the note (#395).
+            textView.applyDisplayString(updated, selection: NSRange(location: cursor, length: 0))
+            parent.text = textView.noteMarkdown
             (textView as? PaddedTextView)?.refreshPlaceholder()
             textView.invalidateIntrinsicContentSize()
             return false
@@ -155,6 +182,94 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 }
 
+// MARK: - Inline image support (#395)
+
+extension UITextView {
+
+    /// Font + colour every run in a note body carries. Read off the view so the
+    /// editor's own configuration stays the single source of truth.
+    var noteBaseAttributes: [NSAttributedString.Key: Any] {
+        var attrs: [NSAttributedString.Key: Any] = [:]
+        if let font { attrs[.font] = font }
+        if let textColor { attrs[.foregroundColor] = textColor }
+        return attrs
+    }
+
+    /// The note's markdown: the display text with every inline image attachment
+    /// turned back into its `![](note-images/…)` token.
+    var noteMarkdown: String {
+        NoteBodyMarkdown.markdown(from: attributedText)
+    }
+
+    /// Replace the contents from stored markdown, building an attachment for
+    /// each image token so pictures render in place while the user types.
+    func setNoteMarkdown(_ markdown: String) {
+        let resolved = NoteBodyMarkdown.attributed(
+            from: markdown,
+            font: font ?? UIFont.systemFont(ofSize: 16),
+            color: textColor ?? .label,
+            resolve: { ReceiptStorage.noteImages.load(relativePath: $0) }
+        )
+        attributedText = resolved
+        typingAttributes = noteBaseAttributes
+    }
+
+    /// Inline image attachments, in document order.
+    func inlineImageAttachments() -> [InlineImageAttachment] {
+        var found: [InlineImageAttachment] = []
+        attributedText.enumerateAttribute(
+            .attachment, in: NSRange(location: 0, length: attributedText.length), options: []
+        ) { value, _, _ in
+            if let inline = value as? InlineImageAttachment { found.append(inline) }
+        }
+        return found
+    }
+
+    /// Swap in a whole new DISPLAY string while keeping inline image attachments.
+    ///
+    /// The formatting toolbar and the list-continuation logic both compute a
+    /// complete replacement string from `text`, which is the pragmatic thing to do
+    /// for plain markdown but drops every attachment when assigned back. They only
+    /// ever add or remove markdown syntax around text, though: they never create
+    /// or delete an attachment character. So the U+FFFC positions in `newDisplay`
+    /// line up 1:1 and in order with the attachments already present, and
+    /// re-threading them is exact rather than a guess.
+    func applyDisplayString(_ newDisplay: String, selection: NSRange? = nil) {
+        let attachments = inlineImageAttachments()
+        let base = noteBaseAttributes
+        let ns = newDisplay as NSString
+        let rebuilt = NSMutableAttributedString()
+        var runStart = 0
+        var next = 0
+
+        for index in 0..<ns.length where ns.character(at: index) == 0xFFFC {
+            if index > runStart {
+                rebuilt.append(NSAttributedString(
+                    string: ns.substring(with: NSRange(location: runStart, length: index - runStart)),
+                    attributes: base
+                ))
+            }
+            if next < attachments.count {
+                let piece = NSMutableAttributedString(attachment: attachments[next])
+                piece.addAttributes(base, range: NSRange(location: 0, length: piece.length))
+                rebuilt.append(piece)
+                next += 1
+            }
+            runStart = index + 1
+        }
+        if runStart < ns.length {
+            rebuilt.append(NSAttributedString(string: ns.substring(from: runStart), attributes: base))
+        }
+
+        let previous = selectedRange
+        attributedText = rebuilt
+        typingAttributes = base
+        let target = selection ?? previous
+        let clamped = min(target.location, rebuilt.length)
+        selectedRange = NSRange(location: clamped, length: min(target.length, rebuilt.length - clamped))
+    }
+}
+
 // MARK: - PaddedTextView
 //
 // UITextView with placeholder support (drawn via an embedded UILabel so it
@@ -164,6 +279,12 @@ final class PaddedTextView: UITextView {
     var placeholderText: String = "" {
         didSet { placeholderLabel.text = placeholderText }
     }
+
+    /// Persists pasted image bytes and returns the relative path (#395).
+    var saveImage: ((Data) async -> String?)? = nil
+    /// Called after an image has been inserted, so the binding picks up the
+    /// new markdown. `textViewDidChange` does not fire for programmatic edits.
+    var onImageInserted: (() -> Void)? = nil
 
     private var lastBoundsWidth: CGFloat = 0
 
@@ -219,6 +340,75 @@ final class PaddedTextView: UITextView {
     @objc func refreshPlaceholder() {
         placeholderLabel.isHidden = !text.isEmpty
         invalidateIntrinsicContentSize()
+    }
+
+    // MARK: - Image paste (#395)
+
+    /// Offer Paste when the pasteboard holds an image, which UIKit does not do by
+    /// default for a plain-text view.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), saveImage != nil, UIPasteboard.general.hasImages {
+            return true
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        // Text pastes keep UIKit's own behaviour, including its undo handling.
+        guard saveImage != nil,
+              UIPasteboard.general.hasImages,
+              let data = Self.pasteboardImageData() else {
+            super.paste(sender)
+            return
+        }
+        insertImage(data: data)
+    }
+
+    /// Prefer the pasteboard's own bytes over re-encoding a `UIImage`.
+    ///
+    /// Screenshots arrive as PNG and photos as HEIC or JPEG; handing the original
+    /// bytes to the compressor keeps one encode step instead of two, and avoids
+    /// silently inflating a screenshot into a lossless re-encode.
+    private static func pasteboardImageData() -> Data? {
+        let board = UIPasteboard.general
+        for type in ["public.png", "public.jpeg", "public.heic", "public.tiff"] {
+            if let data = board.data(forPasteboardType: type) { return data }
+        }
+        return board.image?.pngData()
+    }
+
+    /// Save the bytes, then splice an attachment in at the cursor.
+    ///
+    /// Insertion happens after the await, so the range is re-read at that point:
+    /// the user can keep typing while a large photo compresses, and the image
+    /// must land where the cursor is NOW rather than where it was when they
+    /// pressed Paste.
+    func insertImage(data: Data) {
+        guard let saveImage else { return }
+        let requested = selectedRange
+        Task { @MainActor in
+            guard let relativePath = await saveImage(data) else { return }
+            let attachment = InlineImageAttachment(
+                relativePath: relativePath,
+                alt: "",
+                fileURL: ReceiptStorage.noteImages.load(relativePath: relativePath)
+            )
+            let piece = NSMutableAttributedString(attachment: attachment)
+            piece.addAttributes(
+                noteBaseAttributes, range: NSRange(location: 0, length: piece.length)
+            )
+
+            let storage = NSMutableAttributedString(attributedString: attributedText)
+            let target = NSRange(
+                location: min(requested.location, storage.length),
+                length: 0
+            )
+            storage.replaceCharacters(in: target, with: piece)
+            attributedText = storage
+            typingAttributes = noteBaseAttributes
+            selectedRange = NSRange(location: target.location + piece.length, length: 0)
+            onImageInserted?()
+        }
     }
 }
 
@@ -373,14 +563,14 @@ final class MarkdownFormatToolbarView: UIView {
             // them so the next keystroke goes inside the wrapper.
             let insertion = "\(marker)\(marker)"
             let updated = ns.replacingCharacters(in: range, with: insertion)
-            tv.text = updated
+            tv.applyDisplayString(updated)
             let cursor = range.location + (marker as NSString).length
             tv.selectedRange = NSRange(location: cursor, length: 0)
         } else {
             let selected = ns.substring(with: range)
             let wrapped = "\(marker)\(selected)\(marker)"
             let updated = ns.replacingCharacters(in: range, with: wrapped)
-            tv.text = updated
+            tv.applyDisplayString(updated)
             tv.selectedRange = NSRange(
                 location: range.location + (marker as NSString).length,
                 length: range.length
@@ -396,7 +586,7 @@ final class MarkdownFormatToolbarView: UIView {
         let label = range.length > 0 ? ns.substring(with: range) : "label"
         let inserted = "[\(label)](url)"
         let updated = ns.replacingCharacters(in: range, with: inserted)
-        tv.text = updated
+        tv.applyDisplayString(updated)
         // Select the "url" placeholder so the user can immediately type over it.
         let urlOffset = inserted.distance(from: inserted.startIndex, to: inserted.lastIndex(of: "(")!) + 1
         let urlLength = (inserted as NSString).length - urlOffset - 1
@@ -433,7 +623,7 @@ final class MarkdownFormatToolbarView: UIView {
 
         let replacement = newLines.joined(separator: "\n")
         let updated = ns.replacingCharacters(in: lineRange, with: replacement)
-        tv.text = updated
+        tv.applyDisplayString(updated)
         let lengthDelta = (replacement as NSString).length - lineRange.length
         let newLocation = range.location + (allPrefixed ? -prefix.count : prefix.count)
         let safeLocation = max(0, min(newLocation, (updated as NSString).length))
@@ -476,7 +666,7 @@ final class MarkdownFormatToolbarView: UIView {
 
         let replacement = newLines.joined(separator: "\n")
         let updated = ns.replacingCharacters(in: lineRange, with: replacement)
-        tv.text = updated
+        tv.applyDisplayString(updated)
         let replacementNS = replacement as NSString
         if range.length == 0 {
             // Cursor only: collapse it at the end of the (now-numbered) line so
@@ -535,7 +725,7 @@ final class MarkdownFormatToolbarView: UIView {
 
         let rebuilt = nextPrefix + stripped + (trailingNewline ? "\n" : "")
         let updated = ns.replacingCharacters(in: lineRange, with: rebuilt)
-        tv.text = updated
+        tv.applyDisplayString(updated)
         let newCursor = lineRange.location + (rebuilt as NSString).length - (trailingNewline ? 1 : 0)
         let safeCursor = max(0, min(newCursor, (updated as NSString).length))
         tv.selectedRange = NSRange(location: safeCursor, length: 0)
@@ -596,41 +786,223 @@ private struct EditorListMarker {
 
 // MARK: - macOS MarkdownEditor
 //
-// Native SwiftUI editor for the Mac port (issue #281). macOS has no software
-// keyboard, so the iOS `inputAccessoryView` format toolbar has no analog; and
-// with a full hardware keyboard, typing markdown directly is the natural path.
-// This uses SwiftUI's native `TextEditor` (real focus, scrolling, selection
-// handled by AppKit) with a placeholder overlay, matching the iOS init API so
-// `NotesView` uses it unchanged. The preview tab renders via `MarkdownView`.
-struct MarkdownEditor: View {
+// Native editor for the Mac port (issue #281). macOS has no software keyboard, so
+// the iOS `inputAccessoryView` format toolbar has no analog; with a full hardware
+// keyboard, typing markdown directly is the natural path. The preview tab renders
+// via `MarkdownView`.
+//
+// Wraps `NSTextView` rather than SwiftUI's `TextEditor` (#395). `TextEditor` binds
+// a plain `String` and cannot hold an `NSTextAttachment`, so inline images could
+// not appear in the writing surface at all — the Mac would have shown raw
+// `![](note-images/…)` tokens while iOS showed pictures. Everything else here
+// keeps the previous behaviour: placeholder overlay, real focus, AppKit
+// selection and scrolling, and the same init API so `NotesView` is unchanged.
+struct MarkdownEditor: NSViewRepresentable {
     @Binding var text: String
     @FocusState.Binding var isFocused: Bool
     var minHeight: CGFloat = 320
     var placeholder: String = ""
+    /// Persist pasted image bytes and return the relative path (#395).
+    var saveImage: ((Data) async -> String?)? = nil
 
-    /// Horizontal padding applied to the `TextEditor` itself. The placeholder
-    /// derives its own origin from this via `textEditorPlaceholderInset`, so the
-    /// caret and the placeholder cannot drift apart (#370).
-    private static let editorInset: CGFloat = 2
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            if text.isEmpty {
-                Text(placeholder)
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.muted)
-                    .textEditorPlaceholderInset(horizontal: Self.editorInset, vertical: 0)
-                    .allowsHitTesting(false)
-            }
-            TextEditor(text: $text)
-                .paperFieldOnMac()
-                .focused($isFocused)
-                .font(.edBody)
-                .foregroundStyle(Tokens.ink)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, Self.editorInset)
-                .frame(minHeight: minHeight)
+    func makeNSView(context: Context) -> NoteTextView {
+        let tv = NoteTextView()
+        tv.delegate = context.coordinator
+        tv.font = NSFont(name: "Inter-Regular", size: 16) ?? NSFont.systemFont(ofSize: 16)
+        tv.textColor = NSColor(Tokens.ink)
+        tv.drawsBackground = false
+        tv.isRichText = false
+        tv.isEditable = true
+        tv.isSelectable = true
+        tv.allowsUndo = true
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        // Grow with content; the enclosing SwiftUI ScrollView does the scrolling,
+        // matching how the iOS side sets `isScrollEnabled = false`.
+        tv.isVerticallyResizable = false
+        tv.isHorizontallyResizable = false
+        tv.placeholderText = placeholder
+        tv.saveImage = saveImage
+        tv.setNoteMarkdown(text)
+        tv.onImageInserted = { [weak tv] in
+            guard let tv else { return }
+            context.coordinator.parent.text = tv.noteMarkdown
         }
+        return tv
+    }
+
+    func updateNSView(_ nsView: NoteTextView, context: Context) {
+        context.coordinator.parent = self
+        nsView.saveImage = saveImage
+        nsView.placeholderText = placeholder
+        // Same markdown-vs-display comparison as iOS: an image is one attachment
+        // character on screen and a whole token in the note.
+        if nsView.noteMarkdown != text {
+            let saved = nsView.selectedRange()
+            nsView.setNoteMarkdown(text)
+            let length = (nsView.string as NSString).length
+            nsView.setSelectedRange(NSRange(location: min(saved.location, length), length: 0))
+        }
+        if isFocused, nsView.window?.firstResponder !== nsView {
+            DispatchQueue.main.async { nsView.window?.makeFirstResponder(nsView) }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NoteTextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0, width.isFinite else { return nil }
+        nsView.frame.size.width = width
+        nsView.textContainer?.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
+        guard let layout = nsView.layoutManager, let container = nsView.textContainer else {
+            return CGSize(width: width, height: minHeight)
+        }
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container).height
+        return CGSize(width: width, height: max(used, minHeight))
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MarkdownEditor
+
+        init(_ parent: MarkdownEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NoteTextView else { return }
+            parent.text = tv.noteMarkdown
+            tv.refreshPlaceholder()
+            tv.invalidateIntrinsicContentSize()
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            DispatchQueue.main.async { [weak self] in self?.parent.isFocused = true }
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            DispatchQueue.main.async { [weak self] in self?.parent.isFocused = false }
+        }
+    }
+}
+
+// MARK: - NoteTextView (macOS)
+
+/// `NSTextView` with a placeholder and image paste, the AppKit twin of
+/// `PaddedTextView` (#395).
+final class NoteTextView: NSTextView {
+    var placeholderText: String = "" {
+        didSet { needsDisplay = true }
+    }
+    var saveImage: ((Data) async -> String?)? = nil
+    var onImageInserted: (() -> Void)? = nil
+
+    override var intrinsicContentSize: NSSize {
+        guard let layout = layoutManager, let container = textContainer else {
+            return NSSize(width: NSView.noIntrinsicMetric, height: 0)
+        }
+        layout.ensureLayout(for: container)
+        return NSSize(
+            width: NSView.noIntrinsicMetric,
+            height: layout.usedRect(for: container).height
+        )
+    }
+
+    func refreshPlaceholder() { needsDisplay = true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholderText.isEmpty else { return }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.systemFont(ofSize: 16),
+            .foregroundColor: NSColor(Tokens.muted)
+        ]
+        (placeholderText as NSString).draw(
+            in: NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height),
+            withAttributes: attrs
+        )
+    }
+
+    // MARK: - Image paste
+
+    override func paste(_ sender: Any?) {
+        guard saveImage != nil, let data = Self.pasteboardImageData() else {
+            // `pasteAsPlainText` rather than `super.paste`: the view is
+            // `isRichText = false`, and letting AppKit paste styled text into a
+            // markdown body drags in fonts and colours the note cannot represent.
+            pasteAsPlainText(sender)
+            return
+        }
+        insertImage(data: data)
+    }
+
+    /// Image bytes off the pasteboard, preferring the original encoding. Also
+    /// accepts a promised file (dragging a JPEG in from Finder or Photos).
+    private static func pasteboardImageData() -> Data? {
+        let board = NSPasteboard.general
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            if let data = board.data(forType: type) { return data }
+        }
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let first = urls.first,
+           let data = try? Data(contentsOf: first),
+           NSImage(data: data) != nil {
+            return data
+        }
+        return nil
+    }
+
+    func insertImage(data: Data) {
+        guard let saveImage else { return }
+        let requested = selectedRange()
+        Task { @MainActor in
+            guard let relativePath = await saveImage(data) else { return }
+            let attachment = InlineImageAttachment(
+                relativePath: relativePath,
+                alt: "",
+                fileURL: ReceiptStorage.noteImages.load(relativePath: relativePath)
+            )
+            let piece = NSMutableAttributedString(attachment: attachment)
+            var base: [NSAttributedString.Key: Any] = [:]
+            if let font { base[.font] = font }
+            if let textColor { base[.foregroundColor] = textColor }
+            piece.addAttributes(base, range: NSRange(location: 0, length: piece.length))
+
+            let storage = NSMutableAttributedString(attributedString: attributedString())
+            let target = NSRange(location: min(requested.location, storage.length), length: 0)
+            storage.replaceCharacters(in: target, with: piece)
+            textStorage?.setAttributedString(storage)
+            typingAttributes = base
+            setSelectedRange(NSRange(location: target.location + piece.length, length: 0))
+            onImageInserted?()
+            refreshPlaceholder()
+            invalidateIntrinsicContentSize()
+        }
+    }
+}
+
+// MARK: - Inline image support (macOS)
+
+extension NSTextView {
+
+    var noteMarkdown: String {
+        NoteBodyMarkdown.markdown(from: attributedString())
+    }
+
+    func setNoteMarkdown(_ markdown: String) {
+        let resolved = NoteBodyMarkdown.attributed(
+            from: markdown,
+            font: font ?? NSFont.systemFont(ofSize: 16),
+            color: textColor ?? .labelColor,
+            resolve: { ReceiptStorage.noteImages.load(relativePath: $0) }
+        )
+        textStorage?.setAttributedString(resolved)
+        var base: [NSAttributedString.Key: Any] = [:]
+        if let font { base[.font] = font }
+        if let textColor { base[.foregroundColor] = textColor }
+        typingAttributes = base
     }
 }
 #endif

@@ -135,7 +135,8 @@ targets:
       - path: PersonalDashboard/Services/NoteService.swift
       # Note image attachments (#395).
       - path: PersonalDashboard/Services/NoteImageService.swift
-      - path: PersonalDashboard/Views/Notes/NoteImageStrip.swift
+      - path: PersonalDashboard/Views/Notes/NoteImageViewer.swift
+      - path: PersonalDashboard/Views/Components/NoteBodyMarkdown.swift
       - path: PersonalDashboard/Services/ChecklistService.swift
       - path: PersonalDashboard/Services/FinanceSettings.swift
       - path: PersonalDashboard/Views/Tasks

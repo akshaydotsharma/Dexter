@@ -24,6 +24,9 @@ struct MarkdownView: View {
     var bodyFont: Font = .edBody
     var bodyColor: Color = Tokens.inkSoft
     var headingColor: Color = Tokens.ink
+    /// Tapping an inline image, when the host wants a full-size viewer. Nil in
+    /// chat and draft previews, where an image is just something to look at.
+    var onImageTap: ((String) -> Void)? = nil
 
     var body: some View {
         let blocks = MarkdownParser.parse(text)
@@ -36,6 +39,60 @@ struct MarkdownView: View {
     }
 
     private var blockSpacing: CGFloat { lineLimit == nil ? 10 : 4 }
+
+    /// Width-to-height ratio of a loaded image, falling back to square for a
+    /// degenerate size so the layout cannot divide by zero.
+    private func imageRatio(_ image: PlatformImage) -> CGFloat {
+        guard image.size.width > 0, image.size.height > 0 else { return 1 }
+        return image.size.width / image.size.height
+    }
+
+    /// An inline note image in rendered (preview) mode.
+    ///
+    /// Capped in height for the same reason the editor's attachment is: one
+    /// photo should not push the rest of a note off the screen. A file that is
+    /// not on this device gets an explicit tile rather than blank space, so the
+    /// note still shows that something belongs there.
+    @ViewBuilder
+    private func inlineImage(path: String, alt: String) -> some View {
+        if let url = ReceiptStorage.noteImages.load(relativePath: path),
+           let platformImage = PlatformImage(contentsOfFile: url.path) {
+            // The border has to hug the photo, so the photo needs a real width.
+            //
+            // `.resizable().aspectRatio(contentMode: .fit)` claims every point of
+            // width it is offered and letterboxes itself inside, so the border ends
+            // up wrapping the whole text column with the image floating in it. An
+            // EXPLICIT ratio plus a height cap gives the image an ideal size, and
+            // the trailing Spacer absorbs the remaining width instead of the image.
+            // A photo too wide for the column still shrinks: the ratio is kept and
+            // the height comes down.
+            HStack(spacing: 0) {
+                Image(platformImage: platformImage)
+                    .resizable()
+                    .aspectRatio(imageRatio(platformImage), contentMode: .fit)
+                    .frame(maxHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                    .paperBorder(Tokens.border, radius: Radius.md)
+                    .accessibilityLabel(alt.isEmpty ? "Note image" : alt)
+                    .onTapGesture { onImageTap?(path) }
+                Spacer(minLength: 0)
+            }
+        } else {
+            HStack(spacing: Space.sm) {
+                Image(systemName: "icloud.slash")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(Tokens.mutedSoft)
+                Text("Image on your other device")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+            }
+            .padding(.horizontal, Space.md)
+            .padding(.vertical, Space.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
 
     @ViewBuilder
     private func renderBlock(_ block: MarkdownBlock) -> some View {
@@ -113,6 +170,9 @@ struct MarkdownView: View {
                 .fill(Tokens.divider)
                 .frame(height: 0.5)
                 .padding(.vertical, 4)
+
+        case .image(let path, let alt):
+            inlineImage(path: path, alt: alt)
 
         case .spacer(let lines):
             // Intentional blank lines the user typed. ~18pt per blank line
@@ -201,6 +261,8 @@ enum MarkdownBlock: Hashable {
     case codeBlock(String)
     case divider
     case spacer(lines: Int)
+    /// An inline note image (#395), referenced by its relative path.
+    case image(path: String, alt: String)
 }
 
 // MARK: - Parser
@@ -234,6 +296,24 @@ enum MarkdownParser {
                 if blanks >= 2, !blocks.isEmpty, i < lines.count {
                     blocks.append(.spacer(lines: blanks - 1))
                 }
+                continue
+            }
+
+            // Inline note images (#395). A line can hold text and images in any
+            // order, because paste drops an image wherever the cursor happened to
+            // be, so split the line into its runs rather than assuming an image
+            // sits alone. Images are block-level here, as they are in Apple Notes.
+            if trimmed.contains("](note-images/") {
+                for segment in NoteBodyMarkdown.segments(in: raw) {
+                    switch segment {
+                    case .text(let run):
+                        let t = run.trimmingCharacters(in: .whitespaces)
+                        if !t.isEmpty { blocks.append(.paragraph(t)) }
+                    case .image(let path, let alt):
+                        blocks.append(.image(path: path, alt: alt))
+                    }
+                }
+                i += 1
                 continue
             }
 

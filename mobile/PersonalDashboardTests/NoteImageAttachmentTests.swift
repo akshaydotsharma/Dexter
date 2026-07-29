@@ -300,6 +300,146 @@ final class NoteImageAttachmentTests: XCTestCase {
         )
     }
 
+    // MARK: - Inline placement (markdown <-> editor)
+
+    /// The bijection the editors depend on. `attributed(from:)` makes one
+    /// attachment character per token and `markdown(from:)` makes exactly that
+    /// token back, so simply opening a note cannot rewrite its body.
+    ///
+    /// If this drifts, every note with an image looks edited the moment it is
+    /// viewed, `updateUIView` reloads on every SwiftUI pass, and sync ships a
+    /// change nobody made.
+    func testMarkdownToAttributedRoundTripIsExact() {
+        let cases = [
+            "![](note-images/aaa.jpg)",
+            "Shot list\n\n![](note-images/aaa.jpg)\n\nBar sequence next",
+            "text before ![](note-images/aaa.jpg) text after",
+            "![](note-images/aaa.jpg)![](note-images/bbb.jpg)",
+            "no images at all",
+            "",
+            "trailing newline after image\n![](note-images/aaa.jpg)\n"
+        ]
+        for markdown in cases {
+            let attributed = NoteBodyMarkdown.attributed(
+                from: markdown,
+                font: .systemFont(ofSize: 16),
+                color: .label,
+                resolve: { _ in nil }   // deliberately unresolvable: see below
+            )
+            XCTAssertEqual(
+                NoteBodyMarkdown.markdown(from: attributed), markdown,
+                "round trip changed the body for: \(markdown.debugDescription)"
+            )
+        }
+    }
+
+    /// An image whose bytes are absent must still round-trip. The attachment
+    /// draws a placeholder, but it keeps the path, so saving a note on the device
+    /// that has not received the file cannot erase the reference.
+    func testUnresolvableImageStillRoundTripsItsToken() {
+        let markdown = "before ![](note-images/missing.jpg) after"
+        let attributed = NoteBodyMarkdown.attributed(
+            from: markdown, font: .systemFont(ofSize: 16), color: .label, resolve: { _ in nil }
+        )
+        XCTAssertEqual(attributed.string.filter { $0 == "\u{FFFC}" }.count, 1)
+        XCTAssertEqual(NoteBodyMarkdown.markdown(from: attributed), markdown)
+    }
+
+    func testReferencedPathsFindsImagesInOrder() {
+        let markdown = "a ![](note-images/one.jpg) b ![alt](note-images/two.jpg) c"
+        XCTAssertEqual(
+            NoteBodyMarkdown.referencedPaths(in: markdown),
+            ["note-images/one.jpg", "note-images/two.jpg"]
+        )
+    }
+
+    /// A normal markdown image pointing anywhere else is somebody's note content,
+    /// not one of our attachments, and must be left as text.
+    func testForeignImageLinksAreNotTreatedAsNoteImages() {
+        let markdown = "![cat](https://example.com/cat.png) and ![](/etc/passwd)"
+        XCTAssertTrue(NoteBodyMarkdown.referencedPaths(in: markdown).isEmpty)
+        let attributed = NoteBodyMarkdown.attributed(
+            from: markdown, font: .systemFont(ofSize: 16), color: .label, resolve: { _ in nil }
+        )
+        XCTAssertFalse(attributed.string.contains("\u{FFFC}"))
+        XCTAssertEqual(attributed.string, markdown)
+    }
+
+    /// Preview mode splits a line into text and image runs, so an image pasted
+    /// mid-sentence renders in place instead of swallowing the line.
+    func testParserEmitsImageBlocksMidParagraph() {
+        let blocks = MarkdownParser.parse("before ![](note-images/x.jpg) after")
+        XCTAssertEqual(blocks.count, 3)
+        guard blocks.count == 3 else { return }
+        XCTAssertEqual(blocks[0], .paragraph("before"))
+        XCTAssertEqual(blocks[1], .image(path: "note-images/x.jpg", alt: ""))
+        XCTAssertEqual(blocks[2], .paragraph("after"))
+    }
+
+    // MARK: - Reconciliation
+
+    /// Deleting an image out of the note text detaches its row and its bytes.
+    /// Otherwise it keeps riding along in every export and shows up on the other
+    /// device as an attachment the note no longer mentions.
+    func testReconcileDropsImagesRemovedFromTheBody() async throws {
+        let note = insertNote()
+        let service = NoteImageService(store: store)
+        let kept = try await service.add(noteId: note.clientUUID, imageData: try makePNG(width: 60, height: 60))
+        let removed = try await service.add(noteId: note.clientUUID, imageData: try makePNG(width: 60, height: 60))
+        createdPaths.append(kept.relativePath)
+        let removedURL = try XCTUnwrap(service.fileURL(for: removed))
+
+        // The user kept one image in the body and deleted the other.
+        let body = "Notes\n\n\(NoteBodyMarkdown.token(for: kept.relativePath))"
+        try service.reconcile(noteId: note.clientUUID, content: body)
+
+        let remaining = try service.list(noteId: note.clientUUID)
+        XCTAssertEqual(remaining.map(\.relativePath), [kept.relativePath])
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: removedURL.path),
+            "the removed image should not leak its JPEG"
+        )
+    }
+
+    func testReconcileKeepsEveryStillReferencedImage() async throws {
+        let note = insertNote()
+        let service = NoteImageService(store: store)
+        let first = try await service.add(noteId: note.clientUUID, imageData: try makePNG(width: 60, height: 60))
+        let second = try await service.add(noteId: note.clientUUID, imageData: try makePNG(width: 60, height: 60))
+        createdPaths += [first.relativePath, second.relativePath]
+
+        let body = [
+            NoteBodyMarkdown.token(for: first.relativePath),
+            "some writing in between",
+            NoteBodyMarkdown.token(for: second.relativePath)
+        ].joined(separator: "\n\n")
+        try service.reconcile(noteId: note.clientUUID, content: body)
+
+        XCTAssertEqual(try service.list(noteId: note.clientUUID).count, 2)
+        XCTAssertNotNil(service.fileURL(for: first))
+        XCTAssertNotNil(service.fileURL(for: second))
+    }
+
+    /// Images attached before they were placed inline (the first #395 build's
+    /// separate strip, or a restore whose body predates its images) have a row and
+    /// no token. They get appended to the note rather than disappearing.
+    func testUnreferencedTokensRecoversImagesWithNoPlacement() async throws {
+        let note = insertNote()
+        let service = NoteImageService(store: store)
+        let orphan = try await service.add(noteId: note.clientUUID, imageData: try makePNG(width: 60, height: 60))
+        createdPaths.append(orphan.relativePath)
+
+        let tokens = try XCTUnwrap(
+            service.unreferencedTokens(noteId: note.clientUUID, content: "body with no images")
+        )
+        XCTAssertEqual(tokens, NoteBodyMarkdown.token(for: orphan.relativePath))
+
+        // Once placed, there is nothing left to recover.
+        XCTAssertNil(try service.unreferencedTokens(
+            noteId: note.clientUUID, content: "body\n\n" + tokens
+        ))
+    }
+
     /// Sync carries the rows, so the mapper has to know about the entity.
     /// Registered via `exportedModels`, which is easy to update without adding
     /// the corresponding `map` call.

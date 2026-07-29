@@ -121,6 +121,59 @@ struct NoteImageService {
         }
     }
 
+    // MARK: - Inline reconciliation (#395)
+
+    /// Drop rows for images the note's text no longer references.
+    ///
+    /// Position lives in the markdown, the inventory lives in these rows, and the
+    /// two can disagree in exactly one direction: the user deletes an image out of
+    /// the body (or undoes a paste) and the row is left behind. Left alone those
+    /// rows would keep shipping bytes into every export and would reappear on the
+    /// other device as phantom attachments, so the text is treated as the
+    /// authority and anything unreferenced is detached.
+    ///
+    /// Call this on save, with the content actually being written. Calling it with
+    /// stale content would delete an image the user has just pasted.
+    func reconcile(noteId: UUID, content: String) throws {
+        let referenced = Set(NoteBodyMarkdown.referencedPaths(in: content))
+        let descriptor = FetchDescriptor<LocalNoteImage>(
+            predicate: #Predicate { $0.noteClientUUID == noteId && $0.deletedAt == nil }
+        )
+        let rows = try store.context.fetch(descriptor)
+        let orphans = rows.filter { !referenced.contains($0.relativePath) }
+        guard !orphans.isEmpty else { return }
+
+        let now = Date()
+        var paths: [String] = []
+        for row in orphans {
+            paths.append(row.relativePath)
+            row.deletedAt = now
+            row.updatedAt = now
+        }
+        try store.context.save()
+        for path in paths {
+            try? storage.delete(relativePath: path)
+        }
+    }
+
+    /// Markdown tokens for any image attached to this note that the body does not
+    /// reference yet, in stored order.
+    ///
+    /// Covers two cases. Images attached by the earlier attachment-strip build
+    /// (#395 as first shipped) have rows but no token, and would otherwise vanish
+    /// from the note when the strip was removed. And an archive restored from a
+    /// device whose note body predates its images lands in the same state. Both
+    /// get their pictures appended to the end of the note rather than dropped.
+    func unreferencedTokens(noteId: UUID, content: String) throws -> String? {
+        let referenced = Set(NoteBodyMarkdown.referencedPaths(in: content))
+        let missing = try list(noteId: noteId)
+            .filter { !referenced.contains($0.relativePath) }
+        guard !missing.isEmpty else { return nil }
+        return missing
+            .map { NoteBodyMarkdown.token(for: $0.relativePath) }
+            .joined(separator: "\n\n")
+    }
+
     // MARK: - Internals
 
     /// Append position. Reads the current max rather than counting rows, so a
