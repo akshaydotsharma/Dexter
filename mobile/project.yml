@@ -271,6 +271,14 @@ targets:
       - path: PersonalDashboard/Views/Trips/TripCalendarPopover.swift
       - path: PersonalDashboard/Views/Trips/TicketCardView.swift
       - path: PersonalDashboard/Views/Trips/TicketViewers.swift
+      # Task ticket cards (issue #399). The card, detail sheet and editor section
+      # live under Views/Tasks, which is globbed above, so only these two need
+      # listing. Both are portable: the service is Foundation + SwiftData, and the
+      # extractor reuses the already-shimmed TicketStorage / BarcodeService. The
+      # brightness-boosted scan surface is iOS-only and stays out, exactly as
+      # TicketScanView.swift does.
+      - path: PersonalDashboard/Services/TaskTicketService.swift
+      - path: PersonalDashboard/AI/TaskTicketExtraction.swift
       - path: PersonalDashboard/Resources/Fonts
         type: folder
         buildPhase: resources

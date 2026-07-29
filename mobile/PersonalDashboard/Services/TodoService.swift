@@ -72,7 +72,14 @@ struct TodoService {
 
     /// Soft-delete the todo. `permanent: true` removes the row from the local
     /// store entirely.
+    ///
+    /// Cascades to the task's ticket attachments (#399) so they don't outlive it
+    /// as orphaned rows and files on disk, the same way deleting a note takes its
+    /// images. The cascade runs FIRST: it needs to read the ticket rows, and a
+    /// permanent delete of the task would leave nothing to key them off.
     func delete(_ todo: Todo, permanent: Bool = false) async throws {
+        try? TaskTicketService(store: store).deleteAll(todoId: todo.id)
+
         let row = try fetchLocal(uuid: todo.id)
         if permanent {
             store.context.delete(row)

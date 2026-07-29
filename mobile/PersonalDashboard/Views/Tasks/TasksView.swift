@@ -18,6 +18,10 @@ struct TasksView: View {
     /// Drives the read-only month calendar popover (#385). Anchored to the
     /// top-bar button on iOS and to the window-toolbar button on macOS.
     @State private var showingCalendar = false
+    /// Ticket count per task (#399), driving the pass chip. Counted in one fetch
+    /// for the whole visible list rather than per row, and refreshed on the same
+    /// signals that reload the tasks themselves.
+    @State private var ticketCounts: [UUID: Int] = [:]
     @Bindable var router: AppRouter
 
     var body: some View {
@@ -128,9 +132,15 @@ struct TasksView: View {
         #endif
         // Live-refresh when the voice-capture or chat path writes a task.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
-            Task { await viewModel.load() }
+            Task {
+                await viewModel.load()
+                reloadTicketCounts()
+            }
         }
-        .task { await viewModel.load() }
+        .task {
+            await viewModel.load()
+            reloadTicketCounts()
+        }
         .onAppear {
             // Activity timeline deep-link consumption. The Activity surface
             // sets `router.focus` to ActivityFocus(section: .tasks, id: clientUUID)
@@ -467,6 +477,21 @@ struct TasksView: View {
         return b
     }
 
+    /// Recount ticket attachments for every loaded task (#399). One fetch for the
+    /// whole list, so adding the chip costs a single query rather than one per
+    /// row. A failure leaves the previous counts in place: a stale chip is a far
+    /// smaller problem than an empty list.
+    private func reloadTicketCounts() {
+        let ids = Set(viewModel.todos.map(\.id))
+        guard !ids.isEmpty else {
+            ticketCounts = [:]
+            return
+        }
+        if let counts = try? TaskTicketService().counts(todoIds: ids) {
+            ticketCounts = counts
+        }
+    }
+
     /// Renders a task section with an optional per-section tap-below affordance.
     /// Pass `bucket: nil` for sections that should not have tap-below (e.g. Overdue).
     @ViewBuilder
@@ -482,7 +507,8 @@ struct TasksView: View {
                     onTitleCommit: { newTitle in
                         Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
                     },
-                    onTapWhileDraftActive: { draftFocused = false }
+                    onTapWhileDraftActive: { draftFocused = false },
+                    ticketCount: ticketCounts[todo.id] ?? 0
                 )
                 .swipeToDeleteTrash {
                     Task { await viewModel.delete(todo) }
@@ -561,7 +587,8 @@ struct TasksView: View {
                         onTitleCommit: { newTitle in
                             Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
                         },
-                        onTapWhileDraftActive: { draftFocused = false }
+                        onTapWhileDraftActive: { draftFocused = false },
+                        ticketCount: ticketCounts[todo.id] ?? 0
                     )
                     .swipeToDeleteTrash {
                         Task { await viewModel.delete(todo) }
@@ -812,9 +839,16 @@ private struct TaskRow: View {
     /// Called back to the parent when this row is tapped while a draft is active,
     /// so the parent can flip draftFocused = false and trigger the focus-loss → commitDraft cycle.
     var onTapWhileDraftActive: () -> Void = {}
+    /// Number of tickets attached to this task (#399). Drives the pass chip. The
+    /// parent counts them all in one fetch rather than each row querying, so a
+    /// long list doesn't issue a query per row.
+    var ticketCount: Int = 0
 
     @State private var isEditing: Bool = false
     @State private var editText: String = ""
+    /// Presents the task's tickets. Separate from the editor so the card, and the
+    /// scanner behind it, are two taps from the list rather than buried in a form.
+    @State private var showingTickets = false
     @FocusState private var titleFocused: Bool
     @Environment(\.openURL) private var openURL
     // macOS: local presentation state for the Reminders-style detail popover
@@ -894,7 +928,7 @@ private struct TaskRow: View {
                 }
 
                 let hasTag = todo.tag != nil && !(todo.tag?.isEmpty ?? true)
-                if todo.dueDate != nil || hasTag || todo.mapsURL != nil {
+                if todo.dueDate != nil || hasTag || todo.mapsURL != nil || ticketCount > 0 {
                     HStack(spacing: Space.sm) {
                         if let due = todo.dueDate {
                             HStack(spacing: 4) {
@@ -930,6 +964,9 @@ private struct TaskRow: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Open in Google Maps")
+                        }
+                        if ticketCount > 0 {
+                            ticketChip
                         }
                     }
                 }
@@ -987,6 +1024,35 @@ private struct TaskRow: View {
         #if os(iOS)
         .onTapGesture { beginBodyTap() }
         #endif
+        .sheet(isPresented: $showingTickets) {
+            TaskTicketsSheet(todoId: todo.id, taskTitle: todo.title)
+        }
+    }
+
+    /// The pass chip. Its own tap target opens the tickets without triggering the
+    /// row's tap-to-rename, matching how the MAP chip guards its own tap.
+    private var ticketChip: some View {
+        Button {
+            Haptics.light()
+            showingTickets = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "ticket.fill")
+                    .font(.system(size: 10, weight: .regular))
+                // A count only earns its space once there's more than one.
+                Text(ticketCount > 1 ? "\(ticketCount) TICKETS" : "TICKET")
+                    .font(.edEyebrow)
+                    .textCase(.uppercase)
+                    .tracking(1.4)
+            }
+            .foregroundStyle(Tokens.accentTasks)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Tokens.accentTasks.opacity(0.12), in: Capsule(style: .continuous))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(ticketCount > 1 ? "Show \(ticketCount) tickets" : "Show ticket")
     }
 
     /// Enters inline edit from a body tap. Extracted so iOS (whole-row tap) and
@@ -1232,6 +1298,7 @@ private struct TaskEditorSheet: View {
                                 }
                             }
                         }
+                        ticketsBlock
                     }
                     .padding(Space.lg)
                 }
@@ -1260,6 +1327,32 @@ private struct TaskEditorSheet: View {
         }
     }
     #endif
+
+    // MARK: - Tickets (#399)
+
+    /// Ticket attachments, on both the iOS and macOS editors.
+    ///
+    /// A ticket row is keyed on the task's `clientUUID`, which a task being
+    /// created for the first time does not have yet, so the section says to save
+    /// first rather than silently swallowing an upload that has nowhere to go.
+    @ViewBuilder
+    private var ticketsBlock: some View {
+        if let todo {
+            TaskTicketSection(todoId: todo.id, taskTitle: todo.title)
+        } else {
+            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                Text("Tickets").eyebrow()
+                Text("Save the task first, then attach a ticket to it.")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(Space.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                    .paperBorder(Tokens.border, radius: Radius.md)
+            }
+        }
+    }
 
     // MARK: - macOS editor (Reminders-style inspector popover, issue #287)
 
@@ -1431,6 +1524,14 @@ private struct TaskEditorSheet: View {
                         .padding(.horizontal, Space.md)
                         .padding(.vertical, Space.sm)
                     }
+
+                    // Tickets (#399). The Mac can view, edit and remove a ticket
+                    // and add one from the open panel; there is no camera and no
+                    // present-to-scan surface, both of which are iOS-gated inside
+                    // the section itself. No `macSectionHeader` here: the section
+                    // carries its own eyebrow, because that is where the Add
+                    // control lives.
+                    ticketsBlock
                 }
                 .padding(Space.lg)
             }

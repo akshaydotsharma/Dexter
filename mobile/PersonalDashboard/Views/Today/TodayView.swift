@@ -3,6 +3,8 @@ import SwiftUI
 struct TodayView: View {
     @Bindable var router: AppRouter
 
+    /// Tasks carrying at least one ticket attachment (#399), for the row glyph.
+    @State private var ticketedTaskIDs: Set<UUID> = []
     @State private var todosVM = TodosViewModel()
     @State private var notesVM = NotesViewModel()
     @State private var listsVM = ListsViewModel()
@@ -54,6 +56,22 @@ struct TodayView: View {
         async let b: () = notesVM.load()
         async let c: () = listsVM.load()
         _ = await (a, b, c)
+        reloadTicketedTasks()
+    }
+
+    /// Which of the loaded tasks carry a ticket (#399), in one fetch. Only
+    /// membership is needed here, not a count, because the row shows a glyph
+    /// rather than a number. A failure leaves the previous set alone: a stale
+    /// glyph beats an empty card.
+    private func reloadTicketedTasks() {
+        let ids = Set(todosVM.todos.map(\.id))
+        guard !ids.isEmpty else {
+            ticketedTaskIDs = []
+            return
+        }
+        if let counts = try? TaskTicketService().counts(todoIds: ids) {
+            ticketedTaskIDs = Set(counts.filter { $0.value > 0 }.keys)
+        }
     }
 
     // MARK: - Header
@@ -104,7 +122,8 @@ struct TodayView: View {
                 ForEach(Array(preview.enumerated()), id: \.element.id) { idx, todo in
                     TodayTaskRow(
                         todo: todo,
-                        onToggle: { Task { await todosVM.toggleCompleted(todo) } }
+                        onToggle: { Task { await todosVM.toggleCompleted(todo) } },
+                        hasTicket: ticketedTaskIDs.contains(todo.id)
                     )
                     if idx < preview.count - 1 {
                         Rectangle()
@@ -306,6 +325,11 @@ private struct TodayCardFooter: View {
 private struct TodayTaskRow: View {
     let todo: Todo
     let onToggle: () -> Void
+    /// Whether the task carries a ticket attachment (#399). An indicator only, not
+    /// a control: Today is a glance surface and the row has no tap target beyond
+    /// the checkbox, so acting on the ticket belongs in Tasks where the chip opens
+    /// the card.
+    var hasTicket: Bool = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -328,10 +352,20 @@ private struct TodayTaskRow: View {
                     .strikethrough(todo.completed, color: Tokens.muted)
                     .lineLimit(2)
 
-                if let due = todo.dueDate {
-                    Text(dueLabel(due))
-                        .font(.edCaption)
-                        .foregroundStyle(isOverdue(due) ? Tokens.danger : Tokens.muted)
+                if todo.dueDate != nil || hasTicket {
+                    HStack(spacing: Space.sm) {
+                        if let due = todo.dueDate {
+                            Text(dueLabel(due))
+                                .font(.edCaption)
+                                .foregroundStyle(isOverdue(due) ? Tokens.danger : Tokens.muted)
+                        }
+                        if hasTicket {
+                            Image(systemName: "ticket.fill")
+                                .font(.system(size: 10, weight: .regular))
+                                .foregroundStyle(Tokens.accentTasks)
+                                .accessibilityLabel("Has a ticket")
+                        }
+                    }
                 }
             }
 
