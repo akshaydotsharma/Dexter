@@ -167,9 +167,6 @@ struct FinanceDashboardBand: View {
                 FinanceCategoryBarRow(slice: slice, maxTotal: maxValue)
             }
         }
-        // Same measure cap the expanded panel uses, so the bars don't jump
-        // width when the card opens.
-        .frame(maxWidth: FinancePanelMetrics.contentMeasure, alignment: .leading)
     }
 
     // MARK: - Formatting

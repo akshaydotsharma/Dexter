@@ -39,17 +39,21 @@ enum FinanceBarRowMetrics {
 
 /// Layout metrics for the expanded panel (#389).
 enum FinancePanelMetrics {
-    /// Widest the panel's content may draw. On a maximised Mac window the card
-    /// is ~1450pt, where a full-width category row means an 1100pt bar and a
-    /// 12-bar chart with 70pt gaps — a measure cap fixes both at once. The
-    /// collapsed band's bars carry the same cap so nothing shifts on expand.
-    static var contentMeasure: CGFloat {
-        #if os(macOS)
-        820
-        #else
-        .infinity
-        #endif
-    }
+    /// Content width at which the panel goes from one column to two.
+    ///
+    /// A measure cap was tried first and was wrong: the card grew with the
+    /// window while its content stopped short, so full-screening the app left
+    /// dead space to the right and read as "the dashboard doesn't expand".
+    /// Two columns spend the width instead of ignoring it, and keep each
+    /// element at a sane size rather than drawing an 1100pt bar.
+    ///
+    /// 980 sits clear of both real cases: a 1050pt window gives ~736pt of card
+    /// content (one column, unchanged), a full-screen 1512pt window ~1240pt
+    /// (two columns). The iPhone is nowhere near it.
+    static let twoColumnThreshold: CGFloat = 980
+
+    /// Gutter between the two columns.
+    static let columnGutter: CGFloat = Space.xl
 
     /// Categories shown before the "Show all" row. Everything past this is
     /// rounding error in practice, and 13 rows is what made the card unwieldy.
@@ -62,6 +66,10 @@ enum FinancePanelMetrics {
         120
         #endif
     }
+
+    /// Chart height in two-column mode, where the chart sits beside a taller
+    /// category list.
+    static let wideChartHeight: CGFloat = 168
 
     /// Widest a single bar may draw, regardless of how much room its cell has.
     static var maxBarWidth: CGFloat {
@@ -256,19 +264,82 @@ struct FinanceInsightsPanel: View {
     /// Whether the category list is showing past `categoryPreviewCount`.
     @State private var showAllCategories: Bool = false
 
+    /// The panel's own width, measured without affecting layout, so the column
+    /// count follows the window instead of a hardcoded breakpoint guess.
+    @State private var panelWidth: CGFloat = 0
+
+    private var isWide: Bool { panelWidth >= FinancePanelMetrics.twoColumnThreshold }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            chartBlock
-            sectionRule
-            categoriesBlock
-            if !insights.merchants.isEmpty {
-                sectionRule
-                merchantsBlock
+        layout
+            // Measuring in a background overlay rather than wrapping in a
+            // GeometryReader: a GeometryReader would claim all available height
+            // and break the card's vertical sizing inside the ScrollView. The
+            // measured width is set by the parent card and never by the layout
+            // choice below it, so there is no feedback loop.
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: PanelWidthKey.self, value: proxy.size.width)
+                }
+            )
+            .onPreferenceChange(PanelWidthKey.self) { width in
+                panelWidth = width
             }
-            sectionRule
-            summaryTiles
+    }
+
+    @ViewBuilder
+    private var layout: some View {
+        if isWide {
+            // Chart beside categories, merchants beside the summary. Halves the
+            // card's height on a wide window and keeps bars and bar charts at a
+            // size that still reads.
+            VStack(alignment: .leading, spacing: 0) {
+                columns(
+                    left: { chartBlock },
+                    right: { categoriesBlock }
+                )
+                sectionRule
+                if insights.merchants.isEmpty {
+                    summaryBlock
+                } else {
+                    columns(
+                        left: { merchantsBlock },
+                        right: { summaryBlock }
+                    )
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                chartBlock
+                sectionRule
+                categoriesBlock
+                if !insights.merchants.isEmpty {
+                    sectionRule
+                    merchantsBlock
+                }
+                sectionRule
+                summaryBlock
+            }
         }
-        .frame(maxWidth: FinancePanelMetrics.contentMeasure, alignment: .leading)
+    }
+
+    /// Two equal columns with a hairline between them, top-aligned. The rule
+    /// stretches to the taller column, which is what visually pairs them.
+    private func columns<L: View, R: View>(
+        @ViewBuilder left: () -> L,
+        @ViewBuilder right: () -> R
+    ) -> some View {
+        HStack(alignment: .top, spacing: FinancePanelMetrics.columnGutter) {
+            left()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Rectangle()
+                .fill(Tokens.divider)
+                .frame(width: 0.5)
+                .frame(maxHeight: .infinity)
+            right()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The one separator between blocks: 16 above, hairline, 16 below.
@@ -310,7 +381,7 @@ struct FinanceInsightsPanel: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(height: FinancePanelMetrics.chartHeight / 2)
+                    .frame(height: chartHeight / 2)
             }
         }
     }
@@ -323,7 +394,7 @@ struct FinanceInsightsPanel: View {
                         bar(bucket)
                     }
                 }
-                .frame(height: FinancePanelMetrics.chartHeight)
+                .frame(height: chartHeight)
 
                 Rectangle()
                     .fill(Tokens.divider)
@@ -331,7 +402,7 @@ struct FinanceInsightsPanel: View {
 
                 averageLine
             }
-            .frame(height: FinancePanelMetrics.chartHeight)
+            .frame(height: chartHeight)
             axisRow
         }
     }
@@ -342,7 +413,7 @@ struct FinanceInsightsPanel: View {
         let dimmed = selectedBucket != nil && !isSelected
         // 1.5pt keeps an empty bucket visible as a stub on the baseline rather
         // than vanishing, so gaps in spending still read as periods.
-        let height = Swift.max(1.5, CGFloat(ratio) * FinancePanelMetrics.chartHeight)
+        let height = Swift.max(1.5, CGFloat(ratio) * chartHeight)
         let opacity: Double = dimmed ? 0.28 : (isSelected ? 1.0 : 0.8)
         // Clamped so the empty-bucket stub doesn't render as a lozenge.
         let radius = Swift.min(FinancePanelMetrics.barCornerRadius, height / 2)
@@ -390,7 +461,7 @@ struct FinanceInsightsPanel: View {
         let average = averageBucketTotal
         let ratio = maxBucketTotal > 0 ? average / maxBucketTotal : 0
         if average > 0, ratio > 0.08, ratio < 0.96 {
-            let y = CGFloat(ratio) * FinancePanelMetrics.chartHeight
+            let y = CGFloat(ratio) * chartHeight
             FinanceChartRule()
                 .stroke(Tokens.borderStrong, style: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
                 .frame(height: 1)
@@ -539,6 +610,17 @@ struct FinanceInsightsPanel: View {
     /// Three tiles rather than a divider-separated strip. This is the one place
     /// a raised surface earns itself: three short stats in a row read as a stat
     /// row, and the tile padding IS the breathing room they were missing.
+    ///
+    /// Carries a heading like the other three blocks: without one it read as an
+    /// orphaned footer, and in two-column mode it sits beside a block that has
+    /// a heading, so the pair looked lopsided.
+    private var summaryBlock: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            sectionHeader("Summary")
+            summaryTiles
+        }
+    }
+
     private var summaryTiles: some View {
         HStack(alignment: .top, spacing: Space.sm) {
             summaryTile(
@@ -568,18 +650,17 @@ struct FinanceInsightsPanel: View {
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-            if let caption {
-                Text(caption)
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.mutedSoft)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+            // Always rendered, blank when absent: only "Largest" has a caption,
+            // and reserving the line is what makes all three tiles the same
+            // height. Doing it with `maxHeight: .infinity` instead worked in one
+            // column and then stretched the tiles to the full row height in two.
+            Text(caption ?? " ")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.mutedSoft)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
-        // `maxHeight` so all three tiles match the tallest — only "Largest"
-        // carries a caption line, and without this the other two sit short and
-        // the row's bottom edge reads as ragged.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(FinancePanelMetrics.summaryTilePadding)
         .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         // Not optional: `surface2` is only 6/255 from `surface` in dark mode, so
@@ -589,6 +670,12 @@ struct FinanceInsightsPanel: View {
     }
 
     // MARK: - Derived values
+
+    /// Chart height. Taller in two-column mode, where the chart sits beside a
+    /// taller category list and a short chart leaves the row looking unfinished.
+    private var chartHeight: CGFloat {
+        isWide ? FinancePanelMetrics.wideChartHeight : FinancePanelMetrics.chartHeight
+    }
 
     private var maxBucketTotal: Double {
         Swift.max(0, insights.buckets.map(\.total).max() ?? 0)
@@ -629,6 +716,15 @@ struct FinanceInsightsPanel: View {
             return "Peak \(peak.readoutLabel) · \(FinanceDashboardBand.formatMoney(peak.total))"
         }
         return nil
+    }
+}
+
+/// Carries the panel's measured width up to `FinanceInsightsPanel`, which uses
+/// it to pick a column count.
+private struct PanelWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
