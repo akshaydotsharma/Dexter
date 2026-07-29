@@ -39,6 +39,8 @@ mobile/*.xcarchive
 mobile/.swiftpm/
 # Local build counter — bumps every ship, not committed (each dev/machine has its own)
 mobile/.build_count
+# Older ship-lan versions wrote the counter here; still local-only state.
+mobile/ota/.build_count
 **/xcuserdata/
 **/*.xcuserstate
 
