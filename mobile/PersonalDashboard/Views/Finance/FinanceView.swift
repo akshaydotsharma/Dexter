@@ -38,6 +38,11 @@ struct FinanceView: View {
     @State private var filterState = FinanceFilterState()
     @State private var searchText: String = ""
 
+    /// Whether the dashboard card is showing its full breakdown (#389). Lives
+    /// here rather than inside `FinanceDashboardBand` so it survives the band
+    /// being rebuilt on every filter change and search keystroke.
+    @State private var dashboardExpanded: Bool = false
+
     /// Identifier for the AddExpense sheet. `.new` for the + button,
     /// `.existing(uuid)` for tap-to-edit on a row.
     @State private var editingTarget: ExpenseEditorTarget?
@@ -545,13 +550,25 @@ struct FinanceView: View {
 
     private var populatedContent: some View {
         let filtered = filteredExpenses
-        let stats = computeStats(range: dashboardRange, preset: filterState.datePreset, filter: resolvedFilter)
+        // One filtered pass over the dashboard window feeds both the headline
+        // figures and every breakdown cut (#389), so the two cannot disagree.
+        let range = dashboardRange
+        let rangeRows = rowsInDashboardWindow(range: range)
+        let stats = computeStats(
+            rangeRows: rangeRows,
+            range: range,
+            preset: filterState.datePreset,
+            filter: resolvedFilter
+        )
+        let insights = FinanceInsights.build(rows: rangeRows, range: range)
         return ScrollView {
             VStack(spacing: Space.lg) {
                 FinanceDashboardBand(
                     stats: stats,
+                    insights: insights,
                     headerLabel: dashboardHeaderLabel,
-                    deltaComparisonLabel: filterState.datePreset.deltaComparisonLabel
+                    deltaComparisonLabel: filterState.datePreset.deltaComparisonLabel,
+                    isExpanded: $dashboardExpanded
                 )
                 .padding(.horizontal, Space.lg)
 
@@ -838,25 +855,34 @@ struct FinanceView: View {
         return filterState.datePreset.dashboardLabel
     }
 
+    /// Rows inside the dashboard window that also pass every non-date filter
+    /// (#211). Shared by the headline stats and `FinanceInsights` (#389) so
+    /// both aggregate the identical set.
+    private func rowsInDashboardWindow(range: ClosedRange<Date>) -> [LocalExpense] {
+        var rangeFilter = resolvedFilter
+        rangeFilter.dateRange = range
+        return allExpenses.filter { matches($0, filter: rangeFilter) }
+    }
+
     /// Stats for the dashboard band (#187, #211). Applies the FULL active filter
     /// — person / event / category / source / search — on top of the date
     /// window, so the band sums exactly the rows shown in the list. The same
     /// non-date filters are applied to the preceding comparison window too, so
-    /// the delta compares like-for-like. `filter.dateRange` is overridden
-    /// per-window (`range` for the headline, `prevRange` for the delta); the
-    /// caller's date range is ignored here in favour of those windows.
-    private func computeStats(range: ClosedRange<Date>, preset: FinanceDateRangePreset, filter: ExpenseFilter) -> FinanceDashboardStats {
+    /// the delta compares like-for-like. `filter.dateRange` is overridden for
+    /// the comparison window (`prevRange`); the caller's date range is ignored
+    /// here in favour of the windows.
+    private func computeStats(
+        rangeRows: [LocalExpense],
+        range: ClosedRange<Date>,
+        preset: FinanceDateRangePreset,
+        filter: ExpenseFilter
+    ) -> FinanceDashboardStats {
         let cal = Calendar.current
 
-        // Non-date filters applied to both windows; the date range is swapped
-        // in per-window below so each window keeps its own bounds.
-        var rangeFilter = filter
-        rangeFilter.dateRange = range
-        let rangeRows = allExpenses.filter { matches($0, filter: rangeFilter) }
         // All dashboard-band figures net refunds (#206) AND count only the
         // user's share of split trip expenses (#258) — "my share counts": the
         // headline total, the delta comparison, the category bars, the average
-        // per month, and the sparkline all sum `myShareSGD`.
+        // per month, and every expanded cut all sum `myShareSGD`.
         let rangeTotal = rangeRows.reduce(0) { $0 + $1.myShareSGD }
 
         // Average monthly spend: normalise the period total to a 30.44-day month,
@@ -896,37 +922,9 @@ struct FinanceView: View {
         let prevRows = allExpenses.filter { matches($0, filter: prevFilter) }
         let prevTotal = prevRows.reduce(0) { $0 + $1.myShareSGD }
 
-        var byCategory: [ExpenseCategory: Double] = [:]
-        for row in rangeRows {
-            byCategory[row.categoryEnum, default: 0] += row.myShareSGD
-        }
-        let topCategories = byCategory
-            .sorted { $0.value > $1.value }
-            .prefix(3)
-            .map { (category: $0.key, total: $0.value) }
-
-        // Sparkline: one bucket per calendar day across the selected range,
-        // inclusive of both ends. Days with no spend draw a flat segment.
-        let sparkStart = cal.startOfDay(for: range.lowerBound)
-        let sparkEndDay = cal.startOfDay(for: range.upperBound)
-        let dayCount = (cal.dateComponents([.day], from: sparkStart, to: sparkEndDay).day ?? 0) + 1
-        var dailyDict: [Date: Double] = [:]
-        for row in rangeRows {
-            let day = cal.startOfDay(for: row.date)
-            dailyDict[day, default: 0] += row.myShareSGD
-        }
-        var dailyTotals: [(date: Date, total: Double)] = []
-        for offset in 0..<max(dayCount, 1) {
-            if let day = cal.date(byAdding: .day, value: offset, to: sparkStart) {
-                dailyTotals.append((day, dailyDict[day] ?? 0))
-            }
-        }
-
         return FinanceDashboardStats(
             monthTotal: rangeTotal,
             previousMonthTotal: prevTotal,
-            topCategories: topCategories,
-            dailyTotals: dailyTotals,
             averagePerMonth: averagePerMonth
         )
     }

@@ -142,6 +142,9 @@ targets:
       - path: PersonalDashboard/Views/Components/MarkdownEditor.swift
       - path: PersonalDashboard/Views/Activity/ActivityView.swift
       - path: PersonalDashboard/Views/Finance/FinanceDashboardBand.swift
+      # Expanded Finance dashboard: breakdown model + panel (issue #389).
+      - path: PersonalDashboard/Views/Finance/FinanceInsights.swift
+      - path: PersonalDashboard/Views/Finance/FinanceInsightsPanel.swift
       - path: PersonalDashboard/Views/Settings/PersonalVocabularyView.swift
       - path: PersonalDashboard/Views/Components/GhostAddRow.swift
       - path: PersonalDashboard/Views/Components/MacAddRow.swift
