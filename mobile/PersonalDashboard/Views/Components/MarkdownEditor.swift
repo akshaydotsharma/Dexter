@@ -1,6 +1,8 @@
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
 #endif
 
 // MARK: - MarkdownEditor
@@ -69,6 +71,7 @@ struct MarkdownEditor: UIViewRepresentable {
         // a paste add one at the cursor.
         tv.setNoteMarkdown(text)
         tv.saveImage = saveImage
+        toolbar.allowsImageInsertion = (saveImage != nil)
         // Declare images acceptable, which is what makes UIKit route a dropped or
         // pasted image through `paste(itemProviders:)`. Without it the drop is
         // offered as text and lands as a file path.
@@ -408,7 +411,7 @@ final class PaddedTextView: UITextView {
 
     /// Bytes for one dropped item, preferring the original file representation
     /// over a `UIImage` re-encode so a HEIC photo is not inflated on the way in.
-    private static func imageData(from provider: NSItemProvider) async -> Data? {
+    static func imageData(from provider: NSItemProvider) async -> Data? {
         for identifier in ["public.png", "public.jpeg", "public.heic", "public.tiff"]
         where provider.hasItemConformingToTypeIdentifier(identifier) {
             let data: Data? = await withCheckedContinuation { continuation in
@@ -476,6 +479,18 @@ final class MarkdownFormatToolbarView: UIView {
     var textViewProvider: (() -> UITextView?)? = nil
     /// Called after each successful mutation so the SwiftUI binding updates.
     var onChange: (() -> Void)? = nil
+    /// Whether to offer the image and attachment buttons (#395).
+    ///
+    /// A settable flag rather than asking the textView, because `buildButtons()`
+    /// runs from `init` — before the editor has assigned `textViewProvider` — so
+    /// anything derived from the text view is always false at that point and the
+    /// buttons would never appear. The stack collapses hidden views, so toggling
+    /// this reflows the bar with no layout work.
+    var allowsImageInsertion: Bool = false {
+        didSet { updateImageButtonVisibility() }
+    }
+
+    private var imageButtons: [UIButton] = []
 
     private let stack = UIStackView()
     private let scrollView = UIScrollView()
@@ -555,6 +570,28 @@ final class MarkdownFormatToolbarView: UIView {
             stack.addArrangedSubview(button)
         }
 
+        // Image and attachment (#395). Icons rather than glyph titles: these open
+        // a picker instead of wrapping the selection, and the visual break helps
+        // separate "insert something" from the formatting buttons.
+        //
+        // Only shown when the editor can actually store an image — a note body
+        // can, the other MarkdownEditor callers cannot, and offering a button that
+        // silently does nothing is worse than not offering it.
+        let photo = makeIconButton(
+            systemName: "photo",
+            accessibilityLabel: "Insert image from photo library",
+            handler: { [weak self] in self?.presentPhotoLibrary() }
+        )
+        let attach = makeIconButton(
+            systemName: "paperclip",
+            accessibilityLabel: "Attach an image from Files",
+            handler: { [weak self] in self?.presentFilePicker() }
+        )
+        imageButtons = [photo, attach]
+        stack.addArrangedSubview(photo)
+        stack.addArrangedSubview(attach)
+        updateImageButtonVisibility()
+
         // Keyboard-dismiss button at the trailing edge.
         let dismiss = UIButton(type: .system)
         dismiss.setImage(UIImage(systemName: "keyboard.chevron.compact.down"), for: .normal)
@@ -570,6 +607,95 @@ final class MarkdownFormatToolbarView: UIView {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(spacer)
         stack.addArrangedSubview(dismiss)
+    }
+
+    // MARK: - Image insertion (#395)
+
+    /// Hide rather than omit: the buttons are built once in `init`, and only the
+    /// note body can actually store an image. Offering a button that silently does
+    /// nothing in the other editors would be worse than not offering it.
+    private func updateImageButtonVisibility() {
+        for button in imageButtons { button.isHidden = !allowsImageInsertion }
+    }
+
+    private func makeIconButton(
+        systemName: String,
+        accessibilityLabel: String,
+        handler: @escaping () -> Void
+    ) -> UIButton {
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(
+            systemName: systemName,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        )
+        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+        config.background.cornerRadius = 8
+
+        let button = UIButton(configuration: config)
+        button.tintColor = UIColor { trait in
+            UIColor(Color(hex: trait.userInterfaceStyle == .dark ? 0xF2EBDA : 0x1F1B16))
+        }
+        button.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        button.accessibilityLabel = accessibilityLabel
+        button.addAction(UIAction { _ in handler() }, for: .touchUpInside)
+        return button
+    }
+
+    /// The photo library, via `PHPickerViewController`.
+    ///
+    /// PHPicker runs out of process, so it needs no photo-library permission and
+    /// no usage-description string: the user hands over only what they select.
+    private func presentPhotoLibrary() {
+        var config = PHPickerConfiguration(photoLibrary: .shared())
+        config.filter = .images
+        // 0 means no limit. Several images from one trip into the picker is the
+        // common case when writing up a shoot or a journey.
+        config.selectionLimit = 0
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = self
+        present(picker)
+    }
+
+    /// Files, via the document picker.
+    ///
+    /// Restricted to images because the note body can only reference an image.
+    /// `asCopy: true` so we get a readable temp file rather than a
+    /// security-scoped URL that expires the moment the picker closes.
+    private func presentFilePicker() {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.image], asCopy: true
+        )
+        picker.allowsMultipleSelection = true
+        picker.delegate = self
+        present(picker)
+    }
+
+    /// Present from the topmost view controller.
+    ///
+    /// Deliberately NOT presented from the accessory view's own window: that is
+    /// the keyboard's window, which is torn down as the keyboard dismisses and
+    /// takes any sheet presented from it along with it.
+    private func present(_ controller: UIViewController) {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        guard let root = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController
+                ?? scene?.windows.first?.rootViewController else { return }
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        top.present(controller, animated: true)
+    }
+
+    /// Insert a batch at the cursor, in the order chosen.
+    private func insert(imageData payloads: [Data]) {
+        guard let tv = textViewProvider?() as? PaddedTextView, !payloads.isEmpty else { return }
+        Task { @MainActor in
+            for data in payloads {
+                await tv.insertImageAwaiting(data: data)
+            }
+            // Put the caret back so typing continues after the image.
+            tv.becomeFirstResponder()
+        }
     }
 
     private func makeButton(title: String, identifier: String, handler: @escaping () -> Void) -> UIButton {
@@ -783,6 +909,40 @@ final class MarkdownFormatToolbarView: UIView {
         let safeCursor = max(0, min(newCursor, (updated as NSString).length))
         tv.selectedRange = NSRange(location: safeCursor, length: 0)
         onChange?()
+    }
+}
+
+// MARK: - Picker delegates (#395)
+
+extension MarkdownFormatToolbarView: PHPickerViewControllerDelegate {
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        guard !results.isEmpty else { return }
+        Task { @MainActor in
+            var payloads: [Data] = []
+            for result in results {
+                if let data = await PaddedTextView.imageData(from: result.itemProvider) {
+                    payloads.append(data)
+                }
+            }
+            insert(imageData: payloads)
+        }
+    }
+}
+
+extension MarkdownFormatToolbarView: UIDocumentPickerDelegate {
+    func documentPicker(
+        _ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]
+    ) {
+        // `asCopy: true` means these are temp copies we own outright, so no
+        // security-scoped access bracket is needed to read them.
+        let payloads = urls.compactMap { url -> Data? in
+            guard let data = try? Data(contentsOf: url), UIImage(data: data) != nil else {
+                return nil
+            }
+            return data
+        }
+        insert(imageData: payloads)
     }
 }
 
