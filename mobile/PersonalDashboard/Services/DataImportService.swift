@@ -176,6 +176,7 @@ final class DataImportService {
     enum Entity: String, CaseIterable, Hashable, Identifiable {
         case tasks
         case notes
+        case noteImages
         case noteFolders
         case lists
         case itineraries
@@ -194,6 +195,7 @@ final class DataImportService {
             switch self {
             case .tasks:             return "Tasks"
             case .notes:             return "Notes"
+            case .noteImages:        return "Note images"
             case .noteFolders:       return "Note folders"
             case .lists:             return "Lists"
             case .itineraries:       return "Itineraries"
@@ -212,6 +214,7 @@ final class DataImportService {
             switch self {
             case .tasks:             return "checkmark.square"
             case .notes:             return "doc.text"
+            case .noteImages:        return "photo"
             case .noteFolders:       return "folder"
             case .lists:             return "list.bullet"
             case .itineraries:       return "airplane"
@@ -232,15 +235,19 @@ final class DataImportService {
     /// #319: ticket files (`tickets/<uuid>.<ext>`) travel in the archive
     /// alongside receipts. Same shape and same API as `receiptStorage`.
     private let ticketStorage: TicketStorage
+    /// #395: note image attachments. Same shape and same API again.
+    private let noteImageStorage: ReceiptStorage
 
     init(
         modelContext: ModelContext,
         receiptStorage: ReceiptStorage = .shared,
-        ticketStorage: TicketStorage = .shared
+        ticketStorage: TicketStorage = .shared,
+        noteImageStorage: ReceiptStorage = .noteImages
     ) {
         self.modelContext = modelContext
         self.receiptStorage = receiptStorage
         self.ticketStorage = ticketStorage
+        self.noteImageStorage = noteImageStorage
     }
 
     // MARK: - Preview
@@ -331,6 +338,7 @@ final class DataImportService {
         let existingStatementUUIDs = try existingUUIDs(LocalStatementImport.self,   keyPath: \.clientUUID)
         let existingRecurringUUIDs = try existingStringUUIDs(RecurringExpense.self, keyPath: \.clientUUID)
         let existingMessageKeys    = try existingStringUUIDs(LocalProcessedEmail.self, keyPath: \.messageKey)
+        let existingNoteImageUUIDs = try existingUUIDs(LocalNoteImage.self,          keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -346,6 +354,7 @@ final class DataImportService {
 
         record(.tasks,             payload.tasks.map(\.clientUUID),                    existing: existingTodoUUIDs)
         record(.notes,             payload.notes.map(\.clientUUID),                    existing: existingNoteUUIDs)
+        record(.noteImages,        (payload.noteImages ?? []).map(\.clientUUID),       existing: existingNoteImageUUIDs)
         record(.noteFolders,       payload.noteFolders.map(\.clientUUID),              existing: existingFolderUUIDs)
         record(.lists,             payload.lists.map(\.clientUUID),                    existing: existingListUUIDs)
         record(.itineraries,       payload.itineraries.map(\.clientUUID),              existing: existingTripUUIDs)
@@ -404,10 +413,13 @@ final class DataImportService {
         let existingItineraryUUIDs  = mode == .replaceMatching ? [] : try existingUUIDs(LocalItineraryItem.self,  keyPath: \.clientUUID)
         let existingExpenseUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalExpense.self,  keyPath: \.clientUUID)
         let existingVocabUUIDs      = mode == .replaceMatching ? [] : try existingUUIDs(LocalKeyword.self,        keyPath: \.clientUUID)
+        let existingNoteImageUUIDs  = mode == .replaceMatching ? [] : try existingUUIDs(LocalNoteImage.self,      keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
         var writtenTicketPaths: [String] = []
+        /// #395: and note image files, for the same rollback reason.
+        var writtenNoteImagePaths: [String] = []
 
         do {
             for dto in payload.noteFolders where !existingFolderUUIDs.contains(dto.clientUUID) {
@@ -699,6 +711,27 @@ final class DataImportService {
                 modelContext.insert(email)
             }
 
+            // #395: note images. Inserted after notes so the rows they point at
+            // already exist in this transaction. A row whose file is not in the
+            // archive still restores: the strip shows it as "on your other
+            // device", which is exactly what it is.
+            for dto in (payload.noteImages ?? []) where !existingNoteImageUUIDs.contains(dto.clientUUID) {
+                let restoredPath = try restoreNoteImage(for: dto, archiveEntries: preview.entries)
+                if let restoredPath { writtenNoteImagePaths.append(restoredPath) }
+                modelContext.insert(LocalNoteImage(
+                    clientUUID: dto.clientUUID,
+                    noteClientUUID: dto.noteClientUUID,
+                    relativePath: restoredPath ?? dto.relativePath,
+                    position: dto.position,
+                    pixelWidth: dto.pixelWidth,
+                    pixelHeight: dto.pixelHeight,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt,
+                    deletedAt: dto.deletedAt,
+                    needsSync: false
+                ))
+            }
+
             for dto in payload.vocab where !existingVocabUUIDs.contains(dto.clientUUID) {
                 modelContext.insert(LocalKeyword(
                     clientUUID: dto.clientUUID,
@@ -718,6 +751,9 @@ final class DataImportService {
             }
             for path in writtenTicketPaths {
                 try? ticketStorage.delete(relativePath: path)
+            }
+            for path in writtenNoteImagePaths {
+                try? noteImageStorage.delete(relativePath: path)
             }
             throw ImportError.commitFailed(error)
         }
@@ -749,6 +785,7 @@ final class DataImportService {
         try deleteMatching(LocalNoteFolder.self,     ids: Set(payload.noteFolders.map(\.clientUUID)),  key: \.clientUUID)
         try deleteMatching(LocalTodo.self,           ids: Set(payload.tasks.map(\.clientUUID)),        key: \.clientUUID)
         try deleteMatching(LocalNote.self,           ids: Set(payload.notes.map(\.clientUUID)),        key: \.clientUUID)
+        try deleteMatching(LocalNoteImage.self,      ids: Set((payload.noteImages ?? []).map(\.clientUUID)), key: \.clientUUID)
         try deleteMatching(LocalList.self,           ids: Set(payload.lists.map(\.clientUUID)),        key: \.clientUUID)
         try deleteMatching(LocalTrip.self,           ids: Set(payload.itineraries.map(\.clientUUID)),  key: \.clientUUID)
         try deleteMatching(LocalItineraryItem.self,  ids: Set(payload.itineraryDays.map(\.clientUUID)), key: \.clientUUID)
@@ -833,6 +870,7 @@ final class DataImportService {
         [
             "LocalTodo":            payload.tasks.count,
             "LocalNote":            payload.notes.count,
+            "LocalNoteImage":       payload.noteImages?.count ?? 0,
             "LocalNoteFolder":      payload.noteFolders.count,
             "LocalList":            payload.lists.count,
             "LocalTrip":            payload.itineraries.count,
@@ -863,5 +901,28 @@ final class DataImportService {
             return relativePath
         }
         return try ticketStorage.write(data: archivedData, relativePath: relativePath)
+    }
+
+    /// #395 counterpart for note image attachments.
+    ///
+    /// Unlike receipts and tickets, returning nil does NOT mean the row loses its
+    /// path: an image row with no bytes is still a real attachment that lives on
+    /// the user's other device, and the strip says so. The caller keeps the DTO's
+    /// original path so a later import of the Mac's archive can fill it in.
+    private func restoreNoteImage(
+        for image: DataArchive.NoteImageDTO,
+        archiveEntries: [String: Data]
+    ) throws -> String? {
+        let relativePath = image.relativePath
+        guard !relativePath.isEmpty,
+              let archivedData = archiveEntries[relativePath] else {
+            return nil
+        }
+        // An existing file at the same UUID-keyed path is the same logical image,
+        // so it wins rather than being rewritten. Same rule as receipts.
+        if noteImageStorage.load(relativePath: relativePath) != nil {
+            return relativePath
+        }
+        return try noteImageStorage.write(data: archivedData, relativePath: relativePath)
     }
 }

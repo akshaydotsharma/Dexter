@@ -866,6 +866,16 @@ private struct NoteDetailContent: View {
                     Rectangle().fill(Tokens.divider).frame(height: 0.5)
 
                     bodyEditor
+
+                    // Image attachments (#395). Below the body so the note still
+                    // reads top-to-bottom as writing first, pictures after.
+                    Rectangle().fill(Tokens.divider).frame(height: 0.5)
+
+                    NoteImageStrip(noteId: note.id) {
+                        // Attaching or removing an image bumps the note's
+                        // `updatedAt`, so refresh the index behind this screen.
+                        Task { await viewModel.load() }
+                    }
                 }
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.lg)

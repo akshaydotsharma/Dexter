@@ -61,6 +61,11 @@ enum DataArchive {
         var statementImports: [StatementImportDTO]? = nil
         var processedEmails: [ProcessedEmailDTO]? = nil
 
+        // MARK: Added in #395 — note image attachments.
+        // Optional with a nil default, following the #319 precedent, so archives
+        // written before notes could hold images still decode.
+        var noteImages: [NoteImageDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -114,6 +119,24 @@ enum DataArchive {
         // correctly restores those notes as individually archived, so unarchiving
         // their folder leaves them alone.
         var archivedWithFolderAt: Date? = nil
+    }
+
+    /// A note's image attachment (#395).
+    ///
+    /// `relativePath` maps 1:1 onto an archive entry name, exactly like
+    /// `ExpenseDTO.receiptImagePath` and `ItineraryDayDTO.attachmentPath`, so the
+    /// exporter can put `note-images/<uuid>.jpg` into the zip and the importer
+    /// can put it back in the same place under Documents.
+    struct NoteImageDTO: Codable {
+        let clientUUID: UUID
+        let noteClientUUID: UUID
+        let relativePath: String
+        let position: Int
+        let pixelWidth: Int?
+        let pixelHeight: Int?
+        let createdAt: Date
+        let updatedAt: Date
+        let deletedAt: Date?
     }
 
     struct NoteFolderDTO: Codable {
@@ -398,7 +421,7 @@ enum DataArchive {
     /// Every model this archive format carries, used for the manifest's claimed
     /// list. Order is stable so archives diff cleanly.
     static let exportedModels = [
-        "LocalTodo", "LocalNote", "LocalNoteFolder", "LocalList",
+        "LocalTodo", "LocalNote", "LocalNoteImage", "LocalNoteFolder", "LocalList",
         "LocalTrip", "LocalItineraryItem", "LocalExpense", "LocalKeyword",
         "RecurringExpense", "LocalPerson", "LocalEvent",
         "LocalStatementImport", "LocalProcessedEmail",

@@ -285,6 +285,9 @@ final class SwiftDataStore {
         LocalTodo.self,
         LocalNoteFolder.self,
         LocalNote.self,
+        // Note image attachments (#395). A new model, which is the safe kind of
+        // migration — `LocalNote` itself is untouched.
+        LocalNoteImage.self,
         LocalList.self,
         LocalKeyword.self,
         LocalTrip.self,

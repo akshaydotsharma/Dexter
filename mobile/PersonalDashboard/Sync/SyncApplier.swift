@@ -200,6 +200,9 @@ struct SyncApplier {
                 payload.tasks.append(try decoder.decode(DataArchive.TaskDTO.self, from: data))
             case "LocalNote":
                 payload.notes.append(try decoder.decode(DataArchive.NoteDTO.self, from: data))
+            case "LocalNoteImage":
+                payload.noteImages = (payload.noteImages ?? [])
+                    + [try decoder.decode(DataArchive.NoteImageDTO.self, from: data)]
             case "LocalNoteFolder":
                 payload.noteFolders.append(try decoder.decode(DataArchive.NoteFolderDTO.self, from: data))
             case "LocalList":
@@ -287,6 +290,7 @@ struct SyncApplier {
         switch entity {
         case "LocalTodo":            return try delete(LocalTodo.self, uuid: recordID, key: \.clientUUID)
         case "LocalNote":            return try delete(LocalNote.self, uuid: recordID, key: \.clientUUID)
+        case "LocalNoteImage":       return try delete(LocalNoteImage.self, uuid: recordID, key: \.clientUUID)
         case "LocalNoteFolder":      return try delete(LocalNoteFolder.self, uuid: recordID, key: \.clientUUID)
         case "LocalList":            return try delete(LocalList.self, uuid: recordID, key: \.clientUUID)
         case "LocalTrip":            return try delete(LocalTrip.self, uuid: recordID, key: \.clientUUID)

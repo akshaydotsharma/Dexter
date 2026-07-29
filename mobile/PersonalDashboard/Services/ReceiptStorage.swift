@@ -44,8 +44,17 @@ enum ReceiptStorageError: LocalizedError {
 final class ReceiptStorage {
     static let shared = ReceiptStorage()
 
+    /// Note image attachments (#395), stored under `Documents/note-images/`.
+    ///
+    /// A second instance rather than a copied class: everything below this line
+    /// (the UIKit and ImageIO compressors, the persist / write / load / delete
+    /// plumbing) is directory-agnostic, and note photos want exactly the same
+    /// normalise-to-JPEG treatment receipts get. Only the subdirectory differs,
+    /// so only the subdirectory is injected.
+    static let noteImages = ReceiptStorage(directoryName: "note-images")
+
     private let fileManager: FileManager
-    private let directoryName = "receipts"
+    private let directoryName: String
     private let jpegQuality: CGFloat = 0.75
     /// Longest-edge cap applied to every captured image. 1600 px is more than
     /// enough resolution for receipt OCR via Anthropic Vision and keeps the
@@ -59,8 +68,9 @@ final class ReceiptStorage {
     /// Receipts stay legible at this level.
     private let fallbackJpegQuality: CGFloat = 0.5
 
-    private init(fileManager: FileManager = .default) {
+    private init(fileManager: FileManager = .default, directoryName: String = "receipts") {
         self.fileManager = fileManager
+        self.directoryName = directoryName
     }
 
     // MARK: - Public API
