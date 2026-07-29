@@ -270,14 +270,21 @@ struct TaskCalendarPopover: View {
                 if !entries.isEmpty {
                     let cell = geo[anchor]
                     let gap: CGFloat = 6
+                    // Breathing room the card is never allowed to spend, on all
+                    // four sides. Without it the card's far edge lands flush on
+                    // the popover boundary and its rounded corners are shaved
+                    // off by the popover's own — which reads as the card being
+                    // cut off rather than merely tight. Worst on iPhone, where
+                    // the popover is far smaller than on the Mac.
+                    let inset: CGFloat = 6
 
                     // Vertical: take whichever side of the cell has more room,
                     // and let the card size itself to fit that side. Deciding
                     // the side from free space rather than from the card's own
                     // height is what stops a dense day (Sep 7 carries eleven
                     // items) from being clamped across the cell it belongs to.
-                    let spaceAbove = cell.minY - gap
-                    let spaceBelow = geo.size.height - cell.maxY - gap
+                    let spaceAbove = cell.minY - gap - inset
+                    let spaceBelow = geo.size.height - cell.maxY - gap - inset
                     let placeBelow = spaceBelow > spaceAbove
                     let budget = max(spaceAbove, spaceBelow) - arrowHeight
                     // `cardSize` measures the SLOT, not the card — see the note
@@ -292,9 +299,7 @@ struct TaskCalendarPopover: View {
                     let top = min(max(rawTop, 0), max(geo.size.height - cardSize.height, 0))
 
                     // Horizontal: centred on the cell, pulled back inside the
-                    // popover at the edges. The inset keeps it off the
-                    // popover's own rounded corners.
-                    let inset: CGFloat = 6
+                    // popover at the edges.
                     let rawLeft = cell.midX - cardSize.width / 2
                     let left = min(
                         max(rawLeft, inset),
@@ -321,6 +326,7 @@ struct TaskCalendarPopover: View {
                             day: day,
                             entries: entries,
                             budget: budget,
+                            width: geo.size.width - inset * 2,
                             placeBelow: placeBelow
                         )
                         if arrow == .down {
@@ -386,22 +392,48 @@ struct TaskCalendarPopover: View {
         day: Date,
         entries: [AgendaEntry],
         budget: CGFloat,
+        width: CGFloat,
         placeBelow: Bool
     ) -> some View {
-        ViewThatFits(in: .vertical) {
-            cardBody(day: day, entries: entries, limit: entries.count)
-            cardBody(day: day, entries: entries, limit: 10)
-            cardBody(day: day, entries: entries, limit: 8)
-            cardBody(day: day, entries: entries, limit: 6)
-            cardBody(day: day, entries: entries, limit: 4)
-            cardBody(day: day, entries: entries, limit: 3)
-            cardBody(day: day, entries: entries, limit: 2)
-            cardBody(day: day, entries: entries, limit: 1)
+        let titleCap = titleWidthCap(forCardWidth: width)
+        return ViewThatFits(in: .vertical) {
+            cardBody(day: day, entries: entries, limit: entries.count, titleCap: titleCap)
+            cardBody(day: day, entries: entries, limit: 10, titleCap: titleCap)
+            cardBody(day: day, entries: entries, limit: 8, titleCap: titleCap)
+            cardBody(day: day, entries: entries, limit: 6, titleCap: titleCap)
+            cardBody(day: day, entries: entries, limit: 4, titleCap: titleCap)
+            cardBody(day: day, entries: entries, limit: 3, titleCap: titleCap)
+            cardBody(day: day, entries: entries, limit: 2, titleCap: titleCap)
+            cardBody(day: day, entries: entries, limit: 1, titleCap: titleCap)
         }
         .frame(maxHeight: max(budget, 0), alignment: placeBelow ? .top : .bottom)
     }
 
-    private func cardBody(day: Date, entries: [AgendaEntry], limit: Int) -> some View {
+    /// How wide a title may get before it truncates, derived from the room the
+    /// card actually has.
+    ///
+    /// The card hugs its content, so its width is whatever its widest row wants
+    /// and nothing downstream can shrink it: clamping the card's origin only
+    /// slides an over-wide card sideways, it still runs past the popover and
+    /// gets shaved by its rounded corners. A fixed cap can't work either, since
+    /// the popover on iPhone is much smaller than on the Mac. Capping the one
+    /// unbounded element against the real width is what makes the card
+    /// physically unable to overflow.
+    ///
+    /// `trailingReserve` covers the row's fixed furniture (card padding, the
+    /// icon and its two gaps) plus the widest detail string this view can
+    /// produce, which is a stay's "Check-out · 12:00 AM".
+    private func titleWidthCap(forCardWidth width: CGFloat) -> CGFloat {
+        let trailingReserve: CGFloat = 182
+        return max(90, width - trailingReserve)
+    }
+
+    private func cardBody(
+        day: Date,
+        entries: [AgendaEntry],
+        limit: Int,
+        titleCap: CGFloat
+    ) -> some View {
         let shown = entries.prefix(limit)
         let overflow = entries.count - shown.count
 
@@ -426,10 +458,10 @@ struct TaskCalendarPopover: View {
                         .strikethrough(entry.struckThrough, color: Tokens.muted)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        // Caps how wide one long title can drag the card. The
-                        // card hugs its content, so without this a single long
-                        // itinerary title would stretch it back to full width.
-                        .frame(maxWidth: 180, alignment: .leading)
+                        // The only unbounded element in the row, so this is
+                        // what keeps the card inside the popover. See
+                        // `titleWidthCap(forCardWidth:)`.
+                        .frame(maxWidth: titleCap, alignment: .leading)
                     if let detail = entry.detail {
                         Spacer(minLength: Space.md)
                         Text(detail)
