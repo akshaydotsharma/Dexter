@@ -29,9 +29,14 @@ struct TaskTicketSection: View {
     let todoId: UUID?
     let taskTitle: String
     /// Creates the task and returns its id, for an attachment that arrives before
-    /// the task exists. Returns nil when it cannot (an empty title). The section
-    /// never blocks on "save first" — see `ingest`.
-    let ensureTask: () async -> UUID?
+    /// the task exists. Receives the event name read off the ticket, to use as the
+    /// title when nothing has been typed. Never returns nil in practice — the
+    /// editor falls back to a generic title rather than refusing the upload.
+    let ensureTask: (String?) async -> UUID?
+    /// Hands the values read off the ticket up to the editor so the task's own
+    /// fields fill in: title, due date, address. The whole point of uploading is
+    /// that you should not then have to type what the ticket already says.
+    var onExtracted: (TaskTicketRead) -> Void = { _ in }
 
     @State private var tickets: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -272,27 +277,35 @@ struct TaskTicketSection: View {
         errorMessage = nil
 
         Task {
-            // A ticket needs a task to hang off. Rather than refusing until the
-            // person saves, create the task now — attaching a ticket to a task
-            // you are in the middle of writing is the obvious thing to want.
-            // Written out rather than with `??` because the right-hand side is
-            // async, which `??` cannot host.
-            var resolved = effectiveTodoId
-            if resolved == nil { resolved = await ensureTask() }
-            guard let id = resolved else {
-                isIngesting = false
-                errorMessage = "Give the task a title first, then attach the ticket."
-                return
-            }
-            if todoId == nil { createdTodoId = id }
-
             do {
-                let result = try await service.add(
-                    todoId: id,
-                    taskTitle: taskTitle,
+                // 1. Read the ticket FIRST. This step needs no task at all, which
+                //    is exactly why it is separate: the ticket is what tells us
+                //    what the task should be called.
+                let read = try await service.read(
                     data: data,
-                    isPDF: isPDF
+                    isPDF: isPDF,
+                    taskTitle: taskTitle
                 )
+
+                // 2. Push what it said up into the editor's own fields, so title,
+                //    due date and address fill themselves in. Uploading a ticket
+                //    and then being asked to type what it says is the bug.
+                onExtracted(read)
+
+                // 3. Only now make sure a task exists, named from the ticket when
+                //    nothing has been typed. Written out rather than with `??`
+                //    because the right-hand side is async.
+                var resolved = effectiveTodoId
+                if resolved == nil { resolved = await ensureTask(read.suggestedTitle) }
+                guard let id = resolved else {
+                    isIngesting = false
+                    errorMessage = "Couldn't create a task for this ticket."
+                    return
+                }
+                if todoId == nil { createdTodoId = id }
+
+                // 4. Attach.
+                let result = try service.attach(read, todoId: id)
                 isIngesting = false
                 reload()
                 statusMessage = result.message
@@ -333,7 +346,7 @@ struct TaskTicketsSheet: View {
                         todoId: todoId,
                         taskTitle: taskTitle,
                         // The task already exists here, so this is never called.
-                        ensureTask: { todoId }
+                        ensureTask: { _ in todoId }
                     )
                     .padding(Space.lg)
                 }

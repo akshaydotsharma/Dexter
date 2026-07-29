@@ -463,6 +463,96 @@ final class TaskTicketAttachmentTests: XCTestCase {
         XCTAssertEqual(restored.first?.startTimeText, "17:30")
     }
 
+    // MARK: - Filling the task's own fields from the ticket
+
+    /// Build a read the way `TaskTicketExtraction.read` would, without the network.
+    private func makeRead(
+        eventTitle: String? = "COLDPLAY",
+        eventDate: String? = "2026-09-12",
+        startTimeText: String? = "Show 20:00",
+        venue: String? = "National Stadium, Singapore"
+    ) -> TaskTicketRead {
+        var input: [String: AnthropicJSONValue] = [:]
+        if let eventTitle { input["event_title"] = .string(eventTitle) }
+        if let eventDate { input["event_date"] = .string(eventDate) }
+        if let startTimeText { input["start_time_text"] = .string(startTimeText) }
+        if let venue { input["venue"] = .string(venue) }
+        return TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "P",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            extracted: ExtractedTaskTicket(input: input),
+            degradeMessage: nil
+        )
+    }
+
+    /// The regression behind two rounds of "it asks me for a title first": the
+    /// upload has to be able to NAME the task, so these suggestions must survive
+    /// even when nothing has been typed.
+    func testReadSuggestsTaskFieldsFromTheTicket() throws {
+        let read = makeRead()
+        XCTAssertEqual(read.suggestedTitle, "COLDPLAY")
+        XCTAssertEqual(read.suggestedAddress, "National Stadium, Singapore")
+
+        // The due date is the one place a real `Date` is correct, and it must land
+        // on the PRINTED day in the device's own timezone — an off-by-one here puts
+        // the reminder on the wrong day, which is the bug #163 / #168 were about.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let due = try XCTUnwrap(read.suggestedDueDate)
+        let parts = cal.dateComponents([.year, .month, .day, .hour, .minute], from: due)
+        XCTAssertEqual(parts.year, 2026)
+        XCTAssertEqual(parts.month, 9)
+        XCTAssertEqual(parts.day, 12, "due date landed on the wrong day")
+        XCTAssertEqual(parts.hour, 20, "the printed show time did not carry into the due date")
+        XCTAssertEqual(parts.minute, 0)
+    }
+
+    /// A ticket with a date but no readable time still yields a usable due date.
+    func testSuggestedDueDateWithoutATimeFallsBackToMorning() throws {
+        let read = makeRead(startTimeText: nil)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let parts = cal.dateComponents([.day, .hour], from: try XCTUnwrap(read.suggestedDueDate))
+        XCTAssertEqual(parts.day, 12)
+        XCTAssertEqual(parts.hour, 9)
+    }
+
+    /// Nothing readable means no suggestions, and the caller falls back rather than
+    /// refusing the upload.
+    func testUnreadableTicketSuggestsNothing() {
+        let bare = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: nil,
+            degradeMessage: "couldn't read"
+        )
+        XCTAssertNil(bare.suggestedTitle)
+        XCTAssertNil(bare.suggestedAddress)
+        XCTAssertNil(bare.suggestedDueDate)
+    }
+
+    /// A blank field from the model must not become a blank task title.
+    func testBlankExtractedFieldsAreTreatedAsAbsent() {
+        let read = makeRead(eventTitle: "   ", venue: "")
+        XCTAssertNil(read.suggestedTitle)
+        XCTAssertNil(read.suggestedAddress)
+    }
+
+    func testClockTimeParsingHandlesTheFormsTicketsUse() {
+        typealias E = TaskTicketExtraction
+        XCTAssertEqual(E.parseClockTime("Show 20:00").map { [$0.0, $0.1] }, [20, 0])
+        XCTAssertEqual(E.parseClockTime("20:00").map { [$0.0, $0.1] }, [20, 0])
+        XCTAssertEqual(E.parseClockTime("Doors 7.30pm").map { [$0.0, $0.1] }, [19, 30])
+        XCTAssertEqual(E.parseClockTime("8:05 AM").map { [$0.0, $0.1] }, [8, 5])
+        XCTAssertEqual(E.parseClockTime("12:15am").map { [$0.0, $0.1] }, [0, 15])
+        XCTAssertNil(E.parseClockTime("Doors open early"))
+        XCTAssertNil(E.parseClockTime(nil))
+        // Junk that looks numeric but is not a clock time.
+        XCTAssertNil(E.parseClockTime("Section 122"))
+    }
+
     // MARK: - Sync registration
 
     /// Sync carries the rows, so the mapper has to know about the entity.

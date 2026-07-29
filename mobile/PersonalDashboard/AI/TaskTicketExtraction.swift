@@ -29,6 +29,61 @@ enum TaskTicketExtractionError: LocalizedError {
     }
 }
 
+/// What one uploaded file yielded, BEFORE it is attached to anything.
+///
+/// Reading and attaching are separate steps (#399) because the read is what tells
+/// you what the task should be called. A brand-new task has no title yet, and
+/// demanding one before accepting a ticket gets the order backwards: the ticket
+/// says "COLDPLAY", so that is the title. The section reads first, pushes these
+/// suggestions into the editor's fields, and only then creates the task.
+struct TaskTicketRead {
+    let attachmentPath: String
+    let barcodePayload: String
+    let barcodeSymbology: String
+    let extracted: ExtractedTaskTicket?
+    /// User-facing note when the LLM step failed. The file is still stored.
+    let degradeMessage: String?
+
+    /// The event name, for the task's title when it has none.
+    var suggestedTitle: String? {
+        guard let raw = extracted?.eventTitle else { return nil }
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    /// The venue, for the task's address when it has none.
+    var suggestedAddress: String? {
+        guard let raw = extracted?.venue else { return nil }
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    /// The event moment as a real `Date`, for the task's due date.
+    ///
+    /// This is the one place a `Date` is the right shape: a due date is a reminder
+    /// anchored in the person's own day, unlike the printed time on the card which
+    /// must stay verbatim (see `LocalTaskTicket`). Built in the CURRENT calendar
+    /// and timezone for that reason. Nil when no date was read.
+    var suggestedDueDate: Date? {
+        guard let day = TaskTicketExtraction.parseISODateOnly(extracted?.eventDate) else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        // The day was parsed in UTC; re-anchor it to local midnight so a due date
+        // set from it lands on the printed day rather than the one before.
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let parts = utc.dateComponents([.year, .month, .day], from: day)
+        guard var local = cal.date(from: DateComponents(
+            year: parts.year, month: parts.month, day: parts.day, hour: 9
+        )) else { return nil }
+        if let (h, m) = TaskTicketExtraction.parseClockTime(extracted?.startTimeText),
+           let withTime = cal.date(bySettingHour: h, minute: m, second: 0, of: local) {
+            local = withTime
+        }
+        return local
+    }
+}
+
 /// End-to-end task-ticket ingestion: persist the file → decode the barcode
 /// on-device (Vision) → ONE Claude extraction call → create a `LocalTaskTicket`.
 ///
@@ -67,13 +122,13 @@ struct TaskTicketExtraction {
     /// - Throws when the file itself can't be persisted (disk error), or when the
     ///   task was deleted mid-flight (in which case the orphaned file is cleaned
     ///   up first). Every other failure degrades to a bare row.
-    func run(
-        data: Data,
-        isPDF: Bool,
-        todoUUID: UUID,
-        taskTitle: String,
-        context: ModelContext
-    ) async throws -> TaskTicketExtractionResult {
+    /// STEP 1 — store the file and read it. Touches no SwiftData at all, so it can
+    /// run before the task exists.
+    ///
+    /// - Throws only when the file itself can't be persisted (disk error). A failed
+    ///   read is not an error: the result carries the stored path plus whatever the
+    ///   barcode yielded, and `degradeMessage` explains.
+    func read(data: Data, isPDF: Bool, taskTitle: String) async throws -> TaskTicketRead {
         let storage = TicketStorage.taskTickets
 
         // 1. Persist the original upload. Images are normalised to a compressed
@@ -86,8 +141,6 @@ struct TaskTicketExtraction {
             extractionImageData = BarcodeService.renderFirstPage(pdfData: data, targetLongEdge: 2200)?
                 .jpegDataCompat(quality: 0.85)
         } else {
-            // SUSPENSION 1. Nothing live is held across it — `storage` is a
-            // singleton and `todoUUID` is a value.
             let compressed = try await Task.detached(priority: .userInitiated) {
                 try storage.compress(imageData: data)
             }.value
@@ -112,7 +165,6 @@ struct TaskTicketExtraction {
         var degradeMessage: String?
         if let imageData = extractionImageData {
             do {
-                // SUSPENSION 2. Again only values cross it.
                 extracted = try await extract(imageData: imageData, taskTitle: taskTitle)
             } catch {
                 NSLog("TaskTicketExtraction: extraction failed: %@", error.localizedDescription)
@@ -122,30 +174,44 @@ struct TaskTicketExtraction {
             degradeMessage = "Saved your ticket, but couldn't render it for reading. Tap the card to add details."
         }
 
-        // 4. Re-fetch the task now that the suspensions are behind us. If it was
-        //    deleted mid-flight, drop the file rather than leaving an orphan on
-        //    disk pointed at by nothing (#328's failure mode was the opposite:
-        //    writing to a deleted object and inserting an orphan row).
+        return TaskTicketRead(
+            attachmentPath: relativePath,
+            barcodePayload: decoded?.payload ?? "",
+            barcodeSymbology: decoded?.symbology.rawValue ?? "",
+            extracted: extracted,
+            degradeMessage: degradeMessage
+        )
+    }
+
+    /// STEP 2 — attach a completed read to a task.
+    ///
+    /// Separate from `read` so the caller can create the task from the read's own
+    /// suggestions in between. Addresses the task by `clientUUID` and fetches it
+    /// here, after every suspension is behind us, so it never holds a live `@Model`
+    /// across one (#328).
+    ///
+    /// - Throws when the task vanished mid-flight, cleaning up the orphaned file
+    ///   first.
+    @discardableResult
+    func attach(
+        _ read: TaskTicketRead,
+        toTodo todoUUID: UUID,
+        context: ModelContext
+    ) throws -> TaskTicketExtractionResult {
         guard let todo = Self.fetchTodo(uuid: todoUUID, context: context) else {
-            try? storage.delete(relativePath: relativePath)
+            try? TicketStorage.taskTickets.delete(relativePath: read.attachmentPath)
             throw TaskTicketExtractionError.taskGone
         }
 
-        let ticket = buildTicket(
-            todoUUID: todo.clientUUID,
-            extracted: extracted,
-            decoded: decoded,
-            attachmentPath: relativePath,
-            context: context
-        )
+        let ticket = buildTicket(todoUUID: todo.clientUUID, read: read, context: context)
         context.insert(ticket)
         todo.updatedAt = Date()
         try? context.save()
 
         return TaskTicketExtractionResult(
             ticketUUID: ticket.clientUUID,
-            degraded: extracted == nil,
-            message: extracted == nil ? degradeMessage : nil
+            degraded: read.extracted == nil,
+            message: read.extracted == nil ? read.degradeMessage : nil
         )
     }
 
@@ -163,11 +229,10 @@ struct TaskTicketExtraction {
 
     private func buildTicket(
         todoUUID: UUID,
-        extracted: ExtractedTaskTicket?,
-        decoded: DecodedBarcode?,
-        attachmentPath: String,
+        read: TaskTicketRead,
         context: ModelContext
     ) -> LocalTaskTicket {
+        let extracted = read.extracted
         let cal = Calendar(identifier: .gregorian)
 
         // Extras go in the JSON blob so a new ticket shape never forces another
@@ -189,9 +254,9 @@ struct TaskTicketExtraction {
 
         return LocalTaskTicket(
             todoClientUUID: todoUUID,
-            attachmentPath: attachmentPath,
-            barcodePayload: decoded?.payload ?? "",
-            barcodeSymbology: decoded?.symbology.rawValue ?? "",
+            attachmentPath: read.attachmentPath,
+            barcodePayload: read.barcodePayload,
+            barcodeSymbology: read.barcodeSymbology,
             eventTitle: trimmedOrNil(extracted?.eventTitle) ?? "",
             eventDate: eventDate,
             startTimeText: trimmedOrNil(extracted?.startTimeText) ?? "",
@@ -249,9 +314,30 @@ struct TaskTicketExtraction {
         return (t.isEmpty || t.lowercased() == "null") ? nil : t
     }
 
+    /// Pull an `HH:mm` out of the free-text printed time, so a due date can carry
+    /// the hour. Tolerates a label ("Show 20:00", "Doors 7.30pm") and 12-hour form.
+    /// Nil when there is no clock time in there at all.
+    nonisolated static func parseClockTime(_ raw: String?) -> (Int, Int)? {
+        guard let raw else { return nil }
+        let s = raw.lowercased()
+        guard let m = try? NSRegularExpression(pattern: #"(\d{1,2})[:.](\d{2})\s*(am|pm)?"#),
+              let hit = m.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) else { return nil }
+        func grp(_ i: Int) -> String? {
+            guard let r = Range(hit.range(at: i), in: s) else { return nil }
+            return String(s[r])
+        }
+        guard let hs = grp(1), let ms = grp(2), var h = Int(hs), let mm = Int(ms),
+              (0...23).contains(h), (0...59).contains(mm) else { return nil }
+        if let suffix = grp(3) {
+            if suffix == "pm", h < 12 { h += 12 }
+            if suffix == "am", h == 12 { h = 0 }
+        }
+        return (h, mm)
+    }
+
     /// Parse a bare `yyyy-MM-dd`. Anchored in UTC so the parsed day is the day
     /// printed on the ticket regardless of the phone's timezone.
-    static func parseISODateOnly(_ raw: String?) -> Date? {
+    nonisolated static func parseISODateOnly(_ raw: String?) -> Date? {
         guard let raw, raw != "null" else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -261,7 +347,9 @@ struct TaskTicketExtraction {
         return dateOnly.date(from: dayPart)
     }
 
-    private static let dateOnly: DateFormatter = {
+    /// `nonisolated` alongside `parseISODateOnly`, which `TaskTicketRead` reads
+    /// from outside the actor.
+    nonisolated(unsafe) private static let dateOnly: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")

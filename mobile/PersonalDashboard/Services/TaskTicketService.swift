@@ -64,9 +64,40 @@ struct TaskTicketService {
     /// mid-flight. A failed LLM read is NOT an error: the result comes back with
     /// `degraded` set and a row carrying the file plus whatever barcode was
     /// found, which the UI turns into manual entry.
+    /// Store and read an upload, WITHOUT attaching it to anything yet.
+    ///
+    /// Split from `attach` (#399) so the caller can create the task from what the
+    /// ticket says. Demanding a task title before accepting a ticket had the order
+    /// backwards: the ticket is what tells you the title.
+    ///
     /// `extraction` is injectable for tests. It is `nil`-defaulted rather than
     /// defaulted to a value because a default argument is evaluated in a
     /// nonisolated context, and `TaskTicketExtraction` is `@MainActor`.
+    func read(
+        data: Data,
+        isPDF: Bool,
+        taskTitle: String,
+        extraction: TaskTicketExtraction? = nil
+    ) async throws -> TaskTicketRead {
+        let extraction = extraction ?? TaskTicketExtraction()
+        return try await extraction.read(data: data, isPDF: isPDF, taskTitle: taskTitle)
+    }
+
+    /// Attach a completed read to a task.
+    @discardableResult
+    func attach(
+        _ read: TaskTicketRead,
+        todoId: UUID,
+        extraction: TaskTicketExtraction? = nil
+    ) throws -> TaskTicketExtractionResult {
+        let extraction = extraction ?? TaskTicketExtraction()
+        let result = try extraction.attach(read, toTodo: todoId, context: store.context)
+        touchTodo(todoId)
+        return result
+    }
+
+    /// Convenience for callers that already have a task: read then attach.
+    @discardableResult
     func add(
         todoId: UUID,
         taskTitle: String,
@@ -74,16 +105,8 @@ struct TaskTicketService {
         isPDF: Bool,
         extraction: TaskTicketExtraction? = nil
     ) async throws -> TaskTicketExtractionResult {
-        let extraction = extraction ?? TaskTicketExtraction()
-        let result = try await extraction.run(
-            data: data,
-            isPDF: isPDF,
-            todoUUID: todoId,
-            taskTitle: taskTitle,
-            context: store.context
-        )
-        touchTodo(todoId)
-        return result
+        let read = try await read(data: data, isPDF: isPDF, taskTitle: taskTitle, extraction: extraction)
+        return try attach(read, todoId: todoId, extraction: extraction)
     }
 
     /// Overwrite the user-editable fields on a ticket. Every extracted value is

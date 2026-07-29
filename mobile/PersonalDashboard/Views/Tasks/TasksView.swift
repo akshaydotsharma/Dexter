@@ -1347,8 +1347,30 @@ private struct TaskEditorSheet: View {
         TaskTicketSection(
             todoId: todo?.id,
             taskTitle: currentTitleForTickets,
-            ensureTask: ensureTaskExists
+            ensureTask: ensureTaskExists,
+            onExtracted: applyExtractedTicket
         )
+    }
+
+    /// Fill the task's own fields from what the ticket said (#399).
+    ///
+    /// This is the point of uploading: the ticket already carries the event name,
+    /// the date and the venue, so being asked to type them afterwards makes the
+    /// feature pointless. Only ever fills fields the person has left EMPTY — a
+    /// value they typed always wins over a parsed one.
+    private func applyExtractedTicket(_ read: TaskTicketRead) {
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let suggested = read.suggestedTitle {
+            title = suggested
+        }
+        if !hasDueDate, let due = read.suggestedDueDate {
+            dueDate = due
+            hasDueDate = true
+        }
+        if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let venue = read.suggestedAddress {
+            address = venue
+        }
     }
 
     /// What the ticket card falls back to for its headline. Uses the live field so
@@ -1359,17 +1381,23 @@ private struct TaskEditorSheet: View {
     }
 
     /// Create the task being composed so an attachment has something to attach to,
-    /// returning its id. Nil when there is no title yet — that is the one case
-    /// where we genuinely cannot proceed, and the section says so inline.
+    /// returning its id.
+    ///
+    /// Never refuses. An earlier version required a title first, which put the
+    /// editor's sequencing in front of the person for no reason: the ticket carries
+    /// the event name, so `suggestedTitle` is the title. Only if the ticket could
+    /// not be read either does it fall back to a generic one, which is still better
+    /// than rejecting the upload and making them start over.
     ///
     /// Deliberately does NOT dismiss: the person is still editing, and the ticket
     /// ingest continues against the returned id.
-    private func ensureTaskExists() async -> UUID? {
+    private func ensureTaskExists(suggestedTitle: String?) async -> UUID? {
         if let todo { return todo.id }
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        let typed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fromTicket = suggestedTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolvedTitle = !typed.isEmpty ? typed : (!fromTicket.isEmpty ? fromTicket : "Ticket")
         let created = await viewModel.create(
-            title: trimmed,
+            title: resolvedTitle,
             description: descriptionText.isEmpty ? nil : descriptionText,
             dueDate: hasDueDate ? dueDate : nil,
             tag: tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag,
