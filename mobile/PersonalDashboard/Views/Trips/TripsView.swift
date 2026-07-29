@@ -3,7 +3,8 @@ import SwiftData
 
 /// Top-level surface where the user plans trips (issue #104).
 ///
-/// The root view shows all `LocalTrip`s sorted by start date descending.
+/// The root view groups all `LocalTrip`s into Active / Upcoming / Past and
+/// sorts each group ascending by start date.
 /// Tapping a trip swaps the header in place to a detail header and renders
 /// `TripDetailView` below it — same inline-swap pattern `ListsView` uses, no
 /// `NavigationStack`. The leading-edge back gesture pops the detail back to
@@ -160,36 +161,62 @@ struct TripsView: View {
         .padding(.horizontal, Space.lg)
     }
 
-    /// Trips ordered by travel date (issue #210): upcoming/current trips first,
-    /// ascending so the soonest sits at the top, then past trips below,
-    /// most-recently-ended first. A trip counts as current until its end date
-    /// passes, so a trip spanning today stays in the upcoming group.
-    private var orderedTrips: [LocalTrip] {
+    /// Trips split into the three travel states, each ordered ascending by
+    /// start date so the earliest sits at the top of its group.
+    ///
+    /// The boundaries are day-granular (start/end dates are stored normalised to
+    /// `startOfDay`), so a trip spanning today is Active for the whole of today
+    /// and only drops to Past once its end date is behind us.
+    private struct TripGroups {
+        var active: [LocalTrip] = []
+        var upcoming: [LocalTrip] = []
+        var past: [LocalTrip] = []
+    }
+
+    private var tripGroups: TripGroups {
         let today = Calendar.current.startOfDay(for: .now)
-        let upcoming = trips
-            .filter { $0.endDate >= today }
-            .sorted { ($0.startDate, $0.endDate) < ($1.startDate, $1.endDate) }
-        let past = trips
-            .filter { $0.endDate < today }
-            .sorted { ($0.endDate, $0.startDate) > ($1.endDate, $1.startDate) }
-        return upcoming + past
+        var groups = TripGroups()
+        for trip in trips {
+            if trip.endDate < today {
+                groups.past.append(trip)
+            } else if trip.startDate > today {
+                groups.upcoming.append(trip)
+            } else {
+                groups.active.append(trip)
+            }
+        }
+        // End date breaks ties so two trips starting the same day order by the
+        // one that wraps up first.
+        let ascending: (LocalTrip, LocalTrip) -> Bool = {
+            ($0.startDate, $0.endDate) < ($1.startDate, $1.endDate)
+        }
+        groups.active.sort(by: ascending)
+        groups.upcoming.sort(by: ascending)
+        groups.past.sort(by: ascending)
+        return groups
     }
 
     private var tripList: some View {
-        List {
-            ForEach(orderedTrips) { trip in
-                TripRow(trip: trip, itemCount: itemCount(for: trip)) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        selectedTripUUID = trip.clientUUID
-                    }
-                }
-                .swipeToDeleteTrash {
-                    delete(trip)
-                }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .contentRowInsets(vertical: Space.xs)
-            }
+        let groups = tripGroups
+        return List {
+            tripSection(
+                title: "Active",
+                trips: groups.active,
+                accent: Tokens.success,
+                soft: Tokens.successSoft
+            )
+            tripSection(
+                title: "Upcoming",
+                trips: groups.upcoming,
+                accent: Tokens.accent(for: .itineraries),
+                soft: Tokens.paper2
+            )
+            tripSection(
+                title: "Past",
+                trips: groups.past,
+                accent: Tokens.muted,
+                soft: Tokens.paper2
+            )
 
             Color.clear
                 .frame(height: 96)
@@ -201,6 +228,54 @@ struct TripsView: View {
         .scrollContentBackground(.hidden)
         .background(Tokens.paper)
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// One travel-state group. Empty groups render nothing at all rather than a
+    /// bare header, so a user with only future trips sees just "Upcoming".
+    @ViewBuilder
+    private func tripSection(title: String, trips: [LocalTrip], accent: Color, soft: Color) -> some View {
+        if !trips.isEmpty {
+            Section {
+                ForEach(trips) { trip in
+                    TripRow(trip: trip, itemCount: itemCount(for: trip)) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            selectedTripUUID = trip.clientUUID
+                        }
+                    }
+                    .swipeToDeleteTrash {
+                        delete(trip)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .contentRowInsets(vertical: Space.xs)
+                }
+            } header: {
+                tripSectionHeader(title: title, count: trips.count, accent: accent, soft: soft)
+            }
+        }
+    }
+
+    /// Same shape as the Tasks section headers: accent-coloured title plus a
+    /// count capsule, left-aligned on the paper background.
+    private func tripSectionHeader(title: String, count: Int, accent: Color, soft: Color) -> some View {
+        HStack(spacing: Space.sm) {
+            Text(title)
+                .font(.edHeading)
+                .foregroundStyle(accent)
+            Text("\(count)")
+                .font(.edCaption)
+                .foregroundStyle(accent)
+                .padding(.horizontal, Space.sm)
+                .padding(.vertical, 2)
+                .background(soft, in: Capsule())
+            Spacer()
+        }
+        .textCase(nil)
+        .padding(.horizontal, Space.lg)
+        .padding(.top, Space.sm)
+        .padding(.bottom, Space.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.paper)
     }
 
     // MARK: - Activity deep-link consumption
