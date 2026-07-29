@@ -15,6 +15,9 @@ struct TasksView: View {
     @State private var draftBucket: DraftBucket? = nil
     @State private var draftText: String = ""
     @FocusState private var draftFocused: Bool
+    /// Drives the read-only month calendar popover (#385). Anchored to the
+    /// top-bar button on iOS and to the window-toolbar button on macOS.
+    @State private var showingCalendar = false
     @Bindable var router: AppRouter
 
     var body: some View {
@@ -29,6 +32,19 @@ struct TasksView: View {
                     title: "Tasks",
                     onMenu: {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
+                    },
+                    trailing: {
+                        // Month calendar across tasks AND trips (#385). Same
+                        // top-bar slot Notes/Lists use for Archive, so the
+                        // section-level affordances share one home.
+                        TopBarIconButton(
+                            systemName: "calendar",
+                            accessibilityLabel: "View calendar",
+                            action: { showingCalendar = true }
+                        )
+                        .popover(isPresented: $showingCalendar) {
+                            TaskCalendarPopover()
+                        }
                     }
                 )
                 #endif
@@ -90,7 +106,18 @@ struct TasksView: View {
             .animation(.easeOut(duration: 0.15), value: draftBucket)
         }
         .activeSection(.tasks)
-        .macSectionChrome("Tasks")
+        .macSectionChrome("Tasks") {
+            // macOS home for the calendar (#385): the native window toolbar,
+            // where the popover gets a proper anchor and hover works.
+            Button { showingCalendar = true } label: {
+                Image(systemName: "calendar")
+            }
+            .help("View calendar")
+            .accessibilityLabel("View calendar")
+            .popover(isPresented: $showingCalendar) {
+                TaskCalendarPopover()
+            }
+        }
         // Publish this section's create action so File > New Task and ⌘N reach
         // it while Tasks is on screen (issue #295). Same target as the add
         // button, so the menu and the button cannot diverge.

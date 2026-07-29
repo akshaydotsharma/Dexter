@@ -1,0 +1,635 @@
+import SwiftUI
+import SwiftData
+
+/// Read-only, navigable month calendar shown in an anchored popover from the
+/// Tasks section header (#385).
+///
+/// The sibling of `TripCalendarPopover`, but scoped to everything the user has
+/// dated rather than to one trip: task due dates, trip date ranges, and the
+/// itinerary items inside those trips all light up their day. Paging is free in
+/// both directions; the calendar opens on the current month.
+///
+/// Hovering a day (macOS) or tapping it (iOS, which has no hover) floats a card
+/// listing that day's agenda. The card is deliberately `allowsHitTesting(false)`
+/// so the pointer never enters it — hover stays latched on the cell underneath
+/// and the card cannot flicker itself in and out of existence.
+///
+/// Purely for viewing: nothing here edits or navigates. All day math runs
+/// through `Calendar.current`, matching how `LocalTodo.dueDate` and
+/// `LocalItineraryItem.dayDate` are stored. Itinerary *times* are the one
+/// exception — those are UTC-anchored wall clock, so they render through
+/// `TimelineEntry.itineraryTimeFormatter` exactly as the trip timeline does.
+struct TaskCalendarPopover: View {
+    @Query(filter: #Predicate<LocalTodo> { $0.deletedAt == nil })
+    private var todos: [LocalTodo]
+
+    @Query private var trips: [LocalTrip]
+
+    @Query private var itineraryItems: [LocalItineraryItem]
+
+    /// First-of-month (device-local) of the month on screen.
+    @State private var displayedMonth: Date = {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        return cal.dateInterval(of: .month, for: today)?.start ?? today
+    }()
+
+    /// The day whose agenda card is floating, if any. Set by hover on macOS and
+    /// by tap on iOS.
+    @State private var focusedDay: Date?
+
+    /// Measured height of the floating card, so it can flip above the hovered
+    /// row when there isn't room below it.
+    @State private var cardHeight: CGFloat = 0
+
+    private let taskAccent = Tokens.accent(for: .tasks)
+    private let tripAccent = Tokens.accent(for: .itineraries)
+
+    /// Popover content width. Wider than the trip calendar's 300 because the
+    /// agenda card floats inside these same bounds and needs room for a title
+    /// plus a time.
+    private let contentWidth: CGFloat = 340
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            monthHeader
+            weekdayHeader
+            grid
+            legend
+        }
+        .padding(Space.lg)
+        .frame(width: contentWidth)
+        // Same raised-card surface as `TripCalendarPopover` so the two
+        // calendars read as one component in two places.
+        .background(
+            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                .fill(Tokens.surface)
+        )
+        .paperBorder(Tokens.border, radius: Radius.lg)
+        .shadowLg()
+        .overlayPreferenceValue(CalendarAnchorKey.self) { anchors in
+            floatingCard(anchors: anchors)
+        }
+        .presentationBackground(Tokens.surface)
+        .presentationCompactAdaptation(.popover)
+    }
+
+    // MARK: - Month header (title + paging chevrons)
+
+    private var monthHeader: some View {
+        HStack(spacing: Space.sm) {
+            Text(monthTitle(displayedMonth))
+                .font(.edBodyMedium)
+                .foregroundStyle(Tokens.ink)
+            Spacer(minLength: 0)
+            if !isCurrentMonth {
+                Button { goToToday() } label: {
+                    Text("Today")
+                        .font(.edCaption)
+                        .foregroundStyle(taskAccent)
+                        .padding(.horizontal, Space.sm)
+                        .frame(height: 28)
+                        .contentShape(Rectangle())
+                }
+                .macPlainButtonStyle()
+                .accessibilityLabel("Jump to this month")
+            }
+            Button { changeMonth(by: -1) } label: {
+                chevron("chevron.left")
+            }
+            .macPlainButtonStyle()
+            .accessibilityLabel("Previous month")
+            Button { changeMonth(by: 1) } label: {
+                chevron("chevron.right")
+            }
+            .macPlainButtonStyle()
+            .accessibilityLabel("Next month")
+        }
+    }
+
+    private func chevron(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Tokens.muted)
+            .frame(width: 32, height: 32)
+            .contentShape(Rectangle())
+    }
+
+    // MARK: - Weekday header
+
+    private var weekdayHeader: some View {
+        LazyVGrid(columns: columns, spacing: 6) {
+            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                Text(symbol)
+                    .font(.edEyebrow)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Tokens.mutedSoft)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    // MARK: - Day grid
+
+    private var grid: some View {
+        LazyVGrid(columns: columns, spacing: 6) {
+            ForEach(Array(cells(for: displayedMonth).enumerated()), id: \.offset) { _, date in
+                if let date {
+                    dayCell(date)
+                } else {
+                    Color.clear.frame(height: cellHeight)
+                }
+            }
+        }
+        // The card is allowed to float over the grid but never over the month
+        // title or the weekday row — losing "which month am I in" while reading
+        // a day is a worse trade than losing two rows of numbers.
+        //
+        // Published from a BACKGROUND child, not from the grid itself:
+        // `anchorPreference` on a view REPLACES whatever its subtree produced
+        // for that key, which would silently erase every day-cell anchor.
+        .background(
+            Color.clear.anchorPreference(key: CalendarAnchorKey.self, value: .bounds) {
+                CalendarAnchors(days: [:], grid: $0)
+            }
+        )
+    }
+
+    private func dayCell(_ date: Date) -> some View {
+        let cal = Calendar.current
+        let dayNumber = cal.component(.day, from: date)
+        let inTrip = !trips(covering: date).isEmpty
+        let hasTask = !tasks(on: date).isEmpty
+        let hasPlan = !plans(on: date).isEmpty
+        let isToday = cal.isDateInToday(date)
+        let isFocused = focusedDay == date
+
+        return ZStack {
+            // A trip is a SPAN, so it reads as a wash behind the whole day
+            // rather than as another dot competing with the point events.
+            if inTrip {
+                Circle().fill(tripAccent.opacity(0.22))
+            }
+            if isToday {
+                Circle().strokeBorder(Tokens.ink, lineWidth: 1.5)
+            }
+            if isFocused {
+                Circle().strokeBorder(taskAccent, lineWidth: 2)
+            }
+
+            VStack(spacing: 2) {
+                Text("\(dayNumber)")
+                    .font(.edCaption)
+                    .foregroundStyle(dayNumberColor(inTrip: inTrip, hasTask: hasTask))
+                // Point events sit under the number as dots, so a day can carry
+                // a task and a plan without either one hiding the other. Filled
+                // vs hollow, not just hue: at 5pt the tasks indigo and the
+                // itineraries violet are almost the same colour, so shape is
+                // what actually distinguishes them.
+                HStack(spacing: 3) {
+                    if hasTask { taskMarker }
+                    if hasPlan { planMarker }
+                }
+                .frame(height: 5)
+            }
+        }
+        .frame(height: cellHeight)
+        .contentShape(Circle())
+        .anchorPreference(key: CalendarAnchorKey.self, value: .bounds) { anchor in
+            CalendarAnchors(days: [date: anchor], grid: nil)
+        }
+        .onHover { inside in
+            if inside {
+                focusedDay = date
+            } else if focusedDay == date {
+                focusedDay = nil
+            }
+        }
+        .onTapGesture {
+            focusedDay = (focusedDay == date) ? nil : date
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel(for: date))
+    }
+
+    private var taskMarker: some View {
+        Circle().fill(taskAccent).frame(width: 5, height: 5)
+    }
+
+    private var planMarker: some View {
+        Circle().strokeBorder(tripAccent, lineWidth: 1.2).frame(width: 5, height: 5)
+    }
+
+    private func dayNumberColor(inTrip: Bool, hasTask: Bool) -> Color {
+        if inTrip || hasTask { return Tokens.ink }
+        return Tokens.muted
+    }
+
+    // MARK: - Legend
+
+    private var legend: some View {
+        HStack(spacing: Space.md) {
+            legendItem(label: "Trip") {
+                Circle().fill(tripAccent.opacity(0.22)).frame(width: 12, height: 12)
+            }
+            legendItem(label: "Task") {
+                taskMarker.frame(width: 12)
+            }
+            legendItem(label: "Plan") {
+                planMarker.frame(width: 12)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, Space.xs)
+    }
+
+    private func legendItem<Swatch: View>(
+        label: String,
+        @ViewBuilder swatch: () -> Swatch
+    ) -> some View {
+        HStack(spacing: Space.xs) {
+            swatch()
+            Text(label)
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+        }
+    }
+
+    // MARK: - Floating day-agenda card
+
+    /// The hover/tap card, positioned against the focused cell's bounds.
+    ///
+    /// Placed just below the cell when there's room and flipped above it when
+    /// there isn't, then clamped so it can never be clipped by the popover's
+    /// own edges. Non-interactive by design (see the type doc).
+    @ViewBuilder
+    private func floatingCard(anchors: CalendarAnchors) -> some View {
+        GeometryReader { geo in
+            if let day = focusedDay,
+               let anchor = anchors.days[day] {
+                let entries = agenda(for: day)
+                if !entries.isEmpty {
+                    let cell = geo[anchor]
+                    let gap: CGFloat = 8
+                    // Never ride up over the month title / weekday row.
+                    let ceiling = anchors.grid.map { geo[$0].minY } ?? 0
+                    let below = cell.maxY + gap
+                    let above = cell.minY - gap - cardHeight
+                    // Prefer below; flip above when the card would overflow.
+                    let rawTop = (below + cardHeight <= geo.size.height) ? below : above
+                    let top = min(
+                        max(rawTop, ceiling),
+                        max(geo.size.height - cardHeight, ceiling)
+                    )
+
+                    dayCard(day: day, entries: entries)
+                        .background(
+                            GeometryReader { cardGeo in
+                                Color.clear.preference(
+                                    key: CardHeightKey.self,
+                                    value: cardGeo.size.height
+                                )
+                            }
+                        )
+                        .frame(width: geo.size.width)
+                        .offset(y: top)
+                }
+            }
+        }
+        .onPreferenceChange(CardHeightKey.self) { height in
+            if height > 0 { cardHeight = height }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func dayCard(day: Date, entries: [AgendaEntry]) -> some View {
+        // Cap the list so a heavy travel day can't grow a card taller than the
+        // calendar it floats over.
+        let shown = entries.prefix(maxCardEntries)
+        let overflow = entries.count - shown.count
+
+        return VStack(alignment: .leading, spacing: Space.xs) {
+            Text(day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                .font(.edEyebrow)
+                .textCase(.uppercase)
+                .foregroundStyle(Tokens.mutedSoft)
+
+            ForEach(shown) { entry in
+                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                    Image(systemName: entry.icon)
+                        .font(.system(size: 11))
+                        .foregroundStyle(entry.tint)
+                        .frame(width: 14, alignment: .center)
+                    Text(entry.title)
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.ink)
+                        .strikethrough(entry.struckThrough, color: Tokens.muted)
+                        .lineLimit(1)
+                    if let detail = entry.detail {
+                        Spacer(minLength: Space.xs)
+                        Text(detail)
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                    }
+                }
+            }
+
+            if overflow > 0 {
+                Text("+\(overflow) more")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+        }
+        .padding(Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .fill(Tokens.paper2)
+        )
+        .paperBorder(Tokens.borderStrong, radius: Radius.md)
+        .shadowLg()
+    }
+
+    private let maxCardEntries = 6
+
+    // MARK: - Month paging
+
+    private func changeMonth(by delta: Int) {
+        let cal = Calendar.current
+        guard let next = cal.date(byAdding: .month, value: delta, to: displayedMonth) else { return }
+        focusedDay = nil
+        withAnimation(.easeInOut(duration: 0.2)) { displayedMonth = next }
+    }
+
+    private func goToToday() {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        guard let monthStart = cal.dateInterval(of: .month, for: today)?.start else { return }
+        focusedDay = nil
+        withAnimation(.easeInOut(duration: 0.2)) { displayedMonth = monthStart }
+    }
+
+    private var isCurrentMonth: Bool {
+        Calendar.current.isDate(displayedMonth, equalTo: Date(), toGranularity: .month)
+    }
+
+    // MARK: - Agenda assembly
+
+    /// One line in the floating card.
+    private struct AgendaEntry: Identifiable {
+        let id: String
+        let icon: String
+        let tint: Color
+        let title: String
+        let detail: String?
+        let struckThrough: Bool
+    }
+
+    /// Everything dated on `day`, ordered trips → itinerary items → tasks.
+    /// Trips lead because they're the day's context; the plans and tasks that
+    /// follow happen inside it.
+    private func agenda(for day: Date) -> [AgendaEntry] {
+        var entries: [AgendaEntry] = []
+
+        for trip in trips(covering: day) {
+            entries.append(
+                AgendaEntry(
+                    id: "trip-\(trip.clientUUID.uuidString)",
+                    // Suitcase, not a plane: the plane glyph belongs to the
+                    // flight items below, and the trip line is the day's
+                    // context rather than another thing happening in it.
+                    icon: "suitcase.fill",
+                    tint: tripAccent,
+                    title: tripTitle(trip),
+                    detail: tripDayLabel(trip, on: day),
+                    struckThrough: false
+                )
+            )
+        }
+
+        for plan in plans(on: day) {
+            entries.append(
+                AgendaEntry(
+                    id: "plan-\(plan.item.clientUUID.uuidString)-\(plan.isCheckOut ? "out" : "in")",
+                    icon: planIcon(plan),
+                    tint: tripAccent,
+                    title: plan.item.title,
+                    detail: planDetail(plan),
+                    struckThrough: false
+                )
+            )
+        }
+
+        for todo in tasks(on: day) {
+            entries.append(
+                AgendaEntry(
+                    id: "task-\(todo.clientUUID.uuidString)",
+                    icon: todo.completed ? "checkmark.circle.fill" : "circle",
+                    tint: todo.completed
+                        ? Tokens.muted
+                        : Tokens.priorityColor(for: TaskPriority(rawValue: todo.priority) ?? .none),
+                    title: todo.title,
+                    detail: taskDetail(todo),
+                    struckThrough: todo.completed
+                )
+            )
+        }
+
+        return entries
+    }
+
+    /// "Italy trip" without doubling up when the user already named it one.
+    private func tripTitle(_ trip: LocalTrip) -> String {
+        let name = trip.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return "Trip" }
+        return name.lowercased().contains("trip") ? name : "\(name) trip"
+    }
+
+    /// "Day 3 of 7" — cheap orientation for a day sitting mid-trip.
+    private func tripDayLabel(_ trip: LocalTrip, on day: Date) -> String? {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: trip.startDate)
+        let end = cal.startOfDay(for: trip.endDate)
+        guard let index = cal.dateComponents([.day], from: start, to: day).day,
+              let span = cal.dateComponents([.day], from: start, to: end).day
+        else { return nil }
+        return "Day \(index + 1) of \(span + 1)"
+    }
+
+    private func planIcon(_ plan: DayPlan) -> String {
+        if plan.item.kindEnum == .transport, let mode = plan.item.transportModeEnum {
+            return mode.icon
+        }
+        return plan.item.kindEnum.icon
+    }
+
+    /// Times come from the UTC-anchored wall clock, matching the trip timeline
+    /// so the calendar and the itinerary can never disagree.
+    private func planDetail(_ plan: DayPlan) -> String? {
+        let format: (Date) -> String = { TimelineEntry.itineraryTimeFormatter.string(from: $0) }
+        if plan.isCheckOut {
+            if let out = plan.item.endTime { return "Check-out · \(format(out))" }
+            return "Check-out"
+        }
+        if plan.item.kindEnum == .stay {
+            if let inTime = plan.item.startTime { return "Check-in · \(format(inTime))" }
+            return "Check-in"
+        }
+        if let start = plan.item.startTime { return format(start) }
+        return nil
+    }
+
+    /// Task due times are plain device-local dates, so they use the local
+    /// formatter. A due time pinned to midnight reads as "no particular time"
+    /// and shows the priority instead.
+    private func taskDetail(_ todo: LocalTodo) -> String? {
+        guard let due = todo.dueDate else { return nil }
+        let cal = Calendar.current
+        if cal.startOfDay(for: due) == due {
+            let priority = TaskPriority(rawValue: todo.priority) ?? .none
+            return priority == .none ? nil : priority.label
+        }
+        return due.formatted(.dateTime.hour().minute())
+    }
+
+    // MARK: - Derived day data
+
+    /// A single itinerary appearance on a day. A `.stay` shows up twice: once
+    /// on its check-in day and once on its check-out day.
+    private struct DayPlan {
+        let item: LocalItineraryItem
+        let isCheckOut: Bool
+    }
+
+    private func trips(covering day: Date) -> [LocalTrip] {
+        let cal = Calendar.current
+        return trips
+            .filter { trip in
+                let start = cal.startOfDay(for: trip.startDate)
+                let end = cal.startOfDay(for: trip.endDate)
+                return day >= start && day <= end
+            }
+            .sorted { $0.startDate < $1.startDate }
+    }
+
+    /// Mirrors `TripDetailView.grouped`: every item lands on its `dayDate`, and
+    /// a `.stay` whose check-out differs from its check-in also lands on the
+    /// check-out day. Sorted the way the timeline sorts — timed entries by
+    /// time, then by `sortOrder`.
+    private func plans(on day: Date) -> [DayPlan] {
+        let cal = Calendar.current
+        var result: [DayPlan] = []
+        for item in itineraryItems {
+            let inDay = cal.startOfDay(for: item.dayDate)
+            if inDay == day {
+                result.append(DayPlan(item: item, isCheckOut: false))
+            }
+            if item.kindEnum == .stay, let endDate = item.endDate {
+                let outDay = cal.startOfDay(for: endDate)
+                if outDay != inDay && outDay == day {
+                    result.append(DayPlan(item: item, isCheckOut: true))
+                }
+            }
+        }
+        return result.sorted { lhs, rhs in
+            let lTime = lhs.isCheckOut ? lhs.item.endTime : lhs.item.startTime
+            let rTime = rhs.isCheckOut ? rhs.item.endTime : rhs.item.startTime
+            switch (lTime, rTime) {
+            case let (l?, r?) where l != r: return l < r
+            case (nil, _?): return false
+            case (_?, nil): return true
+            default: return lhs.item.sortOrder < rhs.item.sortOrder
+            }
+        }
+    }
+
+    /// Tasks due on `day`, incomplete first, then by priority, then by time.
+    private func tasks(on day: Date) -> [LocalTodo] {
+        let cal = Calendar.current
+        return todos
+            .filter { todo in
+                guard let due = todo.dueDate else { return false }
+                return cal.startOfDay(for: due) == day
+            }
+            .sorted { lhs, rhs in
+                if lhs.completed != rhs.completed { return !lhs.completed }
+                let lRank = (TaskPriority(rawValue: lhs.priority) ?? .none).sortRank
+                let rRank = (TaskPriority(rawValue: rhs.priority) ?? .none).sortRank
+                if lRank != rRank { return lRank < rRank }
+                return (lhs.dueDate ?? .distantPast) < (rhs.dueDate ?? .distantPast)
+            }
+    }
+
+    private func accessibilityLabel(for date: Date) -> String {
+        let day = date.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        let entries = agenda(for: date)
+        guard !entries.isEmpty else { return day }
+        return "\(day). \(entries.map(\.title).joined(separator: ", "))"
+    }
+
+    // MARK: - Grid math
+
+    private let cellHeight: CGFloat = 38
+
+    /// Seven equal columns for the weekday grid.
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
+
+    /// Sun–Sat single-letter symbols. `veryShortWeekdaySymbols` is always
+    /// Sunday-first (index 0 = Sunday) regardless of the locale's first
+    /// weekday, matching the leading-blank offset computed from `.weekday`.
+    private var weekdaySymbols: [String] {
+        Calendar.current.veryShortWeekdaySymbols
+    }
+
+    /// Grid cells for a month: leading `nil` blanks to align the 1st under its
+    /// weekday column (Sunday-first), then one date per day of the month.
+    private func cells(for monthStart: Date) -> [Date?] {
+        let cal = Calendar.current
+        guard let range = cal.range(of: .day, in: .month, for: monthStart) else { return [] }
+        // `.weekday` is 1=Sunday…7=Saturday, so Sunday needs 0 leading blanks.
+        let leading = cal.component(.weekday, from: monthStart) - 1
+        var result: [Date?] = Array(repeating: nil, count: leading)
+        for day in range {
+            result.append(cal.date(byAdding: .day, value: day - 1, to: monthStart))
+        }
+        return result
+    }
+
+    private func monthTitle(_ monthStart: Date) -> String {
+        monthStart.formatted(.dateTime.month(.wide).year())
+    }
+}
+
+// MARK: - Preference keys
+
+/// Bounds the floating agenda card needs: every day cell (to anchor to the
+/// hovered/tapped one) and the grid itself (as the ceiling the card must not
+/// ride above). One key rather than two because a single
+/// `overlayPreferenceValue` can only read one.
+struct CalendarAnchors {
+    var days: [Date: Anchor<CGRect>]
+    var grid: Anchor<CGRect>?
+}
+
+private struct CalendarAnchorKey: PreferenceKey {
+    static let defaultValue = CalendarAnchors(days: [:], grid: nil)
+
+    static func reduce(value: inout CalendarAnchors, nextValue: () -> CalendarAnchors) {
+        let next = nextValue()
+        value.days.merge(next.days) { _, new in new }
+        if let grid = next.grid { value.grid = grid }
+    }
+}
+
+/// Measured height of the agenda card, fed back so the card can flip above the
+/// hovered row instead of being clipped at the popover's bottom edge.
+private struct CardHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
