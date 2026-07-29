@@ -280,6 +280,12 @@ struct TaskCalendarPopover: View {
                     let spaceBelow = geo.size.height - cell.maxY - gap
                     let placeBelow = spaceBelow > spaceAbove
                     let budget = max(spaceAbove, spaceBelow) - arrowHeight
+                    // `cardSize` measures the SLOT, not the card — see the note
+                    // on `dayCard`. That is fine here: the slot is exactly the
+                    // space on its side of the cell, so both branches land the
+                    // card's near edge `gap` away from the day, and the clamps
+                    // below are only guarding the frame after the focused day
+                    // changes, when the measurement is still the last day's.
                     let rawTop = placeBelow
                         ? cell.maxY + gap
                         : cell.minY - gap - cardSize.height
@@ -311,7 +317,12 @@ struct TaskCalendarPopover: View {
                         if arrow == .up {
                             cardArrow(.up).offset(x: arrowX - cardSize.width / 2, y: 1)
                         }
-                        dayCard(day: day, entries: entries, budget: budget)
+                        dayCard(
+                            day: day,
+                            entries: entries,
+                            budget: budget,
+                            placeBelow: placeBelow
+                        )
                         if arrow == .down {
                             cardArrow(.down).offset(x: arrowX - cardSize.width / 2, y: -1)
                         }
@@ -361,7 +372,22 @@ struct TaskCalendarPopover: View {
     /// date. `ViewThatFits` settles it against the real laid-out heights
     /// instead of arithmetic on font metrics, which would drift the moment a
     /// token changed.
-    private func dayCard(day: Date, entries: [AgendaEntry], budget: CGFloat) -> some View {
+    ///
+    /// `maxHeight` is what bounds the proposal `ViewThatFits` measures against,
+    /// but it is also greedy: the frame grows to the whole budget. So this view
+    /// is a SLOT of `budget` points with the card parked at one end, NOT a view
+    /// the size of the card, and everything downstream has to respect that.
+    /// The card parks at the end nearest the day — top when the slot hangs
+    /// below the cell, bottom when it hangs above — so the slack always falls
+    /// on the far side and the card stays welded to its pointer. Parking it at
+    /// the top in both cases strands the card at the top of the popover with
+    /// the arrow still down by the cell.
+    private func dayCard(
+        day: Date,
+        entries: [AgendaEntry],
+        budget: CGFloat,
+        placeBelow: Bool
+    ) -> some View {
         ViewThatFits(in: .vertical) {
             cardBody(day: day, entries: entries, limit: entries.count)
             cardBody(day: day, entries: entries, limit: 10)
@@ -372,7 +398,7 @@ struct TaskCalendarPopover: View {
             cardBody(day: day, entries: entries, limit: 2)
             cardBody(day: day, entries: entries, limit: 1)
         }
-        .frame(maxHeight: max(budget, 0), alignment: .top)
+        .frame(maxHeight: max(budget, 0), alignment: placeBelow ? .top : .bottom)
     }
 
     private func cardBody(day: Date, entries: [AgendaEntry], limit: Int) -> some View {
