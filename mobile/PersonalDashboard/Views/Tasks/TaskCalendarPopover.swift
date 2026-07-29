@@ -69,7 +69,7 @@ struct TaskCalendarPopover: View {
         )
         .paperBorder(Tokens.border, radius: Radius.lg)
         .shadowLg()
-        .overlayPreferenceValue(CalendarAnchorKey.self) { anchors in
+        .overlayPreferenceValue(DayCellAnchorKey.self) { anchors in
             floatingCard(anchors: anchors)
         }
         .presentationBackground(Tokens.surface)
@@ -143,18 +143,6 @@ struct TaskCalendarPopover: View {
                 }
             }
         }
-        // The card is allowed to float over the grid but never over the month
-        // title or the weekday row — losing "which month am I in" while reading
-        // a day is a worse trade than losing two rows of numbers.
-        //
-        // Published from a BACKGROUND child, not from the grid itself:
-        // `anchorPreference` on a view REPLACES whatever its subtree produced
-        // for that key, which would silently erase every day-cell anchor.
-        .background(
-            Color.clear.anchorPreference(key: CalendarAnchorKey.self, value: .bounds) {
-                CalendarAnchors(days: [:], grid: $0)
-            }
-        )
     }
 
     private func dayCell(_ date: Date) -> some View {
@@ -197,9 +185,7 @@ struct TaskCalendarPopover: View {
         }
         .frame(height: cellHeight)
         .contentShape(Circle())
-        .anchorPreference(key: CalendarAnchorKey.self, value: .bounds) { anchor in
-            CalendarAnchors(days: [date: anchor], grid: nil)
-        }
+        .anchorPreference(key: DayCellAnchorKey.self, value: .bounds) { [date: $0] }
         .onHover { inside in
             if inside {
                 focusedDay = date
@@ -266,29 +252,31 @@ struct TaskCalendarPopover: View {
     /// small triangle points back at the cell — above the card when it sits
     /// below the cell, below it when it has flipped up.
     ///
-    /// Clamped on both axes so it can never be clipped by the popover's edges,
-    /// and never rides up over the month title. Non-interactive by design (see
-    /// the type doc).
+    /// Clamped only against the popover's own edges, so it is never clipped.
+    /// Non-interactive by design (see the type doc).
+    ///
+    /// It is allowed to cover the month title. An earlier version protected the
+    /// title by refusing to place the card above the grid, which meant a tall
+    /// card on a middle row got shoved down over its own day with no pointer —
+    /// it read as a glitch, and you couldn't tell which date it belonged to.
+    /// Being anchored to the right day matters more than keeping the month
+    /// visible, and the card's own header carries the full date anyway.
     @ViewBuilder
-    private func floatingCard(anchors: CalendarAnchors) -> some View {
+    private func floatingCard(anchors: [Date: Anchor<CGRect>]) -> some View {
         GeometryReader { geo in
             if let day = focusedDay,
-               let anchor = anchors.days[day] {
+               let anchor = anchors[day] {
                 let entries = agenda(for: day)
                 if !entries.isEmpty {
                     let cell = geo[anchor]
                     let gap: CGFloat = 6
-                    let ceiling = anchors.grid.map { geo[$0].minY } ?? 0
 
                     // Vertical: prefer below the cell, flip above when the card
                     // would overflow the popover.
                     let below = cell.maxY + gap
                     let placeBelow = below + cardSize.height <= geo.size.height
                     let rawTop = placeBelow ? below : (cell.minY - gap - cardSize.height)
-                    let top = min(
-                        max(rawTop, ceiling),
-                        max(geo.size.height - cardSize.height, ceiling)
-                    )
+                    let top = min(max(rawTop, 0), max(geo.size.height - cardSize.height, 0))
 
                     // Horizontal: centred on the cell, pulled back inside the
                     // popover at the edges. The inset keeps it off the
@@ -302,8 +290,10 @@ struct TaskCalendarPopover: View {
 
                     // A pointer that doesn't point at the cell is worse than no
                     // pointer, so it only appears once the card genuinely
-                    // cleared the cell. A tall card clamped against the ceiling
-                    // still overlaps its own day; that one goes without.
+                    // cleared the cell. With the card free to rise above the
+                    // grid this is now the normal case on every row; the guard
+                    // is here for the extreme day whose card is taller than the
+                    // whole popover.
                     let clearsBelow = placeBelow && top >= cell.maxY
                     let clearsAbove = !placeBelow && top + cardSize.height <= cell.minY
                     let arrow: ArrowDirection? = clearsBelow ? .up : (clearsAbove ? .down : nil)
@@ -363,10 +353,13 @@ struct TaskCalendarPopover: View {
         let overflow = entries.count - shown.count
 
         return VStack(alignment: .leading, spacing: Space.xs) {
+            // Reads as the card's title, in ink rather than a muted eyebrow:
+            // with the card floating over the grid, this line plus the pointer
+            // are what tell you which day you're looking at.
             Text(day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
                 .font(.edEyebrow)
                 .textCase(.uppercase)
-                .foregroundStyle(Tokens.mutedSoft)
+                .foregroundStyle(Tokens.inkSoft)
 
             ForEach(shown) { entry in
                 HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
@@ -416,7 +409,10 @@ struct TaskCalendarPopover: View {
         .shadowLg()
     }
 
-    private let maxCardEntries = 6
+    /// Room for a full travel day. The card may now rise above the grid, so
+    /// eight lines still land inside the popover; the cap only exists so a
+    /// pathological day can't grow a card taller than the calendar itself.
+    private let maxCardEntries = 8
 
     // MARK: - Month paging
 
@@ -668,22 +664,16 @@ struct TaskCalendarPopover: View {
 
 // MARK: - Preference keys
 
-/// Bounds the floating agenda card needs: every day cell (to anchor to the
-/// hovered/tapped one) and the grid itself (as the ceiling the card must not
-/// ride above). One key rather than two because a single
-/// `overlayPreferenceValue` can only read one.
-struct CalendarAnchors {
-    var days: [Date: Anchor<CGRect>]
-    var grid: Anchor<CGRect>?
-}
+/// Every day cell's bounds, so the floating agenda card can anchor itself to
+/// the hovered/tapped one without the cell knowing anything about the card.
+private struct DayCellAnchorKey: PreferenceKey {
+    static let defaultValue: [Date: Anchor<CGRect>] = [:]
 
-private struct CalendarAnchorKey: PreferenceKey {
-    static let defaultValue = CalendarAnchors(days: [:], grid: nil)
-
-    static func reduce(value: inout CalendarAnchors, nextValue: () -> CalendarAnchors) {
-        let next = nextValue()
-        value.days.merge(next.days) { _, new in new }
-        if let grid = next.grid { value.grid = grid }
+    static func reduce(
+        value: inout [Date: Anchor<CGRect>],
+        nextValue: () -> [Date: Anchor<CGRect>]
+    ) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 
