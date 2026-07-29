@@ -69,6 +69,10 @@ struct FinanceDashboardBand: View {
                     .frame(height: 0.5)
                     .padding(.top, Space.xs)
                 FinanceInsightsPanel(insights: insights)
+                    // With the VStack's own `Space.md`, this puts 16 above and
+                    // below the seam — the same rhythm the panel uses between
+                    // its own blocks.
+                    .padding(.top, Space.xs)
             } else if !insights.topCategories.isEmpty {
                 categoryBars
                     .padding(.top, Space.xs)
@@ -158,11 +162,14 @@ struct FinanceDashboardBand: View {
     /// at identical x positions before and after expanding.
     private var categoryBars: some View {
         let maxValue = insights.topCategories.map(\.total).max() ?? 1
-        return VStack(alignment: .leading, spacing: Space.sm) {
+        return VStack(alignment: .leading, spacing: Space.md) {
             ForEach(insights.topCategories) { slice in
                 FinanceCategoryBarRow(slice: slice, maxTotal: maxValue)
             }
         }
+        // Same measure cap the expanded panel uses, so the bars don't jump
+        // width when the card opens.
+        .frame(maxWidth: FinancePanelMetrics.contentMeasure, alignment: .leading)
     }
 
     // MARK: - Formatting

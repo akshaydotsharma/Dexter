@@ -1,40 +1,110 @@
 import SwiftUI
 
-/// Column widths shared by every category bar row (#389).
+/// Column widths and bar geometry shared by every category bar row (#389).
 ///
 /// Tokenised rather than inlined because the collapsed band and the expanded
 /// panel draw the SAME row: if the two drifted, the bars would start at
 /// different x positions and expanding the card would visibly shift them.
 enum FinanceBarRowMetrics {
     static let icon: CGFloat = 18
-    static var name: CGFloat {
-        #if os(macOS)
-        140
-        #else
-        96
-        #endif
-    }
-    /// Share-of-period column. Narrow on purpose: on an iPhone every point here
-    /// comes straight out of the bar, which is the part that communicates.
+
+    /// Category-name column. macOS only — the iPhone row is two-line and lets
+    /// the name size itself, because a fixed column at 326pt content width was
+    /// forcing `minimumScaleFactor` on half the category names.
+    static let name: CGFloat = 150
+
+    /// Share-of-period column.
     static var share: CGFloat {
         #if os(macOS)
-        32
+        34
         #else
         30
         #endif
     }
+
     static var amount: CGFloat {
         #if os(macOS)
-        104
+        116
         #else
-        92
+        104
         #endif
     }
-    static let barHeight: CGFloat = 6
+
+    static let barHeight: CGFloat = 8
+
+    /// Where the iPhone row's second line (the bar) starts, so it lines up with
+    /// the category name above it rather than the icon.
+    static var barLeadingInset: CGFloat { icon + Space.sm }
+}
+
+/// Layout metrics for the expanded panel (#389).
+enum FinancePanelMetrics {
+    /// Widest the panel's content may draw. On a maximised Mac window the card
+    /// is ~1450pt, where a full-width category row means an 1100pt bar and a
+    /// 12-bar chart with 70pt gaps — a measure cap fixes both at once. The
+    /// collapsed band's bars carry the same cap so nothing shifts on expand.
+    static var contentMeasure: CGFloat {
+        #if os(macOS)
+        820
+        #else
+        .infinity
+        #endif
+    }
+
+    /// Categories shown before the "Show all" row. Everything past this is
+    /// rounding error in practice, and 13 rows is what made the card unwieldy.
+    static let categoryPreviewCount = 8
+
+    static var chartHeight: CGFloat {
+        #if os(macOS)
+        112
+        #else
+        120
+        #endif
+    }
+
+    /// Widest a single bar may draw, regardless of how much room its cell has.
+    static var maxBarWidth: CGFloat {
+        #if os(macOS)
+        52
+        #else
+        32
+        #endif
+    }
+
+    /// Top-corner radius of a chart bar. Top-only: a uniform radius this round
+    /// would visibly detach short bars from the baseline rule.
+    static var barCornerRadius: CGFloat {
+        #if os(macOS)
+        8
+        #else
+        6
+        #endif
+    }
+
+    static var summaryTilePadding: CGFloat {
+        #if os(macOS)
+        Space.md
+        #else
+        Space.sm
+        #endif
+    }
+
+    static var showAllRowHeight: CGFloat {
+        #if os(macOS)
+        24
+        #else
+        32
+        #endif
+    }
 }
 
 /// One category row: icon, name, proportional bar, share of period, amount.
-/// Used by the collapsed band (top three) and the expanded panel (all).
+/// Used by the collapsed band (top three) and the expanded panel (the rest).
+///
+/// Single-line table on macOS, two-line on iOS. Both keep every bar starting at
+/// a fixed x and scaled to the same `maxTotal`, which is what makes the list
+/// comparable down the column.
 struct FinanceCategoryBarRow: View {
     let slice: FinanceCategorySlice
     /// Largest total in the set being drawn, so bars are proportional to the
@@ -42,67 +112,140 @@ struct FinanceCategoryBarRow: View {
     let maxTotal: Double
 
     var body: some View {
+        content
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityText)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        #if os(macOS)
+        HStack(spacing: Space.sm) {
+            icon
+            name.frame(width: FinanceBarRowMetrics.name, alignment: .leading)
+            bar
+            share
+            amount
+        }
+        #else
+        // Two lines on the phone: the bar gets the full row width instead of
+        // the ~58pt left over after four fixed columns, which is the difference
+        // between a readable proportion and a nub.
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack(spacing: Space.sm) {
+                icon
+                name
+                Spacer(minLength: Space.sm)
+                share
+                amount
+            }
+            bar.padding(.leading, FinanceBarRowMetrics.barLeadingInset)
+        }
+        #endif
+    }
+
+    private var icon: some View {
+        Image(systemName: slice.category.sfSymbol)
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(Tokens.accentFinance)
+            .frame(width: FinanceBarRowMetrics.icon)
+    }
+
+    private var name: some View {
+        Text(slice.category.displayName)
+            .font(.edFootnote)
+            .foregroundStyle(Tokens.inkSoft)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+    }
+
+    private var bar: some View {
         // A net-negative category (refunds outweighed spend, #206) would give a
         // negative ratio; clamp to 0 so the bar just empties rather than drawing
         // a negative width. The trailing amount still shows the true net.
         let ratio = maxTotal > 0 ? Swift.max(0, slice.total / maxTotal) : 0
-        return HStack(spacing: Space.sm) {
-            Image(systemName: slice.category.sfSymbol)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Tokens.accentFinance)
-                .frame(width: FinanceBarRowMetrics.icon)
-            Text(slice.category.displayName)
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.inkSoft)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: FinanceBarRowMetrics.name, alignment: .leading)
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Tokens.paper2)
+        return GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Tokens.paper2)
+                if ratio > 0 {
                     Capsule()
                         .fill(Tokens.accentFinance.opacity(0.85))
-                        .frame(width: proxy.size.width * CGFloat(ratio))
+                        // Floor at the bar's own height so a sub-1% category
+                        // renders as a round dot instead of a 1pt sliver.
+                        .frame(
+                            width: Swift.max(
+                                FinanceBarRowMetrics.barHeight,
+                                proxy.size.width * CGFloat(ratio)
+                            )
+                        )
                 }
             }
-            .frame(height: FinanceBarRowMetrics.barHeight)
-            Text(shareText)
-                .font(.edCaption)
-                .monospacedDigit()
-                .foregroundStyle(Tokens.mutedSoft)
-                .frame(width: FinanceBarRowMetrics.share, alignment: .trailing)
-            Text(FinanceDashboardBand.formatMoney(slice.total))
-                .font(.edFootnote)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .foregroundStyle(Tokens.inkSoft)
-                .frame(width: FinanceBarRowMetrics.amount, alignment: .trailing)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(slice.category.displayName), \(FinanceDashboardBand.formatMoney(slice.total))"
-            + (slice.share.map { ", \(Int(($0 * 100).rounded())) percent of the period" } ?? "")
-        )
+        .frame(height: FinanceBarRowMetrics.barHeight)
     }
 
-    /// Empty (not "0%") when the period nets to zero or less, where a share
-    /// carries no meaning. The column keeps its width either way so rows align.
+    private var share: some View {
+        Text(shareText)
+            .font(.edCaption)
+            .monospacedDigit()
+            .foregroundStyle(Tokens.mutedSoft)
+            .frame(width: FinanceBarRowMetrics.share, alignment: .trailing)
+    }
+
+    private var amount: some View {
+        Text(amountText)
+            .font(.edFootnote)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .foregroundStyle(isCredit ? Tokens.success : Tokens.inkSoft)
+            .frame(width: FinanceBarRowMetrics.amount, alignment: .trailing)
+    }
+
+    /// A category whose refunds outweighed its spend. Same money as a refunded
+    /// expense row, so it gets the same house treatment: "+" and the success
+    /// colour (#206), rather than a bare minus against an empty bar.
+    private var isCredit: Bool { slice.total < 0 }
+
+    private var amountText: String {
+        let formatted = FinanceDashboardBand.formatMoney(abs(slice.total))
+        return isCredit ? "+\(formatted)" : formatted
+    }
+
+    /// Empty (not "0%") when the period nets to zero or less, or when this
+    /// slice is itself a credit — a negative percentage of spend reads as
+    /// broken. The column keeps its width either way so rows stay aligned.
     private var shareText: String {
-        guard let share = slice.share else { return "" }
+        guard !isCredit, let share = slice.share else { return "" }
         let percent = share * 100
         if percent > 0 && percent < 1 { return "<1%" }
         return "\(Int(percent.rounded()))%"
     }
+
+    private var accessibilityText: String {
+        var parts = [slice.category.displayName, amountText]
+        if isCredit { parts[1] = "\(amountText) refunded" }
+        if let share = slice.share, !isCredit {
+            parts.append("\(Int((share * 100).rounded())) percent of the period")
+        }
+        return parts.joined(separator: ", ")
+    }
 }
 
 /// The expanded half of the Finance dashboard card (#389): a spend-over-time
-/// bar chart at a granularity picked from the selected period, the full
-/// category breakdown, top merchants, and a summary strip.
+/// bar chart at a granularity picked from the selected period, the category
+/// breakdown, top merchants, and a summary strip.
 ///
-/// Every number here comes from the same `FinanceInsights` the collapsed band
-/// reads, which is built from the same filtered rows as the expense list.
+/// Four blocks separated by hairline rules with stepped-up `edHeading` titles,
+/// rather than nested cards. On this palette `surface2` sits 6/255 from
+/// `surface`, so a nested block would only read via a second border ring inside
+/// the card's own — box-in-box. Every other section separation in the app is a
+/// rule plus a header, and the flat read here was a type-hierarchy problem
+/// (10pt heading over 11pt rows), not a container problem.
+///
+/// Every number comes from the same `FinanceInsights` the collapsed band reads,
+/// which is built from the same filtered rows as the expense list.
 struct FinanceInsightsPanel: View {
     let insights: FinanceInsights
 
@@ -110,33 +253,56 @@ struct FinanceInsightsPanel: View {
     /// reading out the peak bucket.
     @State private var selectedBucket: Int?
 
+    /// Whether the category list is showing past `categoryPreviewCount`.
+    @State private var showAllCategories: Bool = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.lg) {
+        VStack(alignment: .leading, spacing: 0) {
             chartBlock
+            sectionRule
             categoriesBlock
             if !insights.merchants.isEmpty {
+                sectionRule
                 merchantsBlock
             }
-            summaryStrip
+            sectionRule
+            summaryTiles
+        }
+        .frame(maxWidth: FinancePanelMetrics.contentMeasure, alignment: .leading)
+    }
+
+    /// The one separator between blocks: 16 above, hairline, 16 below.
+    private var sectionRule: some View {
+        Rectangle()
+            .fill(Tokens.divider)
+            .frame(height: 0.5)
+            .padding(.vertical, Space.lg)
+    }
+
+    /// Section title, one step up the ramp from the rows it labels, with an
+    /// optional live subtitle beneath it.
+    private func sectionHeader(_ title: String, subtitle: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            Text(title)
+                .font(.edHeading)
+                .foregroundStyle(Tokens.ink)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.edCaption)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.muted)
+                    .lineLimit(1)
+            }
         }
     }
 
     // MARK: - Spend over time
 
     private var chartBlock: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text(insights.granularity.chartTitle).eyebrow()
-                Spacer(minLength: Space.sm)
-                if let readout {
-                    Text(readout)
-                        .font(.edCaption)
-                        .monospacedDigit()
-                        .foregroundStyle(Tokens.muted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-            }
+        VStack(alignment: .leading, spacing: Space.md) {
+            // `readout ?? " "` reserves the line so selecting a bar doesn't
+            // reflow the chart under the user's finger.
+            sectionHeader(insights.granularity.chartTitle, subtitle: readout ?? " ")
             if maxBucketTotal > 0 {
                 chart
             } else {
@@ -144,20 +310,20 @@ struct FinanceInsightsPanel: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(height: Self.chartHeight / 2)
+                    .frame(height: FinancePanelMetrics.chartHeight / 2)
             }
         }
     }
 
     private var chart: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
+        VStack(alignment: .leading, spacing: Space.sm) {
             ZStack(alignment: .bottom) {
                 HStack(alignment: .bottom, spacing: barSpacing) {
                     ForEach(insights.buckets) { bucket in
                         bar(bucket)
                     }
                 }
-                .frame(height: Self.chartHeight)
+                .frame(height: FinancePanelMetrics.chartHeight)
 
                 Rectangle()
                     .fill(Tokens.divider)
@@ -165,7 +331,7 @@ struct FinanceInsightsPanel: View {
 
                 averageLine
             }
-            .frame(height: Self.chartHeight)
+            .frame(height: FinancePanelMetrics.chartHeight)
             axisRow
         }
     }
@@ -176,20 +342,28 @@ struct FinanceInsightsPanel: View {
         let dimmed = selectedBucket != nil && !isSelected
         // 1.5pt keeps an empty bucket visible as a stub on the baseline rather
         // than vanishing, so gaps in spending still read as periods.
-        let height = Swift.max(1.5, CGFloat(ratio) * Self.chartHeight)
+        let height = Swift.max(1.5, CGFloat(ratio) * FinancePanelMetrics.chartHeight)
         let opacity: Double = dimmed ? 0.28 : (isSelected ? 1.0 : 0.8)
+        // Clamped so the empty-bucket stub doesn't render as a lozenge.
+        let radius = Swift.min(FinancePanelMetrics.barCornerRadius, height / 2)
 
         return ZStack(alignment: .bottom) {
             Color.clear
-            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                .fill(Tokens.accentFinance.opacity(bucket.total > 0 ? opacity : 0.22))
-                // Capped so a five-bar month reads as a bar chart rather than
-                // five blocks filling the card. Dense series stay under the cap
-                // and keep dividing the width evenly, and the cell itself still
-                // takes an equal share either way — which is what keeps the
-                // axis labels under their own bars.
-                .frame(maxWidth: Self.maxBarWidth)
-                .frame(height: height)
+            UnevenRoundedRectangle(
+                topLeadingRadius: radius,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: radius,
+                style: .continuous
+            )
+            .fill(Tokens.accentFinance.opacity(bucket.total > 0 ? opacity : 0.22))
+            // Capped so a five-bar month reads as a bar chart rather than five
+            // blocks filling the card. Dense series stay under the cap and keep
+            // dividing the width evenly, and the cell itself still takes an
+            // equal share either way — which is what keeps the axis labels
+            // under their own bars.
+            .frame(maxWidth: FinancePanelMetrics.maxBarWidth)
+            .frame(height: height)
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
@@ -216,17 +390,17 @@ struct FinanceInsightsPanel: View {
         let average = averageBucketTotal
         let ratio = maxBucketTotal > 0 ? average / maxBucketTotal : 0
         if average > 0, ratio > 0.08, ratio < 0.96 {
-            let y = CGFloat(ratio) * Self.chartHeight
+            let y = CGFloat(ratio) * FinancePanelMetrics.chartHeight
             FinanceChartRule()
                 .stroke(Tokens.borderStrong, style: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
                 .frame(height: 1)
                 .overlay(alignment: .trailing) {
                     Text("avg")
-                        .font(.system(size: 8, weight: .medium))
+                        .font(.edCaption)
                         .foregroundStyle(Tokens.mutedSoft)
                         .padding(.horizontal, 2)
                         .background(Tokens.surface)
-                        .offset(y: -5)
+                        .offset(y: -7)
                 }
                 .offset(y: -y)
                 .accessibilityLabel("Average \(insights.granularity.chartTitle.lowercased()) \(FinanceDashboardBand.formatMoneyRounded(average))")
@@ -242,7 +416,7 @@ struct FinanceInsightsPanel: View {
             HStack(alignment: .top, spacing: barSpacing) {
                 ForEach(insights.buckets) { bucket in
                     Text(bucket.axisLabel)
-                        .font(.system(size: 9, weight: .medium))
+                        .font(.edCaption)
                         .foregroundStyle(selectedBucket == bucket.id ? Tokens.inkSoft : Tokens.mutedSoft)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
@@ -266,7 +440,7 @@ struct FinanceInsightsPanel: View {
     private func edgeLabel(_ bucket: FinanceSpendBucket?) -> some View {
         if let bucket {
             Text(bucket.axisLabel)
-                .font(.system(size: 9, weight: .medium))
+                .font(.edCaption)
                 .foregroundStyle(Tokens.mutedSoft)
                 .lineLimit(1)
         }
@@ -275,36 +449,70 @@ struct FinanceInsightsPanel: View {
     // MARK: - Categories
 
     private var categoriesBlock: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack {
-                Text("All categories").eyebrow()
-                Spacer()
-                Text("\(insights.categories.count)")
-                    .font(.edCaption)
-                    .monospacedDigit()
-                    .foregroundStyle(Tokens.muted)
-            }
+        VStack(alignment: .leading, spacing: Space.md) {
+            sectionHeader("Categories")
             if insights.categories.isEmpty {
                 Text("Nothing to break down yet")
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             } else {
+                // Proportional to the largest category overall, not to the
+                // largest VISIBLE one, so revealing the tail doesn't rescale
+                // every bar above it.
                 let maxTotal = insights.categories.map(\.total).max() ?? 1
                 VStack(alignment: .leading, spacing: Space.sm) {
-                    ForEach(insights.categories) { slice in
-                        FinanceCategoryBarRow(slice: slice, maxTotal: maxTotal)
+                    VStack(alignment: .leading, spacing: Space.md) {
+                        ForEach(visibleCategories) { slice in
+                            FinanceCategoryBarRow(slice: slice, maxTotal: maxTotal)
+                        }
+                    }
+                    if insights.categories.count > FinancePanelMetrics.categoryPreviewCount {
+                        showAllCategoriesRow
                     }
                 }
             }
         }
     }
 
+    private var visibleCategories: [FinanceCategorySlice] {
+        guard !showAllCategories else { return insights.categories }
+        return Array(insights.categories.prefix(FinancePanelMetrics.categoryPreviewCount))
+    }
+
+    private var showAllCategoriesRow: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.22)) {
+                showAllCategories.toggle()
+            }
+        } label: {
+            HStack(spacing: Space.xs) {
+                Text(showAllCategories ? "Show fewer" : "Show all \(insights.categories.count) categories")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Tokens.muted)
+                    .rotationEffect(.degrees(showAllCategories ? 180 : 0))
+                Spacer(minLength: 0)
+            }
+            // Lands on the name column, not the icon column.
+            .padding(.leading, FinanceBarRowMetrics.barLeadingInset)
+            .frame(minHeight: FinancePanelMetrics.showAllRowHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Merchants
 
+    /// Name and amount only. No bar and no expense count: a second green bar
+    /// chart directly under the first makes the two blocks interchangeable, and
+    /// a merchant "share" would be relative to the top six rather than to any
+    /// real whole. Sort order plus the amount already answer the question.
     private var merchantsBlock: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            Text("Top merchants").eyebrow()
-            VStack(alignment: .leading, spacing: Space.xs) {
+        VStack(alignment: .leading, spacing: Space.md) {
+            sectionHeader("Top merchants")
+            VStack(alignment: .leading, spacing: Space.md) {
                 ForEach(insights.merchants) { merchant in
                     HStack(spacing: Space.sm) {
                         Text(merchant.name)
@@ -312,18 +520,13 @@ struct FinanceInsightsPanel: View {
                             .foregroundStyle(Tokens.inkSoft)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(merchant.count == 1 ? "1 expense" : "\(merchant.count) expenses")
-                            .font(.edCaption)
-                            .monospacedDigit()
-                            .foregroundStyle(Tokens.mutedSoft)
-                            .lineLimit(1)
                         Spacer(minLength: Space.sm)
                         Text(FinanceDashboardBand.formatMoney(merchant.total))
                             .font(.edFootnote)
                             .monospacedDigit()
+                            .foregroundStyle(Tokens.ink)
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
-                            .foregroundStyle(Tokens.inkSoft)
                     }
                     .accessibilityElement(children: .combine)
                 }
@@ -333,38 +536,38 @@ struct FinanceInsightsPanel: View {
 
     // MARK: - Summary
 
-    private var summaryStrip: some View {
+    /// Three tiles rather than a divider-separated strip. This is the one place
+    /// a raised surface earns itself: three short stats in a row read as a stat
+    /// row, and the tile padding IS the breathing room they were missing.
+    private var summaryTiles: some View {
         HStack(alignment: .top, spacing: Space.sm) {
-            summaryStat(
+            summaryTile(
                 label: "Expenses",
                 value: "\(insights.transactionCount)",
                 caption: nil
             )
-            summaryDivider
-            summaryStat(
+            summaryTile(
                 label: "Per day",
                 value: FinanceDashboardBand.formatMoneyRounded(insights.averagePerDay),
                 caption: nil
             )
-            summaryDivider
-            summaryStat(
+            summaryTile(
                 label: "Largest",
                 value: insights.largestExpense.map { FinanceDashboardBand.formatMoneyRounded($0.amount) } ?? "–",
                 caption: insights.largestExpense?.label
             )
         }
-        .padding(.top, Space.xxs)
     }
 
-    private func summaryStat(label: String, value: String, caption: String?) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+    private func summaryTile(label: String, value: String, caption: String?) -> some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
             Text(label).eyebrow()
             Text(value)
-                .font(.edFootnote)
+                .font(.edHeading)
                 .monospacedDigit()
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.75)
             if let caption {
                 Text(caption)
                     .font(.edCaption)
@@ -373,34 +576,19 @@ struct FinanceInsightsPanel: View {
                     .truncationMode(.tail)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // `maxHeight` so all three tiles match the tallest — only "Largest"
+        // carries a caption line, and without this the other two sit short and
+        // the row's bottom edge reads as ragged.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(FinancePanelMetrics.summaryTilePadding)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        // Not optional: `surface2` is only 6/255 from `surface` in dark mode, so
+        // the border is what makes the tile read as a tile.
+        .paperBorder(Tokens.border, radius: Radius.md)
         .accessibilityElement(children: .combine)
     }
 
-    private var summaryDivider: some View {
-        Rectangle()
-            .fill(Tokens.divider)
-            .frame(width: 0.5, height: 28)
-    }
-
     // MARK: - Derived values
-
-    private static var chartHeight: CGFloat {
-        #if os(macOS)
-        88
-        #else
-        104
-        #endif
-    }
-
-    /// Widest a single bar may draw, regardless of how much room its cell has.
-    private static var maxBarWidth: CGFloat {
-        #if os(macOS)
-        44
-        #else
-        30
-        #endif
-    }
 
     private var maxBucketTotal: Double {
         Swift.max(0, insights.buckets.map(\.total).max() ?? 0)
