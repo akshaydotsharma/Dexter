@@ -204,6 +204,11 @@ targets:
       - path: PersonalDashboard/Services/ReceiptStorage.swift
       - path: PersonalDashboard/Services/MiniZip.swift
       - path: PersonalDashboard/Services/DataArchive.swift
+      # Apple Notes import (#396). macOS only — no iOS read API exists.
+      - path: PersonalDashboard/Services/AppleNotesReader.swift
+      - path: PersonalDashboard/Services/AppleNotesHTMLConverter.swift
+      - path: PersonalDashboard/Services/AppleNotesImportService.swift
+      - path: PersonalDashboard/Views/Settings/AppleNotesImportView.swift
       # Cross-device sync (issue #348). Both targets need the whole stack: the
       # Mac is one of the two peers, so omitting any of it would make the feature
       # single-ended.

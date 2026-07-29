@@ -32,6 +32,9 @@ struct DataExportImportView: View {
     @State private var phase: Phase = .idle
     @State private var errorMessage: String? = nil
     @State private var showFileImporter: Bool = false
+    #if os(macOS)
+    @State private var showAppleNotesImport: Bool = false
+    #endif
 
     /// Opt-in repair (#366). OFF by default, and deliberately reset on every
     /// new file pick rather than remembered: overwriting existing records is a
@@ -75,6 +78,11 @@ struct DataExportImportView: View {
                 }
             }
         }
+        #if os(macOS)
+        .sheet(isPresented: $showAppleNotesImport) {
+            AppleNotesImportView()
+        }
+        #endif
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [.zip],
@@ -155,6 +163,26 @@ struct DataExportImportView: View {
                     ) {
                         showFileImporter = true
                     }
+
+                    // Apple Notes import (#396). macOS only: Apple ships no way to
+                    // read the Notes app on iOS, so there is nothing to browse
+                    // there. Notes imported here reach the iPhone through sync.
+                    #if os(macOS)
+                    Rectangle()
+                        .fill(Tokens.divider)
+                        .frame(height: 0.5)
+                        .padding(.leading, Space.lg)
+
+                    DataActionRow(
+                        icon: "note.text",
+                        label: "Import from Apple Notes",
+                        sublabel: "Pick folders and notes from the Notes app.",
+                        trailingState: .chevron,
+                        disabled: isBusy
+                    ) {
+                        showAppleNotesImport = true
+                    }
+                    #endif
                 }
 
                 if let errorMessage {

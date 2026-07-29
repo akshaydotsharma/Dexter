@@ -416,7 +416,13 @@ enum DataArchive {
     /// - `LocalEmailIngestLog`: ingest history rather than user content, and the
     ///   email stack is not in the macOS target at all so these rows never
     ///   exist there.
-    static let excludedModels = ["LocalFXRate", "LocalEmailIngestLog"]
+    /// - `AppleNotesImportRecord`: the same shape of thing for the Apple Notes
+    ///   import (#396). It maps Notes-internal ids to notes we created, which is
+    ///   provenance for one Mac's library rather than anything the user authored.
+    ///   The notes themselves export normally.
+    static let excludedModels = [
+        "LocalFXRate", "LocalEmailIngestLog", "AppleNotesImportRecord"
+    ]
 
     /// Every model this archive format carries, used for the manifest's claimed
     /// list. Order is stable so archives diff cleanly.

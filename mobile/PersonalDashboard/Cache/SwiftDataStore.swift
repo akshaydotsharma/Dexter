@@ -77,7 +77,55 @@ enum DebugLaunchHooks {
         if let source = path(for: "DEXTER_IMPORT_FROM") {
             runImport(from: source, context: context)
         }
+        #if os(macOS)
+        // Apple Notes import (#396). The picker is a list of tap rows, and macOS
+        // SwiftUI ignores synthetic clicks on those, so without this the whole
+        // import path — AppleScript read, HTML conversion, image compression,
+        // SwiftData write, dedup — cannot be exercised end to end by an agent.
+        // Takes a folder NAME, imports every note in it, and leaves the app
+        // running so the result can be inspected in the UI.
+        if let folderName = ProcessInfo.processInfo.environment["DEXTER_IMPORT_APPLE_NOTES"],
+           !folderName.trimmingCharacters(in: .whitespaces).isEmpty {
+            await runAppleNotesImport(folderName: folderName, context: context)
+        }
+        #endif
     }
+
+    #if os(macOS)
+    /// Headless Apple Notes import of one folder, for verification.
+    @MainActor
+    private static func runAppleNotesImport(folderName: String, context: ModelContext) async {
+        // Same gate as `runImport`: this writes real notes, so it is only allowed
+        // against a disposable store.
+        guard SwiftDataStore.isUsingOverrideStore else {
+            NSLog("DEXTER_IMPORT_APPLE_NOTES: refusing without DEXTER_STORE_PATH set — will not write to the real store")
+            exit(1)
+        }
+        do {
+            let folders = try await AppleNotesReader.library()
+            guard let folder = folders.first(where: {
+                $0.name.caseInsensitiveCompare(folderName) == .orderedSame
+            }) else {
+                NSLog("DEXTER_IMPORT_APPLE_NOTES: no folder named %@ (have %d folders)",
+                      folderName, folders.count)
+                exit(1)
+            }
+            let service = AppleNotesImportService(store: SwiftDataStore.shared)
+            let plan = try service.plan(
+                folders: [folder], selectedNoteIDs: Set(folder.notes.map(\.id))
+            )
+            NSLog("DEXTER_IMPORT_APPLE_NOTES: %@ — %d to import, %d already there",
+                  folder.name, plan.pending.count, plan.alreadyImported)
+            let outcome = await service.run(plan: plan)
+            NSLog("DEXTER_IMPORT_APPLE_NOTES: imported=%d images=%d skipped=%d failed=%d nonImageAttachments=%d",
+                  outcome.imported, outcome.imagesImported, outcome.skipped,
+                  outcome.failed, outcome.nonImageAttachmentsSkipped)
+        } catch {
+            NSLog("DEXTER_IMPORT_APPLE_NOTES: failed: %@", String(describing: error))
+            exit(1)
+        }
+    }
+    #endif
 
     @MainActor
     private static func runExport(to target: String, context: ModelContext) async {
@@ -300,6 +348,9 @@ final class SwiftDataStore {
         LocalProcessedEmail.self,
         LocalEmailIngestLog.self,
         LocalStatementImport.self,
+        // MARK: Apple Notes import provenance (#396)
+        // Sidecar, so re-importing a folder cannot duplicate what it already took.
+        AppleNotesImportRecord.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,
