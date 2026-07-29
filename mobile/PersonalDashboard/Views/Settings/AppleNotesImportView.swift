@@ -27,23 +27,47 @@ struct AppleNotesImportView: View {
     @State private var alreadyImported: Set<String> = []
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.ignoresSafeArea()
-                content
-            }
-            .navigationTitle("Import from Apple Notes")
-            .inlineNavigationTitle()
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(Tokens.muted)
-                        .disabled(isBusy)
-                }
-            }
+        // No `NavigationStack` and no `.toolbar` on purpose.
+        //
+        // On macOS those render as two system bands — a grey title strip above and
+        // a button bar below carrying an accent-blue Done — which read as a
+        // different application bolted onto this one, and duplicated the Done that
+        // the content already provides. The sheet draws its own header and footer
+        // in the app's palette instead.
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+            content
         }
-        .frame(minWidth: 560, minHeight: 520)
+        .background(Tokens.paper)
+        .frame(minWidth: 580, minHeight: 560)
         .task { await load() }
+    }
+
+    private var header: some View {
+        HStack(spacing: Space.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Import from Apple Notes")
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                Text("Everything stays on this Mac. Notes reach your iPhone through sync.")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            Spacer(minLength: Space.md)
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(EdIconButtonStyle())
+            .disabled(isBusy)
+            .help("Close")
+            .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.md)
     }
 
     private var isBusy: Bool {
@@ -104,9 +128,8 @@ struct AppleNotesImportView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, Space.xl)
                 Button("Try again") { Task { await load() } }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EdButtonStyle(kind: .secondary))
                     .padding(.top, Space.sm)
-                    .foregroundStyle(Tokens.ink)
             }
         }
     }
@@ -238,9 +261,7 @@ struct AppleNotesImportView: View {
                         selected.removeAll()
                     }
                 }
-                .buttonStyle(.plain)
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.muted)
+                .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
 
                 Spacer()
 
@@ -249,20 +270,14 @@ struct AppleNotesImportView: View {
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.muted)
 
-                Button {
+                // `EdButtonStyle(.primary)` rather than a hand-rolled background.
+                // It pairs `Tokens.paper` ON `Tokens.ink`, which is the inverse
+                // pair; hard-coding white was the bug — in dark mode `Tokens.ink`
+                // IS near-white, so the label vanished into its own button.
+                Button("Import") {
                     Task { await runImport(folders: folders) }
-                } label: {
-                    Text("Import")
-                        .font(.edBodyMedium)
-                        .foregroundStyle(count > 0 ? Color.white : Tokens.mutedSoft)
-                        .padding(.horizontal, Space.lg)
-                        .frame(height: 34)
-                        .background(
-                            count > 0 ? Tokens.ink : Tokens.paper2,
-                            in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EdButtonStyle(kind: count > 0 ? .primary : .secondary))
                 .disabled(count == 0)
             }
             .padding(.horizontal, Space.lg)
@@ -299,12 +314,7 @@ struct AppleNotesImportView: View {
             .padding(.top, Space.xs)
 
             Button("Done") { dismiss() }
-                .buttonStyle(.plain)
-                .font(.edBodyMedium)
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, Space.xl)
-                .frame(height: 38)
-                .background(Tokens.ink, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                .buttonStyle(EdButtonStyle(kind: .primary))
                 .padding(.top, Space.md)
         }
     }

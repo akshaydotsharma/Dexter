@@ -295,7 +295,10 @@ struct DataExportImportView: View {
                         Text(isCommitting ? "Importing…" : commitButtonLabel(preview: preview))
                             .font(.edBodyMedium)
                     }
-                    .foregroundStyle(canCommit(preview: preview) ? Color.white : Tokens.mutedSoft)
+                    // `Tokens.paper`, not white: in dark mode `Tokens.ink` IS
+                    // near-white, so a white label disappeared into its own
+                    // button. Same pairing `EdButtonStyle(.primary)` uses.
+                    .foregroundStyle(canCommit(preview: preview) ? Tokens.paper : Tokens.mutedSoft)
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
                     .background(
@@ -398,7 +401,7 @@ struct DataExportImportView: View {
             } label: {
                 Text("Done")
                     .font(.edBodyMedium)
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(Tokens.paper)
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
                     .background(Tokens.ink, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
