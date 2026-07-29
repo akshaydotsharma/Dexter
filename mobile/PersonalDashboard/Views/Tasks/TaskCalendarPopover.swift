@@ -271,11 +271,18 @@ struct TaskCalendarPopover: View {
                     let cell = geo[anchor]
                     let gap: CGFloat = 6
 
-                    // Vertical: prefer below the cell, flip above when the card
-                    // would overflow the popover.
-                    let below = cell.maxY + gap
-                    let placeBelow = below + cardSize.height <= geo.size.height
-                    let rawTop = placeBelow ? below : (cell.minY - gap - cardSize.height)
+                    // Vertical: take whichever side of the cell has more room,
+                    // and let the card size itself to fit that side. Deciding
+                    // the side from free space rather than from the card's own
+                    // height is what stops a dense day (Sep 7 carries eleven
+                    // items) from being clamped across the cell it belongs to.
+                    let spaceAbove = cell.minY - gap
+                    let spaceBelow = geo.size.height - cell.maxY - gap
+                    let placeBelow = spaceBelow > spaceAbove
+                    let budget = max(spaceAbove, spaceBelow) - arrowHeight
+                    let rawTop = placeBelow
+                        ? cell.maxY + gap
+                        : cell.minY - gap - cardSize.height
                     let top = min(max(rawTop, 0), max(geo.size.height - cardSize.height, 0))
 
                     // Horizontal: centred on the cell, pulled back inside the
@@ -289,11 +296,10 @@ struct TaskCalendarPopover: View {
                     )
 
                     // A pointer that doesn't point at the cell is worse than no
-                    // pointer, so it only appears once the card genuinely
-                    // cleared the cell. With the card free to rise above the
-                    // grid this is now the normal case on every row; the guard
-                    // is here for the extreme day whose card is taller than the
-                    // whole popover.
+                    // pointer. The card is now sized to its side, so it always
+                    // clears; this is a backstop for the frame after the
+                    // focused day changes, when `cardSize` is still the
+                    // previous day's.
                     let clearsBelow = placeBelow && top >= cell.maxY
                     let clearsAbove = !placeBelow && top + cardSize.height <= cell.minY
                     let arrow: ArrowDirection? = clearsBelow ? .up : (clearsAbove ? .down : nil)
@@ -305,7 +311,7 @@ struct TaskCalendarPopover: View {
                         if arrow == .up {
                             cardArrow(.up).offset(x: arrowX - cardSize.width / 2, y: 1)
                         }
-                        dayCard(day: day, entries: entries)
+                        dayCard(day: day, entries: entries, budget: budget)
                         if arrow == .down {
                             cardArrow(.down).offset(x: arrowX - cardSize.width / 2, y: -1)
                         }
@@ -343,13 +349,34 @@ struct TaskCalendarPopover: View {
             CardArrowShape(pointsUp: direction == .up, closed: false)
                 .stroke(Tokens.borderStrong, lineWidth: 1)
         }
-        .frame(width: 14, height: 7)
+        .frame(width: 14, height: arrowHeight)
     }
 
-    private func dayCard(day: Date, entries: [AgendaEntry]) -> some View {
-        // Cap the list so a heavy travel day can't grow a card taller than the
-        // calendar it floats over.
-        let shown = entries.prefix(maxCardEntries)
+    /// Picks the longest version of the list that fits in `budget`.
+    ///
+    /// A fixed entry cap can't work here: the room available depends on which
+    /// row the day sits in, so any constant is either too small for a
+    /// bottom-row day (which has the whole calendar above it) or too big for a
+    /// second-row one, and too big means the card gets clamped over its own
+    /// date. `ViewThatFits` settles it against the real laid-out heights
+    /// instead of arithmetic on font metrics, which would drift the moment a
+    /// token changed.
+    private func dayCard(day: Date, entries: [AgendaEntry], budget: CGFloat) -> some View {
+        ViewThatFits(in: .vertical) {
+            cardBody(day: day, entries: entries, limit: entries.count)
+            cardBody(day: day, entries: entries, limit: 10)
+            cardBody(day: day, entries: entries, limit: 8)
+            cardBody(day: day, entries: entries, limit: 6)
+            cardBody(day: day, entries: entries, limit: 4)
+            cardBody(day: day, entries: entries, limit: 3)
+            cardBody(day: day, entries: entries, limit: 2)
+            cardBody(day: day, entries: entries, limit: 1)
+        }
+        .frame(maxHeight: max(budget, 0), alignment: .top)
+    }
+
+    private func cardBody(day: Date, entries: [AgendaEntry], limit: Int) -> some View {
+        let shown = entries.prefix(limit)
         let overflow = entries.count - shown.count
 
         return VStack(alignment: .leading, spacing: Space.xs) {
@@ -400,7 +427,11 @@ struct TaskCalendarPopover: View {
         // width and leaves a dead band between each title and its time. Fixed
         // at its ideal width, the spacers only stretch shorter rows out to the
         // widest one, which is what keeps the times in a column.
-        .fixedSize(horizontal: true, vertical: false)
+        //
+        // Vertical is fixed too, so each candidate reports its true height to
+        // `ViewThatFits`. Left free, a too-tall candidate would compress to the
+        // proposal and claim to fit.
+        .fixedSize()
         .background(
             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .fill(Tokens.paper2)
@@ -409,10 +440,8 @@ struct TaskCalendarPopover: View {
         .shadowLg()
     }
 
-    /// Room for a full travel day. The card may now rise above the grid, so
-    /// eight lines still land inside the popover; the cap only exists so a
-    /// pathological day can't grow a card taller than the calendar itself.
-    private let maxCardEntries = 8
+    /// Height of the pointer triangle, deducted from the space a card may use.
+    private let arrowHeight: CGFloat = 7
 
     // MARK: - Month paging
 
