@@ -15,8 +15,9 @@ import SwiftUI
 ///    confirmation-only stay (the common email-imported case) ends cleanly
 ///    after its location line.
 ///
-/// Which layout renders is driven by `item.kindEnum` (a `.stay` always takes
-/// the stay layout) and, for non-stay kinds, `item.isBoardingPassStyle`.
+/// Which layout renders is driven by `item.layout`, which the source model
+/// states when it projects itself into `TicketCardData`: a trip `.stay` and a
+/// wallet `.stay` card both resolve to the stay layout, and so on.
 ///
 /// Flights and events render this card inline on the timeline (they're single
 /// moments). A stay is a duration, so its timeline row stays compact and this
@@ -24,8 +25,13 @@ import SwiftUI
 /// `LocalItineraryItem.hasStayBooking`. Items without booking data never reach
 /// this view — they render the plain `TripTimelineRow` card unchanged. The card
 /// is display-only; the presenting tap is attached by the parent row.
+///
+/// Takes a `TicketCardData` value rather than a `LocalItineraryItem` (#398) so
+/// the Wallet section can draw a standalone card with this exact view. Every
+/// property it reads is named as it was on the model, so that change was a
+/// change of type and nothing more.
 struct TicketCardView: View {
-    let item: LocalItineraryItem
+    let item: TicketCardData
     /// The timeline's "HH:mm / Anytime" line, passed down so the card shows the
     /// same time treatment as a normal row. Used by the flight / event layouts;
     /// the stay layout reads `startTime` / `endTime` directly so it can show
@@ -34,11 +40,11 @@ struct TicketCardView: View {
 
     @Environment(\.openURL) private var openURL
 
-    private var meta: TicketMeta? { item.ticketMeta }
+    private var meta: TicketMeta? { item.meta }
 
     /// A `.stay` renders the hotel layout; everything else keeps the original
     /// boarding-pass / event split.
-    private var isStay: Bool { item.kindEnum == .stay }
+    private var isStay: Bool { item.isStay }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,12 +88,10 @@ struct TicketCardView: View {
 
     @ViewBuilder
     private var topContent: some View {
-        if isStay {
-            stayTop
-        } else if item.isBoardingPassStyle {
-            boardingPassTop
-        } else {
-            eventTop
+        switch item.layout {
+        case .stay:         stayTop
+        case .boardingPass: boardingPassTop
+        case .event:        eventTop
         }
     }
 
@@ -98,7 +102,7 @@ struct TicketCardView: View {
             // Label bar: "BOARDING PASS" on the left, operator + flight on the
             // right. A caption strip, not the hero.
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text("BOARDING PASS")
+                Text(item.eyebrow)
                     .font(.edEyebrow)
                     .textCase(.uppercase)
                     .tracking(1.4)
@@ -144,11 +148,12 @@ struct TicketCardView: View {
 
     /// A centered plane between two short dashed segments: the classic pass
     /// "flight path". Its natural width is balanced by the two `maxWidth:
-    /// .infinity` endpoints on either side, keeping the hero symmetric.
+    /// .infinity` endpoints on either side, keeping the hero symmetric. The
+    /// glyph comes from the card (a rail ticket shows a tram, not a plane).
     private var planeConnector: some View {
         HStack(spacing: 5) {
             dashSegment
-            Image(systemName: "airplane")
+            Image(systemName: item.heroGlyph)
                 .font(.system(size: 16, weight: .regular))
                 .foregroundStyle(Tokens.accent(for: .itineraries))
                 .accessibilityHidden(true)
@@ -227,7 +232,7 @@ struct TicketCardView: View {
 
     private var eventTop: some View {
         VStack(spacing: Space.md) {
-            Text((meta?.eventType?.isEmpty == false ? meta!.eventType! : "TICKET").uppercased())
+            Text(item.eyebrow)
                 .font(.edEyebrow)
                 .textCase(.uppercase)
                 .tracking(1.4)
@@ -285,7 +290,7 @@ struct TicketCardView: View {
     private var stayTop: some View {
         VStack(spacing: Space.lg) {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text("STAY")
+                Text(item.eyebrow)
                     .font(.edEyebrow)
                     .textCase(.uppercase)
                     .tracking(1.4)
@@ -325,17 +330,17 @@ struct TicketCardView: View {
     private var stayHero: some View {
         if hasCheckOut {
             HStack(alignment: .top, spacing: Space.sm) {
-                stayEndpoint(label: "CHECK-IN", date: item.dayDate, alignment: .leading)
+                stayEndpoint(label: "CHECK-IN", date: item.primaryDate, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 stayConnector
                     .padding(.top, 6)
 
-                stayEndpoint(label: "CHECK-OUT", date: item.endDate ?? item.dayDate, alignment: .trailing)
+                stayEndpoint(label: "CHECK-OUT", date: item.endDate ?? item.primaryDate, alignment: .trailing)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         } else {
-            stayEndpoint(label: "CHECK-IN", date: item.dayDate, alignment: .center)
+            stayEndpoint(label: "CHECK-IN", date: item.primaryDate, alignment: .center)
                 .frame(maxWidth: .infinity)
         }
     }
@@ -449,7 +454,7 @@ struct TicketCardView: View {
     private var nightsCount: Int? {
         guard let end = item.endDate else { return nil }
         let cal = Calendar.current
-        let inDay = cal.startOfDay(for: item.dayDate)
+        let inDay = cal.startOfDay(for: item.primaryDate)
         let outDay = cal.startOfDay(for: end)
         let n = cal.dateComponents([.day], from: inDay, to: outDay).day ?? 0
         return n > 0 ? n : nil
@@ -608,7 +613,7 @@ struct StayBookingDetailSheet: View {
                     VStack(spacing: Space.lg) {
                         // The stay layout reads its times from the item, so the
                         // timeline's per-row time line isn't needed here.
-                        TicketCardView(item: item, timeText: nil)
+                        TicketCardView(item: TicketCardData(item), timeText: nil)
                         actions
                     }
                     .padding(Space.lg)

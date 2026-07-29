@@ -86,6 +86,55 @@ extension ScannablePass {
     }
 }
 
+// MARK: - Wallet pass (#398)
+
+extension ScannablePass {
+    /// Build a pass from an already-projected wallet card.
+    ///
+    /// Takes `TicketCardData` rather than `LocalWalletCard` because the wallet's
+    /// scan target carries the projection, not the model: the scan surface is
+    /// display-only, and holding a value means it cannot be handed a row that has
+    /// since been deleted. `TicketCardData` also spans both wallet sources, so a
+    /// borrowed trip ticket reaches the scanner through this same init.
+    ///
+    /// The derivations mirror `init(item:)` deliberately — same subtitle rules,
+    /// same seat-then-confirmation badge choice — so a ticket presents
+    /// identically whether it is opened from a trip or from the wallet.
+    init(card: TicketCardData) {
+        let confirmation = card.sourceConfirmation.trimmingCharacters(in: .whitespaces)
+
+        var parts: [String] = []
+        if card.title != card.venue, !card.venue.isEmpty,
+           card.meta?.originCode == nil, card.meta?.destinationCode == nil {
+            parts.append(card.venue)
+        }
+        if let gate = TicketField.code(card.gate) { parts.append("Gate \(gate)") }
+        if let terminal = TicketField.code(card.meta?.terminal) { parts.append("Terminal \(terminal)") }
+
+        var badgeLabel: String?
+        var badgeValue: String?
+        if !card.seat.isEmpty {
+            badgeLabel = "SEAT"
+            badgeValue = card.seat
+        } else if card.isStay, !confirmation.isEmpty {
+            badgeLabel = "CONFIRMATION"
+            badgeValue = confirmation
+        }
+
+        self.init(
+            title: card.title,
+            subtitle: parts.joined(separator: "  ·  "),
+            payload: card.barcodePayload,
+            symbology: card.barcodeSymbology,
+            attachmentPath: card.attachmentPath,
+            referenceUnderCode: card.isStay ? "" : confirmation,
+            badgeLabel: badgeLabel,
+            badgeValue: badgeValue,
+            accent: Tokens.accent(for: .wallet)
+        )
+    }
+}
+
 // MARK: - Task pass (#399)
 
 extension ScannablePass {

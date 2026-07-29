@@ -67,6 +67,7 @@ enum SyncRecordMapper {
         // unique attribute is the IMAP message key. Getting this wrong would
         // collapse every processed email onto one record.
         out += try map("LocalProcessedEmail", payload.processedEmails ?? []) { $0.messageKey }
+        out += try map("LocalWalletCard", payload.walletCards ?? []) { $0.clientUUID.uuidString }
 
         return out
     }

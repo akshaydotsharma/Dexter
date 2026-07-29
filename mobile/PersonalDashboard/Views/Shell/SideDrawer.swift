@@ -111,12 +111,16 @@ struct SideDrawer: View {
 
             DrawerDivider()
 
-            // Six rows: Today, Itineraries, Finance, Vocabulary, Help center,
-            // Settings. Primary surfaces (Notes, Lists, Tasks, Activity) and
-            // Chat live in the bottom tab bar. Dashboard remains hidden
+            // Seven rows: Today, Itineraries, Wallet, Finance, Vocabulary, Help
+            // center, Settings. Primary surfaces (Notes, Lists, Tasks, Activity)
+            // and Chat live in the bottom tab bar. Dashboard remains hidden
             // (issue #30).
+            //
+            // Wallet sits directly under Itineraries because most of what it
+            // holds is travel: the two are read together (#398).
             DrawerRow(section: .today, router: router)
             DrawerRow(section: .itineraries, router: router)
+            DrawerRow(section: .wallet, router: router)
             DrawerRow(section: .finance, router: router)
             DrawerRow(section: .vocabulary, router: router)
             DrawerRow(section: .helpCenter, router: router)

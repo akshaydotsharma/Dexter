@@ -60,6 +60,10 @@ enum DataArchive {
         var events: [EventDTO]? = nil
         var statementImports: [StatementImportDTO]? = nil
         var processedEmails: [ProcessedEmailDTO]? = nil
+        /// Standalone wallet cards (#398). Optional like every field added after
+        /// v1, so an older archive decodes with `nil` and imports as "no cards"
+        /// rather than failing the whole restore.
+        var walletCards: [WalletCardDTO]? = nil
 
         // MARK: Added in #395 — note image attachments.
         // Optional with a nil default, following the #319 precedent, so archives
@@ -286,6 +290,42 @@ enum DataArchive {
         let ticketMetaJSON: String?
     }
 
+    /// A standalone wallet card (#398): a scannable ticket with no trip behind
+    /// it. Every ticket field is carried, following the #319 lesson that a
+    /// restore which rebuilds the row but drops the ticket is worse than useless.
+    ///
+    /// Unlike `ItineraryDayDTO` this is a NEW entity, so nothing here needs to be
+    /// optional for backward compatibility: an archive either has the
+    /// `walletCards` array or does not. The fields are non-optional and mirror
+    /// the model exactly.
+    ///
+    /// `attachmentPath` is meaningful because wallet cards store their files in
+    /// the SAME `tickets/` directory as itinerary tickets, so the exporter's
+    /// existing ticket-file bundling carries them with no new archive layout.
+    struct WalletCardDTO: Codable {
+        let clientUUID: UUID
+        let kind: String
+        let title: String
+        let dayDate: Date
+        let startTime: Date?
+        let arrivalTime: Date?
+        let endDate: Date?
+        let endTime: Date?
+        let notes: String
+        let venue: String
+        let address: String
+        let googleMapsLink: String
+        let seat: String
+        let gate: String
+        let sourceConfirmation: String
+        let attachmentPath: String
+        let barcodePayload: String
+        let barcodeSymbology: String
+        let ticketMetaJSON: String
+        let createdAt: Date
+        let updatedAt: Date
+    }
+
     struct ExpenseDTO: Codable {
         let clientUUID: String
         let date: Date
@@ -462,6 +502,7 @@ enum DataArchive {
         "LocalTrip", "LocalItineraryItem", "LocalExpense", "LocalKeyword",
         "RecurringExpense", "LocalPerson", "LocalEvent",
         "LocalStatementImport", "LocalProcessedEmail",
+        "LocalWalletCard",
     ]
 
     static func makeEncoder() -> JSONEncoder {

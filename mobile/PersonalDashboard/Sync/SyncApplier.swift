@@ -238,6 +238,9 @@ struct SyncApplier {
             case "LocalProcessedEmail":
                 payload.processedEmails = (payload.processedEmails ?? [])
                     + [try decoder.decode(DataArchive.ProcessedEmailDTO.self, from: data)]
+            case "LocalWalletCard":
+                payload.walletCards = (payload.walletCards ?? [])
+                    + [try decoder.decode(DataArchive.WalletCardDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -303,6 +306,7 @@ struct SyncApplier {
         case "LocalPerson":          return try delete(LocalPerson.self, uuid: recordID, key: \.clientUUID)
         case "LocalEvent":           return try delete(LocalEvent.self, uuid: recordID, key: \.clientUUID)
         case "LocalStatementImport": return try delete(LocalStatementImport.self, uuid: recordID, key: \.clientUUID)
+        case "LocalWalletCard":      return try delete(LocalWalletCard.self, uuid: recordID, key: \.clientUUID)
         case "LocalExpense":         return try deleteString(LocalExpense.self, id: recordID, key: \.clientUUID)
         case "RecurringExpense":     return try deleteString(RecurringExpense.self, id: recordID, key: \.clientUUID)
         case "LocalProcessedEmail":  return try deleteString(LocalProcessedEmail.self, id: recordID, key: \.messageKey)
