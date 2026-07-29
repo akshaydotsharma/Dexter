@@ -9,6 +9,13 @@ struct NoteFolder: Codable, Identifiable, Hashable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
+    /// When the folder was archived, nil while it is active (#393). Changed
+    /// through `NoteService.setFolderArchived`, which cascades to the notes
+    /// inside. Optional, so JSON persisted before this field existed decodes to
+    /// nil and those folders restore as active.
+    let archivedAt: Date?
+
+    var isArchived: Bool { archivedAt != nil }
 
     private enum CodingKeys: String, CodingKey {
         case id = "clientUuid"
@@ -18,6 +25,7 @@ struct NoteFolder: Codable, Identifiable, Hashable, Sendable {
         case createdAt
         case updatedAt
         case deletedAt
+        case archivedAt
     }
 }
 
@@ -38,9 +46,11 @@ struct Note: Codable, Identifiable, Hashable, Sendable {
     /// When the note was archived, nil while it is active (#374). Read-only
     /// here like `deletedAt` — changed through `NoteService.setArchived`.
     /// Optional, so JSON persisted before this field existed decodes to nil.
-    ///
-    /// `NoteFolder` above has no equivalent: folders are not archivable.
     let archivedAt: Date?
+    /// Set when this note was archived by its folder being archived rather than
+    /// on its own (#393). Drives nothing in the UI; it exists so unarchiving a
+    /// folder restores exactly the notes it took with it.
+    let archivedWithFolderAt: Date?
 
     var isArchived: Bool { archivedAt != nil }
 
@@ -55,6 +65,7 @@ struct Note: Codable, Identifiable, Hashable, Sendable {
         case updatedAt
         case deletedAt
         case archivedAt
+        case archivedWithFolderAt
     }
 }
 

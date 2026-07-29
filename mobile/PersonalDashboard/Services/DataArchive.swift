@@ -108,6 +108,12 @@ enum DataArchive {
         // their notes as active. Dropping it would silently un-archive every
         // note on the next restore.
         var archivedAt: Date? = nil
+
+        // MARK: Added in #393 — which archived notes belong to a folder cascade.
+        // Same optional-with-default shape. Absent from older archives, which
+        // correctly restores those notes as individually archived, so unarchiving
+        // their folder leaves them alone.
+        var archivedWithFolderAt: Date? = nil
     }
 
     struct NoteFolderDTO: Codable {
@@ -117,6 +123,11 @@ enum DataArchive {
         let createdAt: Date
         let updatedAt: Date
         let deletedAt: Date?
+
+        // MARK: Added in #393 — folders became archivable.
+        // Optional with a nil default so archives written before folders could be
+        // archived still decode, restoring their folders as active.
+        var archivedAt: Date? = nil
     }
 
     struct ListDTO: Codable {
