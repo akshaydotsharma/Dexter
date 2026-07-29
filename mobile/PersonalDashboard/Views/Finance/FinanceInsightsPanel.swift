@@ -52,8 +52,12 @@ enum FinancePanelMetrics {
     /// (two columns). The iPhone is nowhere near it.
     static let twoColumnThreshold: CGFloat = 980
 
-    /// Gutter between the two columns.
-    static let columnGutter: CGFloat = Space.xl
+    /// Gap between section tiles, in both directions.
+    static let tileGap: CGFloat = Space.md
+
+    /// Padding inside a section tile. Tighter than the card's own `Space.lg` so
+    /// one level of nesting doesn't read as bloat.
+    static let tilePadding: CGFloat = Space.md
 
     /// Categories shown before the "Show all" row. Everything past this is
     /// rounding error in practice, and 13 rows is what made the card unwieldy.
@@ -87,14 +91,6 @@ enum FinancePanelMetrics {
         8
         #else
         6
-        #endif
-    }
-
-    static var summaryTilePadding: CGFloat {
-        #if os(macOS)
-        Space.md
-        #else
-        Space.sm
         #endif
     }
 
@@ -292,62 +288,76 @@ struct FinanceInsightsPanel: View {
         if isWide {
             // Chart beside categories, merchants beside the summary. Halves the
             // card's height on a wide window and keeps bars and bar charts at a
-            // size that still reads.
-            VStack(alignment: .leading, spacing: 0) {
+            // size that still reads. Tiles in a row stretch to the taller of the
+            // pair so their bottom edges line up.
+            VStack(alignment: .leading, spacing: FinancePanelMetrics.tileGap) {
                 columns(
-                    left: { chartBlock },
-                    right: { categoriesBlock }
+                    left: { chartBlock(stretch: true) },
+                    right: { categoriesBlock(stretch: true) }
                 )
-                sectionRule
                 if insights.merchants.isEmpty {
-                    summaryBlock
+                    summaryBlock(stretch: false)
                 } else {
                     columns(
-                        left: { merchantsBlock },
-                        right: { summaryBlock }
+                        left: { merchantsBlock(stretch: true) },
+                        right: { summaryBlock(stretch: true) }
                     )
                 }
             }
         } else {
-            VStack(alignment: .leading, spacing: 0) {
-                chartBlock
-                sectionRule
-                categoriesBlock
+            VStack(alignment: .leading, spacing: FinancePanelMetrics.tileGap) {
+                chartBlock(stretch: false)
+                categoriesBlock(stretch: false)
                 if !insights.merchants.isEmpty {
-                    sectionRule
-                    merchantsBlock
+                    merchantsBlock(stretch: false)
                 }
-                sectionRule
-                summaryBlock
+                summaryBlock(stretch: false)
             }
         }
     }
 
-    /// Two equal columns with a hairline between them, top-aligned. The rule
-    /// stretches to the taller column, which is what visually pairs them.
+    /// Two equal-width columns, top-aligned. No rule between them: the tile
+    /// edges do the separating now.
     private func columns<L: View, R: View>(
         @ViewBuilder left: () -> L,
         @ViewBuilder right: () -> R
     ) -> some View {
-        HStack(alignment: .top, spacing: FinancePanelMetrics.columnGutter) {
+        HStack(alignment: .top, spacing: FinancePanelMetrics.tileGap) {
             left()
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Rectangle()
-                .fill(Tokens.divider)
-                .frame(width: 0.5)
-                .frame(maxHeight: .infinity)
             right()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The one separator between blocks: 16 above, hairline, 16 below.
-    private var sectionRule: some View {
-        Rectangle()
-            .fill(Tokens.divider)
-            .frame(height: 0.5)
-            .padding(.vertical, Space.lg)
+    /// One section, as a tile.
+    ///
+    /// A raised `surface2` fill plus a hairline, one radius step tighter than
+    /// the card that holds it. The 6/255 dark-mode gap between `surface2` and
+    /// `surface` is why the border is not optional — it is what makes the tile
+    /// an object rather than a smudge.
+    ///
+    /// - Parameter stretch: fill the height offered, for a tile paired
+    ///   side-by-side with a taller one. Content stays pinned to the top.
+    private func sectionTile<Content: View>(
+        _ title: String,
+        subtitle: String? = nil,
+        stretch: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            sectionHeader(title, subtitle: subtitle)
+            content()
+        }
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: stretch ? .infinity : nil,
+            alignment: .topLeading
+        )
+        .padding(FinancePanelMetrics.tilePadding)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
     }
 
     /// Section title, one step up the ramp from the rows it labels, with an
@@ -369,11 +379,14 @@ struct FinanceInsightsPanel: View {
 
     // MARK: - Spend over time
 
-    private var chartBlock: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            // `readout ?? " "` reserves the line so selecting a bar doesn't
-            // reflow the chart under the user's finger.
-            sectionHeader(insights.granularity.chartTitle, subtitle: readout ?? " ")
+    private func chartBlock(stretch: Bool) -> some View {
+        // `readout ?? " "` reserves the line so selecting a bar doesn't reflow
+        // the chart under the user's finger.
+        sectionTile(
+            insights.granularity.chartTitle,
+            subtitle: readout ?? " ",
+            stretch: stretch
+        ) {
             if maxBucketTotal > 0 {
                 chart
             } else {
@@ -470,7 +483,9 @@ struct FinanceInsightsPanel: View {
                         .font(.edCaption)
                         .foregroundStyle(Tokens.mutedSoft)
                         .padding(.horizontal, 2)
-                        .background(Tokens.surface)
+                        // Knocks out the dashed rule behind it, so it has to
+                        // match the TILE's fill, not the card's.
+                        .background(Tokens.surface2)
                         .offset(y: -7)
                 }
                 .offset(y: -y)
@@ -519,9 +534,8 @@ struct FinanceInsightsPanel: View {
 
     // MARK: - Categories
 
-    private var categoriesBlock: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            sectionHeader("Categories")
+    private func categoriesBlock(stretch: Bool) -> some View {
+        sectionTile("Categories", stretch: stretch) {
             if insights.categories.isEmpty {
                 Text("Nothing to break down yet")
                     .font(.edCaption)
@@ -580,9 +594,8 @@ struct FinanceInsightsPanel: View {
     /// chart directly under the first makes the two blocks interchangeable, and
     /// a merchant "share" would be relative to the top six rather than to any
     /// real whole. Sort order plus the amount already answer the question.
-    private var merchantsBlock: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            sectionHeader("Top merchants")
+    private func merchantsBlock(stretch: Bool) -> some View {
+        sectionTile("Top merchants", stretch: stretch) {
             VStack(alignment: .leading, spacing: Space.md) {
                 ForEach(insights.merchants) { merchant in
                     HStack(spacing: Space.sm) {
@@ -607,33 +620,43 @@ struct FinanceInsightsPanel: View {
 
     // MARK: - Summary
 
-    /// Three tiles rather than a divider-separated strip. This is the one place
-    /// a raised surface earns itself: three short stats in a row read as a stat
-    /// row, and the tile padding IS the breathing room they were missing.
+    /// The three period stats, as plain columns inside the section tile.
     ///
-    /// Carries a heading like the other three blocks: without one it read as an
-    /// orphaned footer, and in two-column mode it sits beside a block that has
-    /// a heading, so the pair looked lopsided.
-    private var summaryBlock: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            sectionHeader("Summary")
-            summaryTiles
+    /// They were individually tiled before every section became a tile; tiles
+    /// inside a tile is one nesting level too many, so the hairlines carry the
+    /// separation here and the tile edge carries the block.
+    private func summaryBlock(stretch: Bool) -> some View {
+        sectionTile("Summary", stretch: stretch) {
+            if stretch {
+                // Paired with the taller merchants tile, so the stats sit
+                // optically centred in the leftover height instead of leaving a
+                // third of the tile visibly empty under them.
+                VStack(spacing: 0) {
+                    Spacer(minLength: Space.sm)
+                    summaryStats
+                    Spacer(minLength: Space.sm)
+                }
+            } else {
+                summaryStats
+            }
         }
     }
 
-    private var summaryTiles: some View {
+    private var summaryStats: some View {
         HStack(alignment: .top, spacing: Space.sm) {
-            summaryTile(
+            summaryStat(
                 label: "Expenses",
                 value: "\(insights.transactionCount)",
                 caption: nil
             )
-            summaryTile(
+            summaryStatDivider
+            summaryStat(
                 label: "Per day",
                 value: FinanceDashboardBand.formatMoneyRounded(insights.averagePerDay),
                 caption: nil
             )
-            summaryTile(
+            summaryStatDivider
+            summaryStat(
                 label: "Largest",
                 value: insights.largestExpense.map { FinanceDashboardBand.formatMoneyRounded($0.amount) } ?? "–",
                 caption: insights.largestExpense?.label
@@ -641,7 +664,7 @@ struct FinanceInsightsPanel: View {
         }
     }
 
-    private func summaryTile(label: String, value: String, caption: String?) -> some View {
+    private func summaryStat(label: String, value: String, caption: String?) -> some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
             Text(label).eyebrow()
             Text(value)
@@ -651,9 +674,7 @@ struct FinanceInsightsPanel: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             // Always rendered, blank when absent: only "Largest" has a caption,
-            // and reserving the line is what makes all three tiles the same
-            // height. Doing it with `maxHeight: .infinity` instead worked in one
-            // column and then stretched the tiles to the full row height in two.
+            // and reserving the line keeps the three columns the same height.
             Text(caption ?? " ")
                 .font(.edCaption)
                 .foregroundStyle(Tokens.mutedSoft)
@@ -661,12 +682,15 @@ struct FinanceInsightsPanel: View {
                 .truncationMode(.tail)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(FinancePanelMetrics.summaryTilePadding)
-        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        // Not optional: `surface2` is only 6/255 from `surface` in dark mode, so
-        // the border is what makes the tile read as a tile.
-        .paperBorder(Tokens.border, radius: Radius.md)
         .accessibilityElement(children: .combine)
+    }
+
+    /// `border`, not `divider`: the tile's `surface2` fill is close enough to
+    /// `divider` in light mode that the rule would disappear.
+    private var summaryStatDivider: some View {
+        Rectangle()
+            .fill(Tokens.border)
+            .frame(width: 0.5, height: 34)
     }
 
     // MARK: - Derived values
