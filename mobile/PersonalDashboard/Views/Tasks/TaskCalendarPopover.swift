@@ -38,9 +38,11 @@ struct TaskCalendarPopover: View {
     /// by tap on iOS.
     @State private var focusedDay: Date?
 
-    /// Measured height of the floating card, so it can flip above the hovered
-    /// row when there isn't room below it.
-    @State private var cardHeight: CGFloat = 0
+    /// Measured size of the floating card. The card hugs its own content, so
+    /// its size isn't knowable up front, and placement needs both axes: the
+    /// height to decide whether to flip above the hovered row, the width to
+    /// centre it on the cell and pull it back inside the popover at the edges.
+    @State private var cardSize: CGSize = .zero
 
     private let taskAccent = Tokens.accent(for: .tasks)
     private let tripAccent = Tokens.accent(for: .itineraries)
@@ -259,9 +261,14 @@ struct TaskCalendarPopover: View {
 
     /// The hover/tap card, positioned against the focused cell's bounds.
     ///
-    /// Placed just below the cell when there's room and flipped above it when
-    /// there isn't, then clamped so it can never be clipped by the popover's
-    /// own edges. Non-interactive by design (see the type doc).
+    /// Sized to its own content rather than to the calendar, and centred on the
+    /// hovered cell, so a two-line day doesn't leave a band of empty middle. A
+    /// small triangle points back at the cell — above the card when it sits
+    /// below the cell, below it when it has flipped up.
+    ///
+    /// Clamped on both axes so it can never be clipped by the popover's edges,
+    /// and never rides up over the month title. Non-interactive by design (see
+    /// the type doc).
     @ViewBuilder
     private func floatingCard(anchors: CalendarAnchors) -> some View {
         GeometryReader { geo in
@@ -270,36 +277,83 @@ struct TaskCalendarPopover: View {
                 let entries = agenda(for: day)
                 if !entries.isEmpty {
                     let cell = geo[anchor]
-                    let gap: CGFloat = 8
-                    // Never ride up over the month title / weekday row.
+                    let gap: CGFloat = 6
                     let ceiling = anchors.grid.map { geo[$0].minY } ?? 0
+
+                    // Vertical: prefer below the cell, flip above when the card
+                    // would overflow the popover.
                     let below = cell.maxY + gap
-                    let above = cell.minY - gap - cardHeight
-                    // Prefer below; flip above when the card would overflow.
-                    let rawTop = (below + cardHeight <= geo.size.height) ? below : above
+                    let placeBelow = below + cardSize.height <= geo.size.height
+                    let rawTop = placeBelow ? below : (cell.minY - gap - cardSize.height)
                     let top = min(
                         max(rawTop, ceiling),
-                        max(geo.size.height - cardHeight, ceiling)
+                        max(geo.size.height - cardSize.height, ceiling)
                     )
 
-                    dayCard(day: day, entries: entries)
-                        .background(
-                            GeometryReader { cardGeo in
-                                Color.clear.preference(
-                                    key: CardHeightKey.self,
-                                    value: cardGeo.size.height
-                                )
-                            }
-                        )
-                        .frame(width: geo.size.width)
-                        .offset(y: top)
+                    // Horizontal: centred on the cell, pulled back inside the
+                    // popover at the edges. The inset keeps it off the
+                    // popover's own rounded corners.
+                    let inset: CGFloat = 6
+                    let rawLeft = cell.midX - cardSize.width / 2
+                    let left = min(
+                        max(rawLeft, inset),
+                        max(geo.size.width - cardSize.width - inset, inset)
+                    )
+
+                    // A pointer that doesn't point at the cell is worse than no
+                    // pointer, so it only appears once the card genuinely
+                    // cleared the cell. A tall card clamped against the ceiling
+                    // still overlaps its own day; that one goes without.
+                    let clearsBelow = placeBelow && top >= cell.maxY
+                    let clearsAbove = !placeBelow && top + cardSize.height <= cell.minY
+                    let arrow: ArrowDirection? = clearsBelow ? .up : (clearsAbove ? .down : nil)
+                    // Keep the triangle off the card's rounded corners.
+                    let arrowX = min(max(cell.midX - left, Radius.md + 8),
+                                     max(cardSize.width - Radius.md - 8, Radius.md + 8))
+
+                    VStack(spacing: 0) {
+                        if arrow == .up {
+                            cardArrow(.up).offset(x: arrowX - cardSize.width / 2, y: 1)
+                        }
+                        dayCard(day: day, entries: entries)
+                        if arrow == .down {
+                            cardArrow(.down).offset(x: arrowX - cardSize.width / 2, y: -1)
+                        }
+                    }
+                    .background(
+                        GeometryReader { cardGeo in
+                            Color.clear.preference(
+                                key: CardSizeKey.self,
+                                value: cardGeo.size
+                            )
+                        }
+                    )
+                    // Hidden until measured: placement needs the real size, and
+                    // one frame at the wrong spot reads as a jump.
+                    .opacity(cardSize == .zero ? 0 : 1)
+                    .offset(x: left, y: top)
                 }
             }
         }
-        .onPreferenceChange(CardHeightKey.self) { height in
-            if height > 0 { cardHeight = height }
+        .onPreferenceChange(CardSizeKey.self) { size in
+            if size.width > 0, size.height > 0 { cardSize = size }
         }
         .allowsHitTesting(false)
+    }
+
+    private enum ArrowDirection { case up, down }
+
+    /// The pointer triangle. Filled to match the card and stroked on its two
+    /// legs only — the base is left open and the whole thing overlaps the card
+    /// by a point, so the card's own border doesn't draw a line across it.
+    private func cardArrow(_ direction: ArrowDirection) -> some View {
+        ZStack {
+            CardArrowShape(pointsUp: direction == .up, closed: true)
+                .fill(Tokens.paper2)
+            CardArrowShape(pointsUp: direction == .up, closed: false)
+                .stroke(Tokens.borderStrong, lineWidth: 1)
+        }
+        .frame(width: 14, height: 7)
     }
 
     private func dayCard(day: Date, entries: [AgendaEntry]) -> some View {
@@ -325,8 +379,13 @@ struct TaskCalendarPopover: View {
                         .foregroundStyle(Tokens.ink)
                         .strikethrough(entry.struckThrough, color: Tokens.muted)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        // Caps how wide one long title can drag the card. The
+                        // card hugs its content, so without this a single long
+                        // itinerary title would stretch it back to full width.
+                        .frame(maxWidth: 180, alignment: .leading)
                     if let detail = entry.detail {
-                        Spacer(minLength: Space.xs)
+                        Spacer(minLength: Space.md)
                         Text(detail)
                             .font(.edCaption)
                             .foregroundStyle(Tokens.muted)
@@ -343,7 +402,12 @@ struct TaskCalendarPopover: View {
             }
         }
         .padding(Space.sm)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Hug the content instead of spanning the calendar. `Spacer` inside the
+        // rows is greedy, so without this the card takes the full proposed
+        // width and leaves a dead band between each title and its time. Fixed
+        // at its ideal width, the spacers only stretch shorter rows out to the
+        // widest one, which is what keeps the times in a column.
+        .fixedSize(horizontal: true, vertical: false)
         .background(
             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .fill(Tokens.paper2)
@@ -623,13 +687,38 @@ private struct CalendarAnchorKey: PreferenceKey {
     }
 }
 
-/// Measured height of the agenda card, fed back so the card can flip above the
-/// hovered row instead of being clipped at the popover's bottom edge.
-private struct CardHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
+/// Measured size of the agenda card, fed back so it can be centred on the
+/// hovered cell and flipped above the row rather than clipped at an edge.
+private struct CardSizeKey: PreferenceKey {
+    static let defaultValue: CGSize = .zero
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
         let next = nextValue()
-        if next > 0 { value = next }
+        if next.width > 0, next.height > 0 { value = next }
+    }
+}
+
+// MARK: - Pointer triangle
+
+/// The card's pointer. `closed` fills the whole triangle; open draws only the
+/// two legs, so the base can be left out and the card's border doesn't show
+/// through as a line across the arrow.
+private struct CardArrowShape: Shape {
+    let pointsUp: Bool
+    let closed: Bool
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        if pointsUp {
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        } else {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        if closed { path.closeSubpath() }
+        return path
     }
 }
