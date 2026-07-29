@@ -133,6 +133,11 @@ targets:
       - path: PersonalDashboard/ViewModels/NotesViewModel.swift
       - path: PersonalDashboard/ViewModels/ListsViewModel.swift
       - path: PersonalDashboard/Services/NoteService.swift
+      # Note image attachments (#395).
+      - path: PersonalDashboard/Services/NoteImageService.swift
+      - path: PersonalDashboard/Views/Notes/NoteImageViewer.swift
+      - path: PersonalDashboard/Views/Components/NoteBodyMarkdown.swift
+      - path: PersonalDashboard/Views/Components/PinchZoomImageView.swift
       - path: PersonalDashboard/Services/ChecklistService.swift
       - path: PersonalDashboard/Services/FinanceSettings.swift
       - path: PersonalDashboard/Views/Tasks
@@ -200,6 +205,11 @@ targets:
       - path: PersonalDashboard/Services/ReceiptStorage.swift
       - path: PersonalDashboard/Services/MiniZip.swift
       - path: PersonalDashboard/Services/DataArchive.swift
+      # Apple Notes import (#396). macOS only — no iOS read API exists.
+      - path: PersonalDashboard/Services/AppleNotesReader.swift
+      - path: PersonalDashboard/Services/AppleNotesHTMLConverter.swift
+      - path: PersonalDashboard/Services/AppleNotesImportService.swift
+      - path: PersonalDashboard/Views/Settings/AppleNotesImportView.swift
       # Cross-device sync (issue #348). Both targets need the whole stack: the
       # Mac is one of the two peers, so omitting any of it would make the feature
       # single-ended.

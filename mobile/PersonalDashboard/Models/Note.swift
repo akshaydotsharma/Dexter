@@ -69,6 +69,40 @@ struct Note: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// View-facing DTO for an image attached to a note (#395). Identity is the
+/// clientUUID; the note link travels by UUID for the same offline-first reason
+/// `Note.folderId` does.
+struct NoteImage: Codable, Identifiable, Hashable, Sendable {
+    let id: UUID
+    let noteId: UUID
+    var relativePath: String
+    var position: Int
+    var pixelWidth: Int?
+    var pixelHeight: Int?
+    let createdAt: Date
+    let updatedAt: Date
+    let deletedAt: Date?
+
+    /// Aspect ratio of the stored JPEG, or nil when the dimensions were never
+    /// recorded. The strip falls back to a square tile in that case.
+    var aspectRatio: Double? {
+        guard let pixelWidth, let pixelHeight, pixelWidth > 0, pixelHeight > 0 else { return nil }
+        return Double(pixelWidth) / Double(pixelHeight)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id = "clientUuid"
+        case noteId = "noteClientUuid"
+        case relativePath
+        case position
+        case pixelWidth
+        case pixelHeight
+        case createdAt
+        case updatedAt
+        case deletedAt
+    }
+}
+
 struct NoteFolderCreateRequest {
     let name: String
 }

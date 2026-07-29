@@ -27,6 +27,18 @@ struct NotesView: View {
         if let raw = ProcessInfo.processInfo.environment["LAUNCH_FOLDER_ID"], let id = UUID(uuidString: raw) { return id }
         return nil
     }()
+    /// Launch straight into one note's detail, by clientUUID (#395).
+    ///
+    /// Same reasoning as `LAUNCH_FOLDER_ID` below: macOS SwiftUI ignores synthetic
+    /// clicks on the tap-gesture rows that open a note, so without this the note
+    /// DETAIL — where inline images are written and rendered — cannot be reached
+    /// by an agent doing a screenshot pass at all.
+    @State private var pendingNoteLaunchId: UUID? = {
+        if let raw = ProcessInfo.processInfo.environment["LAUNCH_NOTE_ID"],
+           let id = UUID(uuidString: raw) { return id }
+        return nil
+    }()
+
     /// Launch straight into the Archive, the same input-free navigation hook
     /// `LAUNCH_FOLDER_ID` above provides for folders (#393).
     ///
@@ -213,6 +225,10 @@ struct NotesView: View {
         }
         .task {
             await viewModel.load()
+            if let id = pendingNoteLaunchId, viewModel.note(id: id) != nil {
+                selectedNoteId = id
+                pendingNoteLaunchId = nil
+            }
             if let id = pendingFolderLaunchId,
                let folder = viewModel.folder(id: id) {
                 selectedFolder = folder
@@ -817,7 +833,21 @@ private struct NoteDetailContent: View {
     @State private var content: String = ""
     @State private var folderId: UUID?
     @State private var hasLoaded = false
-    @State private var mode: NoteEditMode = .preview
+    @State private var mode: NoteEditMode = Self.launchesInEditMode ? .edit : .preview
+
+    /// Open the note straight into EDIT mode with the keyboard up (#395).
+    ///
+    /// The companion to `LAUNCH_NOTE_ID`. A note opens in preview, and the format
+    /// toolbar only exists while the editor is first responder, so the writing
+    /// surface — where inline images are pasted and rendered, and the riskiest code
+    /// in the notes stack — is otherwise unreachable for a screenshot pass on
+    /// EITHER platform. Reaching it by hand means a tap that macOS ignores
+    /// synthetically and that the simulator offers no scripted equivalent for.
+    static var launchesInEditMode: Bool {
+        ProcessInfo.processInfo.environment["LAUNCH_NOTE_MODE"]?.lowercased() == "edit"
+    }
+    /// Relative path of the image being shown full size, nil when none is (#395).
+    @State private var viewingImagePath: String?
     @FocusState private var contentFocused: Bool
 
     enum NoteEditMode { case edit, preview }
@@ -907,6 +937,35 @@ private struct NoteDetailContent: View {
                 content = note.content ?? ""
                 folderId = note.folderId
                 hasLoaded = true
+                // Also focus the editor, which on a device raises the keyboard and
+                // with it the format toolbar.
+                //
+                // Deferred rather than set inline: at `onAppear` the text view is
+                // not in a window yet, so `becomeFirstResponder` is a silent no-op.
+                // Note the SIMULATOR suppresses the software keyboard while a
+                // hardware keyboard is attached, so the accessory toolbar may not
+                // appear there even though edit mode is active — verified 2026-07-30.
+                if Self.launchesInEditMode {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        contentFocused = true
+                    }
+                }
+                // Images attached before they were placed inline (the earlier
+                // strip build, or a restore whose body predates its images) have
+                // a row but no token. Append them so they show up in the note
+                // rather than silently disappearing (#395).
+                if let tokens = (try? NoteImageService()
+                    .unreferencedTokens(noteId: note.id, content: content)) ?? nil {
+                    content = content.isEmpty ? tokens : content + "\n\n" + tokens
+                }
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { viewingImagePath != nil },
+            set: { if !$0 { viewingImagePath = nil } }
+        )) {
+            if let viewingImagePath {
+                NoteImageViewer(relativePath: viewingImagePath)
             }
         }
         .onDisappear {
@@ -926,7 +985,18 @@ private struct NoteDetailContent: View {
                 text: $content,
                 isFocused: $contentFocused,
                 minHeight: 320,
-                placeholder: "Start writing. Use the bar above the keyboard for headings, bold, lists…"
+                placeholder: "Start writing. Use the bar above the keyboard for headings, bold, lists…",
+                // Paste an image and it is compressed, stored, and referenced at
+                // the cursor (#395).
+                saveImage: { data in
+                    do {
+                        return try await NoteImageService()
+                            .add(noteId: note.id, imageData: data)
+                            .relativePath
+                    } catch {
+                        return nil
+                    }
+                }
             )
             .frame(minHeight: 320)
         case .preview:
@@ -940,9 +1010,13 @@ private struct NoteDetailContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, Space.xl)
             } else {
-                MarkdownView(text: content, bodyColor: Tokens.ink)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                MarkdownView(
+                    text: content,
+                    bodyColor: Tokens.ink,
+                    onImageTap: { path in viewingImagePath = path }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
             }
         }
     }
@@ -1026,5 +1100,8 @@ private struct NoteDetailContent: View {
         if finalTitle != note.title || finalContent != note.content || folderId != note.folderId {
             await viewModel.updateNote(note, title: finalTitle, content: finalContent, folderId: folderId)
         }
+        // After the write, not before: the text being saved is what decides which
+        // image rows are still referenced (#395).
+        try? NoteImageService().reconcile(noteId: note.id, content: content)
     }
 }

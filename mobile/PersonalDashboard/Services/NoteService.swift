@@ -112,6 +112,12 @@ struct NoteService {
             child.updatedAt = Date()
         }
         try store.context.save()
+        // Same cascade as `delete(_:)`, one level deeper: deleting a folder
+        // deletes its notes, so it has to take their images too (#395).
+        let imageService = NoteImageService(store: store)
+        for child in children {
+            try imageService.deleteAll(noteId: child.clientUUID)
+        }
     }
 
     // MARK: - Notes
@@ -197,6 +203,10 @@ struct NoteService {
         row.deletedAt = Date()
         row.updatedAt = Date()
         try store.context.save()
+        // Take the note's image attachments with it (#395), otherwise their rows
+        // and JPEGs outlive the note that owned them with nothing left to
+        // reattach them to.
+        try NoteImageService(store: store).deleteAll(noteId: note.id)
     }
 
     // MARK: - Internals

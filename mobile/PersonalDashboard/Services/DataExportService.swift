@@ -26,15 +26,19 @@ final class DataExportService {
     private let receiptStorage: ReceiptStorage
     /// #319: ticket attachments travel in the archive alongside receipts.
     private let ticketStorage: TicketStorage
+    /// #395: note image attachments, same again.
+    private let noteImageStorage: ReceiptStorage
 
     init(
         modelContext: ModelContext,
         receiptStorage: ReceiptStorage = .shared,
-        ticketStorage: TicketStorage = .shared
+        ticketStorage: TicketStorage = .shared,
+        noteImageStorage: ReceiptStorage = .noteImages
     ) {
         self.modelContext = modelContext
         self.receiptStorage = receiptStorage
         self.ticketStorage = ticketStorage
+        self.noteImageStorage = noteImageStorage
     }
 
     /// One archive entry whose bytes have not been read yet: the name it will
@@ -97,6 +101,8 @@ final class DataExportService {
         // there. Same shape as receipts: the stored relative path
         // ("tickets/<uuid>.<ext>") maps 1:1 onto an archive entry path.
         attachments.append(contentsOf: resolveTicketSources(for: payload.itineraryDays))
+        // #395: note image attachments, same relative-path-to-entry-name shape.
+        attachments.append(contentsOf: resolveNoteImageSources(for: payload.noteImages ?? []))
 
         let url = Self.outputURL()
 
@@ -172,6 +178,7 @@ final class DataExportService {
     func buildPayload() throws -> DataArchive.Payload {
         let todos       = try modelContext.fetch(FetchDescriptor<LocalTodo>())
         let notes       = try modelContext.fetch(FetchDescriptor<LocalNote>())
+        let noteImages  = try modelContext.fetch(FetchDescriptor<LocalNoteImage>())
         let folders     = try modelContext.fetch(FetchDescriptor<LocalNoteFolder>())
         let lists       = try modelContext.fetch(FetchDescriptor<LocalList>())
         let trips       = try modelContext.fetch(FetchDescriptor<LocalTrip>())
@@ -212,7 +219,8 @@ final class DataExportService {
             persons: persons.map(Self.dto),
             events: events.map(Self.dto),
             statementImports: statements.map(Self.dto),
-            processedEmails: processed.map(Self.dto)
+            processedEmails: processed.map(Self.dto),
+            noteImages: noteImages.map(Self.dto)
         )
     }
 
@@ -222,6 +230,7 @@ final class DataExportService {
         [
             "LocalTodo":            payload.tasks.count,
             "LocalNote":            payload.notes.count,
+            "LocalNoteImage":       payload.noteImages?.count ?? 0,
             "LocalNoteFolder":      payload.noteFolders.count,
             "LocalList":            payload.lists.count,
             "LocalTrip":            payload.itineraries.count,
@@ -277,7 +286,38 @@ final class DataExportService {
         return sources
     }
 
+    /// #395 counterpart for note image attachments. Missing files are skipped
+    /// like receipts and tickets, and for the same reason: the row still travels,
+    /// and the strip renders a "not on this device" tile for it rather than
+    /// pretending the image is there.
+    private func resolveNoteImageSources(for images: [DataArchive.NoteImageDTO]) -> [AttachmentSource] {
+        var sources: [AttachmentSource] = []
+        var seenPaths = Set<String>()
+        for image in images {
+            let relativePath = image.relativePath
+            guard !relativePath.isEmpty,
+                  seenPaths.insert(relativePath).inserted else { continue }
+            guard let url = noteImageStorage.load(relativePath: relativePath) else { continue }
+            sources.append(AttachmentSource(name: relativePath, url: url))
+        }
+        return sources
+    }
+
     // MARK: - DTO mapping
+
+    private static func dto(_ image: LocalNoteImage) -> DataArchive.NoteImageDTO {
+        DataArchive.NoteImageDTO(
+            clientUUID: image.clientUUID,
+            noteClientUUID: image.noteClientUUID,
+            relativePath: image.relativePath,
+            position: image.position,
+            pixelWidth: image.pixelWidth,
+            pixelHeight: image.pixelHeight,
+            createdAt: image.createdAt,
+            updatedAt: image.updatedAt,
+            deletedAt: image.deletedAt
+        )
+    }
 
     private static func dto(_ todo: LocalTodo) -> DataArchive.TaskDTO {
         DataArchive.TaskDTO(

@@ -51,7 +51,7 @@ struct TicketOriginalViewer: View {
                 TicketPDFView(url: url)
                     .ignoresSafeArea(edges: .bottom)
             } else if let image = loadReceiptPlatformImage(url) {
-                TicketZoomableImageView(image: image)
+                PinchZoomImageView(image: image)
                     .ignoresSafeArea(edges: .bottom)
             } else {
                 unavailable
@@ -153,86 +153,9 @@ private struct TicketPDFView: NSViewRepresentable {
 #endif
 
 // MARK: - Zoomable image
-
-#if canImport(UIKit)
-/// `UIScrollView` + `UIImageView` giving native pinch-to-zoom, pan, and
-/// double-tap-to-toggle. A compact re-implementation (Finance's equivalent is
-/// file-private).
-private struct TicketZoomableImageView: UIViewRepresentable {
-    let image: UIImage
-
-    func makeUIView(context: Context) -> UIScrollView {
-        let scrollView = UIScrollView()
-        scrollView.delegate = context.coordinator
-        scrollView.backgroundColor = .clear
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.showsVerticalScrollIndicator = false
-        scrollView.contentInsetAdjustmentBehavior = .never
-        scrollView.minimumZoomScale = 1.0
-        scrollView.maximumZoomScale = 5.0
-
-        let imageView = UIImageView(image: image)
-        imageView.contentMode = .scaleAspectFit
-        imageView.frame = scrollView.bounds
-        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        scrollView.addSubview(imageView)
-        context.coordinator.imageView = imageView
-
-        let doubleTap = UITapGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleDoubleTap(_:))
-        )
-        doubleTap.numberOfTapsRequired = 2
-        scrollView.addGestureRecognizer(doubleTap)
-        return scrollView
-    }
-
-    func updateUIView(_ uiView: UIScrollView, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator: NSObject, UIScrollViewDelegate {
-        weak var imageView: UIImageView?
-
-        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
-
-        @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
-            guard let scrollView = recognizer.view as? UIScrollView else { return }
-            if scrollView.zoomScale > scrollView.minimumZoomScale + 0.01 {
-                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
-            } else {
-                scrollView.setZoomScale(min(scrollView.maximumZoomScale, 2.5), animated: true)
-            }
-        }
-    }
-}
-#else
-/// macOS zoomable image: an `NSScrollView` hosting an `NSImageView` gives native
-/// magnification (pinch / scroll-to-zoom) and pan, the AppKit analogue of the
-/// iOS `UIScrollView` viewer.
-private struct TicketZoomableImageView: NSViewRepresentable {
-    let image: NSImage
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.drawsBackground = false
-        scrollView.allowsMagnification = true
-        scrollView.minMagnification = 1.0
-        scrollView.maxMagnification = 5.0
-
-        let imageView = NSImageView()
-        imageView.image = image
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.imageAlignment = .alignCenter
-        scrollView.documentView = imageView
-        return scrollView
-    }
-
-    func updateNSView(_ nsView: NSScrollView, context: Context) {
-        (nsView.documentView as? NSImageView)?.image = image
-        nsView.documentView?.frame = nsView.contentView.bounds
-    }
-}
-#endif
+//
+// Moved to `Views/Components/PinchZoomImageView.swift` (#395) so note images get
+// the same pan-and-zoom rather than a second copy of it. Behaviour here is
+// unchanged: the shared view keeps the same scroll-view backing, the same 1x-fit
+// default, and the same double-tap toggle, and simply adds an optional
+// magnification binding this caller does not use.
