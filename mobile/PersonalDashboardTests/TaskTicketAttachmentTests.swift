@@ -69,9 +69,12 @@ final class TaskTicketAttachmentTests: XCTestCase {
         eventTitle: String = "Coldplay",
         venue: String = "National Stadium",
         seat: String = "8",
+        gate: String = "3",
+        reference: String = "ORD-99213",
         section: String? = "122",
         row: String? = "14",
         presentedAtEntry: Bool? = nil,
+        showInWallet: Bool? = nil,
         position: Int = 0
     ) throws -> TaskTicket {
         // A rendered barcode is a legitimate stand-in for a photographed ticket
@@ -96,6 +99,7 @@ final class TaskTicketAttachmentTests: XCTestCase {
         // Left nil by default so the fixture keeps reproducing a row written
         // before the field existed (#405).
         meta.presentedAtEntry = presentedAtEntry
+        meta.showInWallet = showInWallet
 
         let ticket = LocalTaskTicket(
             todoClientUUID: todo.clientUUID,
@@ -108,8 +112,8 @@ final class TaskTicketAttachmentTests: XCTestCase {
             startTimeText: "20:00",
             venue: venue,
             seat: seat,
-            gate: "3",
-            reference: "ORD-99213",
+            gate: gate,
+            reference: reference,
             ticketMetaJSON: meta.encodedString(),
             position: position
         )
@@ -313,12 +317,98 @@ final class TaskTicketAttachmentTests: XCTestCase {
     }
 
     /// The case a barcode-only rule would get wrong: a real event ticket that
-    /// prints nothing scannable at all.
+    /// prints nothing scannable at all. It still prints a seat and a reference,
+    /// which is what it hands over at the door.
     func testUnscannableTicketPresentedAtEntryStillBecomesAWalletCard() throws {
         let todo = insertTodo(title: "Open-air cinema")
         try attachTicket(to: todo, payload: "", presentedAtEntry: true)
 
         XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
+    /// The bug #414 opened: a padel court booking came back judged a pass, with no
+    /// barcode, no reference, no seat and no gate. The judgement alone put a card in
+    /// the Wallet that could not be shown to anyone.
+    func testCourtBookingWithNothingToPresentStaysOffTheWallet() throws {
+        let todo = insertTodo(title: "PADEL")
+        try attachTicket(
+            to: todo,
+            payload: "",
+            eventTitle: "PADEL",
+            venue: "The Racket Co. - Tanjong Pagar",
+            seat: "",
+            gate: "",
+            reference: "",
+            section: nil,
+            row: nil,
+            presentedAtEntry: true
+        )
+
+        XCTAssertTrue(
+            try walletEntries(for: todo).isEmpty,
+            "a judgement with nothing behind it is an opinion, not a pass"
+        )
+    }
+
+    /// The other side of that rule: one printed credential is enough, because that
+    /// is the thing the person actually holds up.
+    func testJudgedPassWithOnlyAReferenceStillBecomesAWalletCard() throws {
+        let todo = insertTodo(title: "Museum entry")
+        try attachTicket(
+            to: todo,
+            payload: "",
+            seat: "",
+            gate: "",
+            reference: "ADM-4471",
+            section: nil,
+            row: nil,
+            presentedAtEntry: true
+        )
+
+        XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
+    /// The person's answer beats the rule, including over a decoded barcode: the
+    /// reason to force a scannable document out is that its code admits nobody.
+    func testManualOverrideForcesAScannableAttachmentOut() throws {
+        let todo = insertTodo(title: "Menu with a QR on it")
+        try attachTicket(to: todo, payload: "SCAN-ME", showInWallet: false)
+
+        XCTAssertTrue(try walletEntries(for: todo).isEmpty)
+    }
+
+    /// And in the other direction, which is what makes the switch worth having on a
+    /// row the rule has just excluded.
+    func testManualOverrideForcesAnUnscannableAttachmentIn() throws {
+        let todo = insertTodo(title: "PADEL")
+        try attachTicket(
+            to: todo,
+            payload: "",
+            seat: "",
+            gate: "",
+            reference: "",
+            section: nil,
+            row: nil,
+            presentedAtEntry: false,
+            showInWallet: true
+        )
+
+        XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
+    /// The override has to survive an edit of the other fields. The detail sheet
+    /// rebuilds `TicketMeta` from the copy it was handed when it opened, so a flip
+    /// written after that copy was taken is exactly what a later Save could undo.
+    func testManualOverrideSurvivesAFieldEdit() throws {
+        let todo = insertTodo(title: "Menu with a QR on it")
+        let service = TaskTicketService(store: store)
+        let attached = try attachTicket(to: todo, payload: "SCAN-ME", showInWallet: false)
+
+        var meta = try XCTUnwrap(attached.ticketMeta)
+        meta.section = "B"
+        _ = try service.update(id: attached.id, venue: "Somewhere else", meta: meta)
+
+        XCTAssertTrue(try walletEntries(for: todo).isEmpty)
     }
 
     /// Every row written before the field existed is unjudged. Reading that silence
