@@ -75,6 +75,13 @@ struct TaskDocumentReadingOverlay: View {
     }
 }
 
+/// A read in flight, and what it is reading (#416). Carried rather than a bare Bool
+/// so the notice can say "file" or "image" without the presenter holding a second
+/// piece of state that could disagree with the first.
+struct TaskReadingNotice: Equatable {
+    let isPDF: Bool
+}
+
 /// File attachments for a task, shown as a stack of wallet cards inside the task
 /// editor with an add control (#399, generalised in #402).
 ///
@@ -108,7 +115,10 @@ struct TaskTicketSection: View {
     /// The owning task, or `nil` when the editor is for a task that has not been
     /// saved yet.
     let todoId: UUID?
-    let taskTitle: String
+    /// Everything the app already knows about the event, which the extractor uses to
+    /// fill what the file does not show (#408). Carries the title the cards fall
+    /// back to, so it replaces the plain `taskTitle` this took before.
+    let context: TaskTicketContext
     /// Tickets read but not yet written, owned by the editor because it owns the
     /// Cancel / Add lifecycle that decides their fate. Always empty once `todoId`
     /// is non-nil.
@@ -122,12 +132,24 @@ struct TaskTicketSection: View {
     /// screen with its spinner running rather than the person waiting on a blank
     /// screen for a parse they cannot see.
     var initialDocument: TaskDocumentUpload? = nil
-    /// Reports whether `initialDocument` is still being read, so the editor can say
-    /// so over the whole form. Only the initial document drives this: an attachment
-    /// added from inside the editor keeps the inline spinner, because you are already
-    /// looking at the section it appears in and blocking the form would be heavier
-    /// than the action deserves.
-    var isReadingInitialDocument: Binding<Bool>? = nil
+    /// The read in flight, so the editor can say so across its whole form (#416).
+    ///
+    /// EVERY read announces now, not just one that arrived with the editor. The
+    /// original reasoning — you are already looking at the section, so a small inline
+    /// spinner is proportionate — assumed you had been looking at it the whole time.
+    /// You have not: you have been in Finder, and you come back to a popover that has
+    /// to tell you what it is doing. Carries `isPDF` so the notice can name what it is
+    /// reading.
+    var reading: Binding<TaskReadingNotice?>? = nil
+    /// Reports that this section is mid-operation: a picker is open, or a read is in
+    /// flight (#408, #416).
+    ///
+    /// On macOS this is what holds the editor popover open. `MacAnchoredPopover`
+    /// switches to `.applicationDefined` while busy, so neither Finder taking key nor
+    /// a stray click behind it can bin a read that is already running. On iOS it
+    /// drives `interactiveDismissDisabled` on the sheet, for the stray-click half of
+    /// the same problem.
+    var isBusy: Binding<Bool>? = nil
 
     @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -135,6 +157,14 @@ struct TaskTicketSection: View {
     @State private var isTargetedForDrop = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    /// The attachment the long-press / right-click menu offered to remove, held for
+    /// the confirmation (#408). Removing deletes the file off the device, so it is
+    /// confirmed here the same way it is in the detail sheet.
+    @State private var pendingRemoval: TaskTicket?
+    /// True from presenting a picker until it hands something back (or is cancelled).
+    /// Part of `isBusy`: on macOS the panel outlives the view that opened it, so the
+    /// window between the two is exactly when the editor must not be dismissed.
+    @State private var awaitingPick = false
     /// `onAppear` can fire more than once for the same view; the document must be
     /// read exactly once or it would be stored and attached twice.
     @State private var consumedInitialDocument = false
@@ -152,6 +182,12 @@ struct TaskTicketSection: View {
     private let service = TaskTicketService()
 
     private var accent: Color { Tokens.accent(for: .tasks) }
+
+    /// The task's title, which the cards fall back to for their headline.
+    private var taskTitle: String { context.title }
+
+    /// Whether an operation is in progress that the editor must stay open for.
+    private var isBusyNow: Bool { isIngesting || awaitingPick }
 
     /// Everything on screen: what is on disk, then what is waiting to be.
     private var tickets: [TaskTicket] { stored + pending }
@@ -208,6 +244,26 @@ struct TaskTicketSection: View {
             isTargetedForDrop = targeted
         }
         .animation(.easeOut(duration: 0.15), value: isTargetedForDrop)
+        // Keep the presenter informed for as long as there is work to lose.
+        .onChange(of: isBusyNow) { _, busy in
+            isBusy?.wrappedValue = busy
+        }
+        .confirmationDialog(
+            "Remove this attachment?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove attachment", role: .destructive) {
+                if let ticket = pendingRemoval { remove(ticket) }
+                pendingRemoval = nil
+            }
+            Button("Keep it", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text("The file will be deleted from this device. The task itself stays.")
+        }
         .onAppear {
             reload()
             // Read a file handed in from the plus menu. Deliberately does NOT open
@@ -215,15 +271,17 @@ struct TaskTicketSection: View {
             // and a sheet over it would hide the thing they came to check.
             if let initialDocument, !consumedInitialDocument {
                 consumedInitialDocument = true
-                ingest(
-                    data: initialDocument.data,
-                    isPDF: initialDocument.isPDF,
-                    autoOpen: false,
-                    announceToEditor: true
-                )
+                ingest(data: initialDocument.data, isPDF: initialDocument.isPDF, autoOpen: false)
             }
         }
-        .onDisappear { ingestTask?.cancel() }
+        .onDisappear {
+            ingestTask?.cancel()
+            // Never leave the presenter pinned open by a section that is gone.
+            awaitingPick = false
+            isBusy?.wrappedValue = false
+            reading?.wrappedValue = nil
+            TaskAttachmentActivity.shared.ended()
+        }
         .sheet(item: $selected) { ticket in
             // A pending ticket has no row to write to, so its edits and its removal
             // are applied to the editor's in-memory copy instead.
@@ -255,14 +313,20 @@ struct TaskTicketSection: View {
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
             CameraPicker { data in
+                awaitingPick = false
                 ingest(data: data, isPDF: false)
             }
         }
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
+            awaitingPick = false
             ingest(data: data, isPDF: false)
         }
         #endif
         .ticketFilePicker(isPresented: $showingFilePicker) { data, isPDF in
+            // Cleared FIRST, and on every outcome including cancel: this is what
+            // releases the editor once the panel is done with, and a path that
+            // forgot it would pin the popover open for good.
+            awaitingPick = false
             ingest(data: data, isPDF: isPDF)
         }
     }
@@ -282,6 +346,7 @@ struct TaskTicketSection: View {
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button {
                     Haptics.light()
+                    awaitingPick = true
                     showingCamera = true
                 } label: {
                     Label("Take a photo", systemImage: "camera")
@@ -289,12 +354,14 @@ struct TaskTicketSection: View {
             }
             Button {
                 Haptics.light()
+                awaitingPick = true
                 showingPhotoLibrary = true
             } label: {
                 Label("Choose from Photos", systemImage: "photo.on.rectangle")
             }
             Button {
                 Haptics.light()
+                awaitingPick = true
                 showingFilePicker = true
             } label: {
                 Label("Choose a file", systemImage: "folder")
@@ -308,6 +375,9 @@ struct TaskTicketSection: View {
         .accessibilityLabel("Add an attachment to this task")
         #else
         Button {
+            // Set BEFORE the panel is asked for, so the editor is already pinned by
+            // the time the panel takes key focus away from it (#408).
+            awaitingPick = true
             showingFilePicker = true
         } label: {
             addLabel
@@ -373,6 +443,25 @@ struct TaskTicketSection: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open attachment \(ticket.displayTitle(fallback: taskTitle))")
+        // Long-press on iPhone, right-click on the Mac: View and Remove on the card
+        // itself (#408). Removing WAS only reachable by opening the card, going to its
+        // actions and confirming, which is a long way round for the thing you most
+        // want when a card should not be there at all — a duplicate.
+        //
+        // Tap still opens the card. This is additive, and the detail sheet keeps its
+        // own Remove action for whoever is already in there.
+        .contextMenu {
+            Button {
+                selected = ticket
+            } label: {
+                Label("View attachment", systemImage: "doc.text.magnifyingglass")
+            }
+            Button(role: .destructive) {
+                pendingRemoval = ticket
+            } label: {
+                Label("Remove attachment", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Actions
@@ -411,20 +500,30 @@ struct TaskTicketSection: View {
     /// everything to fill in. Off for a file that created the task, where the draft
     /// itself is what the person is waiting to see.
     ///
-    /// `announceToEditor` puts the blocking notice over the whole form, for the read
-    /// nobody asked for from inside this section. Both flags are set together for the
-    /// plus-menu path and left alone everywhere else.
     private func ingest(
         data: Data?,
         isPDF: Bool,
-        autoOpen: Bool = true,
-        announceToEditor: Bool = false
+        autoOpen: Bool = true
     ) {
         guard let data, !data.isEmpty else { return }
+
+        // Refuse a file this task already has, BEFORE storing or reading it (#408).
+        // Cheap, and it is the case that actually happened: the first attach looked
+        // like it had done nothing, so it was done again and the task ended up with
+        // two identical cards.
+        if let existing = service.duplicate(of: data, among: tickets) {
+            statusMessage = nil
+            errorMessage = Self.duplicateMessage(existing, fallback: taskTitle)
+            return
+        }
+
         isIngesting = true
         statusMessage = nil
         errorMessage = nil
-        if announceToEditor { isReadingInitialDocument?.wrappedValue = true }
+        reading?.wrappedValue = TaskReadingNotice(isPDF: isPDF)
+        // Also app-wide, so the window behind the popover dims and stops taking
+        // clicks for the duration (#416).
+        TaskAttachmentActivity.shared.began(isPDF: isPDF)
 
         ingestTask = Task {
             // A `defer` rather than a line on each exit: the notice blocks the form,
@@ -432,7 +531,8 @@ struct TaskTicketSection: View {
             // spinner.
             defer {
                 isIngesting = false
-                if announceToEditor { isReadingInitialDocument?.wrappedValue = false }
+                reading?.wrappedValue = nil
+                TaskAttachmentActivity.shared.ended()
             }
             do {
                 // 1. Read the ticket FIRST. This step needs no task at all, which
@@ -441,7 +541,7 @@ struct TaskTicketSection: View {
                 let read = try await service.read(
                     data: data,
                     isPDF: isPDF,
-                    taskTitle: taskTitle
+                    context: context
                 )
 
                 // The editor can be dismissed while this is in flight, and Cancel is
@@ -450,6 +550,18 @@ struct TaskTicketSection: View {
                 // task that will never exist.
                 if Task.isCancelled {
                     service.discardStoredFile(at: read.attachmentPath)
+                    return
+                }
+
+                // The other half of the duplicate check (#408), and it can only run
+                // here: the barcode is not known until Vision has decoded it. This is
+                // what catches the same ticket arriving as a different file — a fresh
+                // screenshot, a re-download — and any row written before ingest
+                // fingerprints existed. The bytes go back out, since nothing is going
+                // to reference them.
+                if let existing = service.duplicate(ofBarcode: read.barcodePayload, among: tickets) {
+                    service.discardStoredFile(at: read.attachmentPath)
+                    errorMessage = Self.duplicateMessage(existing, fallback: taskTitle)
                     return
                 }
 
@@ -487,6 +599,40 @@ struct TaskTicketSection: View {
             }
         }
     }
+
+    /// Remove an attachment, from wherever it currently lives.
+    ///
+    /// A pending ticket has no row, so it goes out of the editor's array and its
+    /// bytes off the disk; a stored one is soft-deleted through the service so the
+    /// removal propagates the way every other delete does. Same split the detail
+    /// sheet makes.
+    private func remove(_ ticket: TaskTicket) {
+        if let index = pending.firstIndex(where: { $0.id == ticket.id }) {
+            service.discardUnattached(pending[index])
+            pending.remove(at: index)
+            statusMessage = nil
+            errorMessage = nil
+            return
+        }
+        do {
+            try service.delete(ticket)
+            reload()
+            statusMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// What to say when the file is already on this task. Names the card it matched
+    /// so the claim is checkable rather than something the person has to take on
+    /// trust while looking at a list of similar cards.
+    private static func duplicateMessage(_ existing: TaskTicket, fallback: String) -> String {
+        let name = existing.displayTitle(fallback: fallback)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            ? "That file is already attached to this task."
+            : "That file is already attached to this task, as \"\(trimmed)\"."
+    }
 }
 
 /// Standalone sheet wrapping the section, presented from the pass chip on a task
@@ -499,9 +645,15 @@ struct TaskTicketSection: View {
 /// where someone will look for it once they know a task already has one.
 struct TaskTicketsSheet: View {
     let todoId: UUID
-    let taskTitle: String
+    /// The whole task, not just its title: a file added from here is read against
+    /// everything the task knows, exactly as one added from the editor is (#408).
+    let context: TaskTicketContext
 
     @Environment(\.dismiss) private var dismiss
+
+    @State private var reading: TaskReadingNotice?
+
+    private var taskTitle: String { context.title }
 
     var body: some View {
         NavigationStack {
@@ -512,12 +664,19 @@ struct TaskTicketsSheet: View {
                     // The task already exists here, so nothing is ever pending.
                     TaskTicketSection(
                         todoId: todoId,
-                        taskTitle: taskTitle,
-                        pending: .constant([])
+                        context: context,
+                        pending: .constant([]),
+                        reading: $reading
                     )
                     .padding(Space.lg)
                 }
+                .blur(radius: reading == nil ? 0 : 4)
+
+                if let reading {
+                    TaskDocumentReadingOverlay(isPDF: reading.isPDF)
+                }
             }
+            .animation(.easeOut(duration: 0.2), value: reading)
             .navigationTitle(taskTitle)
             .inlineNavigationTitle()
             .toolbar {

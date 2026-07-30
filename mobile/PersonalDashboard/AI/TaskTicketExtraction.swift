@@ -17,6 +17,116 @@ enum TaskTicketExtractionError: LocalizedError {
     }
 }
 
+/// What the app already knows about the event a file is being attached to (#408).
+///
+/// The task is not merely a label for the attachment. By the time someone uploads a
+/// ticket, the task often carries more about the event than the file does: a Luma
+/// check-in page is a title and a QR code, while the task it belongs to has the
+/// date, the time and the address. Reading only the image and calling that the
+/// finished card throws away the better half of what is on hand.
+///
+/// So this travels into the extraction twice over. It goes to the model as context,
+/// which lets it resolve what the file leaves partly written, and it is applied
+/// deterministically afterwards to any field the file did not show — the backstop
+/// that still produces a complete card when the model call fails outright.
+///
+/// A value read off the file ALWAYS wins. The file is the primary document; the
+/// task is what someone typed around it.
+struct TaskTicketContext: Equatable, Sendable {
+    var title: String = ""
+    var notes: String = ""
+    /// The task's due date. Read as the event's moment only when the file prints
+    /// no date of its own.
+    var dueDate: Date? = nil
+    var address: String = ""
+
+    init(title: String = "", notes: String = "", dueDate: Date? = nil, address: String = "") {
+        self.title = title
+        self.notes = notes
+        self.dueDate = dueDate
+        self.address = address
+    }
+
+    /// Build from an existing task, for the surfaces that already hold one.
+    init(todo: Todo) {
+        self.init(
+            title: todo.title,
+            notes: todo.description ?? "",
+            dueDate: todo.dueDate,
+            address: todo.address
+        )
+    }
+
+    /// Title only, for a task being composed that has nothing else filled in yet.
+    init(taskTitle: String) {
+        self.init(title: taskTitle)
+    }
+
+    /// Whether there is anything here worth telling the model about at all.
+    var isEmpty: Bool {
+        Self.trimmed(title) == nil
+            && Self.trimmed(notes) == nil
+            && dueDate == nil
+            && Self.trimmed(address) == nil
+    }
+
+    /// The task's own day, at local midnight, for filling a date the file did not
+    /// print. Local because every surface that renders or edits a ticket date uses
+    /// the local calendar — see `TaskTicketExtraction.localMidnight`.
+    var dueDay: Date? {
+        guard let dueDate else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        return cal.startOfDay(for: dueDate)
+    }
+
+    /// The due date's clock time as printed for a human, e.g. "6:30 PM". Used only
+    /// to fill a start time the file left out, and formatted rather than stored raw
+    /// because the ticket's time field is free text by design (see
+    /// `LocalTaskTicket`).
+    var dueClockText: String? {
+        guard let dueDate else { return nil }
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = .current
+        f.locale = .current
+        f.timeStyle = .short
+        f.dateStyle = .none
+        // The short-time format separates the meridiem with U+202F (narrow no-break
+        // space). Correct typography, wrong for this field: the value lands in a text
+        // box someone edits by hand, and an invisible non-typeable character in there
+        // makes an edited "6:30 PM" differ from the stored one for no visible reason.
+        return f.string(from: dueDate)
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+    }
+
+    static func trimmed(_ s: String?) -> String? {
+        guard let s else { return nil }
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+    }
+
+    /// The first URL in the task's notes, for the event page (#412).
+    ///
+    /// This is where the link actually lives in practice: a booking mail gets pasted
+    /// into the notes, or the task was made from a shared link, and the file itself is
+    /// a QR code with no readable address on it at all. Detected rather than
+    /// pattern-matched so a bare `luma.com/x` is found alongside a full `https://` one.
+    var eventURLFromNotes: String? {
+        guard let notes = Self.trimmed(notes) else { return nil }
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else { return nil }
+        let range = NSRange(notes.startIndex..., in: notes)
+        let match = detector.firstMatch(in: notes, options: [], range: range)
+        // `url` normalises a bare host to a scheme, which is what makes the value
+        // openable without the UI having to guess.
+        guard let url = match?.url, url.scheme?.hasPrefix("http") == true else { return nil }
+        return url.absoluteString
+    }
+}
+
 /// What one uploaded file yielded, BEFORE it is attached to anything.
 ///
 /// Reading and attaching are separate steps (#399) because the read is what tells
@@ -34,6 +144,12 @@ struct TaskTicketRead {
     /// When the read happened, which is the reference point for working out an
     /// unprinted year. Injectable so that resolution is testable.
     var readAt: Date = Date()
+    /// Hex SHA-256 of the file as uploaded, carried through to `TicketMeta` so a
+    /// repeat of the same file is recognised rather than attached twice (#408).
+    var sourceHash: String? = nil
+    /// What the task already knew about the event. Fills the fields the file did
+    /// not show — see `TaskTicketContext`.
+    var context: TaskTicketContext = TaskTicketContext()
 
     /// The event name, for the task's title when it has none.
     var suggestedTitle: String? {
@@ -80,6 +196,16 @@ struct TaskTicketRead {
         return local
     }
 
+    /// The day this ticket is for, falling back to the task's own due day when the
+    /// file printed no date (#408).
+    ///
+    /// Separate from `eventDay`, which stays strictly what the FILE said: that one
+    /// feeds the task's due date, and filling it from the task would be the editor
+    /// suggesting a value back to the field it came from.
+    var resolvedEventDay: Date? {
+        eventDay ?? context.dueDay
+    }
+
     /// The ticket exactly as it would be stored, WITHOUT storing it.
     ///
     /// One derivation serves both paths (#399): an attachment on an existing task
@@ -97,11 +223,41 @@ struct TaskTicketRead {
         // Left nil when the model declined to judge, so `belongsInWallet` can tell
         // "not a pass" apart from "nobody looked" (#405).
         meta.presentedAtEntry = extracted?.presentedAtEntry
+        // The ingest fingerprint, so a second run at the same file is recognised
+        // as a repeat (#408).
+        meta.sourceHash = sourceHash
+        // The event page: printed on the document if it says so, otherwise the link
+        // sitting in the task's notes (#412). Not the barcode, which on a check-in
+        // pass is also a URL but a different one.
+        meta.eventURL = Self.clean(extracted?.eventURL) ?? context.eventURLFromNotes
+        meta.guestName = Self.clean(extracted?.guestName)
 
         // Stored at LOCAL midnight of the printed day, because every surface that
-        // renders or edits it uses the local calendar.
+        // renders or edits it uses the local calendar. The printed day is preferred
+        // and the task's own day is the fallback (#408): a file that shows a date
+        // is never overruled by the reminder someone set for it.
         let localDay = eventDay.flatMap { TaskTicketExtraction.localMidnight(ofUTCDay: $0) }
+            ?? context.dueDay
         let metaJSON = meta.isEmpty ? "" : meta.encodedString()
+
+        // Each of these three falls back to what the task already knew, so the card
+        // carries everything on hand about the event rather than only what fitted on
+        // the file (#408). The file wins wherever it read a value.
+        //
+        // Bound to locals rather than written inline: the coalescing chains inside
+        // the initializer below defeated the type checker outright.
+        let resolvedTitle: String = Self.clean(extracted?.eventTitle)
+            ?? TaskTicketContext.trimmed(context.title)
+            ?? ""
+        let resolvedVenue: String = Self.clean(extracted?.venue)
+            ?? TaskTicketContext.trimmed(context.address)
+            ?? ""
+        // The task's clock time stands in only when the task's DAY is also being
+        // used. A file that printed its own date is not given someone else's hour.
+        let taskTime: String? = eventDay == nil ? context.dueClockText : nil
+        let resolvedStartTime: String = Self.clean(extracted?.startTimeText)
+            ?? taskTime
+            ?? ""
 
         return TaskTicket(
             id: id,
@@ -109,10 +265,10 @@ struct TaskTicketRead {
             attachmentPath: attachmentPath,
             barcodePayload: barcodePayload,
             barcodeSymbology: barcodeSymbology,
-            eventTitle: Self.clean(extracted?.eventTitle) ?? "",
+            eventTitle: resolvedTitle,
             eventDate: localDay,
-            startTimeText: Self.clean(extracted?.startTimeText) ?? "",
-            venue: Self.clean(extracted?.venue) ?? "",
+            startTimeText: resolvedStartTime,
+            venue: resolvedVenue,
             seat: Self.clean(extracted?.seat) ?? "",
             // Short codes are the error-prone ones: a bare "T" or a dash read off
             // the ticket is worse than showing nothing, so the gate goes through
@@ -178,8 +334,14 @@ struct TaskTicketExtraction {
     /// - Throws only when the file itself can't be persisted (disk error). A failed
     ///   read is not an error: the result carries the stored path plus whatever the
     ///   barcode yielded, and `degradeMessage` explains.
-    func read(data: Data, isPDF: Bool, taskTitle: String) async throws -> TaskTicketRead {
+    func read(
+        data: Data,
+        isPDF: Bool,
+        context: TaskTicketContext
+    ) async throws -> TaskTicketRead {
         let storage = TicketStorage.taskTickets
+        // Fingerprint the ORIGINAL upload, before compression touches it (#408).
+        let sourceHash = SyncHash.hex(data)
 
         // 1. Persist the original upload. Images are normalised to a compressed
         //    JPEG (off the main actor) that is safe for disk, Vision and Claude
@@ -215,7 +377,7 @@ struct TaskTicketExtraction {
         var degradeMessage: String?
         if let imageData = extractionImageData {
             do {
-                extracted = try await extract(imageData: imageData, taskTitle: taskTitle)
+                extracted = try await extract(imageData: imageData, context: context)
             } catch {
                 NSLog("TaskTicketExtraction: extraction failed: %@", error.localizedDescription)
                 degradeMessage = "Saved your ticket, but couldn't read the details. Tap the card to add them."
@@ -229,7 +391,9 @@ struct TaskTicketExtraction {
             barcodePayload: decoded?.payload ?? "",
             barcodeSymbology: decoded?.symbology.rawValue ?? "",
             extracted: extracted,
-            degradeMessage: degradeMessage
+            degradeMessage: degradeMessage,
+            sourceHash: sourceHash,
+            context: context
         )
     }
 
@@ -301,11 +465,14 @@ struct TaskTicketExtraction {
     /// Send the ticket image to Claude with the dedicated `extract_task_ticket`
     /// tool. Throws on transport / config errors or when the model answers with
     /// prose instead of a tool call; the caller degrades.
-    private func extract(imageData: Data, taskTitle: String) async throws -> ExtractedTaskTicket {
+    private func extract(
+        imageData: Data,
+        context: TaskTicketContext
+    ) async throws -> ExtractedTaskTicket {
         let base64 = imageData.base64EncodedString()
         let userContent: [AnthropicContentBlock] = [
             .image(base64: base64, mediaType: "image/jpeg"),
-            .text(Self.userPrompt(taskTitle: taskTitle))
+            .text(Self.userPrompt(context: context))
         ]
         let messages = [AnthropicMessage(role: "user", content: userContent)]
 
@@ -509,6 +676,10 @@ struct ExtractedTaskTicket {
     /// The weekday printed on the ticket, when it prints one. Used to pin down an
     /// unprinted year — see `TaskTicketExtraction.resolveDay`.
     var printedWeekday: String?
+    /// The event's own page, if the document prints one (#412).
+    var eventURL: String?
+    /// The name the ticket is issued to, if it prints one (#413).
+    var guestName: String?
     /// Whether the ticket actually printed a year, as opposed to the model working
     /// one out. Only a printed year is taken at face value.
     var yearWasPrinted: Bool = false
@@ -530,6 +701,8 @@ struct ExtractedTaskTicket {
         section = s("section")
         row = s("row")
         printedWeekday = s("printed_weekday")
+        eventURL = s("event_url")
+        guestName = s("guest_name")
         // Asked for as a string rather than a JSON boolean to match every other
         // field in this schema, and read leniently.
         yearWasPrinted = ["yes", "true"].contains(
@@ -557,6 +730,8 @@ struct ExtractedTaskTicket {
         section: String? = nil,
         row: String? = nil,
         printedWeekday: String? = nil,
+        eventURL: String? = nil,
+        guestName: String? = nil,
         yearWasPrinted: Bool = false,
         presentedAtEntry: Bool? = nil
     ) {
@@ -571,6 +746,8 @@ struct ExtractedTaskTicket {
         self.section = section
         self.row = row
         self.printedWeekday = printedWeekday
+        self.eventURL = eventURL
+        self.guestName = guestName
         self.yearWasPrinted = yearWasPrinted
         self.presentedAtEntry = presentedAtEntry
     }
@@ -596,6 +773,8 @@ extension TaskTicketExtraction {
                 "seat": field("Seat as printed (e.g. \"12A\", \"Seat 8\"). Omit if none."),
                 "gate": field("Entry gate or door, ONLY when a real value is explicitly printed (e.g. \"Gate 3\", \"Door B\", \"14\"). Never infer it, never emit a placeholder, a dash, \"TBD\", or a lone letter — omit the field entirely if no real gate is shown."),
                 "reference": field("Booking reference, order number or confirmation code as printed. Omit if none."),
+                "event_url": field("The event's own page or booking URL, when one is printed or written on the document as readable text (e.g. \"https://luma.com/4ptmrf91\", an Eventbrite or Ticketmaster link). Read it EXACTLY. Do NOT decode it out of a QR code or barcode, and do not return a check-in or scan-me link — this is the page someone would open to read about the event, not the code that admits them. Omit if none is written."),
+                "guest_name": field("The name the ticket is issued to, exactly as printed (e.g. \"Akshay Sharma\"). This is the holder or guest, not the performer, the venue, the organiser or the person who sold it. Omit unless a name is clearly printed as the holder."),
                 "event_type": field("Kind of event in a word or two (e.g. \"Concert\", \"Football match\", \"Theatre\", \"Appointment\", \"Flight\"). Omit if unclear."),
                 "presented_at_entry": field("\"yes\" when the holder physically hands this over or holds it up to be let in somewhere: a concert or match ticket, a boarding pass, a cinema or museum admission, a collection slip. \"no\" when it merely RECORDS a booking that is looked up under a name on arrival: a restaurant reservation, a hotel booking, a doctor or salon appointment, an order or payment receipt. A booking with a barcode or QR code to scan is \"yes\" whatever it is for. When you genuinely cannot tell, omit the field rather than guessing."),
                 "section": field("Seating section, block or stand for a seated event (e.g. \"Section 122\", \"Block A\"). Omit if none."),
@@ -614,6 +793,8 @@ extension TaskTicketExtraction {
 
     Read values verbatim. Do not guess, round, translate or reformat. Omit any field you cannot read with confidence: a blank field renders as nothing, whereas a wrong one sends the person to the wrong door. Short codes like gate are especially error-prone — emit them ONLY when a real value is explicitly printed, never a lone letter, a dash or a placeholder.
 
+    The message may also list what the person has already recorded about this event on the task the file is attached to. Those details are trustworthy but strictly secondary: never let one override a value printed on the image, and reach for them only to fill a field the image leaves blank. They do not license guessing — a field neither the image nor that list answers stays omitted.
+
     The start time is a special case: return it as printed, character for character. Never normalise it and never attach a timezone. When a ticket prints both a doors time and a show time, the show time is the one to return.
 
     One field is a judgement rather than a reading: presented_at_entry. Ask yourself whether the person holds this document up to get in, or whether it just records a booking that someone looks up under their name when they arrive. A concert ticket, a match ticket and a boarding pass are held up. A table reservation, a hotel booking and a dental appointment are not, however formally they are laid out. Anything carrying a barcode or QR code to scan is held up. Say so only when you are confident; omit the field when you are not.
@@ -621,18 +802,63 @@ extension TaskTicketExtraction {
     The date is the other special case. Many tickets print a day and month with no year, because to the person holding one the year is obvious. It is not obvious to you: today's date is given in the message and it is the only thing you should reason from, never your own sense of what year it is. When no year is printed, take the next occurrence of that day and month on or after today, and if the ticket also prints a day of the week, use it to check yourself — the year is wrong if the weekday does not match.
     """
 
-    static func userPrompt(taskTitle: String, today: Date = Date()) -> String {
-        let trimmed = taskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let context = trimmed.isEmpty
-            ? ""
-            : "\n\nFor context only, the task this ticket is attached to is called \"\(trimmed)\". Use it to disambiguate what you are reading, but never copy it into a field — every value must be read off the image itself."
-
+    /// The user turn: today's date, the extraction instruction, and what the task
+    /// already knows about this event.
+    ///
+    /// That last part used to be the task's title alone, with an instruction never
+    /// to copy it into a field (#408). The instruction was wrong in the common case:
+    /// a booking page carrying a title and a QR code, attached to a task that
+    /// already holds the date, the time and the address, produced a card with three
+    /// empty fields while the answers sat one level up. The file still wins wherever
+    /// it prints a value, which is what the wording below has to make unambiguous.
+    static func userPrompt(context: TaskTicketContext, today: Date = Date()) -> String {
         return """
         Today is \(todayFormatter.string(from: today)). Use that as your reference for any date the ticket leaves partly unwritten.
 
-        Extract the details of the ticket in the image by calling extract_task_ticket.\(context)
+        Extract the details of the ticket in the image by calling extract_task_ticket.\(knownDetails(context))
         """
     }
+
+    /// The "what we already know" block, or "" when the task carries nothing.
+    private static func knownDetails(_ context: TaskTicketContext) -> String {
+        guard !context.isEmpty else { return "" }
+
+        var lines: [String] = []
+        if let title = TaskTicketContext.trimmed(context.title) {
+            lines.append("Task: \"\(title)\"")
+        }
+        if let notes = TaskTicketContext.trimmed(context.notes) {
+            // Capped: notes are free text and can run long, and the useful detail
+            // (a venue, a joining link, a room number) is at the top.
+            lines.append("Notes: \(notes.prefix(600))")
+        }
+        if let due = context.dueDate {
+            lines.append("When: \(dueFormatter.string(from: due))")
+        }
+        if let address = TaskTicketContext.trimmed(context.address) {
+            lines.append("Where: \(address)")
+        }
+
+        return """
+
+
+        Here is what the person has already recorded about this event on the task the file is being attached to:
+
+        \(lines.joined(separator: "\n"))
+
+        Read every field off the IMAGE first: what the document itself shows always wins, and you must never overwrite a printed value with one from this list. Where the image does not show a field and the details above do, take it from them, so the finished card carries everything known about the event instead of only what fitted on the file. Invent nothing that appears in neither.
+        """
+    }
+
+    /// "Friday, 31 July 2026 at 6:30 PM" — the task's due date as the model should
+    /// read it. Weekday included for the same reason `todayFormatter` carries one.
+    nonisolated(unsafe) static let dueFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEEE, d MMMM yyyy 'at' h:mm a"
+        return f
+    }()
 
     /// "Thursday, 30 July 2026" — the weekday is included so the model can check an
     /// inferred year against a printed day name without doing calendar arithmetic

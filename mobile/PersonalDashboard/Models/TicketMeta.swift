@@ -49,6 +49,37 @@ struct TicketMeta: Codable, Equatable, Sendable {
     /// know", never as "yes" — see `LocalTaskTicket.belongsInWallet`.
     var presentedAtEntry: Bool?
 
+    /// Hex SHA-256 of the file exactly as it was uploaded, before any
+    /// compression (#408).
+    ///
+    /// This is what lets a second attempt at the same file be recognised as a
+    /// repeat rather than attached again. It is stamped on the way in, so rows
+    /// written before this field existed carry `nil` and are matched on their
+    /// barcode payload instead. Hashing the ORIGINAL bytes rather than the
+    /// stored JPEG is deliberate: the compression pipeline is free to change its
+    /// constants, and an ingest fingerprint that shifts with them would stop
+    /// recognising files it had already seen.
+    var sourceHash: String?
+
+    /// The event's own page, when the document or the task carries one (#412).
+    ///
+    /// Apple Wallet puts this on the BACK of a pass ("Event Page"), not on its face,
+    /// and that is the right call: it is the thing you reach for before the event, not
+    /// at the door. So it renders as an action on the detail surface rather than a chip
+    /// on the card.
+    ///
+    /// Distinct from the barcode payload, which for a Luma pass is also a URL — the
+    /// check-in link. That one admits you; this one tells you where you are going.
+    var eventURL: String?
+
+    /// Who the ticket is issued to, when the document prints a name (#413).
+    ///
+    /// A Wallet pass carries this as an auxiliary field, and it is what fills that
+    /// row on an event ticket with no seat, row or gate — which is most of them
+    /// outside a stadium. Distinct from `passengerName`, which belongs to the
+    /// boarding-pass layout and is parsed out of BCBP.
+    var guestName: String?
+
     /// A transport ticket (flight / train) is styled as a boarding pass. We
     /// treat any item carrying both endpoint codes, or an explicit boarding
     /// pass flag, or a flight number, as boarding-pass shaped.

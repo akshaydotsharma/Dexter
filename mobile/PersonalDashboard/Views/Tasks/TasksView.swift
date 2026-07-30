@@ -111,6 +111,9 @@ struct TasksView: View {
             .allowsHitTesting(draftBucket == nil)
             .animation(.easeOut(duration: 0.15), value: draftBucket)
         }
+        // Dim the list while an attachment is being read, so the operation reads as
+        // app-wide rather than as something happening in one small card (#416).
+        .dimsWhileReadingAnAttachment()
         .activeSection(.tasks)
         .macSectionChrome("Tasks") {
             // macOS home for the calendar (#385): the native window toolbar,
@@ -931,6 +934,11 @@ private struct TaskRow: View {
     /// Presents the task's tickets. Separate from the editor so the card, and the
     /// scanner behind it, are two taps from the list rather than buried in a form.
     @State private var showingTickets = false
+    /// True while the editor popover has a file panel open or a read running (#416).
+    /// Lives on the ROW because the popover's behaviour is set from out here: busy
+    /// means it closes only when we say so, so neither Finder taking key nor a stray
+    /// click behind it can bin a read in progress.
+    @State private var isAttachmentBusy = false
     @FocusState private var titleFocused: Bool
     @Environment(\.openURL) private var openURL
     // macOS: local presentation state for the Reminders-style detail popover
@@ -1074,8 +1082,22 @@ private struct TaskRow: View {
             // macOS: the editor emanates from the info button as a popover, so
             // it visually belongs to this task. iOS keeps the parent `.sheet`.
             #if os(macOS)
-            .popover(isPresented: $showingEditorPopover, arrowEdge: .leading) {
-                TaskEditorSheet(viewModel: viewModel, todo: todo)
+            // Deliberately NOT SwiftUI's `.popover` (#416): that one is transient, so
+            // it was destroyed the moment Finder took key, and the whole attach then
+            // happened off screen. `MacAnchoredPopover` owns the NSPopover and can
+            // keep it open, which is what lets ONE surface carry the operation end to
+            // end: Add, choose a file, watch it parse, see the card, edit it.
+            .macAnchoredPopover(
+                isPresented: $showingEditorPopover,
+                isBusy: isAttachmentBusy,
+                preferredEdge: .minX
+            ) {
+                TaskEditorSheet(
+                    viewModel: viewModel,
+                    todo: todo,
+                    isAttachmentBusy: $isAttachmentBusy,
+                    onClose: { showingEditorPopover = false }
+                )
             }
             #endif
             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
@@ -1106,7 +1128,7 @@ private struct TaskRow: View {
         .onTapGesture { beginBodyTap() }
         #endif
         .sheet(isPresented: $showingTickets) {
-            TaskTicketsSheet(todoId: todo.id, taskTitle: todo.title)
+            TaskTicketsSheet(todoId: todo.id, context: TaskTicketContext(todo: todo))
         }
     }
 
@@ -1270,6 +1292,14 @@ private struct TaskEditorSheet: View {
     /// A file to read as soon as the editor appears, filling the draft from it
     /// (#402). Nil for a blank editor and for editing an existing task.
     var initialDocument: TaskDocumentUpload? = nil
+    /// Reports an in-flight attachment operation up to the presenter (#416). The
+    /// macOS popover reads it to hold itself open across Finder; iOS uses it to
+    /// refuse an interactive dismiss.
+    var isAttachmentBusy: Binding<Bool>? = nil
+    /// How to close, for a presenter with no working `dismiss` in the environment —
+    /// which is the case inside `MacAnchoredPopover`, where this content is hosted in
+    /// an `NSHostingController` rather than presented by SwiftUI.
+    var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
@@ -1286,10 +1316,8 @@ private struct TaskEditorSheet: View {
     /// Written by `save()`, thrown away by Cancel. Held here rather than in the
     /// ticket section because this view owns that lifecycle.
     @State private var pendingTickets: [TaskTicket] = []
-    /// True while a file picked from the plus menu is being read, which puts a
-    /// blocking notice over the form (#402). Without it the editor opens by itself
-    /// with every field empty and reads as broken.
-    @State private var isReadingInitialDocument = false
+    /// The read in flight, which puts the blocking notice over this form (#416).
+    @State private var reading: TaskReadingNotice?
 
     @Environment(\.openURL) private var openURL
 
@@ -1450,7 +1478,7 @@ private struct TaskEditorSheet: View {
                 // Inside the ZStack, so the navigation bar's Cancel sits above it.
                 readingOverlay
             }
-            .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
+            .animation(.easeOut(duration: 0.2), value: reading)
             .navigationTitle(isEditing ? "Edit task" : "New task")
             .inlineNavigationTitle()
             .toolbar {
@@ -1491,19 +1519,36 @@ private struct TaskEditorSheet: View {
     private var ticketsBlock: some View {
         TaskTicketSection(
             todoId: todo?.id,
-            taskTitle: currentTitleForTickets,
+            context: ticketContext,
             pending: $pendingTickets,
             onExtracted: applyExtractedTicket,
             initialDocument: initialDocument,
-            isReadingInitialDocument: $isReadingInitialDocument
+            reading: $reading,
+            isBusy: isAttachmentBusy ?? .constant(false)
+        )
+    }
+
+    /// What the extractor is told about the event (#408), read off the LIVE editor
+    /// fields rather than the saved task.
+    ///
+    /// Live matters: someone who has just typed the venue into a draft, or corrected
+    /// the date, should have the ticket read against what is on screen. It is also
+    /// the only source available at all while composing a task that does not exist
+    /// yet.
+    private var ticketContext: TaskTicketContext {
+        TaskTicketContext(
+            title: currentTitleForTickets,
+            notes: descriptionText,
+            dueDate: hasDueDate ? dueDate : nil,
+            address: address
         )
     }
 
     /// The blocking notice, over the form only so Cancel stays reachable (#402).
     @ViewBuilder
     private var readingOverlay: some View {
-        if isReadingInitialDocument, let initialDocument {
-            TaskDocumentReadingOverlay(isPDF: initialDocument.isPDF)
+        if let reading {
+            TaskDocumentReadingOverlay(isPDF: reading.isPDF)
         }
     }
 
@@ -1514,7 +1559,7 @@ private struct TaskEditorSheet: View {
     /// focus is what stops its text from competing, and it restores itself when the
     /// values land.
     private var formBlurWhileReading: CGFloat {
-        isReadingInitialDocument ? 4 : 0
+        reading == nil ? 0 : 4
     }
 
     /// Fill the task's own fields from what the ticket said (#399).
@@ -1568,7 +1613,7 @@ private struct TaskEditorSheet: View {
             // grammar. Commit/dismiss live here instead of a window toolbar
             // because this content is presented as a popover / compact sheet.
             HStack {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { closeEditor() }
                     .buttonStyle(.plain)
                     .foregroundStyle(Tokens.muted)
                 Spacer()
@@ -1744,7 +1789,7 @@ private struct TaskEditorSheet: View {
             // Scoped to the scrolling form, so the header's Cancel stays clickable.
             .overlay { readingOverlay }
         }
-        .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
+        .animation(.easeOut(duration: 0.2), value: reading)
         .frame(width: 360, height: 520)
         .background(Tokens.paper)
         .onAppear(perform: prefill)
@@ -1798,6 +1843,15 @@ private struct TaskEditorSheet: View {
     }
     #endif
 
+    /// Close the editor, whichever way it was presented (#416).
+    ///
+    /// `MacAnchoredPopover` hosts this content in an `NSHostingController`, so the
+    /// environment's `dismiss` does nothing there — there is no SwiftUI presentation
+    /// to dismiss, and the presenter has to be told instead.
+    private func closeEditor() {
+        if let onClose { onClose() } else { dismiss() }
+    }
+
     private func prefill() {
         guard let todo else { return }
         title = todo.title
@@ -1849,7 +1903,7 @@ private struct TaskEditorSheet: View {
             let created = await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
             if let created { flushPendingTickets(to: created.id) }
         }
-        dismiss()
+        closeEditor()
     }
 
     /// Write the tickets attached while composing, now that the task exists (#399).
