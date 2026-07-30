@@ -99,7 +99,7 @@ struct TicketCardView: View {
                 // holes are cut from the card's outline, so it draws the dashes
                 // and nothing else. Standalone, it paints its own notches.
                 PerforatedDivider(cutout: embedded, lineColor: perforationLine)
-                    .background(embedded ? Tokens.ticketStub : .clear)
+                    .background(embedded ? stubPaper : .clear)
 
                 barcodeStub
                     .padding(.horizontal, embedded ? 0 : Space.lg)
@@ -110,11 +110,18 @@ struct TicketCardView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// The dashes' colour. Embedded they run across the white stub, so they take
-    /// its own muted ink instead of the page border colour, which would vanish.
+    /// The dashes' colour. Embedded they run across the stub, so they take its
+    /// own muted ink instead of the page border colour, which would vanish.
     private var perforationLine: Color {
-        embedded ? Tokens.ticketStubMuted.opacity(0.45) : Tokens.borderStrong
+        embedded ? stubMuted.opacity(0.5) : Tokens.borderStrong
     }
+
+    /// The stub's paper and ink. The wallet tints it per kind so the bottom of
+    /// the card belongs to the card; the trip timeline keeps the flat white it
+    /// has always had.
+    private var stubPaper: Color { embedded ? palette.stubPaper : Tokens.ticketStub }
+    private var stubInk: Color { embedded ? palette.stubInk : Tokens.ticketStubInk }
+    private var stubMuted: Color { embedded ? palette.stubMuted : Tokens.ticketStubMuted }
 
     /// Whether the card grows a tear line and a stub beneath it.
     ///
@@ -832,6 +839,9 @@ struct TicketCardView: View {
             StayLocationStub(
                 address: item.address,
                 mapsURL: item.mapsURL,
+                paper: palette.stubPaper,
+                ink: palette.stubInk,
+                muted: palette.stubMuted,
                 buttonFill: palette.band
             )
         } else {
@@ -852,6 +862,21 @@ struct TicketCardView: View {
                 compact: !embedded,
                 alignment: .center
             )
+            // The generated code is black on WHITE, so on tinted paper it would
+            // otherwise read as a white rectangle dropped on the ticket. Giving
+            // it a deliberate plate turns that into the quiet zone a scanner
+            // wants anyway.
+            .padding(embedded ? Space.md : 0)
+            .background {
+                if embedded {
+                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                        .fill(Tokens.ticketStub)
+                }
+            }
+            // A square code in a full-width plate reads as a slab with a QR
+            // dropped in the middle; the plate hugs it instead. A wide PDF417
+            // genuinely wants the width, so it keeps it.
+            .frame(maxWidth: barcodePlateWidth)
 
             // A stay already shows its confirmation in the eyebrow, so the stub
             // stays code-free (just the scannable barcode). Flights / events
@@ -861,10 +886,10 @@ struct TicketCardView: View {
                     Text(pnrLabel)
                         .font(.edEyebrow)
                         .tracking(1.4)
-                        .foregroundStyle(Tokens.ticketStubMuted)
+                        .foregroundStyle(stubMuted)
                     Text(confirmationCode)
                         .font(.edMono)
-                        .foregroundStyle(Tokens.ticketStubInk)
+                        .foregroundStyle(stubInk)
                         .lineLimit(1)
                 }
             }
@@ -876,7 +901,7 @@ struct TicketCardView: View {
             if embedded {
                 // Bleeds to the card's own edges: the stub IS the bottom of the
                 // ticket, not a panel sitting on it.
-                Tokens.ticketStub
+                stubPaper
             } else {
                 RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                     .fill(Tokens.ticketStub)
@@ -891,6 +916,16 @@ struct TicketCardView: View {
         switch BarcodeSymbology(rawValue: item.barcodeSymbology) ?? .other {
         case .qr, .aztec, .other: return embedded ? 132 : 84
         case .pdf417, .code128:   return embedded ? 76 : 52
+        }
+    }
+
+    /// How wide the white code plate may grow. `.infinity` for the wide 1D /
+    /// PDF417 strips, which fill it honestly.
+    private var barcodePlateWidth: CGFloat {
+        guard embedded else { return .infinity }
+        switch BarcodeSymbology(rawValue: item.barcodeSymbology) ?? .other {
+        case .qr, .aztec, .other: return stubBarcodeHeight + Space.xxl + Space.md
+        case .pdf417, .code128:   return .infinity
         }
     }
 

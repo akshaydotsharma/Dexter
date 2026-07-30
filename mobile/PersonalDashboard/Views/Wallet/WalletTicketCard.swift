@@ -80,8 +80,7 @@ struct WalletTicketCard: View {
                 endPoint: .bottom
             )
         )
-        .coordinateSpace(name: TicketShape.coordinateSpace)
-        .onPreferenceChange(TicketNotchKey.self) { perforationY = $0 }
+        .readingTicketNotch { perforationY = $0 }
         .clipShape(shape)
         .overlay(shape.stroke(palette.border, lineWidth: 1))
         // Depth is what makes a stack read as a stack rather than a list of

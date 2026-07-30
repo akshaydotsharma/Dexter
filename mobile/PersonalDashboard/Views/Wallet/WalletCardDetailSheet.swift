@@ -89,53 +89,62 @@ struct WalletCardDetailSheet: View {
         }
     }
 
+    /// The actions as a single row of icon tiles rather than a stack of
+    /// full-width rows.
+    ///
+    /// Three stacked rows ate roughly a third of an iPhone screen, which pushed
+    /// the boarding pass — the thing this surface exists to show — off the
+    /// bottom and made you scroll to see your own ticket. Side by side they cost
+    /// one row's height for all of them, and an icon over a short word is as
+    /// readable as a full sentence with a chevron when there are only ever two
+    /// or three of them.
     private var actions: some View {
-        VStack(spacing: Space.sm) {
+        HStack(spacing: Space.sm) {
             // Present-to-scan is the iOS-only gate idiom (brightness + idle
             // timer), so macOS goes straight to the stored file instead.
             #if os(iOS)
             if card.hasBarcode {
-                actionRow(icon: "barcode.viewfinder", title: "Present to scan") {
+                actionTile(icon: "barcode.viewfinder", title: "Scan") {
                     Haptics.light()
                     showingScan = true
                 }
             }
             #endif
             if !card.attachmentPath.isEmpty {
-                actionRow(icon: "doc.text.magnifyingglass", title: "View original ticket") {
+                actionTile(icon: "doc.text.magnifyingglass", title: "Original") {
                     Haptics.light()
                     showingOriginal = true
                 }
             }
             if let onEdit {
-                actionRow(icon: "pencil", title: "Edit details", action: onEdit)
+                actionTile(icon: "pencil", title: "Edit", action: onEdit)
             }
             if let onOpenSource {
-                actionRow(
+                actionTile(
                     icon: "arrow.up.forward.app",
-                    title: "Open \(entry.source.label)",
+                    title: entry.source.label,
                     action: onOpenSource
                 )
             }
         }
+        .frame(maxWidth: .infinity)
     }
 
-    private func actionRow(icon: String, title: String, action: @escaping () -> Void) -> some View {
+    private func actionTile(icon: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: Space.sm) {
+            VStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Tokens.accent(for: .wallet))
-                    .frame(width: 24)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(entry.palette.accent)
                 Text(title)
-                    .font(.edBodyMedium)
+                    .font(.edCaption)
                     .foregroundStyle(Tokens.ink)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Tokens.mutedSoft)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            .padding(Space.md)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Space.md)
+            .padding(.horizontal, Space.sm)
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .paperBorder(Tokens.border, radius: Radius.md)
             .contentShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))

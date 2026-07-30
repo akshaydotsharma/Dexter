@@ -15,7 +15,11 @@ import SwiftUI
 struct StayLocationStub: View {
     let address: String
     let mapsURL: URL?
-    /// The card's band colour. Stub paper is white in BOTH themes, so the
+    /// The stub's paper and ink, tinted to this card's kind.
+    let paper: Color
+    let ink: Color
+    let muted: Color
+    /// The card's band colour. Stub paper is LIGHT in both themes, so the
     /// palette's `accent` cannot be used here (it is light in dark mode and
     /// would vanish); `band` stays saturated in both.
     let buttonFill: Color
@@ -29,10 +33,10 @@ struct StayLocationStub: View {
                     Text("ADDRESS")
                         .font(.edEyebrow)
                         .tracking(1.4)
-                        .foregroundStyle(Tokens.ticketStubMuted)
+                        .foregroundStyle(muted)
                     Text(address)
                         .font(.edBodyMedium)
-                        .foregroundStyle(Tokens.ticketStubInk)
+                        .foregroundStyle(ink)
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
                 }
@@ -49,7 +53,7 @@ struct StayLocationStub: View {
                         Text("Directions")
                             .font(.edBodyMedium)
                     }
-                    .foregroundStyle(Tokens.ticketStub)
+                    .foregroundStyle(paper)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Space.sm)
                     .background(buttonFill, in: Capsule(style: .continuous))
@@ -61,6 +65,6 @@ struct StayLocationStub: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.xl)
-        .background(Tokens.ticketStub)
+        .background(paper)
     }
 }

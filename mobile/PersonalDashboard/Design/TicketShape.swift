@@ -21,10 +21,6 @@ struct TicketShape: Shape {
     /// collapsed card in the deck is a band with no tear line to punch.
     var notchY: CGFloat?
 
-    /// Name of the coordinate space a card establishes so its tear line can
-    /// report where it sits inside the card.
-    static let coordinateSpace = "walletTicket"
-
     func path(in rect: CGRect) -> Path {
         let base = Path(roundedRect: rect, cornerRadius: cornerRadius, style: .continuous)
         guard let notchY,
@@ -52,30 +48,42 @@ struct TicketShape: Shape {
 
 // MARK: - Tear-line measurement
 
-/// Carries the tear line's vertical position up from wherever it is drawn to the
-/// card that has to punch its notches there.
+/// Carries the tear line's position up from wherever it is drawn to the card
+/// that has to punch its notches there.
+///
+/// An ANCHOR rather than a resolved number, on purpose. The first version
+/// measured `proxy.frame(in: .named(…))` against a coordinate space the card
+/// declared — and when that name does not resolve, SwiftUI does not complain,
+/// it quietly returns GLOBAL coordinates. A tear line 800pt down the screen
+/// then failed the shape's "inside the card" guard and the notches silently
+/// vanished, which is exactly what happened to every card in the deck while the
+/// detail sheet (sitting near the top of the window, so global ≈ local) kept
+/// working. An anchor is resolved by the reader's own `GeometryProxy`, so it is
+/// always in the card's coordinates and cannot fall back to anything else.
 struct TicketNotchKey: PreferenceKey {
-    static let defaultValue: CGFloat? = nil
+    static let defaultValue: Anchor<CGRect>? = nil
 
-    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
         value = nextValue() ?? value
     }
 }
 
 extension View {
-    /// Publish this view's vertical midpoint as the enclosing ticket's tear line.
-    ///
-    /// The card reads it with `.onPreferenceChange(TicketNotchKey.self)` and
-    /// feeds it back into its `TicketShape`. One layout pass of lag, which is
-    /// invisible: the card is already animating open when it resolves.
+    /// Publish this view's bounds as the enclosing ticket's tear line.
     func ticketNotchAnchor() -> some View {
-        background(
+        anchorPreference(key: TicketNotchKey.self, value: .bounds) { $0 }
+    }
+
+    /// Read the tear line published by `ticketNotchAnchor()`, resolved in THIS
+    /// view's coordinate space, and hand back its vertical centre.
+    func readingTicketNotch(_ onChange: @escaping (CGFloat?) -> Void) -> some View {
+        backgroundPreferenceValue(TicketNotchKey.self) { anchor in
             GeometryReader { proxy in
-                Color.clear.preference(
-                    key: TicketNotchKey.self,
-                    value: proxy.frame(in: .named(TicketShape.coordinateSpace)).midY
-                )
+                let midY = anchor.map { proxy[$0].midY }
+                Color.clear
+                    .onAppear { onChange(midY) }
+                    .onChange(of: midY) { _, new in onChange(new) }
             }
-        )
+        }
     }
 }

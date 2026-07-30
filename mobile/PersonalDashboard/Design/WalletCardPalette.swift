@@ -35,6 +35,15 @@ struct WalletCardPalette {
     let border: Color
     /// Thin vertical rule between facts cells.
     let factRule: Color
+    /// The tear-off stub's paper, and the ink on it.
+    ///
+    /// Tinted per kind rather than the flat white the trip timeline uses: a
+    /// white slab at the bottom of a coloured card reads as a hole rather than
+    /// part of the ticket. Still LIGHT in both themes, because it is paper and
+    /// because the barcode plate that sits on it has to stay scannable.
+    let stubPaper: Color
+    let stubInk: Color
+    let stubMuted: Color
 
     /// The original #222 violet. Default everywhere, so the trip timeline keeps
     /// the exact colours it had before cards became colour-coded.
@@ -46,7 +55,10 @@ struct WalletCardPalette {
         tintTop: Color.paper(0xF1EAFB, 0x272033),
         tintBottom: Color.paper(0xFCFAFF, 0x1A1620),
         border: Color.paper(0xE3D7F4, 0x3C3352),
-        factRule: Color.paper(0xE1D8F0, 0x352E48)
+        factRule: Color.paper(0xE1D8F0, 0x352E48),
+        stubPaper: Color(hex: 0xF3EDFC),
+        stubInk: Color(hex: 0x2A2135),
+        stubMuted: Color(hex: 0x6B6280)
     )
 
     /// Flights. Deep aviation blue.
@@ -58,7 +70,10 @@ struct WalletCardPalette {
         tintTop: Color.paper(0xE8F0FE, 0x1B2233),
         tintBottom: Color.paper(0xFAFCFF, 0x151A24),
         border: Color.paper(0xD3E1F8, 0x2E3D57),
-        factRule: Color.paper(0xD9E4F7, 0x2A3750)
+        factRule: Color.paper(0xD9E4F7, 0x2A3750),
+        stubPaper: Color(hex: 0xE9F0FC),
+        stubInk: Color(hex: 0x16233A),
+        stubMuted: Color(hex: 0x566780)
     )
 
     /// Rail, coach, ferry. Teal, distinct from the flight blue at a glance.
@@ -70,7 +85,10 @@ struct WalletCardPalette {
         tintTop: Color.paper(0xE6F5F3, 0x152826),
         tintBottom: Color.paper(0xF9FDFC, 0x121D1C),
         border: Color.paper(0xCFE8E4, 0x24443F),
-        factRule: Color.paper(0xD6ECE8, 0x224039)
+        factRule: Color.paper(0xD6ECE8, 0x224039),
+        stubPaper: Color(hex: 0xE4F2EF),
+        stubInk: Color(hex: 0x11302C),
+        stubMuted: Color(hex: 0x4E6C66)
     )
 
     /// Concerts, matches, theatre. Warm magenta, the loudest of the set because
@@ -83,7 +101,10 @@ struct WalletCardPalette {
         tintTop: Color.paper(0xFCE9F1, 0x2B1721),
         tintBottom: Color.paper(0xFFFAFC, 0x1D1218),
         border: Color.paper(0xF5D4E3, 0x4A2437),
-        factRule: Color.paper(0xF2D8E4, 0x452133)
+        factRule: Color.paper(0xF2D8E4, 0x452133),
+        stubPaper: Color(hex: 0xFCE8F1),
+        stubInk: Color(hex: 0x33101F),
+        stubMuted: Color(hex: 0x795065)
     )
 
     /// Hotels and accommodation. Amber, so a stay never reads as travel.
@@ -95,7 +116,10 @@ struct WalletCardPalette {
         tintTop: Color.paper(0xFBEFDD, 0x2A2015),
         tintBottom: Color.paper(0xFFFCF7, 0x1D1710),
         border: Color.paper(0xF0DFC5, 0x4A381F),
-        factRule: Color.paper(0xEDDCC4, 0x453520)
+        factRule: Color.paper(0xEDDCC4, 0x453520),
+        stubPaper: Color(hex: 0xFBEEDB),
+        stubInk: Color(hex: 0x33230F),
+        stubMuted: Color(hex: 0x776043)
     )
 
     /// The catch-all: memberships, parking, anything else scannable. Slate, so
@@ -108,7 +132,10 @@ struct WalletCardPalette {
         tintTop: Color.paper(0xEDF1F5, 0x1E232B),
         tintBottom: Color.paper(0xFBFCFD, 0x161A20),
         border: Color.paper(0xDCE3EA, 0x333C48),
-        factRule: Color.paper(0xE0E6EC, 0x2F3742)
+        factRule: Color.paper(0xE0E6EC, 0x2F3742),
+        stubPaper: Color(hex: 0xEDF1F5),
+        stubInk: Color(hex: 0x1B222B),
+        stubMuted: Color(hex: 0x59636F)
     )
 }
 
