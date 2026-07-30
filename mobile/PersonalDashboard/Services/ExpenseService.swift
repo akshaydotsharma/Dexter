@@ -72,6 +72,11 @@ struct ExpenseFilter: Equatable {
     /// constraint. Tokens OR within this dimension; the dimension ANDs with the
     /// rest. Complements `sources` rather than replacing it.
     var importSources: Set<ImportSourceSelection>?
+    /// Merchants to include (#407). nil / empty = no constraint. Values are
+    /// `ExpenseDedupe.normalizeMerchant` keys, NOT raw merchant strings, so
+    /// "amazon" / "Amazon" / "Amazon " are one filterable option. Tokens OR
+    /// within this dimension; the dimension ANDs with the rest.
+    var merchants: Set<String>?
     var searchText: String?
 
     static let none = ExpenseFilter()
@@ -440,6 +445,14 @@ struct ExpenseService {
         // identical to the mirrored copy in `FinanceView.matches`.
         if let importSources = filter.importSources, !importSources.isEmpty {
             if !importSources.contains(where: { $0.matches(expense) }) { return false }
+        }
+        // Merchant dimension (#407): OR within the selected merchants, matched on
+        // the normalised key so display-spelling drift doesn't split a merchant.
+        // A row with no merchant can never satisfy a merchant filter. Kept
+        // identical to the mirrored copy in `FinanceView.matches`.
+        if let merchants = filter.merchants, !merchants.isEmpty {
+            let key = ExpenseDedupe.normalizeMerchant(expense.merchant ?? "")
+            if key.isEmpty || !merchants.contains(key) { return false }
         }
         if let search = filter.searchText?.trimmedNonEmpty?.lowercased(), !search.isEmpty {
             let merchant = expense.merchant?.lowercased() ?? ""
