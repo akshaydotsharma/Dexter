@@ -120,13 +120,14 @@ struct TicketCardView: View {
     ///
     /// The rule is the same for every kind: the stub holds the thing you USE on
     /// the day. A boarding pass or a cinema ticket tears off its barcode. A
-    /// hotel booking has nothing to scan, so it tears off the map — the fact you
-    /// want from a stay card at the door is where the place is.
-    private var showsStub: Bool { item.hasTicket || hasMapStub }
+    /// hotel booking has nothing to scan, so it tears off its address and a way
+    /// to get there.
+    private var showsStub: Bool { item.hasTicket || hasLocationStub }
 
-    /// A wallet stay with nothing scannable but a real address to draw.
-    private var hasMapStub: Bool {
-        embedded && isStay && !item.hasTicket && !item.address.isEmpty
+    /// A wallet stay with nothing scannable, but somewhere to go.
+    private var hasLocationStub: Bool {
+        embedded && isStay && !item.hasTicket
+            && (!item.address.isEmpty || item.mapsURL != nil)
     }
 
     /// Subtle top-to-bottom accent gradient. Rich enough to feel like a ticket,
@@ -176,7 +177,9 @@ struct TicketCardView: View {
     private var heroPanel: some View {
         heroContent
             .padding(.horizontal, Space.lg)
-            .padding(.vertical, Space.xl)
+            // Deep enough that the artwork is a panel in its own right rather
+            // than a tinted strip behind two lines of text.
+            .padding(.vertical, Space.xxl)
             .frame(maxWidth: .infinity)
             .background(alignment: .trailing) {
                 ZStack(alignment: .trailing) {
@@ -273,7 +276,12 @@ struct TicketCardView: View {
             }
         }
         .padding(.horizontal, Space.lg)
-        .padding(.vertical, Space.sm)
+        // A generous gap under the hero artwork. Butted straight up against it
+        // the facts read as a caption on the image; set apart, the card has an
+        // illustrated half and a written half, which is what a printed ticket
+        // looks like.
+        .padding(.top, Space.xxl)
+        .padding(.bottom, Space.lg)
     }
 
     /// Which facts the list carries, per layout. Boarding-pass slots keep their
@@ -311,10 +319,10 @@ struct TicketCardView: View {
         }
     }
 
-    /// Only a stay puts its address in the list — and only when the map stub is
-    /// not already showing it underneath, which would print it twice.
+    /// Only a stay puts its address in the list — and only when the location
+    /// stub is not already showing it underneath, which would print it twice.
     private var showsAddressRow: Bool {
-        isStay && !item.address.isEmpty && !hasMapStub
+        isStay && !item.address.isEmpty && !hasLocationStub
     }
 
     private func detailRow(label: String, value: String?, isUnknown: Bool) -> some View {
@@ -820,12 +828,10 @@ struct TicketCardView: View {
     /// stub rather than a lopsided thumbnail.
     @ViewBuilder
     private var barcodeStub: some View {
-        if hasMapStub {
-            StayMapStub(
+        if hasLocationStub {
+            StayLocationStub(
                 address: item.address,
-                venue: item.venue.isEmpty ? item.title : item.venue,
                 mapsURL: item.mapsURL,
-                confirmationCode: confirmationCode,
                 buttonFill: palette.band
             )
         } else {
