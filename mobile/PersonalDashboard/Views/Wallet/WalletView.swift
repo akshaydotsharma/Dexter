@@ -42,9 +42,10 @@ struct WalletView: View {
     /// Only used to label a borrowed card with its trip name.
     @Query private var trips: [LocalTrip]
 
-    /// Tickets attached to tasks (#399). Every row carries a card — the model
-    /// exists only to hold one — so unlike the itinerary these need no filter
-    /// beyond skipping soft-deleted rows.
+    /// Tickets attached to tasks (#399), filtered down to the ones that are
+    /// actually a pass in `WalletEntry.build` — same in-memory arrangement as the
+    /// itinerary above, and for the same reason: `belongsInWallet` reads a JSON
+    /// blob, so no `#Predicate` can express it.
     @Query private var taskTickets: [LocalTaskTicket]
 
     /// Only used to label a task ticket with its task's title, which is also the

@@ -35,6 +35,20 @@ struct TicketMeta: Codable, Equatable, Sendable {
     /// presence of route codes.
     var isBoardingPass: Bool?
 
+    /// Whether the holder physically presents this document to get in somewhere:
+    /// a concert ticket, a match ticket, a boarding pass, a museum entry (#405).
+    ///
+    /// This is what separates a pass from a *record of a booking*. A restaurant
+    /// reservation, a hotel enquiry, an appointment reminder and an order receipt
+    /// are all worth keeping on the task, but you do not hold any of them up at a
+    /// door — so they have no business in the Wallet, which exists to put the
+    /// thing you are about to present one tap away.
+    ///
+    /// `nil` means nobody has judged it, which is the state every row written
+    /// before this field existed is in. Callers must treat unknown as "don't
+    /// know", never as "yes" — see `LocalTaskTicket.belongsInWallet`.
+    var presentedAtEntry: Bool?
+
     /// A transport ticket (flight / train) is styled as a boarding pass. We
     /// treat any item carrying both endpoint codes, or an explicit boarding
     /// pass flag, or a flight number, as boarding-pass shaped.

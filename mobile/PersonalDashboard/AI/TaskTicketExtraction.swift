@@ -94,6 +94,9 @@ struct TaskTicketRead {
         meta.eventType = Self.clean(extracted?.eventType)
         meta.section = Self.clean(extracted?.section)
         meta.row = Self.clean(extracted?.row)
+        // Left nil when the model declined to judge, so `belongsInWallet` can tell
+        // "not a pass" apart from "nobody looked" (#405).
+        meta.presentedAtEntry = extracted?.presentedAtEntry
 
         // Stored at LOCAL midnight of the printed day, because every surface that
         // renders or edits it uses the local calendar.
@@ -509,6 +512,10 @@ struct ExtractedTaskTicket {
     /// Whether the ticket actually printed a year, as opposed to the model working
     /// one out. Only a printed year is taken at face value.
     var yearWasPrinted: Bool = false
+    /// Whether this is a document you hold up to be let in, as opposed to a record
+    /// of a booking someone looks up under your name (#405). `nil` when the model
+    /// declined to judge, which stays distinct from a confident "no".
+    var presentedAtEntry: Bool?
 
     init(input: [String: AnthropicJSONValue]) {
         func s(_ key: String) -> String? { input[key]?.stringValue }
@@ -528,6 +535,13 @@ struct ExtractedTaskTicket {
         yearWasPrinted = ["yes", "true"].contains(
             (s("year_was_printed") ?? "").lowercased().trimmingCharacters(in: .whitespaces)
         )
+        // Three-valued, so an omitted field stays unknown rather than collapsing
+        // to "no": unknown falls back to the barcode, "no" is trusted outright.
+        switch (s("presented_at_entry") ?? "").lowercased().trimmingCharacters(in: .whitespaces) {
+        case "yes", "true":  presentedAtEntry = true
+        case "no", "false":  presentedAtEntry = false
+        default:             presentedAtEntry = nil
+        }
     }
 
     /// Direct init for tests and for building a read by hand.
@@ -543,7 +557,8 @@ struct ExtractedTaskTicket {
         section: String? = nil,
         row: String? = nil,
         printedWeekday: String? = nil,
-        yearWasPrinted: Bool = false
+        yearWasPrinted: Bool = false,
+        presentedAtEntry: Bool? = nil
     ) {
         self.eventTitle = eventTitle
         self.eventDate = eventDate
@@ -557,6 +572,7 @@ struct ExtractedTaskTicket {
         self.row = row
         self.printedWeekday = printedWeekday
         self.yearWasPrinted = yearWasPrinted
+        self.presentedAtEntry = presentedAtEntry
     }
 }
 
@@ -581,6 +597,7 @@ extension TaskTicketExtraction {
                 "gate": field("Entry gate or door, ONLY when a real value is explicitly printed (e.g. \"Gate 3\", \"Door B\", \"14\"). Never infer it, never emit a placeholder, a dash, \"TBD\", or a lone letter — omit the field entirely if no real gate is shown."),
                 "reference": field("Booking reference, order number or confirmation code as printed. Omit if none."),
                 "event_type": field("Kind of event in a word or two (e.g. \"Concert\", \"Football match\", \"Theatre\", \"Appointment\", \"Flight\"). Omit if unclear."),
+                "presented_at_entry": field("\"yes\" when the holder physically hands this over or holds it up to be let in somewhere: a concert or match ticket, a boarding pass, a cinema or museum admission, a collection slip. \"no\" when it merely RECORDS a booking that is looked up under a name on arrival: a restaurant reservation, a hotel booking, a doctor or salon appointment, an order or payment receipt. A booking with a barcode or QR code to scan is \"yes\" whatever it is for. When you genuinely cannot tell, omit the field rather than guessing."),
                 "section": field("Seating section, block or stand for a seated event (e.g. \"Section 122\", \"Block A\"). Omit if none."),
                 "row": field("Seating row (e.g. \"Row 14\"). Omit if none.")
             ]),
@@ -598,6 +615,8 @@ extension TaskTicketExtraction {
     Read values verbatim. Do not guess, round, translate or reformat. Omit any field you cannot read with confidence: a blank field renders as nothing, whereas a wrong one sends the person to the wrong door. Short codes like gate are especially error-prone — emit them ONLY when a real value is explicitly printed, never a lone letter, a dash or a placeholder.
 
     The start time is a special case: return it as printed, character for character. Never normalise it and never attach a timezone. When a ticket prints both a doors time and a show time, the show time is the one to return.
+
+    One field is a judgement rather than a reading: presented_at_entry. Ask yourself whether the person holds this document up to get in, or whether it just records a booking that someone looks up under their name when they arrive. A concert ticket, a match ticket and a boarding pass are held up. A table reservation, a hotel booking and a dental appointment are not, however formally they are laid out. Anything carrying a barcode or QR code to scan is held up. Say so only when you are confident; omit the field when you are not.
 
     The date is the other special case. Many tickets print a day and month with no year, because to the person holding one the year is obvious. It is not obvious to you: today's date is given in the message and it is the only thing you should reason from, never your own sense of what year it is. When no year is printed, take the next occurrence of that day and month on or after today, and if the ticket also prints a day of the week, use it to check yourself — the year is wrong if the weekday does not match.
     """
