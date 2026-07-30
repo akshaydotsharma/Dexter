@@ -49,6 +49,21 @@ struct TicketMeta: Codable, Equatable, Sendable {
     /// know", never as "yes" — see `LocalTaskTicket.belongsInWallet`.
     var presentedAtEntry: Bool?
 
+    /// The person's own answer to "does this belong in the Wallet", overriding
+    /// whatever the extractor judged (#414).
+    ///
+    /// `presentedAtEntry` is a model's opinion about a document it saw once, and it
+    /// gets things wrong in both directions: a padel court booking read as a match
+    /// ticket, and somewhere out there a real pass it will refuse to admit.
+    /// Correcting it used to mean deleting the attachment, which throws the file
+    /// away to fix a display decision.
+    ///
+    /// `nil` means nobody has overridden anything and the automatic rule stands,
+    /// which is where every row starts. A value wins outright, including over a
+    /// decoded barcode: the reason to force a scannable document out is usually
+    /// that it carries a code which admits nobody.
+    var showInWallet: Bool?
+
     /// Hex SHA-256 of the file exactly as it was uploaded, before any
     /// compression (#408).
     ///

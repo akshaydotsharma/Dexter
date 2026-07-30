@@ -43,6 +43,18 @@ struct TaskTicketDetailSheet: View {
     @State private var reference = ""
     @State private var eventURL = ""
 
+    /// Wallet membership as it stands right now: the stored override when there is
+    /// one, otherwise whatever the automatic rule decides. Kept outside the edit
+    /// form because it applies immediately rather than on Save, the way a switch
+    /// that moves something between two places should.
+    @State private var showInWallet = false
+
+    /// The override this sheet has written, if any. Held separately because
+    /// `ticket` is the copy captured when the sheet was presented and never sees
+    /// the write: without this, editing a field afterwards would save a `TicketMeta`
+    /// rebuilt from that stale copy and silently undo the flip.
+    @State private var walletOverride: Bool?
+
     @Environment(\.openURL) private var openURL
 
     private let service = TaskTicketService()
@@ -189,6 +201,7 @@ struct TaskTicketDetailSheet: View {
                     openURL(url)
                 }
             }
+            walletRow
             actionRow(icon: "pencil", title: "Edit details") {
                 Haptics.light()
                 isEditing = true
@@ -197,6 +210,50 @@ struct TaskTicketDetailSheet: View {
                 showingDeleteConfirm = true
             }
         }
+    }
+
+    /// The one control here that is not an action: whether this attachment shows up
+    /// in the Wallet (#414).
+    ///
+    /// The rule that decides it by default reads a model's judgement of a document
+    /// it saw once, and it gets things wrong in both directions. Before this, the
+    /// only way to correct it was removing the attachment, which deletes the file to
+    /// fix a display decision. It sits above Edit rather than inside the form
+    /// because it takes effect on the flip, not on Save.
+    private var walletRow: some View {
+        HStack(spacing: Space.sm) {
+            Image(systemName: "wallet.pass")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(accent)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Show in Wallet")
+                    .font(.edBodyMedium)
+                    .foregroundStyle(Tokens.ink)
+                Text(showInWallet ? "Kept with your passes" : "Stays on the task only")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+            }
+            Spacer(minLength: 0)
+            // A hand-written binding rather than `$showInWallet` plus `onChange`:
+            // `prefill` assigns the state directly on every appear and on Cancel,
+            // and an `onChange` would read those as flips and stamp an override on
+            // a sheet nobody touched.
+            Toggle("", isOn: Binding(
+                get: { showInWallet },
+                set: { isOn in
+                    showInWallet = isOn
+                    setWalletMembership(isOn)
+                }
+            ))
+            .labelsHidden()
+            .tint(accent)
+        }
+        .padding(Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Show in Wallet")
     }
 
     private func actionRow(
@@ -329,6 +386,7 @@ struct TaskTicketDetailSheet: View {
         section = meta?.section ?? ""
         row = meta?.row ?? ""
         eventURL = meta?.eventURL ?? ""
+        showInWallet = walletOverride ?? ticket.belongsInWallet
 
         // A ticket the extractor could not read opens straight into the form,
         // because a card that is blank apart from a barcode has nothing to look
@@ -343,6 +401,7 @@ struct TaskTicketDetailSheet: View {
         meta.section = trimmedOrNil(section)
         meta.row = trimmedOrNil(row)
         meta.eventURL = trimmedOrNil(eventURL)
+        if let walletOverride { meta.showInWallet = walletOverride }
 
         let day = hasEventDate ? Calendar.current.startOfDay(for: eventDate) : nil
 
@@ -383,6 +442,40 @@ struct TaskTicketDetailSheet: View {
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Write the person's Wallet answer, on the flip rather than on Save.
+    ///
+    /// Always stores an explicit value, even when it agrees with what the rule
+    /// already decided: a switch that silently reverts because the extractor's
+    /// judgement changed underneath it is worse than one that stays where it was
+    /// put. Nothing dismisses here — this is a setting on the sheet, not an
+    /// errand you leave to run.
+    private func setWalletMembership(_ isOn: Bool) {
+        walletOverride = isOn
+        var meta = ticket.ticketMeta ?? TicketMeta()
+        meta.showInWallet = isOn
+
+        // A ticket still held unsaved in the task editor has no row to update, so
+        // the flip rides along on the copy its holder is keeping.
+        if let onSave {
+            var edited = ticket
+            edited.ticketMetaJSON = meta.encodedString()
+            onSave(edited)
+            return
+        }
+
+        do {
+            _ = try service.update(id: ticket.id, meta: meta)
+            errorMessage = nil
+            onChange()
+        } catch {
+            errorMessage = error.localizedDescription
+            // Put the switch back where it was: the store did not move, so neither
+            // should the control claiming to reflect it.
+            walletOverride = nil
+            showInWallet = ticket.belongsInWallet
         }
     }
 
