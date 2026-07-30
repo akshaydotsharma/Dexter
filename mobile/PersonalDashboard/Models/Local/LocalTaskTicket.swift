@@ -157,6 +157,25 @@ final class LocalTaskTicket {
         TicketMeta.decode(ticketMetaJSON)
     }
 
+    /// Whether this attachment earns a card in the Wallet (#405).
+    ///
+    /// The picker takes any document now (#400), so "attached to a task" stopped
+    /// meaning "is a pass" — a brunch reservation was landing in the Wallet next
+    /// to a boarding pass. Two things get one in:
+    ///
+    /// - Something scannable was decoded off it. Whatever it is for, you are going
+    ///   to hold it under a reader, so the Wallet is where it belongs.
+    /// - The extractor judged it a document you present at a door
+    ///   (`TicketMeta.presentedAtEntry`), which catches the event ticket that
+    ///   prints no code at all.
+    ///
+    /// An unjudged row falls back to the barcode alone. Every row written before
+    /// the field existed is in that state, and reading its silence as "yes" would
+    /// keep exactly the cards this is meant to remove.
+    var belongsInWallet: Bool {
+        hasBarcode || ticketMeta?.presentedAtEntry == true
+    }
+
     /// `true` when the extractor read nothing beyond the file itself, so the UI
     /// should open the fields for manual entry rather than present a card that is
     /// blank apart from a barcode.

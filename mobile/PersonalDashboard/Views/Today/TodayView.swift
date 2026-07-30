@@ -63,6 +63,11 @@ struct TodayView: View {
     /// membership is needed here, not a count, because the row shows a glyph
     /// rather than a number. A failure leaves the previous set alone: a stale
     /// glyph beats an empty card.
+    ///
+    /// Membership means SCANNABLE, not merely attached (#405). The picker takes
+    /// any document now (#400), so a brunch booking would otherwise fly a ticket
+    /// glyph on a glance surface with no way to look closer and find out it isn't
+    /// one — the same claim the Tasks chip stopped making in #403.
     private func reloadTicketedTasks() {
         let ids = Set(todosVM.todos.map(\.id))
         guard !ids.isEmpty else {
@@ -70,7 +75,7 @@ struct TodayView: View {
             return
         }
         if let counts = try? TaskTicketService().counts(todoIds: ids) {
-            ticketedTaskIDs = Set(counts.filter { $0.value.count > 0 }.keys)
+            ticketedTaskIDs = Set(counts.filter { $0.value.hasBarcode }.keys)
         }
     }
 
@@ -325,10 +330,11 @@ private struct TodayCardFooter: View {
 private struct TodayTaskRow: View {
     let todo: Todo
     let onToggle: () -> Void
-    /// Whether the task carries a ticket attachment (#399). An indicator only, not
-    /// a control: Today is a glance surface and the row has no tap target beyond
-    /// the checkbox, so acting on the ticket belongs in Tasks where the chip opens
-    /// the card.
+    /// Whether the task carries a SCANNABLE attachment (#399, #405). An indicator
+    /// only, not a control: Today is a glance surface and the row has no tap target
+    /// beyond the checkbox, so acting on the ticket belongs in Tasks where the chip
+    /// opens the card. A plain file flies no glyph — there is nothing here to open
+    /// that would correct the impression.
     var hasTicket: Bool = false
 
     var body: some View {

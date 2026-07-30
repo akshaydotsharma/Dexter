@@ -71,6 +71,7 @@ final class TaskTicketAttachmentTests: XCTestCase {
         seat: String = "8",
         section: String? = "122",
         row: String? = "14",
+        presentedAtEntry: Bool? = nil,
         position: Int = 0
     ) throws -> TaskTicket {
         // A rendered barcode is a legitimate stand-in for a photographed ticket
@@ -92,6 +93,9 @@ final class TaskTicketAttachmentTests: XCTestCase {
         meta.eventType = "Concert"
         meta.section = section
         meta.row = row
+        // Left nil by default so the fixture keeps reproducing a row written
+        // before the field existed (#405).
+        meta.presentedAtEntry = presentedAtEntry
 
         let ticket = LocalTaskTicket(
             todoClientUUID: todo.clientUUID,
@@ -265,6 +269,118 @@ final class TaskTicketAttachmentTests: XCTestCase {
         let counts = try TaskTicketService(store: store).counts(todoIds: [todo.clientUUID])
 
         XCTAssertEqual(counts[todo.clientUUID], .init(count: 2, hasBarcode: true))
+    }
+
+    // MARK: - What earns a place in the Wallet (#405)
+
+    /// The picker takes any document (#400), so being attached to a task stopped
+    /// meaning "is a pass". These four cases are the whole rule, and they are pure
+    /// logic over a stored JSON blob — nothing about them needs a device, so there
+    /// is no reason for the Wallet's contents to be something we find out by
+    /// looking.
+
+    /// Every card the wallet would build from one task's attachments.
+    private func walletEntries(for todo: LocalTodo) throws -> [WalletEntry] {
+        let tickets = try store.context.fetch(
+            FetchDescriptor<LocalTaskTicket>(predicate: #Predicate { $0.deletedAt == nil })
+        )
+        return WalletEntry.build(
+            cards: [],
+            itineraryItems: [],
+            trips: [],
+            taskTickets: tickets.filter { $0.todoClientUUID == todo.clientUUID },
+            todos: [todo]
+        )
+    }
+
+    func testScannableAttachmentBecomesAWalletCard() throws {
+        let todo = insertTodo(title: "Coldplay")
+        try attachTicket(to: todo, payload: "SCAN-ME")
+
+        XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
+    /// The bug: a Chope confirmation photographed into a task showed up in the
+    /// Wallet beside a boarding pass. Nobody scans a table reservation.
+    func testBookingRecordStaysOffTheWallet() throws {
+        let todo = insertTodo(title: "Mr. Bucket Chocolaterie")
+        try attachTicket(to: todo, payload: "", presentedAtEntry: false)
+
+        XCTAssertTrue(
+            try walletEntries(for: todo).isEmpty,
+            "a booking you are looked up for by name is not a card you present"
+        )
+    }
+
+    /// The case a barcode-only rule would get wrong: a real event ticket that
+    /// prints nothing scannable at all.
+    func testUnscannableTicketPresentedAtEntryStillBecomesAWalletCard() throws {
+        let todo = insertTodo(title: "Open-air cinema")
+        try attachTicket(to: todo, payload: "", presentedAtEntry: true)
+
+        XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
+    /// Every row written before the field existed is unjudged. Reading that silence
+    /// as "yes" would leave exactly the cards this is meant to remove, so it falls
+    /// back to the barcode.
+    func testUnjudgedAttachmentFallsBackToTheBarcode() throws {
+        let scannable = insertTodo(title: "Arsenal v Chelsea")
+        let paperwork = insertTodo(title: "Visa forms")
+        try attachTicket(to: scannable, payload: "OLD-ROW-WITH-QR")
+        try attachTicket(to: paperwork, payload: "")
+
+        XCTAssertEqual(try walletEntries(for: scannable).count, 1)
+        XCTAssertTrue(try walletEntries(for: paperwork).isEmpty)
+    }
+
+    /// A scannable code outranks the judgement: whatever the document is for, you
+    /// are about to hold it under a reader.
+    func testScannableBookingIsAWalletCardDespiteTheJudgement() throws {
+        let todo = insertTodo(title: "Museum entry")
+        try attachTicket(to: todo, payload: "QR-AT-THE-DOOR", presentedAtEntry: false)
+
+        XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
+    /// The field is three-valued on the wire. "no" and "not answered" must not
+    /// collapse into each other — one is trusted, the other falls back.
+    func testPresentedAtEntryReadsAsThreeValued() {
+        func decode(_ raw: String?) -> Bool? {
+            var input: [String: AnthropicJSONValue] = [:]
+            if let raw { input["presented_at_entry"] = .string(raw) }
+            return ExtractedTaskTicket(input: input).presentedAtEntry
+        }
+
+        XCTAssertEqual(decode("yes"), true)
+        XCTAssertEqual(decode("YES"), true)
+        XCTAssertEqual(decode("true"), true)
+        XCTAssertEqual(decode("no"), false)
+        XCTAssertEqual(decode(" No "), false)
+        XCTAssertNil(decode(nil), "an omitted field means nobody judged it")
+        XCTAssertNil(decode(""), "so does a blank one")
+        XCTAssertNil(decode("maybe"), "and so does an answer we do not recognise")
+    }
+
+    /// The judgement has to survive the read → attach hop, or the Wallet gate sees
+    /// nothing regardless of what the model said.
+    func testJudgementSurvivesIntoTheStoredRow() throws {
+        let todo = insertTodo(title: "Dinner at Odette")
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: ExtractedTaskTicket(eventTitle: "Odette", presentedAtEntry: false),
+            degradeMessage: nil
+        )
+        let stored = try TaskTicketService(store: store)
+            .attach(read.ticket(todoId: todo.clientUUID), todoId: todo.clientUUID)
+
+        let row = try XCTUnwrap(try store.context.fetch(
+            FetchDescriptor<LocalTaskTicket>(predicate: #Predicate { $0.clientUUID == stored })
+        ).first)
+        XCTAssertEqual(row.ticketMeta?.presentedAtEntry, false)
+        XCTAssertFalse(row.belongsInWallet)
     }
 
     // MARK: - Editing

@@ -135,8 +135,11 @@ extension WalletEntry {
     ///   - trips: used only to resolve a trip's name for the source chip. An
     ///     item whose trip has vanished is still shown, labelled "Trip", rather
     ///     than dropped: the ticket is the user's, the trip is just context.
-    ///   - taskTickets: every live `LocalTaskTicket` (#399). All of them carry a
-    ///     card by definition — the model exists only to hold one.
+    ///   - taskTickets: every live `LocalTaskTicket` (#399). Only those that are
+    ///     actually a pass are taken — see `LocalTaskTicket.belongsInWallet`. The
+    ///     model held nothing but tickets when it was written, but the picker
+    ///     behind it now accepts any document (#400), so the rest are ordinary
+    ///     attachments and have no card to show.
     ///   - todos: used only to resolve the owning task's title, which is both the
     ///     source chip and the card's fallback name.
     static func build(
@@ -198,6 +201,12 @@ extension WalletEntry {
         }
 
         for ticket in taskTickets {
+            // Not every task attachment is a pass (#405). The picker takes any
+            // document, so a restaurant reservation or an appointment card gets
+            // stored here too — worth keeping on the task, but nothing you present
+            // at a door, and a Wallet full of those is a Wallet you stop trusting
+            // to hold the thing you are about to scan.
+            guard ticket.belongsInWallet else { continue }
             guard let taskTitle = taskTitles[ticket.todoClientUUID] else { continue }
             let data = TicketCardData(ticket, taskTitle: taskTitle)
             out.append(
