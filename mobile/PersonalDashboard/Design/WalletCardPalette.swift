@@ -20,6 +20,10 @@ struct WalletCardPalette {
     /// Solid header band behind the collapsed strip and the expanded card's
     /// title. This is the colour you actually recognise the card by in a stack.
     let band: Color
+    /// The far end of the header's diagonal gradient. A flat rectangle of colour
+    /// reads as a UI element; a header with a gradient across it reads as printed
+    /// stock, which is the difference the deck lives or dies on.
+    let bandDeep: Color
     /// Ink on top of `band`. Near-white in both themes: the band is saturated in
     /// both, so it does not flip.
     let bandInk: Color
@@ -37,6 +41,7 @@ struct WalletCardPalette {
     static let itinerary = WalletCardPalette(
         accent: Color.paper(0x6D28D9, 0xA78BFA),
         band: Color.paper(0x6D28D9, 0x5B21B6),
+        bandDeep: Color.paper(0x4C1D95, 0x3B1A80),
         bandInk: Color.paper(0xFFFFFF, 0xF5F3FF),
         tintTop: Color.paper(0xF1EAFB, 0x272033),
         tintBottom: Color.paper(0xFCFAFF, 0x1A1620),
@@ -48,6 +53,7 @@ struct WalletCardPalette {
     static let boardingPass = WalletCardPalette(
         accent: Color.paper(0x1D4ED8, 0x93B4FF),
         band: Color.paper(0x1D4ED8, 0x1E3A8A),
+        bandDeep: Color.paper(0x1E3A8A, 0x152C6B),
         bandInk: Color.paper(0xFFFFFF, 0xEFF6FF),
         tintTop: Color.paper(0xE8F0FE, 0x1B2233),
         tintBottom: Color.paper(0xFAFCFF, 0x151A24),
@@ -59,6 +65,7 @@ struct WalletCardPalette {
     static let transit = WalletCardPalette(
         accent: Color.paper(0x0F766E, 0x5EEAD4),
         band: Color.paper(0x0F766E, 0x115E59),
+        bandDeep: Color.paper(0x115E59, 0x0B4642),
         bandInk: Color.paper(0xFFFFFF, 0xECFDF5),
         tintTop: Color.paper(0xE6F5F3, 0x152826),
         tintBottom: Color.paper(0xF9FDFC, 0x121D1C),
@@ -71,6 +78,7 @@ struct WalletCardPalette {
     static let event = WalletCardPalette(
         accent: Color.paper(0xBE185D, 0xF9A8D4),
         band: Color.paper(0xBE185D, 0x9D174D),
+        bandDeep: Color.paper(0x9D174D, 0x74103A),
         bandInk: Color.paper(0xFFFFFF, 0xFDF2F8),
         tintTop: Color.paper(0xFCE9F1, 0x2B1721),
         tintBottom: Color.paper(0xFFFAFC, 0x1D1218),
@@ -82,6 +90,7 @@ struct WalletCardPalette {
     static let stay = WalletCardPalette(
         accent: Color.paper(0xB45309, 0xFBBF24),
         band: Color.paper(0xB45309, 0x92400E),
+        bandDeep: Color.paper(0x92400E, 0x6E300A),
         bandInk: Color.paper(0xFFFFFF, 0xFFFBEB),
         tintTop: Color.paper(0xFBEFDD, 0x2A2015),
         tintBottom: Color.paper(0xFFFCF7, 0x1D1710),
@@ -94,6 +103,7 @@ struct WalletCardPalette {
     static let pass = WalletCardPalette(
         accent: Color.paper(0x475569, 0xCBD5E1),
         band: Color.paper(0x475569, 0x334155),
+        bandDeep: Color.paper(0x334155, 0x232C3A),
         bandInk: Color.paper(0xFFFFFF, 0xF8FAFC),
         tintTop: Color.paper(0xEDF1F5, 0x1E232B),
         tintBottom: Color.paper(0xFBFCFD, 0x161A20),

@@ -46,6 +46,15 @@ struct TicketCardView: View {
     /// would read as a mistake. The boarding-pass layout has no title line at
     /// all, so this only affects the event and stay layouts.
     var showsTitle: Bool = true
+    /// Whether the card is drawn INSIDE another card's silhouette (#398).
+    ///
+    /// The wallet's deck wants one continuous piece of paper: a coloured header
+    /// flowing into the body, notches cut through the outline, a full-bleed stub
+    /// under the tear line. So in embedded mode this view drops its own
+    /// background, border and corner radius, lets the parent's `TicketShape`
+    /// supply the outline, and bleeds the barcode stub edge to edge. False
+    /// everywhere on the trip timeline, which keeps its self-contained card.
+    var embedded: Bool = false
 
     @Environment(\.openURL) private var openURL
 
@@ -56,6 +65,21 @@ struct TicketCardView: View {
     private var isStay: Bool { item.isStay }
 
     var body: some View {
+        if embedded {
+            // The parent draws the outline, the wash and the notches.
+            cardContent
+        } else {
+            cardContent
+                // The whole card carries a soft itinerary-accent wash
+                // (theme-aware) so it reads as a distinct physical ticket in the
+                // timeline, not another row.
+                .background(ticketFill, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+                .paperBorder(palette.border, radius: Radius.lg)
+                .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        }
+    }
+
+    private var cardContent: some View {
         VStack(spacing: 0) {
             topContent
                 .padding(.horizontal, Space.lg)
@@ -67,20 +91,25 @@ struct TicketCardView: View {
             // they're unchanged; a confirmation-only stay has neither, so its
             // card ends cleanly after the top content (no dangling perforation).
             if item.hasTicket {
-                PerforatedDivider()
+                // Embedded, the tear line sits on the stub's own paper and the
+                // holes are cut from the card's outline, so it draws the dashes
+                // and nothing else. Standalone, it paints its own notches.
+                PerforatedDivider(cutout: embedded, lineColor: perforationLine)
+                    .background(embedded ? Tokens.ticketStub : .clear)
 
                 barcodeStub
-                    .padding(.horizontal, Space.lg)
-                    .padding(.top, Space.md)
-                    .padding(.bottom, Space.lg)
+                    .padding(.horizontal, embedded ? 0 : Space.lg)
+                    .padding(.top, embedded ? 0 : Space.md)
+                    .padding(.bottom, embedded ? 0 : Space.lg)
             }
         }
         .frame(maxWidth: .infinity)
-        // The whole card carries a soft itinerary-accent wash (theme-aware) so it
-        // reads as a distinct physical ticket in the timeline, not another row.
-        .background(ticketFill, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-        .paperBorder(palette.border, radius: Radius.lg)
-        .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+    }
+
+    /// The dashes' colour. Embedded they run across the white stub, so they take
+    /// its own muted ink instead of the page border colour, which would vanish.
+    private var perforationLine: Color {
+        embedded ? Tokens.ticketStubMuted.opacity(0.45) : Tokens.borderStrong
     }
 
     /// Subtle top-to-bottom accent gradient. Rich enough to feel like a ticket,
@@ -550,7 +579,10 @@ struct TicketCardView: View {
                 symbology: item.barcodeSymbology,
                 attachmentPath: item.attachmentPath,
                 height: stubBarcodeHeight,
-                compact: true,
+                // The wallet's stub is the bottom of a full ticket rather than a
+                // thumbnail on a timeline row, so the code gets the room a
+                // scannable code deserves.
+                compact: !embedded,
                 alignment: .center
             )
 
@@ -571,16 +603,27 @@ struct TicketCardView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, Space.md)
+        .padding(.vertical, embedded ? Space.lg : Space.md)
         .padding(.horizontal, Space.md)
-        .background(Tokens.ticketStub, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .background {
+            if embedded {
+                // Bleeds to the card's own edges: the stub IS the bottom of the
+                // ticket, not a panel sitting on it.
+                Tokens.ticketStub
+            } else {
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .fill(Tokens.ticketStub)
+            }
+        }
     }
 
-    /// A square QR/Aztec wants more height than a wide 1D/PDF417 strip.
+    /// A square QR/Aztec wants more height than a wide 1D/PDF417 strip. The
+    /// wallet's full ticket gets a bigger code than the timeline thumbnail: it
+    /// is the thing you hold up at a gate.
     private var stubBarcodeHeight: CGFloat {
         switch BarcodeSymbology(rawValue: item.barcodeSymbology) ?? .other {
-        case .qr, .aztec, .other: return 84
-        case .pdf417, .code128:   return 52
+        case .qr, .aztec, .other: return embedded ? 132 : 84
+        case .pdf417, .code128:   return embedded ? 76 : 52
         }
     }
 
@@ -750,26 +793,43 @@ private struct TicketFactCell: View {
 // MARK: - Perforated divider
 
 /// The classic ticket "tear" line: a dashed rule with a punched notch at each
-/// edge. Notches are filled with the page background so they read as holes cut
-/// into the card. Purely decorative.
+/// edge. Purely decorative.
+///
+/// Two ways to punch the notches, and which one is right depends on what is
+/// behind the card:
+///  - **Painted** (`cutout: false`, the trip timeline): circles filled with the
+///    page colour, drawn on top of the card. Cheap, and correct as long as the
+///    card really does sit on `Tokens.paper`.
+///  - **Cut** (`cutout: true`, the wallet): the enclosing card removes the holes
+///    from its own outline via `TicketShape`, so anything behind shows through
+///    and the notches survive a card stacked on another card. This mode draws
+///    only the dashes and reports where they sit.
 struct PerforatedDivider: View {
     var notch: CGFloat = 14
+    /// See the note above: `true` means the parent cuts the holes.
+    var cutout: Bool = false
+    var lineColor: Color = Tokens.borderStrong
 
     var body: some View {
         ZStack {
             DashedLine()
                 .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                .foregroundStyle(Tokens.borderStrong)
+                .foregroundStyle(lineColor)
                 .frame(height: 1)
                 .padding(.horizontal, notch)
 
-            HStack {
-                notchCircle
-                Spacer()
-                notchCircle
+            if !cutout {
+                HStack {
+                    notchCircle
+                    Spacer()
+                    notchCircle
+                }
             }
         }
         .frame(height: notch)
+        // Only meaningful in cutout mode; harmless otherwise (nothing upstream
+        // reads the preference).
+        .ticketNotchAnchor()
     }
 
     private var notchCircle: some View {

@@ -39,13 +39,28 @@ struct WalletCardDetailSheet: View {
             ZStack {
                 Tokens.paper.ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: Space.lg) {
-                        TicketCardView(item: card, timeText: entry.timeText)
-                        actions
+                VStack(spacing: Space.lg) {
+                    // The ticket sits in the middle of the page rather than
+                    // pinned under the title bar with the rest of the screen
+                    // empty below it: this surface exists to show ONE card, and
+                    // a card floating in the centre is what that should look
+                    // like. A tall card still scrolls.
+                    GeometryReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                Spacer(minLength: 0)
+                                WalletTicketCard(entry: entry)
+                                Spacer(minLength: 0)
+                            }
+                            .frame(minHeight: proxy.size.height)
+                            .padding(.horizontal, Space.lg)
+                        }
                     }
-                    .padding(Space.lg)
+
+                    actions
+                        .padding(.horizontal, Space.lg)
                 }
+                .padding(.vertical, Space.lg)
             }
             .navigationTitle(entry.source.label)
             .inlineNavigationTitle()
@@ -56,6 +71,14 @@ struct WalletCardDetailSheet: View {
                 }
             }
         }
+        // iOS presents this full-screen, so it already has a definite size to
+        // centre the ticket in. A macOS sheet sizes itself to its content, and
+        // the centring container has no intrinsic height to offer, so without a
+        // floor the sheet collapses to the height of its two action rows and
+        // squeezes the card to a sliver.
+        #if os(macOS)
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 660, idealHeight: 720)
+        #endif
         #if os(iOS)
         .fullScreenCover(isPresented: $showingScan) {
             TicketScanView(pass: ScannablePass(card: card))
