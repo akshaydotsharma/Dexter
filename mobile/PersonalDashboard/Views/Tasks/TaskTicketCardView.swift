@@ -187,14 +187,21 @@ struct TaskTicketCardView: View {
     /// if something has gone wrong. It moved here from beside the eyebrow, where it
     /// competed with the type for the top line.
     private var facts: [TaskTicketFact] {
-        [
+        var out: [TaskTicketFact] = [
             TaskTicketFact(label: "Seat", value: ticket.seat),
             TaskTicketFact(label: "Section", value: meta?.section),
             TaskTicketFact(label: "Row", value: meta?.row),
             TaskTicketFact(label: "Gate", value: ticket.gate),
-            TaskTicketFact(label: "Guest", value: meta?.guestName),
-            TaskTicketFact(label: "Ref", value: ticket.reference)
-        ].filter { $0.value != nil }
+            TaskTicketFact(label: "Guest", value: meta?.guestName)
+        ]
+        // Whatever else the document printed, under its own labels (#420) — "Ticket ·
+        // In-Person", "Table · 12". After the named slots and before the reference,
+        // which stays last because it only matters when something has gone wrong.
+        out.append(contentsOf: (meta?.faceFields ?? []).map {
+            TaskTicketFact(label: $0.label, value: $0.value)
+        })
+        out.append(TaskTicketFact(label: "Ref", value: ticket.reference))
+        return out.filter { $0.value != nil }
     }
 
     /// The three highest-priority facts. A pass caps this row too, and past three the

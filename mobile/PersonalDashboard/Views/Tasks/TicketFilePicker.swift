@@ -31,9 +31,24 @@ struct TicketFilePickerModifier: ViewModifier {
     /// cancel or a read failure.
     let onPick: (Data?, Bool) -> Void
 
-    /// Images and PDFs. `UTType.image` covers PNG, JPEG, HEIC and the rest, so a
-    /// screenshot and a camera export are both acceptable without listing them.
-    static let acceptedTypes: [UTType] = [.image, .pdf]
+    /// Images, PDFs and Apple Wallet passes. `UTType.image` covers PNG, JPEG, HEIC and
+    /// the rest, so a screenshot and a camera export are both acceptable without
+    /// listing them.
+    ///
+    /// A `.pkpass` is here because it is the best version of a ticket there is: the
+    /// issuer's own fields rather than a photograph of some of them (#420). Declared
+    /// by identifier because `UTType` ships no constant for it; the system type is
+    /// present on both platforms, and the `.pkpass` extension is the fallback if a
+    /// future OS ever stops declaring it.
+    static let acceptedTypes: [UTType] = {
+        var types: [UTType] = [.image, .pdf]
+        if let pass = UTType("com.apple.pkpass") {
+            types.append(pass)
+        } else if let byExtension = UTType(filenameExtension: "pkpass") {
+            types.append(byExtension)
+        }
+        return types
+    }()
 
     #if canImport(UIKit)
     func body(content: Content) -> some View {
@@ -83,7 +98,7 @@ struct TicketFilePickerModifier: ViewModifier {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.message = "Choose an image or PDF"
+        panel.message = "Choose an image, PDF or Wallet pass"
         panel.prompt = "Attach"
         // `begin`, not `runModal`: see the type doc. The completion lands on the
         // main queue, so the caller's `Task { … }` ingest starts cleanly.

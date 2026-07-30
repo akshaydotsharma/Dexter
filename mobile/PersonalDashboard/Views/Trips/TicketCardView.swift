@@ -277,9 +277,9 @@ struct TicketCardView: View {
                 if index > 0 { detailDivider }
                 detailRow(label: fact.label, value: fact.value, isUnknown: fact.value == nil)
             }
-            if showsAddressRow {
+            if showsLocationBlock {
                 if !richFacts.isEmpty { detailDivider }
-                addressRow
+                locationRow
             }
         }
         .padding(.horizontal, Space.lg)
@@ -320,16 +320,60 @@ struct TicketCardView: View {
             facts.append(contentsOf: [
                 TicketFact(label: "Section", value: meta?.section),
                 TicketFact(label: "Row",     value: meta?.row),
-                TicketFact(label: "Seat",    value: item.seat.isEmpty ? nil : item.seat)
+                TicketFact(label: "Seat",    value: item.seat.isEmpty ? nil : item.seat),
+                // A gate on an event is a real fact when it is printed (a hall, a
+                // door) and simply absent otherwise, so unlike the boarding pass's
+                // canonical slot it is filtered out rather than dashed.
+                TicketFact(label: "Gate",    value: TicketField.code(item.gate)),
+                // Last of the named facts, because it is the one that matters when
+                // there is no seating at all — which is most events outside a
+                // stadium, and the row a Wallet pass fills with it (#413).
+                TicketFact(label: "Guest",   value: meta?.guestName)
             ].filter { $0.value != nil })
+            facts.append(contentsOf: extraFacts)
             return facts
         }
     }
 
-    /// Only a stay puts its address in the list — and only when the location
-    /// stub is not already showing it underneath, which would print it twice.
-    private var showsAddressRow: Bool {
-        isStay && !item.address.isEmpty && !hasLocationStub
+    /// Whatever else the document printed, under the issuer's own labels (#420).
+    ///
+    /// This is what keeps the card honest about a pass it has never seen the shape of:
+    /// "Ticket · In-Person", "Organiser · Vibe Coders SG", "Table · 12" all render
+    /// without this view knowing any of those exist. Only fields no typed slot above
+    /// already covers reach here — the importer consumes what it recognises first —
+    /// and only the ones the issuer put on the FACE. The back's fields belong on the
+    /// detail surface, which is where you turn a pass over.
+    private var extraFacts: [TicketFact] {
+        (meta?.faceFields ?? []).map { TicketFact(label: $0.label, value: $0.value) }
+    }
+
+    /// Whether the card prints a location block under its facts: the postal address,
+    /// and a way to get there.
+    ///
+    /// Was stay-only, which meant an event card could never show either (#420). That
+    /// was backwards: you have been to your hotel's city before, and the pass for a
+    /// meetup in a building you have never visited is exactly the one that needs an
+    /// address and a map link — which is why Apple Wallet puts both on the back of
+    /// every event ticket it issues.
+    ///
+    /// Suppressed when the stub is already carrying the same thing underneath, which
+    /// would print it twice.
+    private var showsLocationBlock: Bool {
+        !hasLocationStub && (!addressLine.isEmpty || item.mapsURL != nil)
+    }
+
+    /// The address, unless it is just the venue again.
+    ///
+    /// A pass writes its location at two resolutions and they are often the same
+    /// string: this event's venue and its task address are both "Lorong AI @
+    /// One-North". Printing that twice, once labelled VENUE and once ADDRESS, reads as
+    /// a rendering bug rather than as detail — so the duplicate collapses and the row
+    /// becomes the directions link alone.
+    private var addressLine: String {
+        let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty else { return "" }
+        let venue = item.venue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return address.caseInsensitiveCompare(venue) == .orderedSame ? "" : address
     }
 
     private func detailRow(label: String, value: String?, isUnknown: Bool) -> some View {
@@ -348,26 +392,34 @@ struct TicketCardView: View {
         .padding(.vertical, Space.md)
     }
 
-    /// The address wraps, so the MAP pill sits under it rather than fighting it
-    /// for the same line.
-    private var addressRow: some View {
+    /// The address plus a way to get there.
+    ///
+    /// The address wraps, so the MAP pill sits under it rather than fighting it for the
+    /// same line. When the address collapsed into the venue there is nothing to print
+    /// above the pill, so the row becomes the label and the pill on one line — the
+    /// point of it being the tap target, not the text.
+    private var locationRow: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-                Text("ADDRESS")
+                Text(addressLine.isEmpty ? "DIRECTIONS" : "ADDRESS")
                     .font(.edEyebrow)
                     .tracking(1.0)
                     .foregroundStyle(Tokens.muted)
                 Spacer(minLength: Space.sm)
-                Text(item.address)
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.ink)
-                    .multilineTextAlignment(.trailing)
-                    .lineLimit(3)
+                if !addressLine.isEmpty {
+                    Text(addressLine)
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.ink)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(3)
+                } else if let url = item.mapsURL {
+                    mapChip(url: url)
+                }
             }
-            if let url = item.mapsURL {
+            if !addressLine.isEmpty, let url = item.mapsURL {
                 HStack {
                     Spacer(minLength: 0)
-                    stayMapChip(url: url)
+                    mapChip(url: url)
                 }
             }
         }
@@ -718,7 +770,7 @@ struct TicketCardView: View {
                 }
                 Spacer(minLength: Space.sm)
                 if let url {
-                    stayMapChip(url: url)
+                    mapChip(url: url)
                 }
             }
         }
@@ -726,7 +778,7 @@ struct TicketCardView: View {
 
     /// The MAP pill. Its own tap target opens Google Maps without triggering the
     /// card's tap (which goes to the scan surface / editor).
-    private func stayMapChip(url: URL) -> some View {
+    private func mapChip(url: URL) -> some View {
         Button {
             openURL(url)
         } label: {

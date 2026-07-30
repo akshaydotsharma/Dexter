@@ -209,7 +209,8 @@ struct TaskTicketService {
         seat: String? = nil,
         gate: String? = nil,
         reference: String? = nil,
-        meta: TicketMeta? = nil
+        meta: TicketMeta? = nil,
+        attachmentPath: String? = nil
     ) throws -> TaskTicket? {
         var descriptor = FetchDescriptor<LocalTaskTicket>(
             predicate: #Predicate { $0.clientUUID == id && $0.deletedAt == nil }
@@ -225,11 +226,112 @@ struct TaskTicketService {
         if let gate { row.gate = gate }
         if let reference { row.reference = reference }
         if let meta { row.ticketMetaJSON = meta.isEmpty ? "" : meta.encodedString() }
+        if let attachmentPath { row.attachmentPath = attachmentPath }
 
         row.updatedAt = Date()
         try store.context.save()
         touchTodo(row.todoClientUUID)
         return row.toDTO()
+    }
+
+    // MARK: - Upgrading an attachment in place (#420)
+
+    /// Complete an attachment the task already has, from a richer copy of the same
+    /// ticket.
+    ///
+    /// The case this exists for: a ticket was attached as a screenshot, which is all
+    /// anyone had at the time, and later the real `.pkpass` turns up. The pass carries
+    /// its street address, its admission type and the holder's email — none of which
+    /// were in the photograph — and the duplicate check would otherwise refuse it,
+    /// leaving the thinner card as the only version there will ever be. Refusing a
+    /// BETTER copy of something you already have is the wrong answer.
+    ///
+    /// Only empty fields are filled. A value already on the row may have been typed or
+    /// corrected by hand, and an import silently overwriting that is a worse failure
+    /// than a stale field: the person cannot tell it happened. The one exception is the
+    /// ingest fingerprint, which is deliberately replaced so a third attempt at the
+    /// same pass is caught on the cheap byte check rather than after a full read.
+    ///
+    /// - Returns: `true` when something actually changed, so the caller can say
+    ///   "updated" rather than "already attached". `false` leaves the row untouched.
+    @discardableResult
+    func enrich(_ existing: TaskTicket, from read: TaskTicketRead) throws -> Bool {
+        let candidate = read.ticket(
+            id: existing.id,
+            todoId: existing.todoId,
+            position: existing.position
+        )
+
+        /// A field worth writing: the row has nothing and the incoming copy does.
+        func fill(_ current: String, _ incoming: String) -> String? {
+            let now = current.trimmingCharacters(in: .whitespacesAndNewlines)
+            let next = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard now.isEmpty, !next.isEmpty else { return nil }
+            return next
+        }
+
+        let title = fill(existing.eventTitle, candidate.eventTitle)
+        let time = fill(existing.startTimeText, candidate.startTimeText)
+        let venue = fill(existing.venue, candidate.venue)
+        let seat = fill(existing.seat, candidate.seat)
+        let gate = fill(existing.gate, candidate.gate)
+        let reference = fill(existing.reference, candidate.reference)
+        let day: Date?? = (existing.eventDate == nil && candidate.eventDate != nil)
+            ? .some(candidate.eventDate)
+            : nil
+
+        var meta = existing.ticketMeta ?? TicketMeta()
+        let incoming = candidate.ticketMeta ?? TicketMeta()
+        var metaChanged = false
+        func fillMeta(_ current: inout String?, _ next: String?) {
+            guard current == nil || current?.isEmpty == true, let next, !next.isEmpty else { return }
+            current = next
+            metaChanged = true
+        }
+        fillMeta(&meta.eventType, incoming.eventType)
+        fillMeta(&meta.section, incoming.section)
+        fillMeta(&meta.row, incoming.row)
+        fillMeta(&meta.guestName, incoming.guestName)
+        fillMeta(&meta.eventURL, incoming.eventURL)
+        fillMeta(&meta.address, incoming.address)
+        fillMeta(&meta.directionsURL, incoming.directionsURL)
+        if (meta.fields ?? []).isEmpty, let fields = incoming.fields, !fields.isEmpty {
+            meta.fields = fields
+            metaChanged = true
+        }
+        if meta.presentedAtEntry == nil, let judged = incoming.presentedAtEntry {
+            meta.presentedAtEntry = judged
+            metaChanged = true
+        }
+        if let hash = incoming.sourceHash, meta.sourceHash != hash {
+            meta.sourceHash = hash
+            metaChanged = true
+        }
+
+        // The row adopts the new file only when it had none. Two files for one ticket
+        // is a leak, so whichever copy is not kept goes back out.
+        let adoptsFile = !existing.hasAttachment && !candidate.attachmentPath.isEmpty
+        if !adoptsFile {
+            discardStoredFile(at: candidate.attachmentPath)
+        }
+
+        let changed = title != nil || time != nil || venue != nil || seat != nil
+            || gate != nil || reference != nil || day != nil || metaChanged || adoptsFile
+        guard changed else { return false }
+
+        _ = try update(
+            id: existing.id,
+            eventTitle: title,
+            eventDate: day,
+            startTimeText: time,
+            venue: venue,
+            seat: seat,
+            gate: gate,
+            reference: reference,
+            meta: metaChanged ? meta : nil,
+            attachmentPath: adoptsFile ? candidate.attachmentPath : nil
+        )
+        return true
     }
 
     /// Detach a ticket and remove its file.

@@ -26,6 +26,9 @@ struct TaskTicketDetailSheet: View {
 
     @State private var showingScan = false
     @State private var showingOriginal = false
+    #if os(iOS)
+    @State private var showingApplePass = false
+    #endif
     @State private var isEditing = false
     @State private var showingDeleteConfirm = false
     @State private var errorMessage: String?
@@ -66,6 +69,16 @@ struct TaskTicketDetailSheet: View {
     private var fileIsPresent: Bool {
         service.fileURL(for: ticket) != nil
     }
+
+    #if os(iOS)
+    /// The stored `.pkpass` bytes, when the attachment is one (#420). Read on each
+    /// evaluation rather than cached: it is one small file and it cannot go stale.
+    private var storedPassData: Data? {
+        guard TicketStorage.isPass(ticket.attachmentPath),
+              let url = service.fileURL(for: ticket) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -121,6 +134,12 @@ struct TaskTicketDetailSheet: View {
         #if os(iOS)
         .fullScreenCover(isPresented: $showingScan) {
             TicketScanView(pass: ScannablePass(ticket: ticket, taskTitle: taskTitle))
+        }
+        .sheet(isPresented: $showingApplePass) {
+            if let passData = storedPassData {
+                AddPassToAppleWallet(data: passData) { showingApplePass = false }
+                    .ignoresSafeArea()
+            }
         }
         #endif
         .sheet(isPresented: $showingOriginal) {
@@ -186,12 +205,30 @@ struct TaskTicketDetailSheet: View {
                 }
             }
             #endif
-            if fileIsPresent {
+            // A `.pkpass` is a signed data bundle with no page to render, so the viewer
+            // would show its "unavailable" state on an intact file (#420). Apple Wallet
+            // is where you look at a pass, and it is iOS-only.
+            #if os(iOS)
+            if fileIsPresent, let passData = storedPassData,
+               AddPassToAppleWallet.pass(from: passData) != nil {
+                actionRow(icon: "wallet.pass", title: "Show in Apple Wallet") {
+                    Haptics.light()
+                    showingApplePass = true
+                }
+            } else if fileIsPresent, !TicketStorage.isPass(ticket.attachmentPath) {
                 actionRow(icon: "doc.text.magnifyingglass", title: "View original file") {
                     Haptics.light()
                     showingOriginal = true
                 }
             }
+            #else
+            if fileIsPresent, !TicketStorage.isPass(ticket.attachmentPath) {
+                actionRow(icon: "doc.text.magnifyingglass", title: "View original file") {
+                    Haptics.light()
+                    showingOriginal = true
+                }
+            }
+            #endif
             // The event's own page (#412). Apple Wallet puts this on the back of a
             // pass rather than its face, which is the right place: it is what you
             // open before the event, not what you hold up at the door.

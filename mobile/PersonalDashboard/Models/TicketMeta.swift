@@ -87,6 +87,77 @@ struct TicketMeta: Codable, Equatable, Sendable {
     /// check-in link. That one admits you; this one tells you where you are going.
     var eventURL: String?
 
+    /// The full postal address, when the document carries one beyond the venue's
+    /// name (#420).
+    ///
+    /// A pass prints its location twice at different resolutions: "Lorong AI @
+    /// One-North" on the face, where you are glancing at it, and "69 Ayer Rajah
+    /// Cres., Level 3 Vidacity, Singapore 139961" on the back, where you are trying
+    /// to get there. `venue` is the first; this is the second. Kept separate rather
+    /// than overwriting the venue with the longer string, because the short form is
+    /// what belongs on the card.
+    var address: String?
+
+    /// A map link the document itself supplied (#420).
+    ///
+    /// Preferred over a link derived from the address, because an issuer's own link
+    /// resolves to the exact place — Luma ships a Google Maps URL carrying a
+    /// `place_id`, which lands on the building rather than on a text search that may
+    /// match three of them.
+    var directionsURL: String?
+
+    /// Everything else the document printed, as its own labels (#420).
+    ///
+    /// This is the field that stops the next pass needing a code change. Issuers
+    /// print whatever they like — "Ticket: In-Person", "Dress code: smart casual",
+    /// "Organiser", "Table" — and inventing a typed property here for each one means
+    /// a new property, a new render site and a new editor row every time, forever.
+    /// A pass already models this as labelled fields grouped by where they sit, so
+    /// we keep that shape and render it generically.
+    ///
+    /// Only fields no typed property above already covers land here: the mapper
+    /// consumes what it recognises first, so nothing is printed twice.
+    var fields: [PassField]?
+
+    /// One labelled field, positioned the way a pass positions its own.
+    struct PassField: Codable, Equatable, Sendable, Hashable {
+        /// Where the issuer put it. Drives which surface renders it: the card's face
+        /// carries the front groups, and the detail surface — which is our
+        /// equivalent of turning the pass over — carries `back`.
+        enum Placement: String, Codable, Sendable, Hashable {
+            case header, primary, secondary, auxiliary, back
+        }
+
+        var label: String
+        var value: String
+        var placement: Placement
+
+        init(label: String, value: String, placement: Placement) {
+            self.label = label
+            self.value = value
+            self.placement = placement
+        }
+
+        /// A field with no label is legal on a pass (the value stands alone) but has
+        /// nothing to render against in a label-over-value list, so callers treat it
+        /// as unusable rather than printing an unlabelled row.
+        var isRenderable: Bool {
+            !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        /// The value as an openable URL, when that is what it is. A pass puts its
+        /// event page and its directions link in ordinary fields, and a row showing
+        /// 180 characters of query string is worse than a row you can tap.
+        var url: URL? {
+            let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard raw.lowercased().hasPrefix("http://") || raw.lowercased().hasPrefix("https://") else {
+                return nil
+            }
+            return URL(string: raw)
+        }
+    }
+
     /// Who the ticket is issued to, when the document prints a name (#413).
     ///
     /// A Wallet pass carries this as an auxiliary field, and it is what fills that
@@ -103,6 +174,23 @@ struct TicketMeta: Codable, Equatable, Sendable {
         if let f = flightNumber, !f.trimmingCharacters(in: .whitespaces).isEmpty { return true }
         let hasRoute = !(originCode ?? "").isEmpty && !(destinationCode ?? "").isEmpty
         return hasRoute
+    }
+
+    // MARK: - Generic fields
+
+    /// Extra fields that belong on the card's face, in the issuer's own order.
+    ///
+    /// `header` and `primary` are excluded: those hold the date, the time and the
+    /// event's name, which the card already draws as its hero and its title. Printing
+    /// them again in the fact list is the duplication this whole mechanism exists to
+    /// avoid.
+    var faceFields: [PassField] {
+        (fields ?? []).filter { $0.isRenderable && ($0.placement == .secondary || $0.placement == .auxiliary) }
+    }
+
+    /// Extra fields that belong on the back, which is our detail surface.
+    var backFields: [PassField] {
+        (fields ?? []).filter { $0.isRenderable && $0.placement == .back }
     }
 
     // MARK: - JSON string round-trip
