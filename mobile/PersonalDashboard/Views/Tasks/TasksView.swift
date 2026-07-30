@@ -1009,8 +1009,7 @@ private struct TaskRow: View {
                     .foregroundStyle(Tokens.muted)
                 }
 
-                let hasTag = todo.tag != nil && !(todo.tag?.isEmpty ?? true)
-                if todo.dueDate != nil || hasTag || todo.mapsURL != nil || attachments != nil {
+                if todo.dueDate != nil || showsTagPill || showsMapPill || showsTicketPill {
                     HStack(spacing: Space.sm) {
                         if let due = todo.dueDate {
                             HStack(spacing: 4) {
@@ -1021,12 +1020,12 @@ private struct TaskRow: View {
                             .font(.edCaption)
                             .foregroundStyle(dueColor(for: due))
                         }
-                        if let tag = todo.tag, !tag.isEmpty {
+                        if showsTagPill, let tag = todo.tag {
                             // Colour keyed to the tag itself (#338), shared with
                             // the chips in the detail popover.
                             TagPill(tag: tag)
                         }
-                        if let url = todo.mapsURL {
+                        if showsMapPill, let url = todo.mapsURL {
                             Button {
                                 openURL(url)
                             } label: {
@@ -1047,7 +1046,7 @@ private struct TaskRow: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("Open in Google Maps")
                         }
-                        if attachments != nil {
+                        if showsTicketPill {
                             ticketChip
                         }
                     }
@@ -1111,27 +1110,44 @@ private struct TaskRow: View {
         }
     }
 
-    /// The attachment chip. Its own tap target opens them without triggering the
-    /// row's tap-to-rename, matching how the MAP chip guards its own tap.
-    ///
-    /// Reads TICKET only when something on the task is genuinely scannable (#402);
-    /// otherwise it is a file, and saying "ticket" would promise a card that does not
-    /// exist.
+    // MARK: - Pill budget
+    //
+    // The metadata line carries at most TWO pills (#403). Three chips plus a due
+    // date turns the row into a wall of capsules and the title stops being the
+    // first thing read. The two tap targets win the slots because they open
+    // something the row can't otherwise reach; the tag yields, since it's still
+    // on the detail popover and drives filtering elsewhere.
+
+    /// A scannable attachment earns a pill; a plain file does not (#403). Saying
+    /// FILE spent a row slot on something you can't act on from the list, and the
+    /// file is one tap away in the detail sheet.
+    private var showsTicketPill: Bool { attachments?.hasBarcode == true }
+
+    private var showsMapPill: Bool { todo.mapsURL != nil }
+
+    /// Third in line, so it drops out only when both action pills are present.
+    private var showsTagPill: Bool {
+        guard let tag = todo.tag, !tag.isEmpty else { return false }
+        return !(showsTicketPill && showsMapPill)
+    }
+
+    /// The ticket chip. Its own tap target opens the attachments without
+    /// triggering the row's tap-to-rename, matching how the MAP chip guards its
+    /// own tap. Only rendered for genuinely scannable attachments (#402, #403),
+    /// so it can say TICKET without promising a card that doesn't exist.
     @ViewBuilder
     private var ticketChip: some View {
         if let attachments {
-            let isTicket = attachments.hasBarcode
             let count = attachments.count
-            let noun = isTicket ? "TICKET" : "FILE"
             Button {
                 Haptics.light()
                 showingTickets = true
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: isTicket ? "ticket.fill" : "paperclip")
+                    Image(systemName: "ticket.fill")
                         .font(.system(size: 10, weight: .regular))
                     // A count only earns its space once there's more than one.
-                    Text(count > 1 ? "\(count) \(noun)S" : noun)
+                    Text(count > 1 ? "\(count) TICKETS" : "TICKET")
                         .font(.edEyebrow)
                         .textCase(.uppercase)
                         .tracking(1.4)
@@ -1143,11 +1159,7 @@ private struct TaskRow: View {
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(
-                count > 1
-                    ? "Show \(count) attachments"
-                    : (isTicket ? "Show ticket" : "Show attachment")
-            )
+            .accessibilityLabel(count > 1 ? "Show \(count) tickets" : "Show ticket")
         }
     }
 
