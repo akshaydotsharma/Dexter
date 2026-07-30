@@ -65,6 +65,19 @@ struct WalletEntry: Identifiable {
     let source: Source
     let card: TicketCardData
 
+    /// What the card IS, which is what picks its colour in the deck (#398).
+    ///
+    /// A standalone card states its kind outright. A borrowed trip ticket has
+    /// only a layout, so it maps back: a stay is a stay, a route hero is a
+    /// boarding pass, everything else is an event. That mapping is lossy in one
+    /// direction only — a trip rail ticket colours as a boarding pass, because
+    /// the itinerary model does not carry the distinction the wallet's `transit`
+    /// kind does.
+    let kind: WalletCardKind
+
+    /// The colours this card draws in.
+    var palette: WalletCardPalette { kind.palette }
+
     /// The day the card belongs to (start-of-day, device-local). Sorting key.
     let day: Date
 
@@ -141,6 +154,7 @@ extension WalletEntry {
                 WalletEntry(
                     source: .wallet(cardID: card.clientUUID),
                     card: data,
+                    kind: card.kindEnum,
                     day: card.dayDate,
                     validThrough: card.endDate ?? card.dayDate,
                     timeText: timeLine(for: data)
@@ -163,6 +177,7 @@ extension WalletEntry {
                         tripName: tripNames[item.tripUUID] ?? "Trip"
                     ),
                     card: data,
+                    kind: Self.kind(for: data.layout),
                     day: item.dayDate,
                     validThrough: item.endDate ?? item.dayDate,
                     timeText: timeLine(for: data)
@@ -171,6 +186,15 @@ extension WalletEntry {
         }
 
         return out
+    }
+
+    /// Map a borrowed card's layout back to a kind, for colour only.
+    private static func kind(for layout: TicketCardLayout) -> WalletCardKind {
+        switch layout {
+        case .stay:         return .stay
+        case .boardingPass: return .boardingPass
+        case .event:        return .event
+        }
     }
 
     /// Split into upcoming / past and sort each group. `today` is start-of-day.

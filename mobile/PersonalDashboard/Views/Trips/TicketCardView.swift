@@ -37,6 +37,15 @@ struct TicketCardView: View {
     /// the stay layout reads `startTime` / `endTime` directly so it can show
     /// both check-in and check-out times independently.
     let timeText: String?
+    /// Colours this card is drawn in (#398). Defaults to the original itinerary
+    /// violet, so every trip-timeline call site renders exactly as before and
+    /// only the wallet opts into per-kind colour.
+    var palette: WalletCardPalette = .itinerary
+    /// Whether the card draws its own title. False in the wallet deck, where the
+    /// coloured band above the card already carries it and printing it twice
+    /// would read as a mistake. The boarding-pass layout has no title line at
+    /// all, so this only affects the event and stay layouts.
+    var showsTitle: Bool = true
 
     @Environment(\.openURL) private var openURL
 
@@ -70,7 +79,7 @@ struct TicketCardView: View {
         // The whole card carries a soft itinerary-accent wash (theme-aware) so it
         // reads as a distinct physical ticket in the timeline, not another row.
         .background(ticketFill, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-        .paperBorder(Tokens.ticketBorder, radius: Radius.lg)
+        .paperBorder(palette.border, radius: Radius.lg)
         .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
     }
 
@@ -78,7 +87,7 @@ struct TicketCardView: View {
     /// light enough that ink keeps contrast in both light and dark.
     private var ticketFill: LinearGradient {
         LinearGradient(
-            colors: [Tokens.ticketTintTop, Tokens.ticketTintBottom],
+            colors: [palette.tintTop, palette.tintBottom],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -106,7 +115,7 @@ struct TicketCardView: View {
                     .font(.edEyebrow)
                     .textCase(.uppercase)
                     .tracking(1.4)
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    .foregroundStyle(palette.accent)
                 Spacer(minLength: Space.sm)
                 if !operatorLabel.isEmpty {
                     Text(operatorLabel)
@@ -155,7 +164,7 @@ struct TicketCardView: View {
             dashSegment
             Image(systemName: item.heroGlyph)
                 .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(Tokens.accent(for: .itineraries))
+                .foregroundStyle(palette.accent)
                 .accessibilityHidden(true)
             dashSegment
         }
@@ -236,13 +245,15 @@ struct TicketCardView: View {
                 .font(.edEyebrow)
                 .textCase(.uppercase)
                 .tracking(1.4)
-                .foregroundStyle(Tokens.accent(for: .itineraries))
+                .foregroundStyle(palette.accent)
 
-            Text(item.title)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
+            if showsTitle {
+                Text(item.title)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
 
             if !item.venue.isEmpty {
                 HStack(spacing: 4) {
@@ -263,7 +274,7 @@ struct TicketCardView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "clock")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Tokens.accent(for: .itineraries))
+                        .foregroundStyle(palette.accent)
                     Text(time)
                         .font(.edBodyMedium)
                         .monospacedDigit()
@@ -294,7 +305,7 @@ struct TicketCardView: View {
                     .font(.edEyebrow)
                     .textCase(.uppercase)
                     .tracking(1.4)
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    .foregroundStyle(palette.accent)
                 Spacer(minLength: Space.sm)
                 if !confirmationCode.isEmpty {
                     Text(confirmationCode)
@@ -304,12 +315,14 @@ struct TicketCardView: View {
                 }
             }
 
-            Text(item.title)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity)
+            if showsTitle {
+                Text(item.title)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity)
+            }
 
             stayHero
 
@@ -355,7 +368,7 @@ struct TicketCardView: View {
                 dashSegment
                 Image(systemName: "bed.double.fill")
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    .foregroundStyle(palette.accent)
                     .accessibilityHidden(true)
                 dashSegment
             }
@@ -429,10 +442,10 @@ struct TicketCardView: View {
                     .textCase(.uppercase)
                     .tracking(1.4)
             }
-            .foregroundStyle(Tokens.accent(for: .itineraries))
+            .foregroundStyle(palette.accent)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Tokens.accent(for: .itineraries).opacity(0.12), in: Capsule(style: .continuous))
+            .background(palette.accent.opacity(0.12), in: Capsule(style: .continuous))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -517,7 +530,7 @@ struct TicketCardView: View {
             ForEach(Array(facts.enumerated()), id: \.element.id) { index, fact in
                 if index > 0 {
                     Rectangle()
-                        .fill(Tokens.ticketFactRule)
+                        .fill(palette.factRule)
                         .frame(width: 0.5, height: 26)
                 }
                 TicketFactCell(fact: fact)
@@ -669,7 +682,9 @@ struct StayBookingDetailSheet: View {
             HStack(spacing: Space.sm) {
                 Image(systemName: icon)
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    // This sheet belongs to the trip timeline, which is always
+                    // the itinerary colour; only the wallet varies per kind.
+                    .foregroundStyle(WalletCardPalette.itinerary.accent)
                     .frame(width: 24)
                 Text(title)
                     .font(.edBodyMedium)

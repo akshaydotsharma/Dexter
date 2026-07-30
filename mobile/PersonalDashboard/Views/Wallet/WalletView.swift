@@ -5,9 +5,13 @@ import SwiftData
 /// (#398).
 ///
 /// Three things it does, in order of how often they matter:
-///  1. **Shows** every card as the full wallet-style `TicketCardView`, one after
-///     the other, grouped into Upcoming and Past. Upcoming runs soonest-first so
-///     the card you are about to scan is at the top; Past runs most-recent-first.
+///  1. **Shows** every card as a stacked deck: each card collapses to a coloured
+///     band carrying its title and date, cards overlap so the group reads as a
+///     wallet rather than a list, and tapping one unfolds the full ticket while
+///     the rest stay closed. Colour comes from the card's kind, so a stay, a
+///     boarding pass and an event ticket are told apart at a glance. Grouped into
+///     Upcoming (soonest first, so the next thing you need is the card that
+///     opens) and Past (most recent first).
 ///  2. **Presents to scan** on tap: straight into `TicketScanView` (max
 ///     brightness, idle timer held) on iPhone, which is the whole point of a
 ///     wallet at a gate. A card with nothing scannable opens its detail sheet
@@ -51,6 +55,14 @@ struct WalletView: View {
     @State private var showingCamera = false
     @State private var showingPhotoLibrary = false
     @State private var showingPDFPicker = false
+
+    /// Which card is open. One at a time: a deck with several cards unfolded is
+    /// just a list again, and the point of the stack is that the rest stay as
+    /// readable bands. Seeded to the first Upcoming card so the wallet opens on
+    /// the thing you most likely came for.
+    @State private var expandedID: String?
+    /// Guards the seeding so it happens once, not on every re-render.
+    @State private var didSeedExpansion = false
 
     /// Card queued for deletion, driving the confirmation dialog. Holds the UUID
     /// rather than the model so a re-render can't hand the dialog a deleted row.
@@ -98,6 +110,15 @@ struct WalletView: View {
             }
         }
         .activeSection(.wallet)
+        .onAppear(perform: seedExpansionIfNeeded)
+        .onChange(of: groups.upcoming.first?.id) { _, _ in
+            // The first card can change under us — a new upload, or midnight
+            // moving one to Past. Re-seed only while nothing is open, so this
+            // never yanks a card shut while the user is looking at it.
+            guard expandedID == nil else { return }
+            didSeedExpansion = false
+            seedExpansionIfNeeded()
+        }
         .sheet(item: $editorTarget) { target in
             WalletCardEditorSheet(target: target)
                 .presentationDetents([.large])
@@ -169,35 +190,53 @@ struct WalletView: View {
         if grouped.isEmpty {
             emptyState
         } else {
-            ScrollView {
-                LazyVStack(spacing: Space.lg) {
-                    cardGroup(
-                        title: "Upcoming",
-                        entries: grouped.upcoming,
-                        accent: Tokens.accent(for: .wallet),
-                        soft: Tokens.paper2,
-                        isPast: false
-                    )
-                    cardGroup(
-                        title: "Past",
-                        entries: grouped.past,
-                        accent: Tokens.muted,
-                        soft: Tokens.paper2,
-                        isPast: true
-                    )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: Space.xl) {
+                        cardStack(
+                            title: "Upcoming",
+                            entries: grouped.upcoming,
+                            accent: Tokens.accent(for: .wallet),
+                            soft: Tokens.paper2,
+                            isPast: false
+                        )
+                        cardStack(
+                            title: "Past",
+                            entries: grouped.past,
+                            accent: Tokens.muted,
+                            soft: Tokens.paper2,
+                            isPast: true
+                        )
 
-                    // Bumper so the last card clears the floating tab bar + FAB.
-                    Color.clear.frame(height: 96)
+                        // Bumper so the last card clears the floating tab bar + FAB.
+                        Color.clear.frame(height: 96)
+                    }
+                    .padding(.horizontal, Space.lg)
+                    .padding(.top, Space.sm)
                 }
-                .padding(.horizontal, Space.lg)
-                .padding(.top, Space.sm)
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: expandedID) { _, newValue in
+                    // Bring a newly opened card fully into view: it grows
+                    // downward from a strip to a full ticket, so opening one near
+                    // the bottom would otherwise unfold mostly off-screen.
+                    guard let newValue else { return }
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(newValue, anchor: .top)
+                    }
+                }
             }
-            .scrollDismissesKeyboard(.interactively)
         }
     }
 
+    /// One group rendered as a stack of overlapping cards.
+    ///
+    /// The overlap is what makes this a wallet rather than a list: collapsed
+    /// cards are pulled up under the one before them so only their coloured band
+    /// shows, and the whole group reads as a deck you flick through. An open card
+    /// gets real space on both sides so it stops looking stacked and starts
+    /// looking like the ticket it is.
     @ViewBuilder
-    private func cardGroup(
+    private func cardStack(
         title: String,
         entries: [WalletEntry],
         accent: Color,
@@ -208,24 +247,47 @@ struct WalletView: View {
             VStack(alignment: .leading, spacing: Space.md) {
                 groupHeader(title: title, count: entries.count, accent: accent, soft: soft)
 
-                ForEach(entries) { entry in
-                    // Edit / delete are handed over only for a card the wallet
-                    // owns, open-source only for a borrowed one. The row renders
-                    // whichever closures it was given and needs no knowledge of
-                    // the source kinds.
-                    let ownID = walletCardID(of: entry)
-                    WalletCardRow(
-                        entry: entry,
-                        isPast: isPast,
-                        onTap: { open(entry) },
-                        onEdit: ownID.map { id in { editorTarget = .existing(id) } },
-                        onDelete: ownID.map { id in { pendingDeleteID = id } },
-                        onOpenSource: ownID == nil ? { openSource(of: entry) } : nil
-                    )
+                VStack(spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        // Edit / delete go over only for a card the wallet owns,
+                        // open-source only for a borrowed one. The card renders
+                        // whichever closures it was handed.
+                        let ownID = walletCardID(of: entry)
+                        WalletDeckCard(
+                            entry: entry,
+                            isExpanded: expandedID == entry.id,
+                            isPast: isPast,
+                            onToggle: { toggle(entry) },
+                            onOpen: { open(entry) },
+                            onEdit: ownID.map { id in { editorTarget = .existing(id) } },
+                            onDelete: ownID.map { id in { pendingDeleteID = id } },
+                            onOpenSource: ownID == nil ? { openSource(of: entry) } : nil
+                        )
+                        .id(entry.id)
+                        .padding(.top, topInset(at: index, in: entries))
+                        // Later cards draw over earlier ones, so each band
+                        // overlaps the bottom edge of the card above it — the
+                        // stacking order a real wallet has.
+                        .zIndex(Double(index))
+                    }
                 }
             }
         }
     }
+
+    /// Gap above the card at `index`: negative between two closed cards so they
+    /// overlap into a deck, positive whenever either neighbour is open.
+    private func topInset(at index: Int, in entries: [WalletEntry]) -> CGFloat {
+        guard index > 0 else { return 0 }
+        let thisOpen = expandedID == entries[index].id
+        let prevOpen = expandedID == entries[index - 1].id
+        return (thisOpen || prevOpen) ? Space.md : -Self.deckOverlap
+    }
+
+    /// How far each closed card slides under the one before it. Tuned against
+    /// the band's own height: enough that the stack reads as stacked, little
+    /// enough that every title stays fully readable.
+    private static let deckOverlap: CGFloat = 12
 
     /// Same shape as the Trips / Tasks section headers: accent title plus a
     /// count capsule, left-aligned on paper.
@@ -357,6 +419,24 @@ struct WalletView: View {
 
     // MARK: - Actions
 
+    /// Open the tapped card and close whatever was open, or close it if it was
+    /// already the open one.
+    private func toggle(_ entry: WalletEntry) {
+        Haptics.light()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            expandedID = (expandedID == entry.id) ? nil : entry.id
+        }
+    }
+
+    private func seedExpansionIfNeeded() {
+        guard !didSeedExpansion else { return }
+        didSeedExpansion = true
+        let grouped = groups
+        // Fall back to the most recent past card when there is nothing upcoming,
+        // so the wallet never opens looking empty when it holds cards.
+        expandedID = grouped.upcoming.first?.id ?? grouped.past.first?.id
+    }
+
     /// Tapping a card goes straight to the thing you tapped it for: the big
     /// high-contrast barcode. A card with nothing scannable (a manually typed
     /// confirmation code) would show an empty barcode panel, so it opens the
@@ -479,95 +559,3 @@ struct WalletScanTarget: Identifiable {
     let card: TicketCardData
 }
 #endif
-
-// MARK: - Row
-
-/// One card in the wallet list: a provenance chip, the card itself, and the
-/// gestures that act on it.
-private struct WalletCardRow: View {
-    let entry: WalletEntry
-    let isPast: Bool
-    let onTap: () -> Void
-    /// `nil` for a borrowed card, which the wallet does not edit.
-    let onEdit: (() -> Void)?
-    let onDelete: (() -> Void)?
-    /// `nil` for a card the wallet owns; set for a borrowed one.
-    let onOpenSource: (() -> Void)?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            sourceChip
-            TicketCardView(item: entry.card, timeText: entry.timeText)
-        }
-        // Past cards recede rather than disappear: still legible (you may need
-        // last week's receipt) but clearly not the one to scan today.
-        .opacity(isPast ? 0.7 : 1)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
-        .contextMenu {
-            if let onEdit {
-                Button {
-                    onEdit()
-                } label: {
-                    Label("Edit details", systemImage: "pencil")
-                }
-            }
-            if let onOpenSource {
-                Button {
-                    onOpenSource()
-                } label: {
-                    Label("Open \(entry.source.label)", systemImage: "arrow.up.forward.app")
-                }
-            }
-            if let onDelete {
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Label("Delete card", systemImage: "trash")
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.card.title), \(entry.source.label)")
-        .accessibilityHint(entry.card.hasTicket ? "Opens the barcode to scan" : "Opens the card details")
-    }
-
-    /// Provenance line: where the card came from, plus its date. Small and
-    /// quiet — the card below it is the object, this is the label on the sleeve.
-    private var sourceChip: some View {
-        HStack(spacing: 5) {
-            Image(systemName: entry.source.icon)
-                .font(.system(size: 10, weight: .medium))
-            Text(entry.source.label)
-                .font(.edEyebrow)
-                .textCase(.uppercase)
-                .tracking(1.2)
-                .lineLimit(1)
-            Text("·")
-                .font(.edEyebrow)
-            Text(dayLabel)
-                .font(.edEyebrow)
-                .tracking(1.0)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(Tokens.muted)
-        .padding(.leading, 2)
-    }
-
-    /// "MON 14 JUL" style, with the year appended once the card falls outside
-    /// this one, so an old pass never reads as this year's.
-    private var dayLabel: String {
-        let day = entry.day
-        let sameYear = Calendar.current.component(.year, from: day)
-            == Calendar.current.component(.year, from: Date())
-        let style = Date.FormatStyle.dateTime
-            .weekday(.abbreviated)
-            .day()
-            .month(.abbreviated)
-        let formatted = sameYear
-            ? day.formatted(style)
-            : day.formatted(style.year())
-        return formatted.uppercased()
-    }
-}

@@ -287,6 +287,7 @@ targets:
       # (LocalWalletCard, WalletEntry, TicketCardData, WallClock) are picked up by
       # the `PersonalDashboard/Models` glob above and need no entry here.
       - path: PersonalDashboard/Views/Wallet/WalletView.swift
+      - path: PersonalDashboard/Views/Wallet/WalletDeckCard.swift
       - path: PersonalDashboard/Views/Wallet/WalletCardDetailSheet.swift
       - path: PersonalDashboard/Views/Wallet/WalletCardEditorSheet.swift
       - path: PersonalDashboard/Resources/Fonts
