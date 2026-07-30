@@ -26,20 +26,16 @@ struct WalletEntry: Identifiable {
         /// its day, ordering and trip context are edited.
         case trip(itemID: UUID, tripID: UUID, tripName: String)
 
-        // SEAM: task-attached tickets (built in parallel).
-        //
-        //   case task(todoID: UUID, taskTitle: String)
-        //
-        // Add the case, give it a `label`/`icon`/`isEditableInWallet` arm below,
-        // then extend `build` with the todos and map the ones carrying ticket
-        // data. `TicketCardData` needs a matching `init(_ todo: LocalTodo)`
-        // projection; everything else here already works generically.
+        /// A ticket attached to a task (#399). Read-only here for the same
+        /// reason a trip's is: the task owns it, so that is where it is edited.
+        case task(ticketID: UUID, todoID: UUID, taskTitle: String)
 
         /// Chip text shown above the card.
         var label: String {
             switch self {
             case .wallet:                      return "Wallet"
             case .trip(_, _, let tripName):    return tripName
+            case .task(_, _, let taskTitle):   return taskTitle
             }
         }
 
@@ -48,6 +44,7 @@ struct WalletEntry: Identifiable {
             switch self {
             case .wallet: return "wallet.pass"
             case .trip:   return "airplane"
+            case .task:   return "checklist"
             }
         }
 
@@ -56,8 +53,8 @@ struct WalletEntry: Identifiable {
         /// there is exactly one place each record is edited.
         var isEditableInWallet: Bool {
             switch self {
-            case .wallet: return true
-            case .trip:   return false
+            case .wallet:      return true
+            case .trip, .task: return false
             }
         }
     }
@@ -94,8 +91,9 @@ struct WalletEntry: Identifiable {
 
     var id: String {
         switch source {
-        case .wallet(let cardID):      return "wallet:\(cardID.uuidString)"
-        case .trip(let itemID, _, _):  return "trip:\(itemID.uuidString)"
+        case .wallet(let cardID):        return "wallet:\(cardID.uuidString)"
+        case .trip(let itemID, _, _):    return "trip:\(itemID.uuidString)"
+        case .task(let ticketID, _, _):  return "task:\(ticketID.uuidString)"
         }
     }
 
@@ -137,16 +135,24 @@ extension WalletEntry {
     ///   - trips: used only to resolve a trip's name for the source chip. An
     ///     item whose trip has vanished is still shown, labelled "Trip", rather
     ///     than dropped: the ticket is the user's, the trip is just context.
+    ///   - taskTickets: every live `LocalTaskTicket` (#399). All of them carry a
+    ///     card by definition — the model exists only to hold one.
+    ///   - todos: used only to resolve the owning task's title, which is both the
+    ///     source chip and the card's fallback name.
     static func build(
         cards: [LocalWalletCard],
         itineraryItems: [LocalItineraryItem],
-        trips: [LocalTrip]
+        trips: [LocalTrip],
+        taskTickets: [LocalTaskTicket] = [],
+        todos: [LocalTodo] = []
     ) -> [WalletEntry] {
         var tripNames: [UUID: String] = [:]
         for trip in trips { tripNames[trip.clientUUID] = trip.name }
+        var taskTitles: [UUID: String] = [:]
+        for todo in todos { taskTitles[todo.clientUUID] = todo.title }
 
         var out: [WalletEntry] = []
-        out.reserveCapacity(cards.count + itineraryItems.count)
+        out.reserveCapacity(cards.count + itineraryItems.count + taskTickets.count)
 
         for card in cards {
             let data = TicketCardData(card)
@@ -185,7 +191,42 @@ extension WalletEntry {
             )
         }
 
+        for ticket in taskTickets {
+            let taskTitle = taskTitles[ticket.todoClientUUID] ?? "Task"
+            let data = TicketCardData(ticket, taskTitle: taskTitle)
+            out.append(
+                WalletEntry(
+                    source: .task(
+                        ticketID: ticket.clientUUID,
+                        todoID: ticket.todoClientUUID,
+                        taskTitle: taskTitle
+                    ),
+                    card: data,
+                    // Always an event: the model carries no travel grammar, so
+                    // there is nothing else it could honestly be.
+                    kind: .event,
+                    day: data.primaryDate,
+                    // An undated ticket never falls into Past. Its day is only a
+                    // sorting fallback (the row's creation date), so ageing it
+                    // out on that basis would hide a pass that may still be
+                    // good — a membership card, or a ticket whose date the
+                    // extractor could not read.
+                    validThrough: ticket.eventDate ?? .distantFuture,
+                    // The printed time, verbatim. Not reformatted, because the
+                    // number on the card has to match the number at the gate.
+                    timeText: printedTime(ticket.startTimeText)
+                )
+            )
+        }
+
         return out
+    }
+
+    /// The task ticket's printed start time, or "Anytime" when it has none —
+    /// matching how an untimed itinerary card reads.
+    private static func printedTime(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Anytime" : trimmed
     }
 
     /// Map a borrowed card's layout back to a kind, for colour only.

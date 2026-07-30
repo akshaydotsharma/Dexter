@@ -42,6 +42,15 @@ struct WalletView: View {
     /// Only used to label a borrowed card with its trip name.
     @Query private var trips: [LocalTrip]
 
+    /// Tickets attached to tasks (#399). Every row carries a card — the model
+    /// exists only to hold one — so unlike the itinerary these need no filter
+    /// beyond skipping soft-deleted rows.
+    @Query private var taskTickets: [LocalTaskTicket]
+
+    /// Only used to label a task ticket with its task's title, which is also the
+    /// card's fallback name when the extractor read no event name.
+    @Query private var todos: [LocalTodo]
+
     // MARK: Add / edit state
 
     @State private var editorTarget: WalletCardEditorTarget?
@@ -75,7 +84,15 @@ struct WalletView: View {
     #endif
 
     private var entries: [WalletEntry] {
-        WalletEntry.build(cards: cards, itineraryItems: itineraryItems, trips: trips)
+        WalletEntry.build(
+            cards: cards,
+            itineraryItems: itineraryItems,
+            trips: trips,
+            // Soft-deleted rows stay in the store until a sweep; the wallet must
+            // not resurrect a ticket the user deleted from its task.
+            taskTickets: taskTickets.filter { $0.deletedAt == nil },
+            todos: todos
+        )
     }
 
     private var groups: WalletGroups {
@@ -465,6 +482,9 @@ struct WalletView: View {
         case .trip(_, let tripID, _):
             router.focus = ActivityFocus(section: .itineraries, id: tripID)
             router.go(to: .itineraries)
+        case .task(_, let todoID, _):
+            router.focus = ActivityFocus(section: .tasks, id: todoID)
+            router.go(to: .tasks)
         }
     }
 
@@ -473,7 +493,7 @@ struct WalletView: View {
     private func walletCardID(of entry: WalletEntry) -> UUID? {
         switch entry.source {
         case .wallet(let cardID): return cardID
-        case .trip:               return nil
+        case .trip, .task:        return nil
         }
     }
 

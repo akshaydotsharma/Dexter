@@ -175,6 +175,47 @@ extension TicketCardData {
         self.meta = meta
     }
 
+    /// Project a ticket attached to a task (#399, surfaced in the wallet by
+    /// #398). Always the event layout: the model was built for event tickets and
+    /// deliberately carries no route, airline or BCBP grammar.
+    ///
+    /// - Parameter taskTitle: the owning task's title, used when the extractor
+    ///   could not read an event name off the ticket — "Spider-Man" as you typed
+    ///   it beats a blank card.
+    init(_ ticket: LocalTaskTicket, taskTitle: String) {
+        let meta = ticket.ticketMeta
+        let event = ticket.eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        self.layout = .event
+        self.eyebrow = Self.eyebrow(for: .event, eventType: meta?.eventType)
+        self.heroGlyph = "ticket"
+        self.title = event.isEmpty ? taskTitle : event
+        // Undated tickets fall back to the day the row was created, purely so
+        // the card has somewhere to sort. `WalletEntry` keeps them out of Past
+        // regardless — see the `validThrough` note there.
+        self.primaryDate = ticket.eventDate ?? Calendar.current.startOfDay(for: ticket.createdAt)
+        // The task model stores the printed time as a STRING on purpose (#163 /
+        // #168: a Date reformats into the phone's timezone and stops matching the
+        // number the gate is reading). So there is no `Date` to hand over here —
+        // the printed text reaches the card through `WalletEntry.timeText`.
+        self.startTime = nil
+        self.arrivalTime = nil
+        self.endDate = nil
+        self.endTime = nil
+        self.seat = ticket.seat
+        self.gate = ticket.gate
+        self.venue = ticket.venue
+        // A task ticket carries a venue name but no postal address, and no map
+        // link is derivable from a venue alone without guessing.
+        self.address = ""
+        self.mapsURL = nil
+        self.sourceConfirmation = ticket.reference
+        self.attachmentPath = ticket.attachmentPath
+        self.barcodePayload = ticket.barcodePayload
+        self.barcodeSymbology = ticket.barcodeSymbology
+        self.meta = meta
+    }
+
     private static func eyebrow(for layout: TicketCardLayout, eventType: String?) -> String {
         switch layout {
         case .boardingPass:

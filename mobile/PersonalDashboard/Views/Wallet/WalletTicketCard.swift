@@ -38,6 +38,10 @@ struct WalletTicketCard: View {
     /// has the same silhouette rather than some being plain rectangles.
     @State private var headerHeight: CGFloat = 0
 
+    /// Drives the one-shot light sweep across the header when a card opens.
+    /// `-1` parks it off the leading edge; `1` has it clear of the trailing one.
+    @State private var sheen: CGFloat = -1
+
     private var palette: WalletCardPalette { entry.palette }
 
     private var notchY: CGFloat? {
@@ -133,6 +137,7 @@ struct WalletTicketCard: View {
         .padding(.vertical, Space.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(headerFill)
+        .overlay(sheenSweep)
         // A run of same-coloured cards (four hotel stays in a row) merges into
         // one block of colour without this: the hairline is the card edge you
         // see in a closed stack.
@@ -163,6 +168,34 @@ struct WalletTicketCard: View {
         }
     }
 
+    /// A single band of light travelling across the header when the card opens.
+    /// Plays once and parks off-screen — a card that shimmers continuously in a
+    /// list is a distraction, whereas one sweep reads as the card catching the
+    /// light as it turns over.
+    private var sheenSweep: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            LinearGradient(
+                colors: [.clear, palette.bandInk.opacity(0.30), .clear],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: max(width * 0.28, 60))
+            .rotationEffect(.degrees(18))
+            .offset(x: sheen * width * 1.4)
+        }
+        .allowsHitTesting(false)
+        .onAppear { if isOpen { playSheen() } }
+        .onChange(of: isOpen) { _, open in
+            if open { playSheen() } else { sheen = -1 }
+        }
+    }
+
+    private func playSheen() {
+        sheen = -1
+        withAnimation(.easeOut(duration: 0.9)) { sheen = 1 }
+    }
+
     /// Diagonal gradient rather than a flat fill: printed stock has a sheen, and
     /// a stack of flat rectangles reads as a UI list no matter what colour it is.
     private var headerFill: LinearGradient {
@@ -174,14 +207,17 @@ struct WalletTicketCard: View {
     }
 
     /// "BOARDING PASS" on a card the wallet owns, "STAY · ITALY" on one borrowed
-    /// from a trip. Provenance only when it is borrowed: "WALLET" on every
-    /// standalone card would be noise on every row.
+    /// from a trip, "EVENT TICKET · SPIDER-MAN" on one borrowed from a task.
+    /// Provenance only when it is borrowed: "WALLET" on every standalone card
+    /// would be noise on every row.
     private var eyebrow: String {
         let kind = entry.kind.displayName.uppercased()
-        if case .trip = entry.source {
+        switch entry.source {
+        case .wallet:
+            return kind
+        case .trip, .task:
             return "\(kind) · \(entry.source.label.uppercased())"
         }
-        return kind
     }
 
     // MARK: - When

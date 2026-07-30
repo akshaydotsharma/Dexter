@@ -82,15 +82,19 @@ struct TicketCardView: View {
     private var cardContent: some View {
         VStack(spacing: 0) {
             topContent
-                .padding(.horizontal, Space.lg)
-                .padding(.top, Space.lg)
-                .padding(.bottom, Space.lg)
+                // The rich stay's hero panel bleeds to the card's own edges, so
+                // it supplies its own padding and takes none from here.
+                .padding(.horizontal, isRichStay ? 0 : Space.lg)
+                .padding(.top, isRichStay ? 0 : Space.lg)
+                .padding(.bottom, isRichStay ? 0 : Space.lg)
 
-            // The tear-off stub only exists when there's something scannable to
-            // separate. Flights / events always have a barcode or attachment, so
-            // they're unchanged; a confirmation-only stay has neither, so its
-            // card ends cleanly after the top content (no dangling perforation).
-            if item.hasTicket {
+            // The tear-off stub only exists when there's something to separate.
+            // Flights / events always have a barcode or attachment, so they're
+            // unchanged; on the timeline a confirmation-only stay has neither
+            // and its card ends cleanly after the top content. In the wallet
+            // that same stay tears off its confirmation code instead — that IS
+            // what you read out at a desk, so the ticket has a stub either way.
+            if showsStub {
                 // Embedded, the tear line sits on the stub's own paper and the
                 // holes are cut from the card's outline, so it draws the dashes
                 // and nothing else. Standalone, it paints its own notches.
@@ -110,6 +114,17 @@ struct TicketCardView: View {
     /// its own muted ink instead of the page border colour, which would vanish.
     private var perforationLine: Color {
         embedded ? Tokens.ticketStubMuted.opacity(0.45) : Tokens.borderStrong
+    }
+
+    /// Whether the card grows a tear line and a stub beneath it.
+    private var showsStub: Bool { item.hasTicket || hasConfirmationStub }
+
+    /// A wallet stay with no barcode and no file, but a confirmation code: the
+    /// code becomes the stub. Keeps every wallet card the same shape, and gives
+    /// the one thing the card is actually FOR its own piece of paper instead of
+    /// a footnote in the eyebrow.
+    private var hasConfirmationStub: Bool {
+        embedded && isStay && !item.hasTicket && !confirmationCode.isEmpty
     }
 
     /// Subtle top-to-bottom accent gradient. Rich enough to feel like a ticket,
@@ -132,6 +147,10 @@ struct TicketCardView: View {
         case .event:        eventTop
         }
     }
+
+    /// The wallet's stay card is a page, not a row: it gets the illustrated hero
+    /// and the roomier detail list rather than the compact timeline treatment.
+    private var isRichStay: Bool { embedded && isStay }
 
     // MARK: Boarding-pass top
 
@@ -327,7 +346,16 @@ struct TicketCardView: View {
     /// address + MAP line. Every datum appears once: the confirmation lives in
     /// the eyebrow, the nights count on the hero path, and the times in the
     /// facts strip.
+    @ViewBuilder
     private var stayTop: some View {
+        if isRichStay {
+            richStayTop
+        } else {
+            compactStayTop
+        }
+    }
+
+    private var compactStayTop: some View {
         VStack(spacing: Space.lg) {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
                 Text(item.eyebrow)
@@ -362,6 +390,113 @@ struct TicketCardView: View {
             stayLocationLine
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// The wallet's stay: an illustrated hero panel carrying the two dates, then
+    /// a labelled detail list. Taller on purpose — a stay has real content (two
+    /// dates, two times, an address, a code) and a page that shows it all with
+    /// air around it reads as a ticket, where the same facts crammed into a
+    /// four-column strip read as a table.
+    private var richStayTop: some View {
+        VStack(spacing: 0) {
+            stayHeroPanel
+
+            VStack(spacing: 0) {
+                if let time = checkInTimeText {
+                    stayDetailRow(label: "Check-in", value: time)
+                    stayDetailDivider
+                }
+                if let time = checkOutTimeText {
+                    stayDetailRow(label: "Check-out", value: time)
+                    stayDetailDivider
+                }
+                if !item.address.isEmpty {
+                    stayAddressRow
+                }
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.sm)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The two dates on their own illustrated panel. The artwork is generated,
+    /// not photographic: a soft wash in the card's own colour with an oversized
+    /// glyph bleeding off the right edge. No asset to ship, no network fetch,
+    /// and it stays correct whatever colour the card is.
+    private var stayHeroPanel: some View {
+        stayHero
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.xl)
+            .frame(maxWidth: .infinity)
+            .background(alignment: .trailing) {
+                ZStack(alignment: .trailing) {
+                    LinearGradient(
+                        colors: [palette.accent.opacity(0.16), palette.accent.opacity(0.02)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    // Always the bed, never `item.heroGlyph`: a trip item hands
+                    // over "airplane" unconditionally (it predates the glyph
+                    // being configurable), which would put a plane on a hotel.
+                    Image(systemName: "bed.double.fill")
+                        .font(.system(size: 150, weight: .light))
+                        .foregroundStyle(palette.accent.opacity(0.09))
+                        .rotationEffect(.degrees(-12))
+                        .offset(x: 44, y: 12)
+                        .accessibilityHidden(true)
+                }
+                .clipped()
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(palette.factRule).frame(height: 0.5)
+            }
+    }
+
+    private func stayDetailRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            Text(label.uppercased())
+                .font(.edEyebrow)
+                .tracking(1.0)
+                .foregroundStyle(Tokens.muted)
+            Spacer(minLength: Space.sm)
+            Text(value)
+                .font(.edBodyMedium)
+                .monospacedDigit()
+                .foregroundStyle(Tokens.ink)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, Space.md)
+    }
+
+    /// The address gets its own row shape: the text wraps, and the MAP pill sits
+    /// under it rather than fighting it for the same line.
+    private var stayAddressRow: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                Text("ADDRESS")
+                    .font(.edEyebrow)
+                    .tracking(1.0)
+                    .foregroundStyle(Tokens.muted)
+                Spacer(minLength: Space.sm)
+                Text(item.address)
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(3)
+            }
+            if let url = item.mapsURL {
+                HStack {
+                    Spacer(minLength: 0)
+                    stayMapChip(url: url)
+                }
+            }
+        }
+        .padding(.vertical, Space.md)
+    }
+
+    private var stayDetailDivider: some View {
+        Rectangle().fill(palette.factRule).frame(height: 0.5)
     }
 
     /// Symmetric stay hero: big check-in date, a centered bed glyph + nights
@@ -572,7 +707,36 @@ struct TicketCardView: View {
     /// The tear-off stub: a white panel (both themes) with the code centered and
     /// the PNR / reference centered beneath, so it reads as a scannable ticket
     /// stub rather than a lopsided thumbnail.
+    @ViewBuilder
     private var barcodeStub: some View {
+        if hasConfirmationStub {
+            confirmationStub
+        } else {
+            scannableStub
+        }
+    }
+
+    /// The stub for a stay with nothing scannable: the booking reference, set
+    /// large in mono, which is what a front desk asks for.
+    private var confirmationStub: some View {
+        VStack(spacing: Space.xs) {
+            Text("CONFIRMATION")
+                .font(.edEyebrow)
+                .tracking(1.4)
+                .foregroundStyle(Tokens.ticketStubMuted)
+            Text(confirmationCode)
+                .font(.system(size: 26, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Tokens.ticketStubInk)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Space.xl)
+        .padding(.horizontal, Space.md)
+        .background(Tokens.ticketStub)
+    }
+
+    private var scannableStub: some View {
         VStack(spacing: Space.sm) {
             BarcodeImageView(
                 payload: item.barcodePayload,
