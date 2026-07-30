@@ -216,7 +216,12 @@ struct WalletTicketCard: View {
         case .wallet:
             return kind
         case .trip, .task:
-            return "\(kind) · \(entry.source.label.uppercased())"
+            let provenance = entry.source.label.uppercased()
+            // A task usually IS the thing — "Spider-Man: Brand New Day" the task
+            // holding the "Spider-Man: Brand New Day" ticket — and printing the
+            // name twice, once above the other, reads as a rendering bug.
+            guard provenance != entry.card.title.uppercased() else { return kind }
+            return "\(kind) · \(provenance)"
         }
     }
 

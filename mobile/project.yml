@@ -289,6 +289,7 @@ targets:
       - path: PersonalDashboard/Views/Wallet/WalletView.swift
       - path: PersonalDashboard/Views/Wallet/WalletDeckCard.swift
       - path: PersonalDashboard/Views/Wallet/WalletTicketCard.swift
+      - path: PersonalDashboard/Views/Wallet/StayMapStub.swift
       - path: PersonalDashboard/Views/Wallet/WalletCardDetailSheet.swift
       - path: PersonalDashboard/Views/Wallet/WalletCardEditorSheet.swift
       - path: PersonalDashboard/Resources/Fonts

@@ -276,6 +276,7 @@ struct WalletView: View {
                             isPast: isPast,
                             onToggle: { toggle(entry) },
                             onOpen: { open(entry) },
+                            onPresent: { present(entry) },
                             onEdit: ownID.map { id in { editorTarget = .existing(id) } },
                             onDelete: ownID.map { id in { pendingDeleteID = id } },
                             onOpenSource: ownID == nil ? { openSource(of: entry) } : nil
@@ -454,15 +455,26 @@ struct WalletView: View {
         expandedID = grouped.upcoming.first?.id ?? grouped.past.first?.id
     }
 
-    /// Tapping a card goes straight to the thing you tapped it for: the big
-    /// high-contrast barcode. A card with nothing scannable (a manually typed
-    /// confirmation code) would show an empty barcode panel, so it opens the
-    /// detail surface instead. macOS has no scan surface at all and always shows
-    /// the detail.
+    /// Tapping a card opens the card, full size and centred on the page.
+    ///
+    /// It used to go straight to the scan screen, which is a bare barcode on
+    /// black — correct at a gate, wrong as the answer to "show me this ticket",
+    /// which is what tapping a card in a wallet means. Scanning now has its own
+    /// button (`present`), on the card and in the detail surface, so the two
+    /// intentions stop sharing one gesture.
     private func open(_ entry: WalletEntry) {
         Haptics.light()
+        detailTarget = WalletDetailTarget(entry: entry)
+    }
+
+    /// Straight to the high-contrast barcode: max brightness, idle timer held.
+    /// The fast path for someone already standing at the gate. A card with
+    /// nothing scannable falls back to its detail rather than presenting an
+    /// empty barcode panel, and macOS has no scan surface at all.
+    private func present(_ entry: WalletEntry) {
+        Haptics.light()
         #if os(iOS)
-        if entry.card.hasTicket {
+        if entry.card.hasBarcode {
             scanTarget = WalletScanTarget(id: entry.id, card: entry.card)
         } else {
             detailTarget = WalletDetailTarget(entry: entry)

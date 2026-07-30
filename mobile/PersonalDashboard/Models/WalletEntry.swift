@@ -148,8 +148,14 @@ extension WalletEntry {
     ) -> [WalletEntry] {
         var tripNames: [UUID: String] = [:]
         for trip in trips { tripNames[trip.clientUUID] = trip.name }
+        // LIVE tasks only. Deleting a task soft-deletes the task but does not
+        // cascade to its tickets, so a ticket can outlive its owner — and a
+        // wallet card that routes back to a task the user already deleted is
+        // worse than no card. An orphan is skipped rather than shown unlabelled.
         var taskTitles: [UUID: String] = [:]
-        for todo in todos { taskTitles[todo.clientUUID] = todo.title }
+        for todo in todos where todo.deletedAt == nil {
+            taskTitles[todo.clientUUID] = todo.title
+        }
 
         var out: [WalletEntry] = []
         out.reserveCapacity(cards.count + itineraryItems.count + taskTickets.count)
@@ -192,7 +198,7 @@ extension WalletEntry {
         }
 
         for ticket in taskTickets {
-            let taskTitle = taskTitles[ticket.todoClientUUID] ?? "Task"
+            guard let taskTitle = taskTitles[ticket.todoClientUUID] else { continue }
             let data = TicketCardData(ticket, taskTitle: taskTitle)
             out.append(
                 WalletEntry(

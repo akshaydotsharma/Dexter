@@ -17,8 +17,12 @@ struct WalletDeckCard: View {
     let isPast: Bool
     /// Tap the header: expand, or collapse if already open.
     let onToggle: () -> Void
-    /// Tap the opened ticket, or its Present button: go to the barcode.
+    /// Tap the opened ticket: see the card full size, centred on its own page.
     let onOpen: () -> Void
+    /// The Present button: straight to the barcode, for someone already at the
+    /// gate. Split from `onOpen` because looking at a ticket and presenting it
+    /// are different intentions and were sharing one gesture.
+    let onPresent: () -> Void
     let onEdit: (() -> Void)?
     let onDelete: (() -> Void)?
     let onOpenSource: (() -> Void)?
@@ -65,7 +69,7 @@ struct WalletDeckCard: View {
     private var actionRow: some View {
         #if os(iOS)
         if entry.card.hasTicket {
-            Button(action: onOpen) {
+            Button(action: onPresent) {
                 actionLabel(
                     icon: entry.card.hasBarcode ? "barcode.viewfinder" : "doc.text.magnifyingglass",
                     title: entry.card.hasBarcode ? "Present to scan" : "View ticket"
