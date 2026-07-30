@@ -16,8 +16,8 @@
 #   bash mobile/scripts/mac-open-for-verification.sh [section] [expected-window-title]
 #
 #   section  lowercase AppSection raw value passed as LAUNCH_SECTION
-#            (chat today tasks notes lists itineraries finance vocabulary
-#             activity settings — NOT helpCenter, see project memory)
+#            (chat today tasks notes lists itineraries wallet finance
+#             vocabulary activity settings — NOT helpCenter, see project memory)
 #            default: tasks
 #
 # What it does:

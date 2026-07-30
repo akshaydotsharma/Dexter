@@ -355,6 +355,9 @@ final class SwiftDataStore {
         // MARK: Apple Notes import provenance (#396)
         // Sidecar, so re-importing a folder cannot duplicate what it already took.
         AppleNotesImportRecord.self,
+        // Standalone wallet cards (#398). A new model type, so a lightweight
+        // migration that creates one table and touches nothing above it.
+        LocalWalletCard.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

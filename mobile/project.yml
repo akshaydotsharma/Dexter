@@ -279,6 +279,19 @@ targets:
       # TicketScanView.swift does.
       - path: PersonalDashboard/Services/TaskTicketService.swift
       - path: PersonalDashboard/AI/TaskTicketExtraction.swift
+      # Wallet surface (issue #398). Present-to-scan (TicketScanView) stays iOS-
+      # only for the same brightness / idle-timer reason as the trip path, so the
+      # wallet's tap routes every card to the detail sheet on macOS and its
+      # `TicketScanView` call sites are `#if os(iOS)`-guarded. Camera capture is
+      # likewise iOS-only; Photos + PDF import work on both. The models
+      # (LocalWalletCard, WalletEntry, TicketCardData, WallClock) are picked up by
+      # the `PersonalDashboard/Models` glob above and need no entry here.
+      - path: PersonalDashboard/Views/Wallet/WalletView.swift
+      - path: PersonalDashboard/Views/Wallet/WalletDeckCard.swift
+      - path: PersonalDashboard/Views/Wallet/WalletTicketCard.swift
+      - path: PersonalDashboard/Views/Wallet/StayLocationStub.swift
+      - path: PersonalDashboard/Views/Wallet/WalletCardDetailSheet.swift
+      - path: PersonalDashboard/Views/Wallet/WalletCardEditorSheet.swift
       - path: PersonalDashboard/Resources/Fonts
         type: folder
         buildPhase: resources

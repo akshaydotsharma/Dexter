@@ -15,8 +15,9 @@ import SwiftUI
 ///    confirmation-only stay (the common email-imported case) ends cleanly
 ///    after its location line.
 ///
-/// Which layout renders is driven by `item.kindEnum` (a `.stay` always takes
-/// the stay layout) and, for non-stay kinds, `item.isBoardingPassStyle`.
+/// Which layout renders is driven by `item.layout`, which the source model
+/// states when it projects itself into `TicketCardData`: a trip `.stay` and a
+/// wallet `.stay` card both resolve to the stay layout, and so on.
 ///
 /// Flights and events render this card inline on the timeline (they're single
 /// moments). A stay is a duration, so its timeline row stays compact and this
@@ -24,55 +25,123 @@ import SwiftUI
 /// `LocalItineraryItem.hasStayBooking`. Items without booking data never reach
 /// this view — they render the plain `TripTimelineRow` card unchanged. The card
 /// is display-only; the presenting tap is attached by the parent row.
+///
+/// Takes a `TicketCardData` value rather than a `LocalItineraryItem` (#398) so
+/// the Wallet section can draw a standalone card with this exact view. Every
+/// property it reads is named as it was on the model, so that change was a
+/// change of type and nothing more.
 struct TicketCardView: View {
-    let item: LocalItineraryItem
+    let item: TicketCardData
     /// The timeline's "HH:mm / Anytime" line, passed down so the card shows the
     /// same time treatment as a normal row. Used by the flight / event layouts;
     /// the stay layout reads `startTime` / `endTime` directly so it can show
     /// both check-in and check-out times independently.
     let timeText: String?
+    /// Colours this card is drawn in (#398). Defaults to the original itinerary
+    /// violet, so every trip-timeline call site renders exactly as before and
+    /// only the wallet opts into per-kind colour.
+    var palette: WalletCardPalette = .itinerary
+    /// Whether the card draws its own title. False in the wallet deck, where the
+    /// coloured band above the card already carries it and printing it twice
+    /// would read as a mistake. The boarding-pass layout has no title line at
+    /// all, so this only affects the event and stay layouts.
+    var showsTitle: Bool = true
+    /// Whether the card is drawn INSIDE another card's silhouette (#398).
+    ///
+    /// The wallet's deck wants one continuous piece of paper: a coloured header
+    /// flowing into the body, notches cut through the outline, a full-bleed stub
+    /// under the tear line. So in embedded mode this view drops its own
+    /// background, border and corner radius, lets the parent's `TicketShape`
+    /// supply the outline, and bleeds the barcode stub edge to edge. False
+    /// everywhere on the trip timeline, which keeps its self-contained card.
+    var embedded: Bool = false
 
     @Environment(\.openURL) private var openURL
 
-    private var meta: TicketMeta? { item.ticketMeta }
+    private var meta: TicketMeta? { item.meta }
 
     /// A `.stay` renders the hotel layout; everything else keeps the original
     /// boarding-pass / event split.
-    private var isStay: Bool { item.kindEnum == .stay }
+    private var isStay: Bool { item.isStay }
 
     var body: some View {
+        if embedded {
+            // The parent draws the outline, the wash and the notches.
+            cardContent
+        } else {
+            cardContent
+                // The whole card carries a soft itinerary-accent wash
+                // (theme-aware) so it reads as a distinct physical ticket in the
+                // timeline, not another row.
+                .background(ticketFill, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+                .paperBorder(palette.border, radius: Radius.lg)
+                .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        }
+    }
+
+    private var cardContent: some View {
         VStack(spacing: 0) {
             topContent
-                .padding(.horizontal, Space.lg)
-                .padding(.top, Space.lg)
-                .padding(.bottom, Space.lg)
+                // The rich stay's hero panel bleeds to the card's own edges, so
+                // it supplies its own padding and takes none from here.
+                .padding(.horizontal, embedded ? 0 : Space.lg)
+                .padding(.top, embedded ? 0 : Space.lg)
+                .padding(.bottom, embedded ? 0 : Space.lg)
 
-            // The tear-off stub only exists when there's something scannable to
-            // separate. Flights / events always have a barcode or attachment, so
-            // they're unchanged; a confirmation-only stay has neither, so its
-            // card ends cleanly after the top content (no dangling perforation).
-            if item.hasTicket {
-                PerforatedDivider()
+            // The tear-off stub only exists when there's something to separate.
+            // Flights / events always have a barcode or attachment, so they're
+            // unchanged; on the timeline a confirmation-only stay has neither
+            // and its card ends cleanly after the top content. In the wallet
+            // that same stay tears off its confirmation code instead — that IS
+            // what you read out at a desk, so the ticket has a stub either way.
+            if showsStub {
+                // Embedded, the tear line sits on the stub's own paper and the
+                // holes are cut from the card's outline, so it draws the dashes
+                // and nothing else. Standalone, it paints its own notches.
+                PerforatedDivider(cutout: embedded, lineColor: perforationLine)
+                    .background(embedded ? stubPaper : .clear)
 
                 barcodeStub
-                    .padding(.horizontal, Space.lg)
-                    .padding(.top, Space.md)
-                    .padding(.bottom, Space.lg)
+                    .padding(.horizontal, embedded ? 0 : Space.lg)
+                    .padding(.top, embedded ? 0 : Space.md)
+                    .padding(.bottom, embedded ? 0 : Space.lg)
             }
         }
         .frame(maxWidth: .infinity)
-        // The whole card carries a soft itinerary-accent wash (theme-aware) so it
-        // reads as a distinct physical ticket in the timeline, not another row.
-        .background(ticketFill, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-        .paperBorder(Tokens.ticketBorder, radius: Radius.lg)
-        .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+    }
+
+    /// The dashes' colour. Embedded they run across the stub, so they take its
+    /// own muted ink instead of the page border colour, which would vanish.
+    private var perforationLine: Color {
+        embedded ? stubMuted.opacity(0.5) : Tokens.borderStrong
+    }
+
+    /// The stub's paper and ink. The wallet tints it per kind so the bottom of
+    /// the card belongs to the card; the trip timeline keeps the flat white it
+    /// has always had.
+    private var stubPaper: Color { embedded ? palette.stubPaper : Tokens.ticketStub }
+    private var stubInk: Color { embedded ? palette.stubInk : Tokens.ticketStubInk }
+    private var stubMuted: Color { embedded ? palette.stubMuted : Tokens.ticketStubMuted }
+
+    /// Whether the card grows a tear line and a stub beneath it.
+    ///
+    /// The rule is the same for every kind: the stub holds the thing you USE on
+    /// the day. A boarding pass or a cinema ticket tears off its barcode. A
+    /// hotel booking has nothing to scan, so it tears off its address and a way
+    /// to get there.
+    private var showsStub: Bool { item.hasTicket || hasLocationStub }
+
+    /// A wallet stay with nothing scannable, but somewhere to go.
+    private var hasLocationStub: Bool {
+        embedded && isStay && !item.hasTicket
+            && (!item.address.isEmpty || item.mapsURL != nil)
     }
 
     /// Subtle top-to-bottom accent gradient. Rich enough to feel like a ticket,
     /// light enough that ink keeps contrast in both light and dark.
     private var ticketFill: LinearGradient {
         LinearGradient(
-            colors: [Tokens.ticketTintTop, Tokens.ticketTintBottom],
+            colors: [palette.tintTop, palette.tintBottom],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -82,13 +151,253 @@ struct TicketCardView: View {
 
     @ViewBuilder
     private var topContent: some View {
-        if isStay {
-            stayTop
-        } else if item.isBoardingPassStyle {
-            boardingPassTop
+        if embedded {
+            richTop
         } else {
-            eventTop
+            switch item.layout {
+            case .stay:         compactStayTop
+            case .boardingPass: boardingPassTop
+            case .event:        eventTop
+            }
         }
+    }
+
+    // MARK: - Rich (wallet) layout
+
+    /// The wallet's card is a page, not a row, whatever kind it is: an
+    /// illustrated hero panel carrying the card's headline fact, then a labelled
+    /// detail list. Every layout gets it — a boarding pass and a cinema ticket
+    /// have as much to say as a hotel booking, and the compact timeline
+    /// treatment squeezes all three into a strip.
+    private var richTop: some View {
+        VStack(spacing: 0) {
+            heroPanel
+            detailList
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The card's headline fact on generated artwork: a wash in the card's own
+    /// colour with an oversized glyph bleeding off the right edge. Generated
+    /// rather than photographic — there is no artwork to ship or fetch, and it
+    /// stays correct at any palette.
+    private var heroPanel: some View {
+        heroContent
+            .padding(.horizontal, Space.lg)
+            // Deep enough that the artwork is a panel in its own right rather
+            // than a tinted strip behind two lines of text.
+            .padding(.vertical, Space.xxl)
+            .frame(maxWidth: .infinity)
+            .background(alignment: .trailing) {
+                ZStack(alignment: .trailing) {
+                    LinearGradient(
+                        colors: [palette.accent.opacity(0.16), palette.accent.opacity(0.02)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    Image(systemName: watermarkGlyph)
+                        .font(.system(size: 150, weight: .light))
+                        .foregroundStyle(palette.accent.opacity(0.09))
+                        .rotationEffect(.degrees(-12))
+                        .offset(x: 44, y: 12)
+                        .accessibilityHidden(true)
+                }
+                .clipped()
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(palette.factRule).frame(height: 0.5)
+            }
+    }
+
+    @ViewBuilder
+    private var heroContent: some View {
+        switch item.layout {
+        case .stay:         stayHero
+        case .boardingPass: routeHero
+        case .event:        eventHero
+        }
+    }
+
+    /// A trip item hands over "airplane" unconditionally (it predates the glyph
+    /// being configurable), so a stay and an event state their own rather than
+    /// putting a plane on a hotel or a cinema seat.
+    private var watermarkGlyph: String {
+        switch item.layout {
+        case .stay:         return "bed.double.fill"
+        case .boardingPass: return item.heroGlyph
+        case .event:        return "ticket.fill"
+        }
+    }
+
+    /// The event's two-endpoint hero, mirroring the flight's route and the
+    /// stay's dates: the day on one side, the printed start time on the other.
+    /// Collapses to a centred date when there is no time, rather than showing an
+    /// endpoint with nothing in it.
+    @ViewBuilder
+    private var eventHero: some View {
+        if let time = eventBigTime {
+            HStack(alignment: .top, spacing: Space.sm) {
+                heroEndpoint(bigDate(item.primaryDate), label: "DATE", alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 5) {
+                    dashSegment
+                    Image(systemName: "ticket.fill")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(palette.accent)
+                        .accessibilityHidden(true)
+                    dashSegment
+                }
+                .padding(.top, 6)
+
+                heroEndpoint(time, label: "STARTS", alignment: .trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        } else {
+            heroEndpoint(bigDate(item.primaryDate), label: "DATE", alignment: .center)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// The event's start time. Prefers the formatted value off a real `Date`,
+    /// falling back to the timeline's own string — which is how a task ticket's
+    /// time arrives, stored verbatim as printed so it cannot drift by timezone.
+    private var eventBigTime: String? {
+        if let formatted = departureTimeText { return formatted }
+        return departureTime
+    }
+
+    /// The card's facts as a vertical list. The same values the compact card
+    /// packs into an equal-width strip, given a line each: at card width a strip
+    /// truncates "IndiGo · 6E681" and stacks four seat numbers into a column two
+    /// characters wide.
+    private var detailList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(richFacts.enumerated()), id: \.element.id) { index, fact in
+                if index > 0 { detailDivider }
+                detailRow(label: fact.label, value: fact.value, isUnknown: fact.value == nil)
+            }
+            if showsAddressRow {
+                if !richFacts.isEmpty { detailDivider }
+                addressRow
+            }
+        }
+        .padding(.horizontal, Space.lg)
+        // A generous gap under the hero artwork. Butted straight up against it
+        // the facts read as a caption on the image; set apart, the card has an
+        // illustrated half and a written half, which is what a printed ticket
+        // looks like.
+        .padding(.top, Space.xxl)
+        .padding(.bottom, Space.lg)
+    }
+
+    /// Which facts the list carries, per layout. Boarding-pass slots keep their
+    /// em dash for an unknown gate or terminal — on a pass those blanks are
+    /// information ("not assigned yet"), where an event with no row number just
+    /// has no row.
+    private var richFacts: [TicketFact] {
+        switch item.layout {
+        case .stay:
+            return [
+                TicketFact(label: "Check-in",     value: checkInTimeText),
+                TicketFact(label: "Check-out",    value: checkOutTimeText),
+                TicketFact(label: "Confirmation", value: confirmationCode.isEmpty ? nil : confirmationCode)
+            ].filter { $0.value != nil }
+
+        case .boardingPass:
+            var facts: [TicketFact] = []
+            if !operatorLabel.isEmpty {
+                facts.append(TicketFact(label: "Flight", value: operatorLabel))
+            }
+            facts.append(contentsOf: boardingPassFacts)
+            return facts
+
+        case .event:
+            var facts: [TicketFact] = []
+            if !item.venue.isEmpty {
+                facts.append(TicketFact(label: "Venue", value: item.venue))
+            }
+            facts.append(contentsOf: [
+                TicketFact(label: "Section", value: meta?.section),
+                TicketFact(label: "Row",     value: meta?.row),
+                TicketFact(label: "Seat",    value: item.seat.isEmpty ? nil : item.seat)
+            ].filter { $0.value != nil })
+            return facts
+        }
+    }
+
+    /// Only a stay puts its address in the list — and only when the location
+    /// stub is not already showing it underneath, which would print it twice.
+    private var showsAddressRow: Bool {
+        isStay && !item.address.isEmpty && !hasLocationStub
+    }
+
+    private func detailRow(label: String, value: String?, isUnknown: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            Text(label.uppercased())
+                .font(.edEyebrow)
+                .tracking(1.0)
+                .foregroundStyle(Tokens.muted)
+            Spacer(minLength: Space.sm)
+            Text(value ?? TicketField.unknownDash)
+                .font(.edBodyMedium)
+                .foregroundStyle(isUnknown ? Tokens.mutedSoft : Tokens.ink)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+        }
+        .padding(.vertical, Space.md)
+    }
+
+    /// The address wraps, so the MAP pill sits under it rather than fighting it
+    /// for the same line.
+    private var addressRow: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                Text("ADDRESS")
+                    .font(.edEyebrow)
+                    .tracking(1.0)
+                    .foregroundStyle(Tokens.muted)
+                Spacer(minLength: Space.sm)
+                Text(item.address)
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(3)
+            }
+            if let url = item.mapsURL {
+                HStack {
+                    Spacer(minLength: 0)
+                    stayMapChip(url: url)
+                }
+            }
+        }
+        .padding(.vertical, Space.md)
+    }
+
+    private var detailDivider: some View {
+        Rectangle().fill(palette.factRule).frame(height: 0.5)
+    }
+
+    /// "JUL 3" style month + day, shared by the stay and event heroes.
+    private func bigDate(_ date: Date) -> String {
+        date.formatted(.dateTime.month(.abbreviated).day()).uppercased()
+    }
+
+    /// One end of a two-endpoint hero: a big value over a small label.
+    private func heroEndpoint(_ value: String, label: String, alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 3) {
+            Text(value)
+                .font(.edDisplay)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.edEyebrow)
+                .tracking(1.0)
+                .foregroundStyle(Tokens.muted)
+                .lineLimit(1)
+        }
+        .multilineTextAlignment(alignment == .leading ? .leading : (alignment == .trailing ? .trailing : .center))
     }
 
     // MARK: Boarding-pass top
@@ -98,11 +407,11 @@ struct TicketCardView: View {
             // Label bar: "BOARDING PASS" on the left, operator + flight on the
             // right. A caption strip, not the hero.
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text("BOARDING PASS")
+                Text(item.eyebrow)
                     .font(.edEyebrow)
                     .textCase(.uppercase)
                     .tracking(1.4)
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    .foregroundStyle(palette.accent)
                 Spacer(minLength: Space.sm)
                 if !operatorLabel.isEmpty {
                     Text(operatorLabel)
@@ -144,13 +453,14 @@ struct TicketCardView: View {
 
     /// A centered plane between two short dashed segments: the classic pass
     /// "flight path". Its natural width is balanced by the two `maxWidth:
-    /// .infinity` endpoints on either side, keeping the hero symmetric.
+    /// .infinity` endpoints on either side, keeping the hero symmetric. The
+    /// glyph comes from the card (a rail ticket shows a tram, not a plane).
     private var planeConnector: some View {
         HStack(spacing: 5) {
             dashSegment
-            Image(systemName: "airplane")
+            Image(systemName: item.heroGlyph)
                 .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(Tokens.accent(for: .itineraries))
+                .foregroundStyle(palette.accent)
                 .accessibilityHidden(true)
             dashSegment
         }
@@ -227,17 +537,19 @@ struct TicketCardView: View {
 
     private var eventTop: some View {
         VStack(spacing: Space.md) {
-            Text((meta?.eventType?.isEmpty == false ? meta!.eventType! : "TICKET").uppercased())
+            Text(item.eyebrow)
                 .font(.edEyebrow)
                 .textCase(.uppercase)
                 .tracking(1.4)
-                .foregroundStyle(Tokens.accent(for: .itineraries))
+                .foregroundStyle(palette.accent)
 
-            Text(item.title)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
+            if showsTitle {
+                Text(item.title)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
 
             if !item.venue.isEmpty {
                 HStack(spacing: 4) {
@@ -258,7 +570,7 @@ struct TicketCardView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "clock")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Tokens.accent(for: .itineraries))
+                        .foregroundStyle(palette.accent)
                     Text(time)
                         .font(.edBodyMedium)
                         .monospacedDigit()
@@ -282,14 +594,14 @@ struct TicketCardView: View {
     /// address + MAP line. Every datum appears once: the confirmation lives in
     /// the eyebrow, the nights count on the hero path, and the times in the
     /// facts strip.
-    private var stayTop: some View {
+    private var compactStayTop: some View {
         VStack(spacing: Space.lg) {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text("STAY")
+                Text(item.eyebrow)
                     .font(.edEyebrow)
                     .textCase(.uppercase)
                     .tracking(1.4)
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    .foregroundStyle(palette.accent)
                 Spacer(minLength: Space.sm)
                 if !confirmationCode.isEmpty {
                     Text(confirmationCode)
@@ -299,12 +611,14 @@ struct TicketCardView: View {
                 }
             }
 
-            Text(item.title)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity)
+            if showsTitle {
+                Text(item.title)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity)
+            }
 
             stayHero
 
@@ -325,17 +639,17 @@ struct TicketCardView: View {
     private var stayHero: some View {
         if hasCheckOut {
             HStack(alignment: .top, spacing: Space.sm) {
-                stayEndpoint(label: "CHECK-IN", date: item.dayDate, alignment: .leading)
+                stayEndpoint(label: "CHECK-IN", date: item.primaryDate, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 stayConnector
                     .padding(.top, 6)
 
-                stayEndpoint(label: "CHECK-OUT", date: item.endDate ?? item.dayDate, alignment: .trailing)
+                stayEndpoint(label: "CHECK-OUT", date: item.endDate ?? item.primaryDate, alignment: .trailing)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         } else {
-            stayEndpoint(label: "CHECK-IN", date: item.dayDate, alignment: .center)
+            stayEndpoint(label: "CHECK-IN", date: item.primaryDate, alignment: .center)
                 .frame(maxWidth: .infinity)
         }
     }
@@ -350,7 +664,7 @@ struct TicketCardView: View {
                 dashSegment
                 Image(systemName: "bed.double.fill")
                     .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    .foregroundStyle(palette.accent)
                     .accessibilityHidden(true)
                 dashSegment
             }
@@ -369,7 +683,7 @@ struct TicketCardView: View {
     /// `alignment` pins the stack to its outer edge so the two ends mirror.
     private func stayEndpoint(label: String, date: Date, alignment: HorizontalAlignment) -> some View {
         VStack(alignment: alignment, spacing: 3) {
-            Text(stayBigDate(date))
+            Text(bigDate(date))
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1)
@@ -424,10 +738,10 @@ struct TicketCardView: View {
                     .textCase(.uppercase)
                     .tracking(1.4)
             }
-            .foregroundStyle(Tokens.accent(for: .itineraries))
+            .foregroundStyle(palette.accent)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Tokens.accent(for: .itineraries).opacity(0.12), in: Capsule(style: .continuous))
+            .background(palette.accent.opacity(0.12), in: Capsule(style: .continuous))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -436,12 +750,6 @@ struct TicketCardView: View {
 
     // MARK: Stay derived values
 
-    /// "JUL 3" style month + day, formatted in the device calendar (the stay
-    /// dates are start-of-day device-local values).
-    private func stayBigDate(_ date: Date) -> String {
-        date.formatted(.dateTime.month(.abbreviated).day()).uppercased()
-    }
-
     /// Nights between check-in (`dayDate`) and check-out (`endDate`), or `nil`
     /// when there's no distinct check-out. Never returns 0 or negative — a
     /// same-day / missing check-out collapses the hero instead of showing "0
@@ -449,7 +757,7 @@ struct TicketCardView: View {
     private var nightsCount: Int? {
         guard let end = item.endDate else { return nil }
         let cal = Calendar.current
-        let inDay = cal.startOfDay(for: item.dayDate)
+        let inDay = cal.startOfDay(for: item.primaryDate)
         let outDay = cal.startOfDay(for: end)
         let n = cal.dateComponents([.day], from: inDay, to: outDay).day ?? 0
         return n > 0 ? n : nil
@@ -512,7 +820,7 @@ struct TicketCardView: View {
             ForEach(Array(facts.enumerated()), id: \.element.id) { index, fact in
                 if index > 0 {
                     Rectangle()
-                        .fill(Tokens.ticketFactRule)
+                        .fill(palette.factRule)
                         .frame(width: 0.5, height: 26)
                 }
                 TicketFactCell(fact: fact)
@@ -525,16 +833,50 @@ struct TicketCardView: View {
     /// The tear-off stub: a white panel (both themes) with the code centered and
     /// the PNR / reference centered beneath, so it reads as a scannable ticket
     /// stub rather than a lopsided thumbnail.
+    @ViewBuilder
     private var barcodeStub: some View {
+        if hasLocationStub {
+            StayLocationStub(
+                address: item.address,
+                mapsURL: item.mapsURL,
+                paper: palette.stubPaper,
+                ink: palette.stubInk,
+                muted: palette.stubMuted,
+                buttonFill: palette.band
+            )
+        } else {
+            scannableStub
+        }
+    }
+
+    private var scannableStub: some View {
         VStack(spacing: Space.sm) {
             BarcodeImageView(
                 payload: item.barcodePayload,
                 symbology: item.barcodeSymbology,
                 attachmentPath: item.attachmentPath,
                 height: stubBarcodeHeight,
-                compact: true,
+                // The wallet's stub is the bottom of a full ticket rather than a
+                // thumbnail on a timeline row, so the code gets the room a
+                // scannable code deserves.
+                compact: !embedded,
                 alignment: .center
             )
+            // The generated code is black on WHITE, so on tinted paper it would
+            // otherwise read as a white rectangle dropped on the ticket. Giving
+            // it a deliberate plate turns that into the quiet zone a scanner
+            // wants anyway.
+            .padding(embedded ? Space.md : 0)
+            .background {
+                if embedded {
+                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                        .fill(Tokens.ticketStub)
+                }
+            }
+            // A square code in a full-width plate reads as a slab with a QR
+            // dropped in the middle; the plate hugs it instead. A wide PDF417
+            // genuinely wants the width, so it keeps it.
+            .frame(maxWidth: barcodePlateWidth)
 
             // A stay already shows its confirmation in the eyebrow, so the stub
             // stays code-free (just the scannable barcode). Flights / events
@@ -544,25 +886,46 @@ struct TicketCardView: View {
                     Text(pnrLabel)
                         .font(.edEyebrow)
                         .tracking(1.4)
-                        .foregroundStyle(Tokens.ticketStubMuted)
+                        .foregroundStyle(stubMuted)
                     Text(confirmationCode)
                         .font(.edMono)
-                        .foregroundStyle(Tokens.ticketStubInk)
+                        .foregroundStyle(stubInk)
                         .lineLimit(1)
                 }
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, Space.md)
+        .padding(.vertical, embedded ? Space.lg : Space.md)
         .padding(.horizontal, Space.md)
-        .background(Tokens.ticketStub, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .background {
+            if embedded {
+                // Bleeds to the card's own edges: the stub IS the bottom of the
+                // ticket, not a panel sitting on it.
+                stubPaper
+            } else {
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .fill(Tokens.ticketStub)
+            }
+        }
     }
 
-    /// A square QR/Aztec wants more height than a wide 1D/PDF417 strip.
+    /// A square QR/Aztec wants more height than a wide 1D/PDF417 strip. The
+    /// wallet's full ticket gets a bigger code than the timeline thumbnail: it
+    /// is the thing you hold up at a gate.
     private var stubBarcodeHeight: CGFloat {
         switch BarcodeSymbology(rawValue: item.barcodeSymbology) ?? .other {
-        case .qr, .aztec, .other: return 84
-        case .pdf417, .code128:   return 52
+        case .qr, .aztec, .other: return embedded ? 132 : 84
+        case .pdf417, .code128:   return embedded ? 76 : 52
+        }
+    }
+
+    /// How wide the white code plate may grow. `.infinity` for the wide 1D /
+    /// PDF417 strips, which fill it honestly.
+    private var barcodePlateWidth: CGFloat {
+        guard embedded else { return .infinity }
+        switch BarcodeSymbology(rawValue: item.barcodeSymbology) ?? .other {
+        case .qr, .aztec, .other: return stubBarcodeHeight + Space.xxl + Space.md
+        case .pdf417, .code128:   return .infinity
         }
     }
 
@@ -608,7 +971,7 @@ struct StayBookingDetailSheet: View {
                     VStack(spacing: Space.lg) {
                         // The stay layout reads its times from the item, so the
                         // timeline's per-row time line isn't needed here.
-                        TicketCardView(item: item, timeText: nil)
+                        TicketCardView(item: TicketCardData(item), timeText: nil)
                         actions
                     }
                     .padding(Space.lg)
@@ -664,7 +1027,9 @@ struct StayBookingDetailSheet: View {
             HStack(spacing: Space.sm) {
                 Image(systemName: icon)
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Tokens.accent(for: .itineraries))
+                    // This sheet belongs to the trip timeline, which is always
+                    // the itinerary colour; only the wallet varies per kind.
+                    .foregroundStyle(WalletCardPalette.itinerary.accent)
                     .frame(width: 24)
                 Text(title)
                     .font(.edBodyMedium)
@@ -730,26 +1095,43 @@ private struct TicketFactCell: View {
 // MARK: - Perforated divider
 
 /// The classic ticket "tear" line: a dashed rule with a punched notch at each
-/// edge. Notches are filled with the page background so they read as holes cut
-/// into the card. Purely decorative.
+/// edge. Purely decorative.
+///
+/// Two ways to punch the notches, and which one is right depends on what is
+/// behind the card:
+///  - **Painted** (`cutout: false`, the trip timeline): circles filled with the
+///    page colour, drawn on top of the card. Cheap, and correct as long as the
+///    card really does sit on `Tokens.paper`.
+///  - **Cut** (`cutout: true`, the wallet): the enclosing card removes the holes
+///    from its own outline via `TicketShape`, so anything behind shows through
+///    and the notches survive a card stacked on another card. This mode draws
+///    only the dashes and reports where they sit.
 struct PerforatedDivider: View {
     var notch: CGFloat = 14
+    /// See the note above: `true` means the parent cuts the holes.
+    var cutout: Bool = false
+    var lineColor: Color = Tokens.borderStrong
 
     var body: some View {
         ZStack {
             DashedLine()
                 .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                .foregroundStyle(Tokens.borderStrong)
+                .foregroundStyle(lineColor)
                 .frame(height: 1)
                 .padding(.horizontal, notch)
 
-            HStack {
-                notchCircle
-                Spacer()
-                notchCircle
+            if !cutout {
+                HStack {
+                    notchCircle
+                    Spacer()
+                    notchCircle
+                }
             }
         }
         .frame(height: notch)
+        // Only meaningful in cutout mode; harmless otherwise (nothing upstream
+        // reads the preference).
+        .ticketNotchAnchor()
     }
 
     private var notchCircle: some View {

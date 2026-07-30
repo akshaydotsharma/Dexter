@@ -193,6 +193,7 @@ final class DataImportService {
         case statementImports
         case recurringExpenses
         case processedEmails
+        case walletCards
 
         var id: String { rawValue }
 
@@ -213,6 +214,7 @@ final class DataImportService {
             case .statementImports:  return "Statement imports"
             case .recurringExpenses: return "Recurring expenses"
             case .processedEmails:   return "Processed emails"
+            case .walletCards:       return "Wallet cards"
             }
         }
 
@@ -233,6 +235,7 @@ final class DataImportService {
             case .statementImports:  return "doc.text.magnifyingglass"
             case .recurringExpenses: return "arrow.clockwise.circle"
             case .processedEmails:   return "envelope"
+            case .walletCards:       return "wallet.pass"
             }
         }
     }
@@ -352,6 +355,7 @@ final class DataImportService {
         let existingRecurringUUIDs = try existingStringUUIDs(RecurringExpense.self, keyPath: \.clientUUID)
         let existingMessageKeys    = try existingStringUUIDs(LocalProcessedEmail.self, keyPath: \.messageKey)
         let existingNoteImageUUIDs = try existingUUIDs(LocalNoteImage.self,          keyPath: \.clientUUID)
+        let existingWalletCardIDs  = try existingUUIDs(LocalWalletCard.self,        keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -380,6 +384,7 @@ final class DataImportService {
         record(.statementImports,  (payload.statementImports ?? []).map(\.clientUUID), existing: existingStatementUUIDs)
         record(.recurringExpenses, (payload.recurringExpenses ?? []).map(\.clientUUID), existing: existingRecurringUUIDs)
         record(.processedEmails,   (payload.processedEmails ?? []).map(\.messageKey),  existing: existingMessageKeys)
+        record(.walletCards,       (payload.walletCards ?? []).map(\.clientUUID),      existing: existingWalletCardIDs)
 
         return (skip, repair)
     }
@@ -429,6 +434,7 @@ final class DataImportService {
         let existingVocabUUIDs      = mode == .replaceMatching ? [] : try existingUUIDs(LocalKeyword.self,        keyPath: \.clientUUID)
         let existingNoteImageUUIDs  = mode == .replaceMatching ? [] : try existingUUIDs(LocalNoteImage.self,      keyPath: \.clientUUID)
         let existingTaskTicketUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalTaskTicket.self,     keyPath: \.clientUUID)
+        let existingWalletCardUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalWalletCard.self,     keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
@@ -609,12 +615,52 @@ final class DataImportService {
                 // actually restored from the archive. Setting it otherwise makes
                 // `hasTicket` true against a file that isn't on disk, which is
                 // worse than reporting no ticket.
-                let restoredTicket = try restoreTicket(for: dto, archiveEntries: preview.entries)
+                let restoredTicket = try restoreTicket(
+                    relativePath: dto.attachmentPath,
+                    archiveEntries: preview.entries
+                )
                 if let restoredTicket {
                     writtenTicketPaths.append(restoredTicket)
                     item.attachmentPath = restoredTicket
                 }
                 modelContext.insert(item)
+            }
+
+            // #398: standalone wallet cards. Same shape as the itinerary loop
+            // above, including the "only set `attachmentPath` when the file was
+            // actually restored" rule.
+            for dto in payload.walletCards ?? [] where !existingWalletCardUUIDs.contains(dto.clientUUID) {
+                let card = LocalWalletCard(
+                    clientUUID: dto.clientUUID,
+                    kind: WalletCardKind(rawValue: dto.kind) ?? .pass,
+                    title: dto.title,
+                    dayDate: dto.dayDate,
+                    startTime: dto.startTime,
+                    arrivalTime: dto.arrivalTime,
+                    endDate: dto.endDate,
+                    endTime: dto.endTime,
+                    notes: dto.notes,
+                    venue: dto.venue,
+                    address: dto.address,
+                    googleMapsLink: dto.googleMapsLink,
+                    seat: dto.seat,
+                    gate: dto.gate,
+                    sourceConfirmation: dto.sourceConfirmation,
+                    barcodePayload: dto.barcodePayload,
+                    barcodeSymbology: dto.barcodeSymbology,
+                    ticketMetaJSON: dto.ticketMetaJSON,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt
+                )
+                let restoredCardFile = try restoreTicket(
+                    relativePath: dto.attachmentPath,
+                    archiveEntries: preview.entries
+                )
+                if let restoredCardFile {
+                    writtenTicketPaths.append(restoredCardFile)
+                    card.attachmentPath = restoredCardFile
+                }
+                modelContext.insert(card)
             }
 
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
@@ -846,6 +892,7 @@ final class DataImportService {
         try deleteMatching(LocalPerson.self,         ids: Set((payload.persons ?? []).map(\.clientUUID)), key: \.clientUUID)
         try deleteMatching(LocalEvent.self,          ids: Set((payload.events ?? []).map(\.clientUUID)),  key: \.clientUUID)
         try deleteMatching(LocalStatementImport.self, ids: Set((payload.statementImports ?? []).map(\.clientUUID)), key: \.clientUUID)
+        try deleteMatching(LocalWalletCard.self,      ids: Set((payload.walletCards ?? []).map(\.clientUUID)),     key: \.clientUUID)
 
         // String-keyed models.
         try deleteMatching(LocalExpense.self,   ids: Set(payload.expenses.map(\.clientUUID)), key: \.clientUUID)
@@ -936,17 +983,21 @@ final class DataImportService {
             "LocalEvent":           payload.events?.count ?? 0,
             "LocalStatementImport": payload.statementImports?.count ?? 0,
             "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
+            "LocalWalletCard":      payload.walletCards?.count ?? 0,
         ]
     }
 
     /// #319 counterpart of `restoreReceipt` for ticket attachments. Returns nil
     /// when the archive carries no file for this row, and the caller then leaves
     /// `attachmentPath` empty rather than pointing at a file that isn't there.
+    ///
+    /// Takes the bare relative path (#398) so itinerary items and wallet cards,
+    /// which share the `tickets/` directory, restore through one implementation.
     private func restoreTicket(
-        for item: DataArchive.ItineraryDayDTO,
+        relativePath: String?,
         archiveEntries: [String: Data]
     ) throws -> String? {
-        guard let relativePath = item.attachmentPath,
+        guard let relativePath,
               !relativePath.isEmpty,
               let archivedData = archiveEntries[relativePath] else {
             return nil

@@ -105,7 +105,14 @@ final class DataExportService {
         // item's `attachmentPath` would have pointed at a file that isn't
         // there. Same shape as receipts: the stored relative path
         // ("tickets/<uuid>.<ext>") maps 1:1 onto an archive entry path.
-        attachments.append(contentsOf: resolveTicketSources(for: payload.itineraryDays))
+        // #398: wallet-card files live in the SAME `tickets/` directory as
+        // itinerary tickets, so both entities' paths go through one de-duping
+        // resolve. Note images (#395) and task tickets (#399) have their own
+        // directories and keep their own passes.
+        attachments.append(contentsOf: resolveTicketSources(
+            paths: payload.itineraryDays.map(\.attachmentPath)
+                + (payload.walletCards ?? []).map { $0.attachmentPath }
+        ))
         // #395: note image attachments, same relative-path-to-entry-name shape.
         attachments.append(contentsOf: resolveNoteImageSources(for: payload.noteImages ?? []))
         // #399: same again for task tickets. Their bytes are the only route
@@ -203,6 +210,8 @@ final class DataExportService {
         let processed   = try modelContext.fetch(FetchDescriptor<LocalProcessedEmail>())
         // #399: task ticket attachments.
         let taskTickets = try modelContext.fetch(FetchDescriptor<LocalTaskTicket>())
+        // #398: standalone wallet cards.
+        let walletCards = try modelContext.fetch(FetchDescriptor<LocalWalletCard>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -217,23 +226,52 @@ final class DataExportService {
             }
         }
 
+        // Each array is bound to an explicitly-typed local before the
+        // initialiser rather than mapped inline.
+        //
+        // `Self.dto` is seventeen overloads distinguished only by argument type,
+        // and resolving all of them inside one initialiser call is what tipped
+        // the type-checker over its time limit when the seventeenth arrived
+        // (#398 on top of #395 and #399). Annotating each result removes the
+        // overload search entirely, and keeps the next model from hitting it.
+        let taskDTOs: [DataArchive.TaskDTO] = todos.map(Self.dto)
+        let noteDTOs: [DataArchive.NoteDTO] = notes.map(Self.dto)
+        let folderDTOs: [DataArchive.NoteFolderDTO] = folders.map(Self.dto)
+        let listDTOs: [DataArchive.ListDTO] = lists.map(Self.dto)
+        let tripDTOs: [DataArchive.ItineraryDTO] = trips.map(Self.dto)
+        let itineraryDTOs: [DataArchive.ItineraryDayDTO] = itineraryItems.map(Self.dto)
+        let expenseDTOs: [DataArchive.ExpenseDTO] = expenses.map(Self.dto)
+        let vocabDTOs: [DataArchive.VocabDTO] = vocab.map(Self.dto)
+        let recurringDTOs: [DataArchive.RecurringExpenseDTO] = recurring.map(Self.dto)
+        let personDTOs: [DataArchive.PersonDTO] = persons.map(Self.dto)
+        let eventDTOs: [DataArchive.EventDTO] = events.map(Self.dto)
+        let statementDTOs: [DataArchive.StatementImportDTO] = statements.map(Self.dto)
+        let processedDTOs: [DataArchive.ProcessedEmailDTO] = processed.map(Self.dto)
+        let noteImageDTOs: [DataArchive.NoteImageDTO] = noteImages.map(Self.dto)
+        let taskTicketDTOs: [DataArchive.TaskTicketDTO] = taskTickets.map(Self.dto)
+        let walletCardDTOs: [DataArchive.WalletCardDTO] = walletCards.map(Self.dto)
+
         return DataArchive.Payload(
-            tasks: todos.map(Self.dto),
-            notes: notes.map(Self.dto),
-            noteFolders: folders.map(Self.dto),
-            lists: lists.map(Self.dto),
+            tasks: taskDTOs,
+            notes: noteDTOs,
+            noteFolders: folderDTOs,
+            lists: listDTOs,
             listItems: listItems,
-            itineraries: trips.map(Self.dto),
-            itineraryDays: itineraryItems.map(Self.dto),
-            expenses: expenses.map(Self.dto),
-            vocab: vocab.map(Self.dto),
-            recurringExpenses: recurring.map(Self.dto),
-            persons: persons.map(Self.dto),
-            events: events.map(Self.dto),
-            statementImports: statements.map(Self.dto),
-            processedEmails: processed.map(Self.dto),
-            noteImages: noteImages.map(Self.dto),
-            taskTickets: taskTickets.map(Self.dto)
+            itineraries: tripDTOs,
+            itineraryDays: itineraryDTOs,
+            expenses: expenseDTOs,
+            vocab: vocabDTOs,
+            recurringExpenses: recurringDTOs,
+            persons: personDTOs,
+            events: eventDTOs,
+            statementImports: statementDTOs,
+            processedEmails: processedDTOs,
+            // Argument order follows the declaration order in `Payload`, which
+            // is why wallet cards sit between the processed emails and the note
+            // images rather than at the end.
+            walletCards: walletCardDTOs,
+            noteImages: noteImageDTOs,
+            taskTickets: taskTicketDTOs
         )
     }
 
@@ -256,6 +294,7 @@ final class DataExportService {
             "LocalEvent":           payload.events?.count ?? 0,
             "LocalStatementImport": payload.statementImports?.count ?? 0,
             "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
+            "LocalWalletCard":      payload.walletCards?.count ?? 0,
         ]
     }
 
@@ -283,15 +322,20 @@ final class DataExportService {
         return sources
     }
 
-    /// #319 counterpart of `resolveReceiptSources` for itinerary ticket
-    /// attachments. Missing files are skipped, matching the receipt behaviour:
-    /// the importer only sets `attachmentPath` when it actually restored a file,
-    /// so a skipped file yields a row that correctly reports no ticket.
-    private func resolveTicketSources(for items: [DataArchive.ItineraryDayDTO]) -> [AttachmentSource] {
+    /// #319 counterpart of `resolveReceiptSources` for ticket attachments.
+    /// Missing files are skipped, matching the receipt behaviour: the importer
+    /// only sets `attachmentPath` when it actually restored a file, so a skipped
+    /// file yields a row that correctly reports no ticket.
+    ///
+    /// Takes bare relative paths rather than a DTO (#398) because two entities
+    /// now reference the same `tickets/` directory: itinerary items and wallet
+    /// cards. De-duping across BOTH in one call is the point — a card and a trip
+    /// item pointing at the same file must not be written into the zip twice.
+    private func resolveTicketSources(paths: [String?]) -> [AttachmentSource] {
         var sources: [AttachmentSource] = []
         var seenPaths = Set<String>()
-        for item in items {
-            guard let relativePath = item.attachmentPath,
+        for path in paths {
+            guard let relativePath = path,
                   !relativePath.isEmpty,
                   seenPaths.insert(relativePath).inserted else { continue }
             guard let url = ticketStorage.load(relativePath: relativePath) else { continue }
@@ -476,6 +520,32 @@ final class DataExportService {
             gate: item.gate,
             venue: item.venue,
             ticketMetaJSON: item.ticketMetaJSON
+        )
+    }
+
+    private static func dto(_ card: LocalWalletCard) -> DataArchive.WalletCardDTO {
+        DataArchive.WalletCardDTO(
+            clientUUID: card.clientUUID,
+            kind: card.kind,
+            title: card.title,
+            dayDate: card.dayDate,
+            startTime: card.startTime,
+            arrivalTime: card.arrivalTime,
+            endDate: card.endDate,
+            endTime: card.endTime,
+            notes: card.notes,
+            venue: card.venue,
+            address: card.address,
+            googleMapsLink: card.googleMapsLink,
+            seat: card.seat,
+            gate: card.gate,
+            sourceConfirmation: card.sourceConfirmation,
+            attachmentPath: card.attachmentPath,
+            barcodePayload: card.barcodePayload,
+            barcodeSymbology: card.barcodeSymbology,
+            ticketMetaJSON: card.ticketMetaJSON,
+            createdAt: card.createdAt,
+            updatedAt: card.updatedAt
         )
     }
 

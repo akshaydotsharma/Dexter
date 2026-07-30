@@ -1158,7 +1158,7 @@ private struct TripTimelineRow: View {
             // items). We don't swap the check-OUT half of a stay to a ticket
             // card — the ticket lives on the check-in entry.
             if showsTicketCard {
-                TicketCardView(item: entry.item, timeText: entry.dateTimeLine)
+                TicketCardView(item: TicketCardData(entry.item), timeText: entry.dateTimeLine)
             } else {
                 card
             }
@@ -1673,20 +1673,11 @@ struct ItineraryItemEditorSheet: View {
     /// calendar day with those same components anchored in UTC. The result's
     /// UTC H:M equals the picked local H:M, so a UTC-pinned display formatter
     /// renders exactly what the user picked, regardless of timezone.
+    ///
+    /// The conversion itself lives in `WallClock` (#398) so the wallet editor
+    /// writes identical values; this stays as the local name the editor reads.
     private func utcWallClock(onDay: Date, timeFrom: Date) -> Date {
-        let local = Calendar.current
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        let day = local.dateComponents([.year, .month, .day], from: onDay)
-        let time = local.dateComponents([.hour, .minute], from: timeFrom)
-        var comps = DateComponents()
-        comps.year = day.year
-        comps.month = day.month
-        comps.day = day.day
-        comps.hour = time.hour
-        comps.minute = time.minute
-        comps.second = 0
-        return utc.date(from: comps) ?? timeFrom
+        WallClock.utcAnchor(onDay: onDay, timeFrom: timeFrom)
     }
 
     /// Storage boundary → picker. Inverse of `utcWallClock`: read the
@@ -1694,16 +1685,7 @@ struct ItineraryItemEditorSheet: View {
     /// build a DEVICE-local Date carrying those same components on `onDay`'s
     /// local calendar day, so the DatePicker surfaces the stated time.
     private func deviceLocalPickerDate(onDay: Date, utcWallClock: Date) -> Date {
-        let local = Calendar.current
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        let time = utc.dateComponents([.hour, .minute], from: utcWallClock)
-        return local.date(
-            bySettingHour: time.hour ?? 0,
-            minute: time.minute ?? 0,
-            second: 0,
-            of: onDay
-        ) ?? onDay
+        WallClock.devicePickerDate(onDay: onDay, anchor: utcWallClock)
     }
 
     /// Returns `existing` with the time-of-day replaced by `defaultHour:00` if

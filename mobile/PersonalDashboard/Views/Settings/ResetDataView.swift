@@ -15,6 +15,7 @@ struct ResetDataView: View {
 
     enum Category: String, CaseIterable, Identifiable {
         case itineraries
+        case wallet
         case vocabulary
         case notes
         case lists
@@ -25,6 +26,7 @@ struct ResetDataView: View {
         var label: String {
             switch self {
             case .itineraries: return "Itineraries"
+            case .wallet:      return "Wallet"
             case .vocabulary:  return "Vocabulary"
             case .notes:       return "Notes"
             case .lists:       return "Lists"
@@ -35,6 +37,7 @@ struct ResetDataView: View {
         var icon: String {
             switch self {
             case .itineraries: return "airplane"
+            case .wallet:      return "wallet.pass"
             case .vocabulary:  return "character.book.closed"
             case .notes:       return "doc.text"
             case .lists:       return "list.bullet"
@@ -46,6 +49,7 @@ struct ResetDataView: View {
         var singular: String {
             switch self {
             case .itineraries: return "itinerary"
+            case .wallet:      return "wallet card"
             case .vocabulary:  return "vocabulary word"
             case .notes:       return "note"
             case .lists:       return "list"
@@ -57,6 +61,7 @@ struct ResetDataView: View {
         var plural: String {
             switch self {
             case .itineraries: return "itineraries"
+            case .wallet:      return "wallet cards"
             case .vocabulary:  return "vocabulary words"
             case .notes:       return "notes"
             case .lists:       return "lists"
@@ -333,6 +338,7 @@ struct ResetDataView: View {
 
     private func recomputeCounts() {
         counts[.itineraries] = (try? modelContext.fetchCount(FetchDescriptor<LocalTrip>())) ?? 0
+        counts[.wallet]      = (try? modelContext.fetchCount(FetchDescriptor<LocalWalletCard>())) ?? 0
         counts[.vocabulary]  = (try? modelContext.fetchCount(FetchDescriptor<LocalKeyword>())) ?? 0
         counts[.notes]       = (try? modelContext.fetchCount(FetchDescriptor<LocalNote>())) ?? 0
         counts[.lists]       = (try? modelContext.fetchCount(FetchDescriptor<LocalList>())) ?? 0
@@ -350,6 +356,11 @@ struct ResetDataView: View {
                 case .itineraries:
                     try modelContext.delete(model: LocalItineraryItem.self)
                     try modelContext.delete(model: LocalTrip.self)
+                // Standalone wallet cards only (#398). Trip tickets belong to
+                // the itineraries bucket above and are deleted with it, so a
+                // wallet reset never reaches into a trip.
+                case .wallet:
+                    try modelContext.delete(model: LocalWalletCard.self)
                 case .vocabulary:
                     try modelContext.delete(model: LocalKeyword.self)
                 case .notes:
