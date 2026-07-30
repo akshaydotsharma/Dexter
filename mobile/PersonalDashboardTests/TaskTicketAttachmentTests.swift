@@ -74,9 +74,14 @@ final class TaskTicketAttachmentTests: XCTestCase {
         position: Int = 0
     ) throws -> TaskTicket {
         // A rendered barcode is a legitimate stand-in for a photographed ticket
-        // and keeps the fixture free of a checked-in binary.
+        // and keeps the fixture free of a checked-in binary. An empty `payload`
+        // means "a document with no barcode in it", so the file still needs real
+        // bytes — only the stored payload is blank.
         let image = try XCTUnwrap(
-            BarcodeService.render(payload: payload, symbology: symbology),
+            BarcodeService.render(
+                payload: payload.isEmpty ? "FIXTURE-NO-BARCODE" : payload,
+                symbology: symbology
+            ),
             "could not render a fixture barcode"
         )
         let jpeg = try XCTUnwrap(image.jpegDataCompat(quality: 0.9))
@@ -229,8 +234,37 @@ final class TaskTicketAttachmentTests: XCTestCase {
         let counts = try TaskTicketService(store: store)
             .counts(todoIds: [withTickets.clientUUID, without.clientUUID])
 
-        XCTAssertEqual(counts[withTickets.clientUUID], 2)
+        XCTAssertEqual(counts[withTickets.clientUUID]?.count, 2)
         XCTAssertNil(counts[without.clientUUID], "a task with no tickets should not appear")
+    }
+
+    /// The list chip says TICKET off the back of this, so a plain document must not
+    /// report a barcode it does not have (#402).
+    func testCountsReportWhetherAnythingIsScannable() throws {
+        let scannable = insertTodo(title: "Concert")
+        let paperwork = insertTodo(title: "Visa forms")
+        try attachTicket(to: scannable, payload: "SCAN-ME")
+        try attachTicket(to: paperwork, payload: "")
+
+        let counts = try TaskTicketService(store: store)
+            .counts(todoIds: [scannable.clientUUID, paperwork.clientUUID])
+
+        XCTAssertEqual(counts[scannable.clientUUID], .init(count: 1, hasBarcode: true))
+        XCTAssertEqual(
+            counts[paperwork.clientUUID], .init(count: 1, hasBarcode: false),
+            "a document with no barcode must not read as a ticket"
+        )
+    }
+
+    /// One scannable attachment among several is enough to call the task a ticket.
+    func testOneBarcodeAmongSeveralAttachmentsCountsAsScannable() throws {
+        let todo = insertTodo(title: "Trip paperwork")
+        try attachTicket(to: todo, payload: "")
+        try attachTicket(to: todo, payload: "BOARDING-PASS", position: 1)
+
+        let counts = try TaskTicketService(store: store).counts(todoIds: [todo.clientUUID])
+
+        XCTAssertEqual(counts[todo.clientUUID], .init(count: 2, hasBarcode: true))
     }
 
     // MARK: - Editing

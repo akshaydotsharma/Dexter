@@ -70,7 +70,7 @@ struct TodayView: View {
             return
         }
         if let counts = try? TaskTicketService().counts(todoIds: ids) {
-            ticketedTaskIDs = Set(counts.filter { $0.value > 0 }.keys)
+            ticketedTaskIDs = Set(counts.filter { $0.value.count > 0 }.keys)
         }
     }
 

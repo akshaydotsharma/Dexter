@@ -6,7 +6,14 @@ import AppKit
 
 struct TasksView: View {
     @State private var viewModel = TodosViewModel()
-    @State private var showingEditor = false
+    /// What the new-task editor is opened with: nothing, or a file to read (#402).
+    @State private var editorTarget: TaskEditorTarget?
+    /// Pickers behind the plus menu's capture entries.
+    @State private var showingDocumentPicker = false
+    #if os(iOS)
+    @State private var showingDocumentCamera = false
+    @State private var showingDocumentPhotos = false
+    #endif
     @State private var editingTodo: Todo?
     @State private var completedExpanded: Bool = false
     // Per-section tap-below inline draft state.
@@ -21,7 +28,7 @@ struct TasksView: View {
     /// Ticket count per task (#399), driving the pass chip. Counted in one fetch
     /// for the whole visible list rather than per row, and refreshed on the same
     /// signals that reload the tasks themselves.
-    @State private var ticketCounts: [UUID: Int] = [:]
+    @State private var ticketCounts: [UUID: TaskTicketService.Summary] = [:]
     @Bindable var router: AppRouter
 
     var body: some View {
@@ -94,12 +101,7 @@ struct TasksView: View {
                 }
             }
 
-            Button {
-                showingEditor = true
-            } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+            addMenuButton
             .padding(.trailing, 22)
             .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -127,7 +129,7 @@ struct TasksView: View {
         // button, so the menu and the button cannot diverge.
         #if os(macOS)
         .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Task") {
-            showingEditor = true
+            editorTarget = .blank
         })
         #endif
         // Live-refresh when the voice-capture or chat path writes a task.
@@ -154,8 +156,30 @@ struct TasksView: View {
         // New-task editor. On iOS a full sheet; on macOS the same restyled
         // editor presented as a compact modal sheet (the FAB has no anchor for
         // a popover — the per-task detail editor is the popover, issue #287).
-        .sheet(isPresented: $showingEditor) {
-            TaskEditorSheet(viewModel: viewModel, todo: nil)
+        .sheet(item: $editorTarget) { target in
+            TaskEditorSheet(
+                viewModel: viewModel,
+                todo: nil,
+                initialDocument: target.document
+            )
+        }
+        // Capture entries on the plus menu (#402). A picked file becomes the
+        // editor's `initialDocument`, so the editor opens straight away and reads it
+        // with its own spinner rather than making the person wait on a blank screen.
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showingDocumentCamera) {
+            CameraPicker { data in
+                showingDocumentCamera = false
+                openEditor(with: data, isPDF: false)
+            }
+            .ignoresSafeArea()
+        }
+        .photoLibraryPicker(isPresented: $showingDocumentPhotos) { data in
+            openEditor(with: data, isPDF: false)
+        }
+        #endif
+        .ticketFilePicker(isPresented: $showingDocumentPicker) { data, isPDF in
+            openEditor(with: data, isPDF: isPDF)
         }
         // Detail editor from a row's info button. iOS only — macOS presents
         // this as a popover anchored to the info button inside `TaskRow`.
@@ -477,10 +501,67 @@ struct TasksView: View {
         return b
     }
 
-    /// Recount ticket attachments for every loaded task (#399). One fetch for the
-    /// whole list, so adding the chip costs a single query rather than one per
-    /// row. A failure leaves the previous counts in place: a stale chip is a far
-    /// smaller problem than an empty list.
+    // MARK: - Add menu + capture
+    /// The plus button (#402). A task can be created two ways — from a document or
+    /// by typing — so the button offers the choice rather than assuming the second,
+    /// mirroring the capture menu Finance already uses.
+    ///
+    /// Capture sits above the divider because that is the new capability people came
+    /// for; manual entry stays last and is also what ⌘N and File > New Task reach, so
+    /// the fast path for someone who just wants to type is still one keystroke.
+    private var addMenuButton: some View {
+        Menu {
+            #if os(iOS)
+            // Hidden without a camera (simulators, and any Mac): the picker would
+            // silently fall back to the photo library and make two entries redundant.
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button {
+                    Haptics.light()
+                    showingDocumentCamera = true
+                } label: {
+                    Label("Scan a document", systemImage: "camera")
+                }
+            }
+            Button {
+                Haptics.light()
+                showingDocumentPhotos = true
+            } label: {
+                Label("From Photos", systemImage: "photo.on.rectangle")
+            }
+            #endif
+            Button {
+                showingDocumentPicker = true
+            } label: {
+                Label("From a file", systemImage: "doc.text")
+            }
+            Divider()
+            Button {
+                editorTarget = .blank
+            } label: {
+                Label("Enter manually", systemImage: "pencil")
+            }
+        } label: {
+            Image(systemName: "plus")
+        }
+        .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+        .accessibilityLabel("Add a task")
+    }
+
+    /// Open the new-task editor on a picked file. `nil` is a cancelled picker.
+    ///
+    /// The presentation waits for the picker to finish dismissing. Asking SwiftUI to
+    /// present a sheet from the same view in the same turn another presentation is
+    /// tearing down gets the request dropped, and the symptom is a file pick that
+    /// silently does nothing. The delay is the dismissal animation, so it reads as
+    /// the picker closing rather than as lag.
+    private func openEditor(with data: Data?, isPDF: Bool) {
+        guard let data, !data.isEmpty else { return }
+        let upload = TaskDocumentUpload(data: data, isPDF: isPDF)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            editorTarget = .document(upload)
+        }
+    }
+
     private func reloadTicketCounts() {
         let ids = Set(viewModel.todos.map(\.id))
         guard !ids.isEmpty else {
@@ -508,7 +589,7 @@ struct TasksView: View {
                         Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
                     },
                     onTapWhileDraftActive: { draftFocused = false },
-                    ticketCount: ticketCounts[todo.id] ?? 0
+                    attachments: ticketCounts[todo.id]
                 )
                 .swipeToDeleteTrash {
                     Task { await viewModel.delete(todo) }
@@ -588,7 +669,7 @@ struct TasksView: View {
                             Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
                         },
                         onTapWhileDraftActive: { draftFocused = false },
-                        ticketCount: ticketCounts[todo.id] ?? 0
+                        attachments: ticketCounts[todo.id]
                     )
                     .swipeToDeleteTrash {
                         Task { await viewModel.delete(todo) }
@@ -842,7 +923,8 @@ private struct TaskRow: View {
     /// Number of tickets attached to this task (#399). Drives the pass chip. The
     /// parent counts them all in one fetch rather than each row querying, so a
     /// long list doesn't issue a query per row.
-    var ticketCount: Int = 0
+    /// Nil when the task has no attachments (#402).
+    var attachments: TaskTicketService.Summary? = nil
 
     @State private var isEditing: Bool = false
     @State private var editText: String = ""
@@ -928,7 +1010,7 @@ private struct TaskRow: View {
                 }
 
                 let hasTag = todo.tag != nil && !(todo.tag?.isEmpty ?? true)
-                if todo.dueDate != nil || hasTag || todo.mapsURL != nil || ticketCount > 0 {
+                if todo.dueDate != nil || hasTag || todo.mapsURL != nil || attachments != nil {
                     HStack(spacing: Space.sm) {
                         if let due = todo.dueDate {
                             HStack(spacing: 4) {
@@ -965,7 +1047,7 @@ private struct TaskRow: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("Open in Google Maps")
                         }
-                        if ticketCount > 0 {
+                        if attachments != nil {
                             ticketChip
                         }
                     }
@@ -1029,30 +1111,44 @@ private struct TaskRow: View {
         }
     }
 
-    /// The pass chip. Its own tap target opens the tickets without triggering the
+    /// The attachment chip. Its own tap target opens them without triggering the
     /// row's tap-to-rename, matching how the MAP chip guards its own tap.
+    ///
+    /// Reads TICKET only when something on the task is genuinely scannable (#402);
+    /// otherwise it is a file, and saying "ticket" would promise a card that does not
+    /// exist.
+    @ViewBuilder
     private var ticketChip: some View {
-        Button {
-            Haptics.light()
-            showingTickets = true
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "ticket.fill")
-                    .font(.system(size: 10, weight: .regular))
-                // A count only earns its space once there's more than one.
-                Text(ticketCount > 1 ? "\(ticketCount) TICKETS" : "TICKET")
-                    .font(.edEyebrow)
-                    .textCase(.uppercase)
-                    .tracking(1.4)
+        if let attachments {
+            let isTicket = attachments.hasBarcode
+            let count = attachments.count
+            let noun = isTicket ? "TICKET" : "FILE"
+            Button {
+                Haptics.light()
+                showingTickets = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isTicket ? "ticket.fill" : "paperclip")
+                        .font(.system(size: 10, weight: .regular))
+                    // A count only earns its space once there's more than one.
+                    Text(count > 1 ? "\(count) \(noun)S" : noun)
+                        .font(.edEyebrow)
+                        .textCase(.uppercase)
+                        .tracking(1.4)
+                }
+                .foregroundStyle(Tokens.accentTasks)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Tokens.accentTasks.opacity(0.12), in: Capsule(style: .continuous))
+                .contentShape(Capsule())
             }
-            .foregroundStyle(Tokens.accentTasks)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Tokens.accentTasks.opacity(0.12), in: Capsule(style: .continuous))
-            .contentShape(Capsule())
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                count > 1
+                    ? "Show \(count) attachments"
+                    : (isTicket ? "Show ticket" : "Show attachment")
+            )
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(ticketCount > 1 ? "Show \(ticketCount) tickets" : "Show ticket")
     }
 
     /// Enters inline edit from a body tap. Extracted so iOS (whole-row tap) and
@@ -1133,9 +1229,35 @@ private struct TaskRow: View {
 
 // MARK: - Editor sheet (kept simple, on paper background)
 
+/// What the new-task editor was opened with (#402).
+///
+/// One sheet rather than two Bools, so "blank editor" and "editor reading a file"
+/// cannot both try to present at once.
+private enum TaskEditorTarget: Identifiable {
+    case blank
+    case document(TaskDocumentUpload)
+
+    var id: String {
+        switch self {
+        case .blank: return "blank"
+        case .document(let upload): return upload.id.uuidString
+        }
+    }
+
+    var document: TaskDocumentUpload? {
+        switch self {
+        case .blank: return nil
+        case .document(let upload): return upload
+        }
+    }
+}
+
 private struct TaskEditorSheet: View {
     let viewModel: TodosViewModel
     let todo: Todo?
+    /// A file to read as soon as the editor appears, filling the draft from it
+    /// (#402). Nil for a blank editor and for editing an existing task.
+    var initialDocument: TaskDocumentUpload? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
@@ -1350,7 +1472,8 @@ private struct TaskEditorSheet: View {
             todoId: todo?.id,
             taskTitle: currentTitleForTickets,
             pending: $pendingTickets,
-            onExtracted: applyExtractedTicket
+            onExtracted: applyExtractedTicket,
+            initialDocument: initialDocument
         )
     }
 
@@ -1382,11 +1505,11 @@ private struct TaskEditorSheet: View {
         return trimmed.isEmpty ? (todo?.title ?? "") : trimmed
     }
 
-    /// A ticket whose event name is the only thing naming the task still needs the
-    /// task to have a title, since an untitled task cannot be saved. Filling it from
-    /// the ticket is `applyExtractedTicket`'s job; this is the last-resort name for a
-    /// ticket nothing could be read from, so the upload is never rejected outright.
-    private static let untitledTicketTaskName = "Ticket"
+    /// An attachment whose own details are the only thing naming the task still needs
+    /// the task to have a title, since an untitled task cannot be saved. Filling it
+    /// from the file is `applyExtractedTicket`'s job; this is the last-resort name for
+    /// a file nothing could be read from, so the upload is never rejected outright.
+    private static let untitledTicketTaskName = "Untitled task"
 
     /// Whether there is anything worth saving. A ticket on its own counts (#399): it
     /// carries the event name that becomes the title, and one the extractor could

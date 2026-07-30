@@ -76,7 +76,7 @@ struct TaskTicketDetailSheet: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
-            .navigationTitle("Ticket")
+            .navigationTitle("Attachment")
             .inlineNavigationTitle()
             .toolbar {
                 if isEditing {
@@ -112,19 +112,19 @@ struct TaskTicketDetailSheet: View {
             TicketOriginalViewer(attachmentPath: ticket.attachmentPath)
         }
         .confirmationDialog(
-            "Remove this ticket?",
+            "Remove this attachment?",
             isPresented: $showingDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Remove ticket", role: .destructive) { delete() }
+            Button("Remove attachment", role: .destructive) { delete() }
             Button("Keep it", role: .cancel) {}
         } message: {
             // A pending ticket has no task behind it yet, so promising that the task
             // stays would be describing something that does not exist.
             Text(
                 onDelete == nil
-                    ? "The ticket file will be deleted from this device. The task itself stays."
-                    : "The ticket file will be deleted from this device."
+                    ? "The file will be deleted from this device. The task itself stays."
+                    : "The file will be deleted from this device."
             )
         }
     }
@@ -172,7 +172,7 @@ struct TaskTicketDetailSheet: View {
             }
             #endif
             if fileIsPresent {
-                actionRow(icon: "doc.text.magnifyingglass", title: "View original ticket") {
+                actionRow(icon: "doc.text.magnifyingglass", title: "View original file") {
                     Haptics.light()
                     showingOriginal = true
                 }
@@ -181,7 +181,7 @@ struct TaskTicketDetailSheet: View {
                 Haptics.light()
                 isEditing = true
             }
-            actionRow(icon: "trash", title: "Remove ticket", isDestructive: true) {
+            actionRow(icon: "trash", title: "Remove attachment", isDestructive: true) {
                 showingDeleteConfirm = true
             }
         }

@@ -5,8 +5,24 @@ import UniformTypeIdentifiers
 import UIKit
 #endif
 
-/// Ticket attachments for a task, shown as a stack of wallet cards inside the
-/// task editor with an add control (#399).
+/// A file picked outside the task editor, on its way in to be read (#402).
+///
+/// Carries the bytes rather than a URL because the picker's security-scoped access
+/// ends when it dismisses, and the editor is presented after that.
+struct TaskDocumentUpload: Identifiable, Equatable {
+    let id: UUID
+    let data: Data
+    let isPDF: Bool
+
+    init(data: Data, isPDF: Bool) {
+        self.id = UUID()
+        self.data = data
+        self.isPDF = isPDF
+    }
+}
+
+/// File attachments for a task, shown as a stack of wallet cards inside the task
+/// editor with an add control (#399, generalised in #402).
 ///
 /// Owns its own reads and writes through `TaskTicketService` rather than routing
 /// them through `TasksViewModel`, for the reason `NoteImageStrip` does the same
@@ -19,19 +35,21 @@ import UIKit
 ///
 /// ## Getting a file in
 ///
-/// Three ways, in the order people reach for them: drop a file on the section,
-/// pick one from Finder / Files, or take a photo (iPhone only). There is no
-/// separate "image" and "PDF" entry — one file picker accepts either, because the
-/// distinction is not a choice worth surfacing. See `TicketFilePicker`.
+/// Four ways, in the order people reach for them: it arrives with the task from the
+/// plus menu (`initialDocument`), or it is dropped on the section, picked from
+/// Finder / Files, or photographed (iPhone only). There is no separate "image" and
+/// "PDF" entry — one file picker accepts either, because the distinction is not a
+/// choice worth surfacing. See `TicketFilePicker`.
 ///
 /// ## Attaching to a task that does not exist yet
 ///
-/// A ticket added while composing a NEW task is held in `pending` and written only
-/// when the editor is committed. An earlier version created the task the moment a
-/// file arrived, which meant Cancel left a task behind — the editor deciding on the
-/// person's behalf that they had finished. The ticket still reads immediately, so
-/// the parsed title, date and venue fill the form straight away; it is only the
-/// write that waits.
+/// An attachment added while composing a NEW task is held in `pending` and written
+/// only when the editor is committed. An earlier version created the task the moment
+/// a file arrived, which meant Cancel left a task behind — the editor deciding on the
+/// person's behalf that they had finished. The file still reads immediately, so the
+/// parsed title, date and venue fill the form straight away; it is only the write
+/// that waits. This is also what makes "create a task from a document" work: the
+/// draft is a real card and real fields with nothing yet committed.
 struct TaskTicketSection: View {
     /// The owning task, or `nil` when the editor is for a task that has not been
     /// saved yet.
@@ -45,6 +63,11 @@ struct TaskTicketSection: View {
     /// fields fill in: title, due date, address. The whole point of uploading is
     /// that you should not then have to type what the ticket already says.
     var onExtracted: (TaskTicketRead) -> Void = { _ in }
+    /// A file chosen before the editor opened, read as soon as the section appears
+    /// (#402). This is the "create a task from a document" path: the editor is on
+    /// screen with its spinner running rather than the person waiting on a blank
+    /// screen for a parse they cannot see.
+    var initialDocument: TaskDocumentUpload? = nil
 
     @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -52,6 +75,9 @@ struct TaskTicketSection: View {
     @State private var isTargetedForDrop = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    /// `onAppear` can fire more than once for the same view; the document must be
+    /// read exactly once or it would be stored and attached twice.
+    @State private var consumedInitialDocument = false
 
     #if os(iOS)
     @State private var showingCamera = false
@@ -73,10 +99,10 @@ struct TaskTicketSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack(spacing: Space.sm) {
-                Text("Tickets").eyebrow()
+                Text("Attachments").eyebrow()
                 if isIngesting {
                     ProgressView().scaleEffect(0.7)
-                    Text("Reading the ticket…")
+                    Text("Reading the file…")
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
                 }
@@ -118,7 +144,16 @@ struct TaskTicketSection: View {
             isTargetedForDrop = targeted
         }
         .animation(.easeOut(duration: 0.15), value: isTargetedForDrop)
-        .onAppear(perform: reload)
+        .onAppear {
+            reload()
+            // Read a file handed in from the plus menu. Deliberately does NOT open
+            // the ticket sheet afterwards: the person asked to see the draft task,
+            // and a sheet over it would hide the thing they came to check.
+            if let initialDocument, !consumedInitialDocument {
+                consumedInitialDocument = true
+                ingest(data: initialDocument.data, isPDF: initialDocument.isPDF, autoOpen: false)
+            }
+        }
         .sheet(item: $selected) { ticket in
             // A pending ticket has no row to write to, so its edits and its removal
             // are applied to the editor's in-memory copy instead.
@@ -200,7 +235,7 @@ struct TaskTicketSection: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(isIngesting)
-        .accessibilityLabel("Add a ticket to this task")
+        .accessibilityLabel("Add an attachment to this task")
         #else
         Button {
             showingFilePicker = true
@@ -209,7 +244,7 @@ struct TaskTicketSection: View {
         }
         .buttonStyle(.plain)
         .disabled(isIngesting)
-        .accessibilityLabel("Choose a ticket image or PDF")
+        .accessibilityLabel("Choose an image or PDF")
         #endif
     }
 
@@ -231,10 +266,10 @@ struct TaskTicketSection: View {
 
     private var emptyHint: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("Drop a ticket here, or use Add.")
+            Text("Drop a file here, or use Add.")
                 .font(.edCaption)
                 .foregroundStyle(isTargetedForDrop ? accent : Tokens.inkSoft)
-            Text("An image or a PDF. Dexter reads the details off it and gives you a card you can scan at the door.")
+            Text("An image or a PDF. Dexter reads the details off it, and turns a barcode into a card you can scan at the door.")
                 .font(.edCaption)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -267,7 +302,7 @@ struct TaskTicketSection: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open ticket \(ticket.displayTitle(fallback: taskTitle))")
+        .accessibilityLabel("Open attachment \(ticket.displayTitle(fallback: taskTitle))")
     }
 
     // MARK: - Actions
@@ -298,9 +333,14 @@ struct TaskTicketSection: View {
     }
 
     /// Run one upload through the pipeline. A failed LLM read is not an error:
-    /// the row still exists with the file and any barcode, and the detail sheet
-    /// opens into its form so the details can be typed in.
-    private func ingest(data: Data?, isPDF: Bool) {
+    /// the attachment still exists with the file and any barcode, and its sheet
+    /// opens into the form so the details can be typed in.
+    ///
+    /// `autoOpen` surfaces that form immediately for a read the model could make
+    /// nothing of, which is the case where there is nothing to look at and
+    /// everything to fill in. Off for a file that created the task, where the draft
+    /// itself is what the person is waiting to see.
+    private func ingest(data: Data?, isPDF: Bool, autoOpen: Bool = true) {
         guard let data, !data.isEmpty else { return }
         isIngesting = true
         statusMessage = nil
@@ -339,9 +379,12 @@ struct TaskTicketSection: View {
 
                 isIngesting = false
                 statusMessage = read.degradeMessage
-                // Open the new ticket: on a clean read so the card can be seen,
-                // and on a degraded one so the fields are right there.
-                if let added = tickets.first(where: { $0.id == addedId }) {
+                // A read that yielded nothing opens its form, since a card blank
+                // apart from a barcode has nothing to look at. A good read does
+                // not: its card is already on screen and a sheet over it would just
+                // be something else to dismiss.
+                if autoOpen, read.extracted == nil,
+                   let added = tickets.first(where: { $0.id == addedId }) {
                     selected = added
                 }
             } catch {

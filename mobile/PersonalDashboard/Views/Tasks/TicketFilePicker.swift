@@ -71,7 +71,7 @@ struct TicketFilePickerModifier: ViewModifier {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.message = "Choose a ticket image or PDF"
+        panel.message = "Choose an image or PDF"
         panel.prompt = "Attach"
         // `begin`, not `runModal`: see the type doc. The completion lands on the
         // main queue, so the caller's `Task { … }` ingest starts cleanly.

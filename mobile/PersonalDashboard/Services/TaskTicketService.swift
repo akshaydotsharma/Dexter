@@ -27,16 +27,32 @@ struct TaskTicketService {
         return try store.context.fetch(descriptor).map { $0.toDTO() }
     }
 
-    /// Count per task for a set of tasks, so the Tasks and Today lists can show a
-    /// pass chip without loading any bytes.
-    func counts(todoIds: Set<UUID>) throws -> [UUID: Int] {
+    /// What a task's attachments amount to, for the list chip: how many, and whether
+    /// any of them is actually scannable (#402).
+    ///
+    /// The chip has to know about the barcode because "TICKET" on a plain PDF is a
+    /// claim the attachment does not support, and the same picker now takes any
+    /// document.
+    struct Summary: Equatable {
+        var count: Int
+        var hasBarcode: Bool
+    }
+
+    /// Summary per task for a set of tasks, so the Tasks and Today lists can show a
+    /// chip without loading any bytes.
+    func counts(todoIds: Set<UUID>) throws -> [UUID: Summary] {
         guard !todoIds.isEmpty else { return [:] }
         let descriptor = FetchDescriptor<LocalTaskTicket>(
             predicate: #Predicate { $0.deletedAt == nil }
         )
-        var out: [UUID: Int] = [:]
+        var out: [UUID: Summary] = [:]
         for row in try store.context.fetch(descriptor) where todoIds.contains(row.todoClientUUID) {
-            out[row.todoClientUUID, default: 0] += 1
+            var summary = out[row.todoClientUUID] ?? Summary(count: 0, hasBarcode: false)
+            summary.count += 1
+            if !row.barcodePayload.trimmingCharacters(in: .whitespaces).isEmpty {
+                summary.hasBarcode = true
+            }
+            out[row.todoClientUUID] = summary
         }
         return out
     }
