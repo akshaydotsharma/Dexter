@@ -145,6 +145,15 @@ final class TicketStorage {
         try persist(data: pdfData, ext: "pdf")
     }
 
+    /// Save a `.pkpass` archive unchanged (#420).
+    ///
+    /// Verbatim for two reasons: the archive is the document (its fields can be
+    /// re-read at any time, where a flattened screenshot of it cannot), and on iOS the
+    /// original bytes are what Apple Wallet will accept back.
+    func save(passData: Data) throws -> String {
+        try persist(data: passData, ext: "pkpass")
+    }
+
     /// Resolve a stored relative path back to an on-disk URL. Returns nil if the
     /// file no longer exists (e.g. user reinstalled the app).
     func load(relativePath: String) -> URL? {
@@ -201,6 +210,12 @@ final class TicketStorage {
     /// True when a stored path points at a PDF (drives viewer branching).
     static func isPDF(_ relativePath: String) -> Bool {
         relativePath.lowercased().hasSuffix(".pdf")
+    }
+
+    /// True when a stored path points at an Apple Wallet pass archive (#420). There
+    /// is nothing to render for one, so the viewer offers Apple Wallet instead.
+    static func isPass(_ relativePath: String) -> Bool {
+        relativePath.lowercased().hasSuffix(".pkpass")
     }
 
     // MARK: - Internals

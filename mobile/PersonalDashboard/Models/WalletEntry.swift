@@ -105,6 +105,16 @@ struct WalletEntry: Identifiable {
     }
 }
 
+/// What a task lends to the cards hanging off it (#420): its name, and where it is.
+///
+/// A struct rather than three parallel dictionaries keyed on the same UUID, which is
+/// three chances for one of them to be looked up and the others forgotten.
+private struct TaskCardContext {
+    let title: String
+    let address: String
+    let mapsLink: String
+}
+
 // MARK: - Grouping
 
 /// The wallet's two groups, each already sorted.
@@ -155,9 +165,17 @@ extension WalletEntry {
         // cascade to its tickets, so a ticket can outlive its owner — and a
         // wallet card that routes back to a task the user already deleted is
         // worse than no card. An orphan is skipped rather than shown unlabelled.
-        var taskTitles: [UUID: String] = [:]
+        //
+        // The address and the map link travel with the title (#420). A ticket row has
+        // no address of its own, and the task it hangs off usually does — so without
+        // this the card cannot show where the event is even though the app knows.
+        var taskContext: [UUID: TaskCardContext] = [:]
         for todo in todos where todo.deletedAt == nil {
-            taskTitles[todo.clientUUID] = todo.title
+            taskContext[todo.clientUUID] = TaskCardContext(
+                title: todo.title,
+                address: todo.address,
+                mapsLink: todo.googleMapsLink
+            )
         }
 
         var out: [WalletEntry] = []
@@ -207,8 +225,14 @@ extension WalletEntry {
             // at a door, and a Wallet full of those is a Wallet you stop trusting
             // to hold the thing you are about to scan.
             guard ticket.belongsInWallet else { continue }
-            guard let taskTitle = taskTitles[ticket.todoClientUUID] else { continue }
-            let data = TicketCardData(ticket, taskTitle: taskTitle)
+            guard let task = taskContext[ticket.todoClientUUID] else { continue }
+            let taskTitle = task.title
+            let data = TicketCardData(
+                ticket,
+                taskTitle: taskTitle,
+                taskAddress: task.address,
+                taskMapsLink: task.mapsLink
+            )
             out.append(
                 WalletEntry(
                     source: .task(

@@ -179,17 +179,26 @@ extension TicketCardData {
     /// #398). Always the event layout: the model was built for event tickets and
     /// deliberately carries no route, airline or BCBP grammar.
     ///
-    /// - Parameter taskTitle: the owning task's title, used when the extractor
-    ///   could not read an event name off the ticket — "Spider-Man" as you typed
-    ///   it beats a blank card.
-    init(_ ticket: LocalTaskTicket, taskTitle: String) {
+    /// - Parameters:
+    ///   - taskTitle: the owning task's title, used when the extractor could not
+    ///     read an event name off the ticket — "Spider-Man" as you typed it beats
+    ///     a blank card.
+    ///   - taskAddress: the owning task's address. See the note on `address` below.
+    ///   - taskMapsLink: the owning task's stored map link, same reason.
+    init(
+        _ ticket: LocalTaskTicket,
+        taskTitle: String,
+        taskAddress: String = "",
+        taskMapsLink: String = ""
+    ) {
         let meta = ticket.ticketMeta
         let event = ticket.eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = event.isEmpty ? taskTitle : event
 
         self.layout = .event
         self.eyebrow = Self.eyebrow(for: .event, eventType: meta?.eventType)
         self.heroGlyph = "ticket"
-        self.title = event.isEmpty ? taskTitle : event
+        self.title = resolvedTitle
         // Undated tickets fall back to the day the row was created, purely so
         // the card has somewhere to sort. `WalletEntry` keeps them out of Past
         // regardless — see the `validThrough` note there.
@@ -205,15 +214,43 @@ extension TicketCardData {
         self.seat = ticket.seat
         self.gate = ticket.gate
         self.venue = ticket.venue
-        // A task ticket carries a venue name but no postal address, and no map
-        // link is derivable from a venue alone without guessing.
-        self.address = ""
-        self.mapsURL = nil
+        // The document's own address wins; the owning task's is the fallback (#420).
+        //
+        // A task ticket has no address column, so this used to be blank and the card
+        // could never show one — even when the task it hangs off had both an address
+        // and a map link typed on it, which is the usual case by the time someone
+        // attaches a ticket. Two sources, in order of authority: a `.pkpass` states
+        // the street address on its back, and failing that the task is what a person
+        // wrote down about where they are going.
+        self.address = meta?.address?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? taskAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.mapsURL = Self.mapsURL(
+            explicit: meta?.directionsURL ?? taskMapsLink,
+            name: resolvedTitle,
+            address: self.address
+        )
         self.sourceConfirmation = ticket.reference
         self.attachmentPath = ticket.attachmentPath
         self.barcodePayload = ticket.barcodePayload
         self.barcodeSymbology = ticket.barcodeSymbology
         self.meta = meta
+    }
+
+    /// A tappable map target: the link we were given if there is one, otherwise a
+    /// Google Maps search built from the place's name and address (#420).
+    ///
+    /// Mirrors `LocalItineraryItem.mapsURL`, which resolves the same two sources in
+    /// the same order, so a card's MAP chip behaves identically whichever model it
+    /// came from. `nil` with no link and no address, because a bare title is not a
+    /// reliable map target and a chip that lands on the wrong building is worse than
+    /// no chip.
+    private static func mapsURL(explicit: String?, name: String, address: String) -> URL? {
+        let stored = (explicit ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !stored.isEmpty {
+            if let url = URL(string: stored), url.scheme != nil { return url }
+            if let url = URL(string: "https://\(stored)") { return url }
+        }
+        return LocalItineraryItem.googleMapsSearchURL(name: name, address: address)
     }
 
     private static func eyebrow(for layout: TicketCardLayout, eventType: String?) -> String {

@@ -560,6 +560,21 @@ struct TaskTicketSection: View {
                 // fingerprints existed. The bytes go back out, since nothing is going
                 // to reference them.
                 if let existing = service.duplicate(ofBarcode: read.barcodePayload, among: tickets) {
+                    // Unless the new copy is BETTER than the one already here (#420).
+                    //
+                    // A `.pkpass` carries fields no photograph of the same ticket can
+                    // show — the street address, the admission type, the holder's
+                    // email — so a screenshot attached weeks ago can be completed by
+                    // the real pass turning up later. Refusing the richer copy on the
+                    // grounds that we already have the poorer one is the wrong answer,
+                    // and only empty fields are filled, so nothing typed by hand is
+                    // overwritten. Any other repeat is still just a repeat.
+                    if TicketStorage.isPass(read.attachmentPath),
+                       try service.enrich(existing, from: read) {
+                        reload()
+                        statusMessage = Self.enrichedMessage(existing, fallback: taskTitle)
+                        return
+                    }
                     service.discardStoredFile(at: read.attachmentPath)
                     errorMessage = Self.duplicateMessage(existing, fallback: taskTitle)
                     return
@@ -632,6 +647,17 @@ struct TaskTicketSection: View {
         return trimmed.isEmpty
             ? "That file is already attached to this task."
             : "That file is already attached to this task, as \"\(trimmed)\"."
+    }
+
+    /// Said when a pass completed an attachment already here rather than adding a
+    /// second one (#420). Worth its own message: "already attached" would be a lie
+    /// about what just happened, and silence would read as the attach having failed.
+    private static func enrichedMessage(_ existing: TaskTicket, fallback: String) -> String {
+        let name = existing.displayTitle(fallback: fallback)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            ? "You already had this ticket, so its missing details were filled in from the pass."
+            : "You already had \"\(trimmed)\", so its missing details were filled in from the pass."
     }
 }
 

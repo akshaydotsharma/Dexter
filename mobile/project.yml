@@ -129,6 +129,11 @@ targets:
       - path: PersonalDashboard/ViewModels/TodosViewModel.swift
       - path: PersonalDashboard/Services/TodoService.swift
       - path: PersonalDashboard/Services/MapsLinkResolver.swift
+      # .pkpass ingest (#420): a zip reader and the pass.json mapper. Shared
+      # with iOS; the Apple Wallet hand-off around them is iOS-only and stays
+      # out of this target.
+      - path: PersonalDashboard/Services/ZipArchiveReader.swift
+      - path: PersonalDashboard/Services/WalletPassImport.swift
       - path: PersonalDashboard/Services/APIError.swift
       - path: PersonalDashboard/ViewModels/NotesViewModel.swift
       - path: PersonalDashboard/ViewModels/ListsViewModel.swift

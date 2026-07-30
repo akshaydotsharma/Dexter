@@ -231,6 +231,15 @@ struct TaskTicketRead {
         // pass is also a URL but a different one.
         meta.eventURL = Self.clean(extracted?.eventURL) ?? context.eventURLFromNotes
         meta.guestName = Self.clean(extracted?.guestName)
+        // The pass's back, in its own words (#420). A document that states a street
+        // address and a map link is the only source for either — the task's address
+        // is applied later, at render, so the two stay distinguishable.
+        meta.address = Self.clean(extracted?.address)
+        meta.directionsURL = Self.clean(extracted?.directionsURL)
+        // Anything printed that no typed field above covers. Left nil rather than an
+        // empty array so an ordinary ticket's meta JSON stays as short as it was.
+        let extraFields = extracted?.fields.filter(\.isRenderable) ?? []
+        meta.fields = extraFields.isEmpty ? nil : extraFields
 
         // Stored at LOCAL midnight of the printed day, because every surface that
         // renders or edits it uses the local calendar. The printed day is preferred
@@ -343,6 +352,17 @@ struct TaskTicketExtraction {
         // Fingerprint the ORIGINAL upload, before compression touches it (#408).
         let sourceHash = SyncHash.hex(data)
 
+        // A `.pkpass` is not a picture of a ticket, it is the ticket's own data (#420):
+        // every field the issuer printed, front and back, plus the barcode payload and
+        // the date, in a JSON file inside the archive. So it skips this whole pipeline —
+        // no compression, no Vision decode, no model call, nothing inferred. Detected
+        // from the BYTES rather than from a caller-supplied flag, which is what makes
+        // every entry surface (the picker, a shared file, an Open-in hand-off) get it
+        // for free.
+        if let pass = WalletPassImport.read(data: data) {
+            return try Self.readPass(pass, data: data, sourceHash: sourceHash, context: context)
+        }
+
         // 1. Persist the original upload. Images are normalised to a compressed
         //    JPEG (off the main actor) that is safe for disk, Vision and Claude
         //    alike; PDFs are stored verbatim.
@@ -392,6 +412,36 @@ struct TaskTicketExtraction {
             barcodeSymbology: decoded?.symbology.rawValue ?? "",
             extracted: extracted,
             degradeMessage: degradeMessage,
+            sourceHash: sourceHash,
+            context: context
+        )
+    }
+
+    /// The `.pkpass` route (#420): store the archive as it arrived and read its
+    /// `pass.json`.
+    ///
+    /// Stored verbatim rather than converted to an image, because the archive IS the
+    /// document — it holds the artwork, the barcode and every field, and on iOS it can
+    /// be handed straight back to Apple Wallet. Re-reading it later re-derives
+    /// everything, which a flattened screenshot could not.
+    ///
+    /// There is no degrade path worth writing: the only way this fails is a corrupt
+    /// archive, and `WalletPassImport.read` has already returned non-nil, meaning the
+    /// `pass.json` decoded. Disk failure still throws, as it does for any upload.
+    private static func readPass(
+        _ pass: WalletPassImport,
+        data: Data,
+        sourceHash: String,
+        context: TaskTicketContext
+    ) throws -> TaskTicketRead {
+        let relativePath = try TicketStorage.taskTickets.save(passData: data)
+        let barcode = pass.barcode
+        return TaskTicketRead(
+            attachmentPath: relativePath,
+            barcodePayload: barcode?.payload ?? "",
+            barcodeSymbology: barcode?.symbology.rawValue ?? "",
+            extracted: pass.extracted(),
+            degradeMessage: nil,
             sourceHash: sourceHash,
             context: context
         )
@@ -687,6 +737,15 @@ struct ExtractedTaskTicket {
     /// of a booking someone looks up under your name (#405). `nil` when the model
     /// declined to judge, which stays distinct from a confident "no".
     var presentedAtEntry: Bool?
+    /// The full postal address, when the document prints one beyond the venue's name
+    /// (#420).
+    var address: String?
+    /// A map link the document itself supplied (#420).
+    var directionsURL: String?
+    /// Everything printed that no field above covers, with the issuer's own labels
+    /// (#420). Populated in full by the `.pkpass` route, which can see the real field
+    /// groups; the model route fills it from `other_fields`.
+    var fields: [TicketMeta.PassField] = []
 
     init(input: [String: AnthropicJSONValue]) {
         func s(_ key: String) -> String? { input[key]?.stringValue }
@@ -715,6 +774,36 @@ struct ExtractedTaskTicket {
         case "no", "false":  presentedAtEntry = false
         default:             presentedAtEntry = nil
         }
+        address = s("address")
+        directionsURL = s("directions_url")
+        fields = Self.parseOtherFields(input["other_fields"])
+    }
+
+    /// Decode `other_fields` into labelled fields (#420).
+    ///
+    /// The schema asks for `["Label: value", …]` rather than an array of objects.
+    /// Objects are perfectly decodable here, but a flat string per line is the shape
+    /// the model gets right first time, and the cost of it being wrong is a row that
+    /// reads oddly rather than a field silently dropped. Split on the FIRST colon
+    /// only, so "Doors: 18:30" keeps its own colon in the value.
+    ///
+    /// Everything from this route is placed `auxiliary`: a photograph shows one side
+    /// of a document, so we know it was printed but not that it was on the back.
+    private static func parseOtherFields(_ raw: AnthropicJSONValue?) -> [TicketMeta.PassField] {
+        guard case let .array(items) = raw else { return [] }
+        var out: [TicketMeta.PassField] = []
+        for item in items {
+            guard let line = item.stringValue else { continue }
+            guard let separator = line.firstIndex(of: ":") else { continue }
+            let label = String(line[line.startIndex..<separator])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(line[line.index(after: separator)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let field = TicketMeta.PassField(label: label, value: value, placement: .auxiliary)
+            guard field.isRenderable else { continue }
+            out.append(field)
+        }
+        return out
     }
 
     /// Direct init for tests and for building a read by hand.
@@ -733,7 +822,10 @@ struct ExtractedTaskTicket {
         eventURL: String? = nil,
         guestName: String? = nil,
         yearWasPrinted: Bool = false,
-        presentedAtEntry: Bool? = nil
+        presentedAtEntry: Bool? = nil,
+        address: String? = nil,
+        directionsURL: String? = nil,
+        fields: [TicketMeta.PassField] = []
     ) {
         self.eventTitle = eventTitle
         self.eventDate = eventDate
@@ -750,6 +842,9 @@ struct ExtractedTaskTicket {
         self.guestName = guestName
         self.yearWasPrinted = yearWasPrinted
         self.presentedAtEntry = presentedAtEntry
+        self.address = address
+        self.directionsURL = directionsURL
+        self.fields = fields
     }
 }
 
@@ -778,7 +873,14 @@ extension TaskTicketExtraction {
                 "event_type": field("Kind of event in a word or two (e.g. \"Concert\", \"Football match\", \"Theatre\", \"Court booking\", \"Class\", \"Appointment\", \"Flight\"). Omit if unclear."),
                 "presented_at_entry": field("\"yes\" when the holder physically hands this over or holds it up to be let in somewhere: a concert or match ticket, a boarding pass, a cinema or museum admission, a collection slip. \"no\" when it merely RECORDS a booking that is looked up under a name on arrival: a restaurant reservation, a hotel booking, a doctor or salon appointment, an order or payment receipt, and a slot booked at a facility (a padel or tennis court, a pitch, a bowling lane, a studio, a gym or fitness class). Booking a court to PLAY on is a reservation, not a match ticket, however sporting it sounds: nobody takes anything off you at a door. A booking with a barcode or QR code to scan is \"yes\" whatever it is for. When you genuinely cannot tell, omit the field rather than guessing."),
                 "section": field("Seating section, block or stand for a seated event (e.g. \"Section 122\", \"Block A\"). Omit if none."),
-                "row": field("Seating row (e.g. \"Row 14\"). Omit if none.")
+                "row": field("Seating row (e.g. \"Row 14\"). Omit if none."),
+                "address": field("The full postal or street address, when the document prints one BEYOND the venue's name (e.g. \"69 Ayer Rajah Cres., Level 3 Vidacity, Singapore 139961\"). Return it only when it is a real address with a street or a postcode in it — if all the document shows is the place's name, that is the venue and this field is omitted. Never repeat the venue here."),
+                "directions_url": field("A map link printed on the document (a Google Maps, Apple Maps or share.google URL). Read it exactly. Omit if none is written, and never construct one yourself."),
+                "other_fields": .object([
+                    "type": .string("array"),
+                    "description": .string("Everything ELSE the document prints that no field above covers, one entry per fact, each as \"Label: value\" using the document's OWN label (e.g. \"Ticket: In-Person\", \"Organiser: Vibe Coders SG\", \"Dress code: Smart casual\", \"Table: 12\"). This is how a detail the schema never anticipated still reaches the card, so include anything a person would want to see on the ticket. Do NOT repeat anything already returned in another field, do not include the barcode's contents, and do not invent labels: if the document shows a bare value with no label, omit it."),
+                    "items": .object(["type": .string("string")])
+                ])
             ]),
             "required": .array([])
         ])
