@@ -230,6 +230,7 @@ struct TaskTicketRead {
         // sitting in the task's notes (#412). Not the barcode, which on a check-in
         // pass is also a URL but a different one.
         meta.eventURL = Self.clean(extracted?.eventURL) ?? context.eventURLFromNotes
+        meta.guestName = Self.clean(extracted?.guestName)
 
         // Stored at LOCAL midnight of the printed day, because every surface that
         // renders or edits it uses the local calendar. The printed day is preferred
@@ -677,6 +678,8 @@ struct ExtractedTaskTicket {
     var printedWeekday: String?
     /// The event's own page, if the document prints one (#412).
     var eventURL: String?
+    /// The name the ticket is issued to, if it prints one (#413).
+    var guestName: String?
     /// Whether the ticket actually printed a year, as opposed to the model working
     /// one out. Only a printed year is taken at face value.
     var yearWasPrinted: Bool = false
@@ -699,6 +702,7 @@ struct ExtractedTaskTicket {
         row = s("row")
         printedWeekday = s("printed_weekday")
         eventURL = s("event_url")
+        guestName = s("guest_name")
         // Asked for as a string rather than a JSON boolean to match every other
         // field in this schema, and read leniently.
         yearWasPrinted = ["yes", "true"].contains(
@@ -727,6 +731,7 @@ struct ExtractedTaskTicket {
         row: String? = nil,
         printedWeekday: String? = nil,
         eventURL: String? = nil,
+        guestName: String? = nil,
         yearWasPrinted: Bool = false,
         presentedAtEntry: Bool? = nil
     ) {
@@ -742,6 +747,7 @@ struct ExtractedTaskTicket {
         self.row = row
         self.printedWeekday = printedWeekday
         self.eventURL = eventURL
+        self.guestName = guestName
         self.yearWasPrinted = yearWasPrinted
         self.presentedAtEntry = presentedAtEntry
     }
@@ -768,6 +774,7 @@ extension TaskTicketExtraction {
                 "gate": field("Entry gate or door, ONLY when a real value is explicitly printed (e.g. \"Gate 3\", \"Door B\", \"14\"). Never infer it, never emit a placeholder, a dash, \"TBD\", or a lone letter — omit the field entirely if no real gate is shown."),
                 "reference": field("Booking reference, order number or confirmation code as printed. Omit if none."),
                 "event_url": field("The event's own page or booking URL, when one is printed or written on the document as readable text (e.g. \"https://luma.com/4ptmrf91\", an Eventbrite or Ticketmaster link). Read it EXACTLY. Do NOT decode it out of a QR code or barcode, and do not return a check-in or scan-me link — this is the page someone would open to read about the event, not the code that admits them. Omit if none is written."),
+                "guest_name": field("The name the ticket is issued to, exactly as printed (e.g. \"Akshay Sharma\"). This is the holder or guest, not the performer, the venue, the organiser or the person who sold it. Omit unless a name is clearly printed as the holder."),
                 "event_type": field("Kind of event in a word or two (e.g. \"Concert\", \"Football match\", \"Theatre\", \"Appointment\", \"Flight\"). Omit if unclear."),
                 "presented_at_entry": field("\"yes\" when the holder physically hands this over or holds it up to be let in somewhere: a concert or match ticket, a boarding pass, a cinema or museum admission, a collection slip. \"no\" when it merely RECORDS a booking that is looked up under a name on arrival: a restaurant reservation, a hotel booking, a doctor or salon appointment, an order or payment receipt. A booking with a barcode or QR code to scan is \"yes\" whatever it is for. When you genuinely cannot tell, omit the field rather than guessing."),
                 "section": field("Seating section, block or stand for a seated event (e.g. \"Section 122\", \"Block A\"). Omit if none."),

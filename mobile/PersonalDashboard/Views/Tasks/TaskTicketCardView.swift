@@ -69,63 +69,102 @@ struct TaskTicketCardView: View {
 
     // MARK: - Top content
 
+    /// Laid out on the Apple Wallet pass grammar (#413): a header block top right,
+    /// then primary, secondary and auxiliary groups, all flush left.
+    ///
+    /// The previous version centred everything and hung the venue and the time off
+    /// glyphs, which read as a stack of captions rather than a pass. Left alignment
+    /// with labelled groups is what makes a real pass scannable: the eye lands in one
+    /// column and every value sits under the word for what it is. No icons and no
+    /// rules between fields, for the same reason Wallet has none — on a card this
+    /// small they are noise competing with the values.
     private var topContent: some View {
-        VStack(spacing: Space.md) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: Space.md) {
+            // Header. The type sits where a pass puts its logo text; the date and
+            // time go top right, time over date, which is Luma's own arrangement.
+            HStack(alignment: .top, spacing: Space.sm) {
                 Text(eyebrow)
                     .font(.edEyebrow)
                     .textCase(.uppercase)
                     .tracking(1.4)
                     .foregroundStyle(accent)
                 Spacer(minLength: Space.sm)
-                if !ticket.reference.isEmpty {
-                    Text(ticket.reference)
-                        .font(.edFootnote)
-                        .foregroundStyle(Tokens.inkSoft)
-                        .lineLimit(1)
-                }
+                headerWhen
             }
 
+            // Primary: the one thing you are looking for.
             Text(ticket.displayTitle(fallback: taskTitle))
                 .font(.edTitle)
                 .foregroundStyle(Tokens.ink)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.leading)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
+            // Secondary.
             if !ticket.venue.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "mappin.and.ellipse")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(Tokens.muted)
+                labelledGroup("Location") {
                     Text(ticket.venue)
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.muted)
+                        .font(.edSubheadline)
+                        .foregroundStyle(Tokens.ink)
                         .lineLimit(2)
-                        .multilineTextAlignment(.center)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            // When is the thing you check first, so it is promoted out of the
-            // equal-weight facts strip into its own accent-led line.
-            if let when = whenText {
-                HStack(spacing: 6) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(accent)
-                    Text(when)
+            // Auxiliary.
+            if !facts.isEmpty {
+                auxiliaryRow
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The header block: printed time over date, right-aligned.
+    ///
+    /// The time is the label and the date the value, which looks backwards written
+    /// down and is right on the card — the time is the smaller, more glanceable half,
+    /// and it is the one that must stay verbatim, so it is never reformatted here.
+    @ViewBuilder
+    private var headerWhen: some View {
+        let time = ticket.startTimeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let date = ticket.eventDate.map {
+            $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+        }
+        if !time.isEmpty || date != nil {
+            VStack(alignment: .trailing, spacing: 1) {
+                if !time.isEmpty {
+                    Text(time)
+                        .font(.edEyebrow)
+                        .tracking(0.8)
+                        .foregroundStyle(Tokens.muted)
+                        .lineLimit(1)
+                }
+                if let date {
+                    Text(date)
                         .font(.edBodyMedium)
                         .foregroundStyle(Tokens.ink)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
                 }
             }
-
-            if !facts.isEmpty {
-                factsRow
-            }
+            .fixedSize()
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    /// A Wallet field group: the label in small caps over its value.
+    private func labelledGroup<Content: View>(
+        _ label: String,
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(.edEyebrow)
+                .tracking(1.0)
+                .foregroundStyle(Tokens.muted)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The eyebrow carries the event type when the extractor read one, so a match
@@ -135,46 +174,42 @@ struct TaskTicketCardView: View {
         return type.isEmpty ? "TICKET" : type.uppercased()
     }
 
-    /// Date and printed time on one line. The time is rendered exactly as it was
-    /// read off the ticket — never reformatted, because the number here has to
-    /// match the number the gate is reading (see `LocalTaskTicket`).
-    private var whenText: String? {
-        let dateText = ticket.eventDate.map {
-            $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-        }
-        let timeText = ticket.startTimeText.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch (dateText, timeText.isEmpty) {
-        case (let d?, false): return "\(d) · \(timeText)"
-        case (let d?, true):  return d
-        case (nil, false):    return timeText
-        case (nil, true):     return nil
-        }
-    }
+    // MARK: - Auxiliary fields
 
-    // MARK: - Facts
-
-    /// Only the slots carrying a real value, so a sparse ticket does not show
-    /// empty columns. Unlike the boarding-pass strip there is no canonical set of
-    /// four here: an event ticket legitimately has just a seat, or nothing.
+    /// Only the slots carrying a real value, so a sparse ticket shows no empty
+    /// columns. Unlike the boarding-pass strip there is no canonical set here: an
+    /// event ticket legitimately has just a seat, or just a name, or nothing.
+    ///
+    /// Ordered by how specifically each one gets you to your place. Seat, section and
+    /// row are what you read walking in; gate is next; the guest name matters when
+    /// there is no seating at all, which is most non-stadium events (and is the field
+    /// Wallet itself leads that row with); the booking reference is last, useful only
+    /// if something has gone wrong. It moved here from beside the eyebrow, where it
+    /// competed with the type for the top line.
     private var facts: [TaskTicketFact] {
         [
+            TaskTicketFact(label: "Seat", value: ticket.seat),
             TaskTicketFact(label: "Section", value: meta?.section),
             TaskTicketFact(label: "Row", value: meta?.row),
-            TaskTicketFact(label: "Seat", value: ticket.seat),
-            TaskTicketFact(label: "Gate", value: ticket.gate)
+            TaskTicketFact(label: "Gate", value: ticket.gate),
+            TaskTicketFact(label: "Guest", value: meta?.guestName),
+            TaskTicketFact(label: "Ref", value: ticket.reference)
         ].filter { $0.value != nil }
     }
 
-    private var factsRow: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(facts.enumerated()), id: \.element.id) { index, fact in
-                if index > 0 {
-                    Rectangle()
-                        .fill(Tokens.ticketFactRule)
-                        .frame(width: 0.5, height: 26)
-                }
+    /// The three highest-priority facts. A pass caps this row too, and past three the
+    /// values start truncating on the Mac's 360-point popover, which is worse than
+    /// leaving the rest to the detail sheet.
+    private var shownFacts: [TaskTicketFact] { Array(facts.prefix(3)) }
+
+    /// Left-aligned, natural widths, no rules. Equal-width centred columns were what
+    /// made a single fact sit marooned in the middle of the card.
+    private var auxiliaryRow: some View {
+        HStack(alignment: .top, spacing: Space.lg) {
+            ForEach(shownFacts) { fact in
                 TaskTicketFactCell(fact: fact)
             }
+            Spacer(minLength: 0)
         }
     }
 
@@ -237,13 +272,14 @@ private struct TaskTicketFact: Identifiable {
     }
 }
 
-/// A centered label-over-value cell that takes an equal share of the row, so any
-/// number of facts distributes symmetrically across the card width.
+/// A left-aligned label-over-value cell sized to its content, so a row of one does
+/// not stretch and a row of three packs from the leading edge (#413). Matches how a
+/// Wallet pass lays its auxiliary fields out.
 private struct TaskTicketFactCell: View {
     let fact: TaskTicketFact
 
     var body: some View {
-        VStack(spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(fact.label.uppercased())
                 .font(.edEyebrow)
                 .tracking(1.0)
@@ -254,6 +290,6 @@ private struct TaskTicketFactCell: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
-        .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

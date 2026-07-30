@@ -72,6 +72,14 @@ struct TicketMeta: Codable, Equatable, Sendable {
     /// check-in link. That one admits you; this one tells you where you are going.
     var eventURL: String?
 
+    /// Who the ticket is issued to, when the document prints a name (#413).
+    ///
+    /// A Wallet pass carries this as an auxiliary field, and it is what fills that
+    /// row on an event ticket with no seat, row or gate — which is most of them
+    /// outside a stadium. Distinct from `passengerName`, which belongs to the
+    /// boarding-pass layout and is parsed out of BCBP.
+    var guestName: String?
+
     /// A transport ticket (flight / train) is styled as a boarding pass. We
     /// treat any item carrying both endpoint codes, or an explicit boarding
     /// pass flag, or a flight number, as boarding-pass shaped.

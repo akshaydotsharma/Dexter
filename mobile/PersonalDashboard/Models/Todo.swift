@@ -116,7 +116,33 @@ struct TaskTicket: Codable, Identifiable, Hashable, Sendable {
     /// found one, otherwise the caller supplies the task's own title.
     func displayTitle(fallback: String) -> String {
         let trimmed = eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? fallback : trimmed
+        guard !trimmed.isEmpty else { return fallback }
+        return Self.completing(trimmed, with: fallback) ?? trimmed
+    }
+
+    /// `fallback` when it is the same name as `title`, finished (#413).
+    ///
+    /// Booking pages truncate their own headings, and the extractor is told to read
+    /// verbatim, so a Luma check-in page yields the literal string
+    /// `"Vibe Coders SG #2 - Securing Vibe Co..."`, ellipsis included. The task it is
+    /// attached to holds the whole name, which makes the card's own title the worse of
+    /// the two.
+    ///
+    /// Deliberately narrow: it fires only when the read value ENDS in an ellipsis and
+    /// the fallback continues it, so it can complete a name and never replace one.
+    /// Applied at render rather than on write, so rows already stored this way are
+    /// fixed too with no migration.
+    static func completing(_ title: String, with fallback: String) -> String? {
+        let normalised = title.replacingOccurrences(of: "\u{2026}", with: "...")
+        guard normalised.hasSuffix("...") else { return nil }
+        let stripped = String(normalised.dropLast(3)).trimmingCharacters(in: .whitespaces)
+        // Long enough that the prefix is a real name and not a couple of letters that
+        // could match anything.
+        guard stripped.count >= 8 else { return nil }
+        let candidate = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate.count > stripped.count,
+              candidate.lowercased().hasPrefix(stripped.lowercased()) else { return nil }
+        return candidate
     }
 
     /// `true` when the extractor read nothing beyond the file itself. The detail

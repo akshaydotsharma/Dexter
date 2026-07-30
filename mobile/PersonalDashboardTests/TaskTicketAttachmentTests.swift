@@ -949,6 +949,60 @@ final class TaskTicketAttachmentTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(ticket.eventDate), localDay(2026, 9, 12))
     }
 
+    // MARK: - Completing a title the page itself truncated (#413)
+
+    /// Build a ticket through the read, so the test exercises the real derivation.
+    private func ticketTitled(_ eventTitle: String) -> TaskTicket {
+        TaskTicketRead(
+            attachmentPath: "task-tickets/t.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: ExtractedTaskTicket(eventTitle: eventTitle),
+            degradeMessage: nil
+        ).ticket(todoId: UUID())
+    }
+
+    /// The Luma check-in page truncates its own heading, and the extractor is told to
+    /// read verbatim, so the stored title is literally "… Securing Vibe Co...". The
+    /// task holds the whole name, so the card shows that instead.
+    func testATruncatedTitleIsCompletedFromTheTask() {
+        XCTAssertEqual(
+            ticketTitled("Vibe Coders SG #2 - Securing Vibe Co...")
+                .displayTitle(fallback: "Vibe Coders SG #2 - Securing Vibe Coded Apps"),
+            "Vibe Coders SG #2 - Securing Vibe Coded Apps"
+        )
+    }
+
+    /// The single-glyph ellipsis too, since that is what a renderer emits.
+    func testTheSingleGlyphEllipsisIsHandled() {
+        XCTAssertEqual(
+            ticketTitled("Arsenal v Chelsea \u{2014} Premier Leag\u{2026}")
+                .displayTitle(fallback: "Arsenal v Chelsea \u{2014} Premier League"),
+            "Arsenal v Chelsea \u{2014} Premier League"
+        )
+    }
+
+    /// It completes a name; it never replaces one.
+    func testAFullTitleIsNeverReplacedByTheTask() {
+        // Not truncated, so the file's own value stands.
+        XCTAssertEqual(
+            ticketTitled("COLDPLAY").displayTitle(fallback: "Buy merch before the show"),
+            "COLDPLAY"
+        )
+        // Truncated, but the task is about something else entirely.
+        XCTAssertEqual(
+            ticketTitled("Some Long Event Na...").displayTitle(fallback: "Pick up the dry cleaning"),
+            "Some Long Event Na..."
+        )
+        // Too short a prefix to trust against any task title.
+        XCTAssertEqual(
+            ticketTitled("Vibe...").displayTitle(fallback: "Vibe Coders SG #2"),
+            "Vibe..."
+        )
+        // And an empty read still falls back whole, as it always did.
+        XCTAssertEqual(ticketTitled("").displayTitle(fallback: "Vibe Coders"), "Vibe Coders")
+    }
+
     // MARK: - The event's own page (#412)
 
     /// The link is usually in the task's notes, not on the file: the file is a QR code
