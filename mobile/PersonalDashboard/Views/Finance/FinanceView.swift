@@ -762,6 +762,7 @@ struct FinanceView: View {
                 filterState.people.removeAll()
                 filterState.events.removeAll()
                 filterState.importSources.removeAll()
+                filterState.merchants.removeAll()
                 filterState.datePreset = .thisMonth
                 // Return to the default This Month landing view (#245): drop the
                 // explicit-date flag so the date goes back to being a soft view.
@@ -826,6 +827,14 @@ struct FinanceView: View {
         // identical to the mirrored copy in `ExpenseService.matches`.
         if let importSources = filter.importSources, !importSources.isEmpty {
             if !importSources.contains(where: { $0.matches(expense) }) { return false }
+        }
+        // Merchant dimension (#407): OR within the selected merchants, matched on
+        // the normalised key so display-spelling drift doesn't split a merchant.
+        // A row with no merchant can never satisfy a merchant filter. Kept
+        // identical to the mirrored copy in `ExpenseService.matches`.
+        if let merchants = filter.merchants, !merchants.isEmpty {
+            let key = ExpenseDedupe.normalizeMerchant(expense.merchant ?? "")
+            if key.isEmpty || !merchants.contains(key) { return false }
         }
         if let search = filter.searchText?.lowercased(), !search.isEmpty {
             let merchant = expense.merchant?.lowercased() ?? ""

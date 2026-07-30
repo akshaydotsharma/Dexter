@@ -86,6 +86,9 @@ struct FinanceFilterState: Equatable {
     var events: Set<UUID> = []
     /// "Imported from" provenance filter (#245). Empty = no constraint.
     var importSources: Set<ImportSourceSelection> = []
+    /// Merchant filter (#407). Empty = no constraint. Holds
+    /// `ExpenseDedupe.normalizeMerchant` keys, not raw display spellings.
+    var merchants: Set<String> = []
     /// True once the user has tapped any date-preset chip (or committed a custom
     /// range) this session (#245). Until then the default `.thisMonth` window is
     /// a SOFT view, not a hard filter: it constrains the landing list but is
@@ -98,7 +101,8 @@ struct FinanceFilterState: Equatable {
     /// in here). Drives the soft-date rule.
     func hasOtherFilters(searchText: String?) -> Bool {
         if !categories.isEmpty || !sources.isEmpty || !people.isEmpty
-            || !events.isEmpty || !importSources.isEmpty { return true }
+            || !events.isEmpty || !importSources.isEmpty
+            || !merchants.isEmpty { return true }
         if let search = searchText?.trimmingCharacters(in: .whitespacesAndNewlines),
            !search.isEmpty { return true }
         return false
@@ -124,6 +128,7 @@ struct FinanceFilterState: Equatable {
         if !people.isEmpty { filter.people = people }
         if !events.isEmpty { filter.events = events }
         if !importSources.isEmpty { filter.importSources = importSources }
+        if !merchants.isEmpty { filter.merchants = merchants }
         filter.searchText = searchText
         return filter
     }
@@ -293,7 +298,8 @@ struct FinanceFilterBar: View {
             sources: $state.sources,
             people: $state.people,
             events: $state.events,
-            importSources: $state.importSources
+            importSources: $state.importSources,
+            merchants: $state.merchants
         )
     }
 
@@ -324,7 +330,7 @@ struct FinanceFilterBar: View {
     private var hasActiveFilters: Bool {
         !state.categories.isEmpty || !state.sources.isEmpty
             || !state.people.isEmpty || !state.events.isEmpty
-            || !state.importSources.isEmpty
+            || !state.importSources.isEmpty || !state.merchants.isEmpty
     }
 
     /// Label for the Custom chip: the picked span for `.custom`, the quick
@@ -529,6 +535,7 @@ private struct MoreFiltersSheet: View {
     @Binding var people: Set<UUID>
     @Binding var events: Set<UUID>
     @Binding var importSources: Set<ImportSourceSelection>
+    @Binding var merchants: Set<String>
 
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var allPeople: [LocalPerson]
@@ -548,10 +555,22 @@ private struct MoreFiltersSheet: View {
     @State private var categoryExpanded = false
     @State private var sourceExpanded = false
     @State private var importSourceExpanded = false
+    @State private var merchantExpanded = false
+
+    /// Free-text query for the Merchant dimension (#407). Scoped to the sheet —
+    /// it narrows which merchant OPTIONS are listed and never becomes a filter
+    /// itself, so it's deliberately separate from the Finance list's own search
+    /// field (which matches merchant OR description on the expenses).
+    @State private var merchantSearch: String = ""
+
+    /// How many merchants the Merchant dimension lists before the user searches
+    /// (#407). Statement imports produce hundreds of distinct merchants, so the
+    /// collapsed list is the busiest few rather than the whole store.
+    private static let merchantListLimit = 10
 
     private var hasActiveFilters: Bool {
         !categories.isEmpty || !sources.isEmpty || !people.isEmpty
-            || !events.isEmpty || !importSources.isEmpty
+            || !events.isEmpty || !importSources.isEmpty || !merchants.isEmpty
     }
 
     /// A distinct statement the user can filter by, plus the count of expenses
@@ -593,6 +612,87 @@ private struct MoreFiltersSheet: View {
         allExpenses.filter { ImportSourceSelection.receipts.matches($0) }.count
     }
 
+    // MARK: - Merchant dimension (#407)
+
+    /// One filterable merchant. `key` is the `ExpenseDedupe.normalizeMerchant`
+    /// value the filter matches on; `label` is the spelling shown to the user.
+    private struct MerchantOption: Identifiable {
+        let key: String
+        let label: String
+        let count: Int
+        var id: String { key }
+    }
+
+    /// Every merchant that currently has at least one expense Finance can see,
+    /// with its row count.
+    ///
+    /// Grouped by normalised key so the LLM's paraphrasing (`SHOPEE SINGAPORE`
+    /// one statement run, `Shopee Singapore` the next — see the `dedupeDescriptor`
+    /// note on `LocalExpense`) doesn't split one merchant into several options.
+    /// The label shown is the most frequent raw spelling, so the list reads the
+    /// way the expense rows do.
+    ///
+    /// Derived from live expenses, so a merchant lists only while it still has
+    /// rows — the same rule the "Imported from" buckets follow (#251). Rows
+    /// removed from Finance (#264) are excluded because the matcher rejects them
+    /// outright: counting them would offer a merchant that filters to nothing.
+    private var merchantOptions: [MerchantOption] {
+        var counts: [String: Int] = [:]
+        var spellings: [String: [String: Int]] = [:]
+        for expense in allExpenses {
+            guard !expense.hiddenFromFinance else { continue }
+            let raw = (expense.merchant ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = ExpenseDedupe.normalizeMerchant(raw)
+            guard !key.isEmpty else { continue }
+            counts[key, default: 0] += 1
+            spellings[key, default: [:]][raw, default: 0] += 1
+        }
+        return counts.map { key, count in
+            let label = spellings[key]?
+                .max { lhs, rhs in
+                    lhs.value == rhs.value
+                        ? lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedDescending
+                        : lhs.value < rhs.value
+                }?
+                .key ?? key
+            return MerchantOption(key: key, label: label, count: count)
+        }
+    }
+
+    /// The merchant rows to render, always sorted alphabetically.
+    ///
+    /// With no query: the `merchantListLimit` busiest merchants, so the ones
+    /// worth filtering by are in reach without listing hundreds of names. With a
+    /// query: every match across the WHOLE list, which is the point of the
+    /// search field.
+    ///
+    /// Selected merchants are appended in either mode. Without that, selecting a
+    /// merchant and then typing (or clearing the query, when the pick sat
+    /// outside the busiest few) would hide the selection while it kept filtering
+    /// the list — active but invisible, and impossible to untick.
+    private func visibleMerchants(from all: [MerchantOption]) -> [MerchantOption] {
+        let query = merchantSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        var shown: [MerchantOption]
+        if query.isEmpty {
+            shown = all
+                .sorted { lhs, rhs in
+                    lhs.count == rhs.count
+                        ? lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+                        : lhs.count > rhs.count
+                }
+                .prefix(Self.merchantListLimit)
+                .map { $0 }
+        } else {
+            shown = all.filter { $0.label.localizedCaseInsensitiveContains(query) }
+        }
+        let shownKeys = Set(shown.map(\.key))
+        shown += all.filter { merchants.contains($0.key) && !shownKeys.contains($0.key) }
+        return shown.sorted {
+            $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+    }
+
     var body: some View {
         FilterSurface(
             title: "Filters",
@@ -604,6 +704,8 @@ private struct MoreFiltersSheet: View {
                 people.removeAll()
                 events.removeAll()
                 importSources.removeAll()
+                merchants.removeAll()
+                merchantSearch = ""
                 // Back to the default This Month landing view (#245).
                 datePreset = .thisMonth
                 dateExplicitlySet = false
@@ -672,6 +774,12 @@ private struct MoreFiltersSheet: View {
                     }
                     .tint(Tokens.accentFinance)
                     .listRowBackground(Tokens.surface)
+
+                    // Merchant (#407). Sits next to Category — both answer "what
+                    // was this spend" — and ahead of Source, which is the capture
+                    // channel. Unlike the other dimensions its option list is
+                    // unbounded, hence the top-N + search treatment inside.
+                    merchantDimension
 
                     DisclosureGroup(isExpanded: $sourceExpanded) {
                         ForEach(ExpenseSource.allCases) { source in
@@ -743,6 +851,111 @@ private struct MoreFiltersSheet: View {
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
         }
+    }
+
+    /// The Merchant dimension (#407): a search field (only once the list is
+    /// longer than it renders), the visible merchant rows, and a footer stating
+    /// how much of the list is hidden so "10 rows" never reads as "10 merchants
+    /// exist". Hidden entirely when no expense carries a merchant, mirroring the
+    /// Person / Event / Imported-from dimensions.
+    @ViewBuilder
+    private var merchantDimension: some View {
+        let all = merchantOptions
+        if !all.isEmpty {
+            let shown = visibleMerchants(from: all)
+            DisclosureGroup(isExpanded: $merchantExpanded) {
+                if all.count > Self.merchantListLimit {
+                    merchantSearchField
+                }
+
+                ForEach(shown) { option in
+                    merchantRow(option)
+                }
+
+                if shown.isEmpty {
+                    Text("No merchant matches “\(merchantSearch.trimmingCharacters(in: .whitespacesAndNewlines))”")
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.muted)
+                        .listRowBackground(Tokens.surface)
+                } else if shown.count < all.count {
+                    Text("Showing \(shown.count) of \(all.count). Search to find the rest.")
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.muted)
+                        .listRowBackground(Tokens.surface)
+                }
+            } label: {
+                dimensionLabel("Merchant", summary: summary(merchants.count))
+            }
+            .tint(Tokens.accentFinance)
+            .listRowBackground(Tokens.surface)
+        }
+    }
+
+    /// Search input for the Merchant dimension. Same paper-field styling as the
+    /// Finance list's own search field so the two read as one idiom.
+    private var merchantSearchField: some View {
+        HStack(spacing: Space.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Tokens.muted)
+            TextField("Search all merchants", text: $merchantSearch)
+                .paperFieldOnMac()
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .autocorrectionDisabled(true)
+                .noAutocapitalization()
+            if !merchantSearch.isEmpty {
+                Button {
+                    merchantSearch = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Tokens.mutedSoft)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear merchant search")
+            }
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
+        .listRowBackground(Tokens.surface)
+    }
+
+    /// One merchant row: icon + spelling, its expense count, and a trailing
+    /// checkmark when selected. Mirrors `statementRow`, which carries the same
+    /// label-count-checkmark shape.
+    private func merchantRow(_ option: MerchantOption) -> some View {
+        let selected = merchants.contains(option.key)
+        return Button {
+            toggle(option.key, in: &merchants)
+        } label: {
+            HStack(spacing: Space.sm) {
+                Image(systemName: "storefront")
+                    .foregroundStyle(Tokens.accentFinance)
+                    .frame(width: 24)
+                Text(option.label)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: Space.sm)
+                Text("\(option.count)")
+                    .font(.edFootnote)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.muted)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Tokens.accentFinance)
+                }
+            }
+            // Whole-row tap target, incl. the Spacer's transparent space (#245
+            // follow-up).
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Tokens.surface)
     }
 
     /// "All" when nothing is picked, otherwise "N selected" — the collapsed
