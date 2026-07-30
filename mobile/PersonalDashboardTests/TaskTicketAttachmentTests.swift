@@ -949,6 +949,87 @@ final class TaskTicketAttachmentTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(ticket.eventDate), localDay(2026, 9, 12))
     }
 
+    // MARK: - The event's own page (#412)
+
+    /// The link is usually in the task's notes, not on the file: the file is a QR code
+    /// with no readable address on it. Modelled on the Apple Wallet pass for this same
+    /// event, which carries the Luma page as a back field.
+    func testEventURLComesFromTheTaskNotesWhenTheFileHasNone() throws {
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "https://luma.com/check-in/evt-oQFgiXtb73y8yCh?pk=g-TZIx7lJbtxy4uaO",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            extracted: ExtractedTaskTicket(eventTitle: "Vibe Coders SG #2"),
+            degradeMessage: nil,
+            context: TaskTicketContext(
+                title: "Vibe Coders SG #2 - Securing Vibe Coded Apps",
+                notes: "https://luma.com/4ptmrf91?pk=g-TZIx7lJbtxy4uaO"
+            )
+        )
+        let meta = try XCTUnwrap(read.ticket(todoId: UUID()).ticketMeta)
+        XCTAssertEqual(meta.eventURL, "https://luma.com/4ptmrf91?pk=g-TZIx7lJbtxy4uaO")
+    }
+
+    /// A URL printed on the document wins over the one in the notes, the same way every
+    /// other field does.
+    func testAURLReadOffTheFileBeatsTheOneInTheNotes() throws {
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: ExtractedTaskTicket(eventURL: "https://luma.com/from-the-file"),
+            degradeMessage: nil,
+            context: TaskTicketContext(notes: "https://luma.com/from-the-notes")
+        )
+        let meta = try XCTUnwrap(read.ticket(todoId: UUID()).ticketMeta)
+        XCTAssertEqual(meta.eventURL, "https://luma.com/from-the-file")
+    }
+
+    /// The check-in URL in the barcode is NOT the event page. Promoting it would send
+    /// someone to a scan endpoint instead of the page about the event.
+    func testTheBarcodeURLIsNeverUsedAsTheEventPage() throws {
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "https://luma.com/check-in/evt-oQFgiXtb73y8yCh",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            extracted: ExtractedTaskTicket(eventTitle: "Vibe Coders"),
+            degradeMessage: nil,
+            context: TaskTicketContext(title: "Vibe Coders")
+        )
+        XCTAssertNil(read.ticket(todoId: UUID()).ticketMeta?.eventURL)
+    }
+
+    /// Notes are free text, so only real links count. Prose must not become a link.
+    func testNotesWithoutALinkYieldNoEventPage() {
+        XCTAssertNil(
+            TaskTicketContext(notes: "Ask Rahul about the after-party. Bring a laptop.")
+                .eventURLFromNotes
+        )
+        XCTAssertNil(TaskTicketContext(notes: "").eventURLFromNotes)
+        // A bare host still counts, and comes back openable rather than as typed.
+        XCTAssertEqual(
+            TaskTicketContext(notes: "details at luma.com/4ptmrf91").eventURLFromNotes,
+            "http://luma.com/4ptmrf91"
+        )
+    }
+
+    /// The link has to survive the write, or the detail surface can never offer it.
+    func testTheEventPageSurvivesIntoTheStoredRow() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/u.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: nil,
+            degradeMessage: nil,
+            context: TaskTicketContext(notes: "https://luma.com/4ptmrf91")
+        )
+        try service.attach(read.ticket(todoId: todo.clientUUID), todoId: todo.clientUUID)
+        let stored = try XCTUnwrap(try service.list(todoId: todo.clientUUID).first)
+        XCTAssertEqual(stored.ticketMeta?.eventURL, "https://luma.com/4ptmrf91")
+    }
+
     // MARK: - Refusing the same file twice (#408)
 
     /// The failure this closes: the attach gave no visible sign it had worked, so it

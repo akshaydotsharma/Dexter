@@ -156,10 +156,6 @@ struct TaskTicketSection: View {
     /// hands off to the attachments sheet, which is presented from the window and does
     /// survive the panel. Every other editor path is already a sheet and passes nil.
     var onRequestOwnSurface: (() -> Void)? = nil
-    /// Open the file picker as soon as the section appears, for the sheet that Add in
-    /// the popover just handed off to (#408). Without it the hand-off costs a second
-    /// click for no reason: the person already said what they wanted.
-    var opensPickerOnAppear: Bool = false
 
     @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -178,9 +174,6 @@ struct TaskTicketSection: View {
     /// `onAppear` can fire more than once for the same view; the document must be
     /// read exactly once or it would be stored and attached twice.
     @State private var consumedInitialDocument = false
-    /// Same guard for the handed-off picker: `onAppear` can fire more than once, and a
-    /// second panel over the first is not a thing anyone asked for.
-    @State private var consumedPickerOnAppear = false
     /// The in-flight read, so dismissing the editor can cancel it. The file is on
     /// disk before the read returns, so a read nobody is waiting for any more has to
     /// clean up after itself.
@@ -279,12 +272,6 @@ struct TaskTicketSection: View {
         }
         .onAppear {
             reload()
-            // Pick up where the hand-off left off: Add was already pressed, in a
-            // surface that could not host the panel (#408).
-            if opensPickerOnAppear, !consumedPickerOnAppear {
-                consumedPickerOnAppear = true
-                openPickerDirectly()
-            }
             // Read a file handed in from the plus menu. Deliberately does NOT open
             // the ticket sheet afterwards: the person asked to see the draft task,
             // and a sheet over it would hide the thing they came to check.
@@ -520,26 +507,6 @@ struct TaskTicketSection: View {
         }
     }
 
-    /// Ask for the file picker on appear, for the hand-off from a surface that could
-    /// not host one (#408).
-    ///
-    /// macOS asks AppKit outright rather than flipping the presentation flag: the
-    /// modifier waits on an observed false-to-true transition, and a flip made as this
-    /// view first appears does not reliably read as one, which left the sheet up with
-    /// no panel behind it. iOS keeps the binding, where `fileImporter` is the only way
-    /// in and the timing is not in question.
-    private func openPickerDirectly() {
-        awaitingPick = true
-        #if os(macOS)
-        TicketFilePickerModifier.presentOpenPanel { data, isPDF in
-            awaitingPick = false
-            ingest(data: data, isPDF: isPDF)
-        }
-        #else
-        showingFilePicker = true
-        #endif
-    }
-
     /// Read a dropped file and ingest it. Mirrors the picker's own read so a drop
     /// and a pick land in exactly the same place.
     private func ingest(url: URL) {
@@ -696,18 +663,25 @@ struct TaskTicketSection: View {
     }
 }
 
-/// A request to show a task's attachments, and what to do on arrival (#408).
+/// A request to show a task's attachments, optionally carrying a file that is already
+/// on its way in (#408, reshaped in #412).
 ///
-/// Exists so the "open the file panel too" instruction travels WITH the presentation
-/// rather than beside it. As a separate `@State` flag set in the same event, the
-/// sheet's content read it back as false: that closure evaluates against a copy of
-/// the presenting view, and nothing guarantees a second flag written in the same
-/// transaction is visible to it. One item, no ordering to get wrong.
+/// The file travels WITH the presentation rather than beside it. As a separate
+/// `@State` flag set in the same event, the sheet's content read it back as false:
+/// that closure evaluates against a copy of the presenting view, and nothing orders
+/// the two writes. One item, no ordering to get wrong.
+///
+/// Carrying the BYTES (rather than "and now open a panel") is what removes a click.
+/// Add opens the panel where it stands; the sheet then opens already reading, which
+/// is the same shape as making a task from a document.
 struct TaskTicketsRequest: Identifiable {
     let id = UUID()
-    /// True when Add in the macOS editor popover handed off, because a popover cannot
-    /// host a file panel — see `TaskTicketSection.onRequestOwnSurface`.
-    let openPicker: Bool
+    /// A file picked before this sheet existed, read as soon as it appears.
+    let upload: TaskDocumentUpload?
+
+    init(upload: TaskDocumentUpload? = nil) {
+        self.upload = upload
+    }
 }
 
 /// Standalone sheet wrapping the section, presented from the pass chip on a task
@@ -723,12 +697,17 @@ struct TaskTicketsSheet: View {
     /// The whole task, not just its title: a file added from here is read against
     /// everything the task knows, exactly as one added from the editor is (#408).
     let context: TaskTicketContext
-    /// True when this sheet was opened BY Add in the macOS editor popover, which
-    /// cannot host a file panel itself (#408). The panel comes straight up here, so
-    /// the hand-off costs no extra click.
-    var opensPickerOnAppear: Bool = false
+    /// A file picked before this sheet opened, read the moment it appears (#412).
+    ///
+    /// Set when Add in the macOS editor popover handed off. The read announces itself
+    /// over the whole sheet, which is deliberately the SAME treatment as making a task
+    /// from a document: darkened, blurred, one spinner saying what is happening. That
+    /// consistency is the point — it is the same operation.
+    var initialDocument: TaskDocumentUpload? = nil
 
     @Environment(\.dismiss) private var dismiss
+
+    @State private var isReadingInitialDocument = false
 
     private var taskTitle: String { context.title }
 
@@ -743,11 +722,18 @@ struct TaskTicketsSheet: View {
                         todoId: todoId,
                         context: context,
                         pending: .constant([]),
-                        opensPickerOnAppear: opensPickerOnAppear
+                        initialDocument: initialDocument,
+                        isReadingInitialDocument: $isReadingInitialDocument
                     )
                     .padding(Space.lg)
                 }
+                .blur(radius: isReadingInitialDocument ? 4 : 0)
+
+                if isReadingInitialDocument, let initialDocument {
+                    TaskDocumentReadingOverlay(isPDF: initialDocument.isPDF)
+                }
             }
+            .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
             .navigationTitle(taskTitle)
             .inlineNavigationTitle()
             .toolbar {

@@ -1084,11 +1084,21 @@ private struct TaskRow: View {
             .popover(isPresented: $showingEditorPopover, arrowEdge: .leading) {
                 TaskEditorSheet(viewModel: viewModel, todo: todo) {
                     // Add, from a popover that the file panel would dismiss (#408).
-                    // Swap it for the attachments sheet and open the panel there: this
-                    // state lives on the ROW, in the window, so it survives both the
-                    // popover going away and the panel taking focus.
+                    //
+                    // Ask for the panel HERE rather than handing off to a surface that
+                    // then asks again (#412): Add meant "choose a file", so Finder is
+                    // what should appear. This closure and the state it writes belong to
+                    // the ROW, which lives in the window, so both survive the popover
+                    // being torn down the instant the panel takes key.
                     showingEditorPopover = false
-                    ticketsRequest = TaskTicketsRequest(openPicker: true)
+                    TicketFilePickerModifier.presentOpenPanel { data, isPDF in
+                        guard let data, !data.isEmpty else { return }
+                        // The sheet opens already reading, with the same darkened notice
+                        // as making a task from a document, and the card lands in it.
+                        ticketsRequest = TaskTicketsRequest(
+                            upload: TaskDocumentUpload(data: data, isPDF: isPDF)
+                        )
+                    }
                 }
             }
             #endif
@@ -1123,10 +1133,10 @@ private struct TaskRow: View {
             TaskTicketsSheet(
                 todoId: todo.id,
                 context: TaskTicketContext(todo: todo),
-                // True only when Add in the editor popover sent us here. Opening the
-                // same sheet from the TICKET pill must not throw a file panel at
-                // someone who came to look at a card.
-                opensPickerOnAppear: request.openPicker
+                // Non-nil only when Add in the editor popover already picked a file.
+                // Opening the same sheet from the TICKET pill carries nothing, so it
+                // just shows the cards.
+                initialDocument: request.upload
             )
         }
     }
@@ -1162,7 +1172,7 @@ private struct TaskRow: View {
             let count = attachments.count
             Button {
                 Haptics.light()
-                ticketsRequest = TaskTicketsRequest(openPicker: false)
+                ticketsRequest = TaskTicketsRequest()
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "ticket.fill")

@@ -106,6 +106,25 @@ struct TaskTicketContext: Equatable, Sendable {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t
     }
+
+    /// The first URL in the task's notes, for the event page (#412).
+    ///
+    /// This is where the link actually lives in practice: a booking mail gets pasted
+    /// into the notes, or the task was made from a shared link, and the file itself is
+    /// a QR code with no readable address on it at all. Detected rather than
+    /// pattern-matched so a bare `luma.com/x` is found alongside a full `https://` one.
+    var eventURLFromNotes: String? {
+        guard let notes = Self.trimmed(notes) else { return nil }
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else { return nil }
+        let range = NSRange(notes.startIndex..., in: notes)
+        let match = detector.firstMatch(in: notes, options: [], range: range)
+        // `url` normalises a bare host to a scheme, which is what makes the value
+        // openable without the UI having to guess.
+        guard let url = match?.url, url.scheme?.hasPrefix("http") == true else { return nil }
+        return url.absoluteString
+    }
 }
 
 /// What one uploaded file yielded, BEFORE it is attached to anything.
@@ -207,6 +226,10 @@ struct TaskTicketRead {
         // The ingest fingerprint, so a second run at the same file is recognised
         // as a repeat (#408).
         meta.sourceHash = sourceHash
+        // The event page: printed on the document if it says so, otherwise the link
+        // sitting in the task's notes (#412). Not the barcode, which on a check-in
+        // pass is also a URL but a different one.
+        meta.eventURL = Self.clean(extracted?.eventURL) ?? context.eventURLFromNotes
 
         // Stored at LOCAL midnight of the printed day, because every surface that
         // renders or edits it uses the local calendar. The printed day is preferred
@@ -652,6 +675,8 @@ struct ExtractedTaskTicket {
     /// The weekday printed on the ticket, when it prints one. Used to pin down an
     /// unprinted year — see `TaskTicketExtraction.resolveDay`.
     var printedWeekday: String?
+    /// The event's own page, if the document prints one (#412).
+    var eventURL: String?
     /// Whether the ticket actually printed a year, as opposed to the model working
     /// one out. Only a printed year is taken at face value.
     var yearWasPrinted: Bool = false
@@ -673,6 +698,7 @@ struct ExtractedTaskTicket {
         section = s("section")
         row = s("row")
         printedWeekday = s("printed_weekday")
+        eventURL = s("event_url")
         // Asked for as a string rather than a JSON boolean to match every other
         // field in this schema, and read leniently.
         yearWasPrinted = ["yes", "true"].contains(
@@ -700,6 +726,7 @@ struct ExtractedTaskTicket {
         section: String? = nil,
         row: String? = nil,
         printedWeekday: String? = nil,
+        eventURL: String? = nil,
         yearWasPrinted: Bool = false,
         presentedAtEntry: Bool? = nil
     ) {
@@ -714,6 +741,7 @@ struct ExtractedTaskTicket {
         self.section = section
         self.row = row
         self.printedWeekday = printedWeekday
+        self.eventURL = eventURL
         self.yearWasPrinted = yearWasPrinted
         self.presentedAtEntry = presentedAtEntry
     }
@@ -739,6 +767,7 @@ extension TaskTicketExtraction {
                 "seat": field("Seat as printed (e.g. \"12A\", \"Seat 8\"). Omit if none."),
                 "gate": field("Entry gate or door, ONLY when a real value is explicitly printed (e.g. \"Gate 3\", \"Door B\", \"14\"). Never infer it, never emit a placeholder, a dash, \"TBD\", or a lone letter — omit the field entirely if no real gate is shown."),
                 "reference": field("Booking reference, order number or confirmation code as printed. Omit if none."),
+                "event_url": field("The event's own page or booking URL, when one is printed or written on the document as readable text (e.g. \"https://luma.com/4ptmrf91\", an Eventbrite or Ticketmaster link). Read it EXACTLY. Do NOT decode it out of a QR code or barcode, and do not return a check-in or scan-me link — this is the page someone would open to read about the event, not the code that admits them. Omit if none is written."),
                 "event_type": field("Kind of event in a word or two (e.g. \"Concert\", \"Football match\", \"Theatre\", \"Appointment\", \"Flight\"). Omit if unclear."),
                 "presented_at_entry": field("\"yes\" when the holder physically hands this over or holds it up to be let in somewhere: a concert or match ticket, a boarding pass, a cinema or museum admission, a collection slip. \"no\" when it merely RECORDS a booking that is looked up under a name on arrival: a restaurant reservation, a hotel booking, a doctor or salon appointment, an order or payment receipt. A booking with a barcode or QR code to scan is \"yes\" whatever it is for. When you genuinely cannot tell, omit the field rather than guessing."),
                 "section": field("Seating section, block or stand for a seated event (e.g. \"Section 122\", \"Block A\"). Omit if none."),

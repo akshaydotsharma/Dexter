@@ -41,6 +41,9 @@ struct TaskTicketDetailSheet: View {
     @State private var seat = ""
     @State private var gate = ""
     @State private var reference = ""
+    @State private var eventURL = ""
+
+    @Environment(\.openURL) private var openURL
 
     private let service = TaskTicketService()
 
@@ -177,6 +180,15 @@ struct TaskTicketDetailSheet: View {
                     showingOriginal = true
                 }
             }
+            // The event's own page (#412). Apple Wallet puts this on the back of a
+            // pass rather than its face, which is the right place: it is what you
+            // open before the event, not what you hold up at the door.
+            if let url = resolvedEventURL {
+                actionRow(icon: "safari", title: "Open event page") {
+                    Haptics.light()
+                    openURL(url)
+                }
+            }
             actionRow(icon: "pencil", title: "Edit details") {
                 Haptics.light()
                 isEditing = true
@@ -273,6 +285,12 @@ struct TaskTicketDetailSheet: View {
             labeled("Reference") {
                 field($reference, placeholder: "Booking or order reference")
             }
+            labeled("Event page") {
+                field($eventURL, placeholder: "Link to the event")
+                    .noAutocapitalization()
+                    .autocorrectionDisabled(true)
+                    .urlKeyboard()
+            }
         }
     }
 
@@ -310,6 +328,7 @@ struct TaskTicketDetailSheet: View {
         let meta = ticket.ticketMeta
         section = meta?.section ?? ""
         row = meta?.row ?? ""
+        eventURL = meta?.eventURL ?? ""
 
         // A ticket the extractor could not read opens straight into the form,
         // because a card that is blank apart from a barcode has nothing to look
@@ -323,6 +342,7 @@ struct TaskTicketDetailSheet: View {
         var meta = ticket.ticketMeta ?? TicketMeta()
         meta.section = trimmedOrNil(section)
         meta.row = trimmedOrNil(row)
+        meta.eventURL = trimmedOrNil(eventURL)
 
         let day = hasEventDate ? Calendar.current.startOfDay(for: eventDate) : nil
 
@@ -379,6 +399,16 @@ struct TaskTicketDetailSheet: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// The stored event page as a URL, coercing a bare host to https so a value typed
+    /// by hand still opens. Nil when there is nothing usable, which is what hides the
+    /// action rather than offering one that goes nowhere.
+    private var resolvedEventURL: URL? {
+        guard let raw = ticket.ticketMeta?.eventURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        if let url = URL(string: raw), url.scheme != nil { return url }
+        return URL(string: "https://\(raw)")
     }
 
     private func trimmedOrNil(_ s: String) -> String? {

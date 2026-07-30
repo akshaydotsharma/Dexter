@@ -61,6 +61,17 @@ struct TicketMeta: Codable, Equatable, Sendable {
     /// recognising files it had already seen.
     var sourceHash: String?
 
+    /// The event's own page, when the document or the task carries one (#412).
+    ///
+    /// Apple Wallet puts this on the BACK of a pass ("Event Page"), not on its face,
+    /// and that is the right call: it is the thing you reach for before the event, not
+    /// at the door. So it renders as an action on the detail surface rather than a chip
+    /// on the card.
+    ///
+    /// Distinct from the barcode payload, which for a Luma pass is also a URL — the
+    /// check-in link. That one admits you; this one tells you where you are going.
+    var eventURL: String?
+
     /// A transport ticket (flight / train) is styled as a boarding pass. We
     /// treat any item carrying both endpoint codes, or an explicit boarding
     /// pass flag, or a flight number, as boarding-pass shaped.
