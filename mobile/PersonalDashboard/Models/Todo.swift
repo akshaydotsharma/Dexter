@@ -68,6 +68,68 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// View-facing DTO for a wallet-style ticket attached to a task (#399). Identity
+/// is the clientUUID; the task link travels by UUID so a ticket added offline can
+/// reference a task created offline. Entirely local — the server schema has no
+/// notion of these, so there are no `CodingKeys` gymnastics here: this DTO is
+/// only ever encoded into the backup archive and the sync oplog.
+struct TaskTicket: Codable, Identifiable, Hashable, Sendable {
+    let id: UUID
+    let todoId: UUID
+    var attachmentPath: String
+    var barcodePayload: String
+    var barcodeSymbology: String
+    var eventTitle: String
+    var eventDate: Date?
+    var startTimeText: String
+    var venue: String
+    var seat: String
+    var gate: String
+    var reference: String
+    var ticketMetaJSON: String
+    var position: Int
+    let createdAt: Date
+    let updatedAt: Date
+    let deletedAt: Date?
+
+    var hasBarcode: Bool {
+        !barcodePayload.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var hasAttachment: Bool {
+        !attachmentPath.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Decoded extras (eventType, section, row), or `nil` when none are stored.
+    var ticketMeta: TicketMeta? {
+        TicketMeta.decode(ticketMetaJSON)
+    }
+
+    /// Typed symbology for the barcode renderer. `nil` when there is no barcode
+    /// or the stored token is unrecognised, in which case the card falls back to
+    /// the original image.
+    var symbology: BarcodeSymbology? {
+        BarcodeSymbology(rawValue: barcodeSymbology)
+    }
+
+    /// What the card shows as its headline: the event name when the extractor
+    /// found one, otherwise the caller supplies the task's own title.
+    func displayTitle(fallback: String) -> String {
+        let trimmed = eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    /// `true` when the extractor read nothing beyond the file itself. The detail
+    /// sheet opens straight into its form for one of these, because a card that is
+    /// blank apart from a barcode has nothing to look at and everything to fill in.
+    var isBare: Bool {
+        eventTitle.trimmingCharacters(in: .whitespaces).isEmpty
+            && venue.trimmingCharacters(in: .whitespaces).isEmpty
+            && eventDate == nil
+            && seat.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+}
+
 struct TodoCreateRequest: Encodable {
     let title: String
     let description: String?

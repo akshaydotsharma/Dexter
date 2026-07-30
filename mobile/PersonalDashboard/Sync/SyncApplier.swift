@@ -198,6 +198,9 @@ struct SyncApplier {
             switch op.entity {
             case "LocalTodo":
                 payload.tasks.append(try decoder.decode(DataArchive.TaskDTO.self, from: data))
+            case "LocalTaskTicket":
+                payload.taskTickets = (payload.taskTickets ?? [])
+                    + [try decoder.decode(DataArchive.TaskTicketDTO.self, from: data)]
             case "LocalNote":
                 payload.notes.append(try decoder.decode(DataArchive.NoteDTO.self, from: data))
             case "LocalNoteImage":
@@ -289,6 +292,7 @@ struct SyncApplier {
     private func deleteRecord(entity: String, recordID: String) throws -> Bool {
         switch entity {
         case "LocalTodo":            return try delete(LocalTodo.self, uuid: recordID, key: \.clientUUID)
+        case "LocalTaskTicket":      return try delete(LocalTaskTicket.self, uuid: recordID, key: \.clientUUID)
         case "LocalNote":            return try delete(LocalNote.self, uuid: recordID, key: \.clientUUID)
         case "LocalNoteImage":       return try delete(LocalNoteImage.self, uuid: recordID, key: \.clientUUID)
         case "LocalNoteFolder":      return try delete(LocalNoteFolder.self, uuid: recordID, key: \.clientUUID)

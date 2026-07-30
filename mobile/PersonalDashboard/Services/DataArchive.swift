@@ -66,6 +66,11 @@ enum DataArchive {
         // written before notes could hold images still decode.
         var noteImages: [NoteImageDTO]? = nil
 
+        // MARK: Added in #399 — task ticket attachments.
+        // Optional with a nil default, following the #319 precedent, so archives
+        // written before tasks could hold tickets still decode.
+        var taskTickets: [TaskTicketDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -95,6 +100,32 @@ enum DataArchive {
         let priority: Int?
         let address: String?
         let googleMapsLink: String?
+    }
+
+    /// A task's wallet-style ticket attachment (#399).
+    ///
+    /// `attachmentPath` maps 1:1 onto an archive entry name, exactly like
+    /// `ExpenseDTO.receiptImagePath` and `ItineraryDayDTO.attachmentPath`, so the
+    /// exporter can put `task-tickets/<uuid>.jpg` into the zip and the importer
+    /// can put it back in the same place under Documents.
+    struct TaskTicketDTO: Codable {
+        let clientUUID: UUID
+        let todoClientUUID: UUID
+        let attachmentPath: String
+        let barcodePayload: String
+        let barcodeSymbology: String
+        let eventTitle: String
+        let eventDate: Date?
+        let startTimeText: String
+        let venue: String
+        let seat: String
+        let gate: String
+        let reference: String
+        let ticketMetaJSON: String
+        let position: Int
+        let createdAt: Date
+        let updatedAt: Date
+        let deletedAt: Date?
     }
 
     struct NoteDTO: Codable {
@@ -427,7 +458,7 @@ enum DataArchive {
     /// Every model this archive format carries, used for the manifest's claimed
     /// list. Order is stable so archives diff cleanly.
     static let exportedModels = [
-        "LocalTodo", "LocalNote", "LocalNoteImage", "LocalNoteFolder", "LocalList",
+        "LocalTodo", "LocalTaskTicket", "LocalNote", "LocalNoteImage", "LocalNoteFolder", "LocalList",
         "LocalTrip", "LocalItineraryItem", "LocalExpense", "LocalKeyword",
         "RecurringExpense", "LocalPerson", "LocalEvent",
         "LocalStatementImport", "LocalProcessedEmail",

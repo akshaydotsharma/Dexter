@@ -331,6 +331,10 @@ final class SwiftDataStore {
     /// live one is not.
     static let schemaModels: [any PersistentModel.Type] = [
         LocalTodo.self,
+        // Ticket attachments for a task (#399). A sidecar for the same reason the
+        // Sync types below are: adding a model is a safe lightweight migration,
+        // widening `LocalTodo` is not.
+        LocalTaskTicket.self,
         LocalNoteFolder.self,
         LocalNote.self,
         // Note image attachments (#395). A new model, which is the safe kind of

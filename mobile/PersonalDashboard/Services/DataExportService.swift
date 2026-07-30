@@ -28,17 +28,22 @@ final class DataExportService {
     private let ticketStorage: TicketStorage
     /// #395: note image attachments, same again.
     private let noteImageStorage: ReceiptStorage
+    /// #399: task ticket attachments, same deal. A separate instance because it
+    /// reads from `Documents/task-tickets/` rather than `Documents/tickets/`.
+    private let taskTicketStorage: TicketStorage
 
     init(
         modelContext: ModelContext,
         receiptStorage: ReceiptStorage = .shared,
         ticketStorage: TicketStorage = .shared,
-        noteImageStorage: ReceiptStorage = .noteImages
+        noteImageStorage: ReceiptStorage = .noteImages,
+        taskTicketStorage: TicketStorage = .taskTickets
     ) {
         self.modelContext = modelContext
         self.receiptStorage = receiptStorage
         self.ticketStorage = ticketStorage
         self.noteImageStorage = noteImageStorage
+        self.taskTicketStorage = taskTicketStorage
     }
 
     /// One archive entry whose bytes have not been read yet: the name it will
@@ -103,6 +108,11 @@ final class DataExportService {
         attachments.append(contentsOf: resolveTicketSources(for: payload.itineraryDays))
         // #395: note image attachments, same relative-path-to-entry-name shape.
         attachments.append(contentsOf: resolveNoteImageSources(for: payload.noteImages ?? []))
+        // #399: same again for task tickets. Their bytes are the only route
+        // between devices, since the sync oplog carries JSON and has no asset
+        // transfer, so leaving them out of the archive would mean a ticket could
+        // never leave the phone it was photographed on.
+        attachments.append(contentsOf: resolveTaskTicketSources(for: payload.taskTickets ?? []))
 
         let url = Self.outputURL()
 
@@ -191,6 +201,8 @@ final class DataExportService {
         let events      = try modelContext.fetch(FetchDescriptor<LocalEvent>())
         let statements  = try modelContext.fetch(FetchDescriptor<LocalStatementImport>())
         let processed   = try modelContext.fetch(FetchDescriptor<LocalProcessedEmail>())
+        // #399: task ticket attachments.
+        let taskTickets = try modelContext.fetch(FetchDescriptor<LocalTaskTicket>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -220,7 +232,8 @@ final class DataExportService {
             events: events.map(Self.dto),
             statementImports: statements.map(Self.dto),
             processedEmails: processed.map(Self.dto),
-            noteImages: noteImages.map(Self.dto)
+            noteImages: noteImages.map(Self.dto),
+            taskTickets: taskTickets.map(Self.dto)
         )
     }
 
@@ -229,6 +242,7 @@ final class DataExportService {
     private static func counts(for payload: DataArchive.Payload) -> [String: Int] {
         [
             "LocalTodo":            payload.tasks.count,
+            "LocalTaskTicket":      payload.taskTickets?.count ?? 0,
             "LocalNote":            payload.notes.count,
             "LocalNoteImage":       payload.noteImages?.count ?? 0,
             "LocalNoteFolder":      payload.noteFolders.count,
@@ -303,6 +317,25 @@ final class DataExportService {
         return sources
     }
 
+    /// #399 counterpart for task ticket attachments. Same contract as the three
+    /// above: a missing file is skipped rather than failing the export, and the
+    /// importer only sets `attachmentPath` when it actually restored a file, so a
+    /// skipped file yields a row that correctly reports no attachment.
+    private func resolveTaskTicketSources(
+        for tickets: [DataArchive.TaskTicketDTO]
+    ) -> [AttachmentSource] {
+        var sources: [AttachmentSource] = []
+        var seenPaths = Set<String>()
+        for ticket in tickets {
+            let relativePath = ticket.attachmentPath
+            guard !relativePath.isEmpty,
+                  seenPaths.insert(relativePath).inserted else { continue }
+            guard let url = taskTicketStorage.load(relativePath: relativePath) else { continue }
+            sources.append(AttachmentSource(name: relativePath, url: url))
+        }
+        return sources
+    }
+
     // MARK: - DTO mapping
 
     private static func dto(_ image: LocalNoteImage) -> DataArchive.NoteImageDTO {
@@ -316,6 +349,31 @@ final class DataExportService {
             createdAt: image.createdAt,
             updatedAt: image.updatedAt,
             deletedAt: image.deletedAt
+        )
+    }
+
+    /// #399. Every field is carried: a partial ticket DTO is exactly the class of
+    /// bug #366 had to add an overwrite path for, where a lossy archive left rows
+    /// that an insert-only merge could never heal.
+    private static func dto(_ ticket: LocalTaskTicket) -> DataArchive.TaskTicketDTO {
+        DataArchive.TaskTicketDTO(
+            clientUUID: ticket.clientUUID,
+            todoClientUUID: ticket.todoClientUUID,
+            attachmentPath: ticket.attachmentPath,
+            barcodePayload: ticket.barcodePayload,
+            barcodeSymbology: ticket.barcodeSymbology,
+            eventTitle: ticket.eventTitle,
+            eventDate: ticket.eventDate,
+            startTimeText: ticket.startTimeText,
+            venue: ticket.venue,
+            seat: ticket.seat,
+            gate: ticket.gate,
+            reference: ticket.reference,
+            ticketMetaJSON: ticket.ticketMetaJSON,
+            position: ticket.position,
+            createdAt: ticket.createdAt,
+            updatedAt: ticket.updatedAt,
+            deletedAt: ticket.deletedAt
         )
     }
 

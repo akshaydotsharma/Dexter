@@ -26,7 +26,7 @@ enum TicketStorageError: LocalizedError {
 }
 
 /// File-system store for wallet-style ticket assets (#222). Writes go into
-/// `Documents/tickets/<uuid>.<ext>` and only the relative path
+/// `Documents/<directoryName>/<uuid>.<ext>` and only the relative path
 /// (`"tickets/<uuid>.<ext>"`) is persisted onto `LocalItineraryItem.attachmentPath`.
 ///
 /// Deliberately a near-clone of `ReceiptStorage` (same relative-path rationale,
@@ -37,16 +37,34 @@ enum TicketStorageError: LocalizedError {
 /// per-image limit, so the SAME compressed bytes are safe for both the on-disk
 /// save AND the barcode-decode / extraction passes.
 ///
+/// ## Two instances, one pipeline (#399)
+///
+/// Task tickets need the identical treatment — barcode-grade resolution, PDF
+/// passthrough, relative paths — so they get a second instance with its own
+/// subdirectory rather than a third near-identical class. Injecting the
+/// directory is what #395 did to `ReceiptStorage` for note images, and for the
+/// same reason: the compression constants here are tuned so PDF417 rows survive,
+/// and that tuning should live in exactly one place.
+///
+/// Only `persist` consults `directoryName`. `load`, `write` and `delete` resolve
+/// whatever relative path they are handed against Documents, so a path minted by
+/// one instance is readable through either.
+///
 /// Cross-platform (issue #281): iOS keeps the UIKit `UIImage` compression path
 /// byte-for-byte; macOS uses the exact ImageIO + CoreGraphics approach already
 /// proven in `ReceiptStorage` (decode → EXIF-transform → downsample →
 /// JPEG-encode, off the main actor, no AppKit round-trip).
 @MainActor
 final class TicketStorage {
+    /// Itinerary tickets (#222), in `Documents/tickets/`.
     static let shared = TicketStorage()
+    /// Task tickets (#399), in `Documents/task-tickets/`. A separate namespace so
+    /// orphan sweeps and the archive's attachment resolvers can reason about one
+    /// feature's assets without walking the other's.
+    static let taskTickets = TicketStorage(directoryName: "task-tickets")
 
     private let fileManager: FileManager
-    private let directoryName = "tickets"
+    private let directoryName: String
     private let jpegQuality: CGFloat = 0.8
     /// Longest-edge cap. Tickets carry fine barcode detail (PDF417 rows), so we
     /// keep more resolution than receipts (2000 vs 1600) while staying under
@@ -57,8 +75,9 @@ final class TicketStorage {
     private let targetMaxBytes: Int = 3_500_000
     private let fallbackJpegQuality: CGFloat = 0.55
 
-    private init(fileManager: FileManager = .default) {
+    private init(fileManager: FileManager = .default, directoryName: String = "tickets") {
         self.fileManager = fileManager
+        self.directoryName = directoryName
     }
 
     // MARK: - Public API

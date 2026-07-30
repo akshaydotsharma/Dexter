@@ -6,7 +6,14 @@ import AppKit
 
 struct TasksView: View {
     @State private var viewModel = TodosViewModel()
-    @State private var showingEditor = false
+    /// What the new-task editor is opened with: nothing, or a file to read (#402).
+    @State private var editorTarget: TaskEditorTarget?
+    /// Pickers behind the plus menu's capture entries.
+    @State private var showingDocumentPicker = false
+    #if os(iOS)
+    @State private var showingDocumentCamera = false
+    @State private var showingDocumentPhotos = false
+    #endif
     @State private var editingTodo: Todo?
     @State private var completedExpanded: Bool = false
     // Per-section tap-below inline draft state.
@@ -18,6 +25,10 @@ struct TasksView: View {
     /// Drives the read-only month calendar popover (#385). Anchored to the
     /// top-bar button on iOS and to the window-toolbar button on macOS.
     @State private var showingCalendar = false
+    /// Ticket count per task (#399), driving the pass chip. Counted in one fetch
+    /// for the whole visible list rather than per row, and refreshed on the same
+    /// signals that reload the tasks themselves.
+    @State private var ticketCounts: [UUID: TaskTicketService.Summary] = [:]
     @Bindable var router: AppRouter
 
     var body: some View {
@@ -90,12 +101,7 @@ struct TasksView: View {
                 }
             }
 
-            Button {
-                showingEditor = true
-            } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+            addMenuButton
             .padding(.trailing, 22)
             .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -123,14 +129,20 @@ struct TasksView: View {
         // button, so the menu and the button cannot diverge.
         #if os(macOS)
         .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Task") {
-            showingEditor = true
+            editorTarget = .blank
         })
         #endif
         // Live-refresh when the voice-capture or chat path writes a task.
         .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
-            Task { await viewModel.load() }
+            Task {
+                await viewModel.load()
+                reloadTicketCounts()
+            }
         }
-        .task { await viewModel.load() }
+        .task {
+            await viewModel.load()
+            reloadTicketCounts()
+        }
         .onAppear {
             // Activity timeline deep-link consumption. The Activity surface
             // sets `router.focus` to ActivityFocus(section: .tasks, id: clientUUID)
@@ -144,8 +156,30 @@ struct TasksView: View {
         // New-task editor. On iOS a full sheet; on macOS the same restyled
         // editor presented as a compact modal sheet (the FAB has no anchor for
         // a popover — the per-task detail editor is the popover, issue #287).
-        .sheet(isPresented: $showingEditor) {
-            TaskEditorSheet(viewModel: viewModel, todo: nil)
+        .sheet(item: $editorTarget) { target in
+            TaskEditorSheet(
+                viewModel: viewModel,
+                todo: nil,
+                initialDocument: target.document
+            )
+        }
+        // Capture entries on the plus menu (#402). A picked file becomes the
+        // editor's `initialDocument`, so the editor opens straight away and reads it
+        // with its own spinner rather than making the person wait on a blank screen.
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showingDocumentCamera) {
+            CameraPicker { data in
+                showingDocumentCamera = false
+                openEditor(with: data, isPDF: false)
+            }
+            .ignoresSafeArea()
+        }
+        .photoLibraryPicker(isPresented: $showingDocumentPhotos) { data in
+            openEditor(with: data, isPDF: false)
+        }
+        #endif
+        .ticketFilePicker(isPresented: $showingDocumentPicker) { data, isPDF in
+            openEditor(with: data, isPDF: isPDF)
         }
         // Detail editor from a row's info button. iOS only — macOS presents
         // this as a popover anchored to the info button inside `TaskRow`.
@@ -467,6 +501,78 @@ struct TasksView: View {
         return b
     }
 
+    // MARK: - Add menu + capture
+    /// The plus button (#402). A task can be created two ways — from a document or
+    /// by typing — so the button offers the choice rather than assuming the second,
+    /// mirroring the capture menu Finance already uses.
+    ///
+    /// Capture sits above the divider because that is the new capability people came
+    /// for; manual entry stays last and is also what ⌘N and File > New Task reach, so
+    /// the fast path for someone who just wants to type is still one keystroke.
+    private var addMenuButton: some View {
+        Menu {
+            #if os(iOS)
+            // Hidden without a camera (simulators, and any Mac): the picker would
+            // silently fall back to the photo library and make two entries redundant.
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button {
+                    Haptics.light()
+                    showingDocumentCamera = true
+                } label: {
+                    Label("Scan a document", systemImage: "camera")
+                }
+            }
+            Button {
+                Haptics.light()
+                showingDocumentPhotos = true
+            } label: {
+                Label("From Photos", systemImage: "photo.on.rectangle")
+            }
+            #endif
+            Button {
+                showingDocumentPicker = true
+            } label: {
+                Label("From a file", systemImage: "doc.text")
+            }
+            Divider()
+            Button {
+                editorTarget = .blank
+            } label: {
+                Label("Enter manually", systemImage: "pencil")
+            }
+        } label: {
+            Image(systemName: "plus")
+        }
+        .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
+        .accessibilityLabel("Add a task")
+    }
+
+    /// Open the new-task editor on a picked file. `nil` is a cancelled picker.
+    ///
+    /// The presentation waits for the picker to finish dismissing. Asking SwiftUI to
+    /// present a sheet from the same view in the same turn another presentation is
+    /// tearing down gets the request dropped, and the symptom is a file pick that
+    /// silently does nothing. The delay is the dismissal animation, so it reads as
+    /// the picker closing rather than as lag.
+    private func openEditor(with data: Data?, isPDF: Bool) {
+        guard let data, !data.isEmpty else { return }
+        let upload = TaskDocumentUpload(data: data, isPDF: isPDF)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            editorTarget = .document(upload)
+        }
+    }
+
+    private func reloadTicketCounts() {
+        let ids = Set(viewModel.todos.map(\.id))
+        guard !ids.isEmpty else {
+            ticketCounts = [:]
+            return
+        }
+        if let counts = try? TaskTicketService().counts(todoIds: ids) {
+            ticketCounts = counts
+        }
+    }
+
     /// Renders a task section with an optional per-section tap-below affordance.
     /// Pass `bucket: nil` for sections that should not have tap-below (e.g. Overdue).
     @ViewBuilder
@@ -482,7 +588,8 @@ struct TasksView: View {
                     onTitleCommit: { newTitle in
                         Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
                     },
-                    onTapWhileDraftActive: { draftFocused = false }
+                    onTapWhileDraftActive: { draftFocused = false },
+                    attachments: ticketCounts[todo.id]
                 )
                 .swipeToDeleteTrash {
                     Task { await viewModel.delete(todo) }
@@ -561,7 +668,8 @@ struct TasksView: View {
                         onTitleCommit: { newTitle in
                             Task { await viewModel.update(todo, title: newTitle, description: todo.description, dueDate: todo.dueDate, tag: todo.tag) }
                         },
-                        onTapWhileDraftActive: { draftFocused = false }
+                        onTapWhileDraftActive: { draftFocused = false },
+                        attachments: ticketCounts[todo.id]
                     )
                     .swipeToDeleteTrash {
                         Task { await viewModel.delete(todo) }
@@ -812,9 +920,17 @@ private struct TaskRow: View {
     /// Called back to the parent when this row is tapped while a draft is active,
     /// so the parent can flip draftFocused = false and trigger the focus-loss → commitDraft cycle.
     var onTapWhileDraftActive: () -> Void = {}
+    /// Number of tickets attached to this task (#399). Drives the pass chip. The
+    /// parent counts them all in one fetch rather than each row querying, so a
+    /// long list doesn't issue a query per row.
+    /// Nil when the task has no attachments (#402).
+    var attachments: TaskTicketService.Summary? = nil
 
     @State private var isEditing: Bool = false
     @State private var editText: String = ""
+    /// Presents the task's tickets. Separate from the editor so the card, and the
+    /// scanner behind it, are two taps from the list rather than buried in a form.
+    @State private var showingTickets = false
     @FocusState private var titleFocused: Bool
     @Environment(\.openURL) private var openURL
     // macOS: local presentation state for the Reminders-style detail popover
@@ -894,7 +1010,7 @@ private struct TaskRow: View {
                 }
 
                 let hasTag = todo.tag != nil && !(todo.tag?.isEmpty ?? true)
-                if todo.dueDate != nil || hasTag || todo.mapsURL != nil {
+                if todo.dueDate != nil || hasTag || todo.mapsURL != nil || attachments != nil {
                     HStack(spacing: Space.sm) {
                         if let due = todo.dueDate {
                             HStack(spacing: 4) {
@@ -930,6 +1046,9 @@ private struct TaskRow: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Open in Google Maps")
+                        }
+                        if attachments != nil {
+                            ticketChip
                         }
                     }
                 }
@@ -987,6 +1106,49 @@ private struct TaskRow: View {
         #if os(iOS)
         .onTapGesture { beginBodyTap() }
         #endif
+        .sheet(isPresented: $showingTickets) {
+            TaskTicketsSheet(todoId: todo.id, taskTitle: todo.title)
+        }
+    }
+
+    /// The attachment chip. Its own tap target opens them without triggering the
+    /// row's tap-to-rename, matching how the MAP chip guards its own tap.
+    ///
+    /// Reads TICKET only when something on the task is genuinely scannable (#402);
+    /// otherwise it is a file, and saying "ticket" would promise a card that does not
+    /// exist.
+    @ViewBuilder
+    private var ticketChip: some View {
+        if let attachments {
+            let isTicket = attachments.hasBarcode
+            let count = attachments.count
+            let noun = isTicket ? "TICKET" : "FILE"
+            Button {
+                Haptics.light()
+                showingTickets = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isTicket ? "ticket.fill" : "paperclip")
+                        .font(.system(size: 10, weight: .regular))
+                    // A count only earns its space once there's more than one.
+                    Text(count > 1 ? "\(count) \(noun)S" : noun)
+                        .font(.edEyebrow)
+                        .textCase(.uppercase)
+                        .tracking(1.4)
+                }
+                .foregroundStyle(Tokens.accentTasks)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Tokens.accentTasks.opacity(0.12), in: Capsule(style: .continuous))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                count > 1
+                    ? "Show \(count) attachments"
+                    : (isTicket ? "Show ticket" : "Show attachment")
+            )
+        }
     }
 
     /// Enters inline edit from a body tap. Extracted so iOS (whole-row tap) and
@@ -1067,9 +1229,35 @@ private struct TaskRow: View {
 
 // MARK: - Editor sheet (kept simple, on paper background)
 
+/// What the new-task editor was opened with (#402).
+///
+/// One sheet rather than two Bools, so "blank editor" and "editor reading a file"
+/// cannot both try to present at once.
+private enum TaskEditorTarget: Identifiable {
+    case blank
+    case document(TaskDocumentUpload)
+
+    var id: String {
+        switch self {
+        case .blank: return "blank"
+        case .document(let upload): return upload.id.uuidString
+        }
+    }
+
+    var document: TaskDocumentUpload? {
+        switch self {
+        case .blank: return nil
+        case .document(let upload): return upload
+        }
+    }
+}
+
 private struct TaskEditorSheet: View {
     let viewModel: TodosViewModel
     let todo: Todo?
+    /// A file to read as soon as the editor appears, filling the draft from it
+    /// (#402). Nil for a blank editor and for editing an existing task.
+    var initialDocument: TaskDocumentUpload? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
@@ -1082,6 +1270,14 @@ private struct TaskEditorSheet: View {
     @State private var googleMapsLink: String = ""
     @State private var isResolvingAddress = false
     @State private var addressResolveTask: Task<Void, Never>?
+    /// Tickets attached while composing a task that does not exist yet (#399).
+    /// Written by `save()`, thrown away by Cancel. Held here rather than in the
+    /// ticket section because this view owns that lifecycle.
+    @State private var pendingTickets: [TaskTicket] = []
+    /// True while a file picked from the plus menu is being read, which puts a
+    /// blocking notice over the form (#402). Without it the editor opens by itself
+    /// with every field empty and reads as broken.
+    @State private var isReadingInitialDocument = false
 
     @Environment(\.openURL) private var openURL
 
@@ -1232,11 +1428,17 @@ private struct TaskEditorSheet: View {
                                 }
                             }
                         }
+                        ticketsBlock
                     }
                     .padding(Space.lg)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .blur(radius: formBlurWhileReading)
+
+                // Inside the ZStack, so the navigation bar's Cancel sits above it.
+                readingOverlay
             }
+            .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
             .navigationTitle(isEditing ? "Edit task" : "New task")
             .inlineNavigationTitle()
             .toolbar {
@@ -1245,11 +1447,14 @@ private struct TaskEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
-                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(!canSave)
                         .foregroundStyle(Tokens.ink)
                 }
             }
             .onAppear(perform: prefill)
+            // Covers both Cancel and a swipe-down dismiss, and runs after a save has
+            // already emptied the array.
+            .onDisappear(perform: discardPendingTickets)
         }
     }
 
@@ -1260,6 +1465,87 @@ private struct TaskEditorSheet: View {
         }
     }
     #endif
+
+    // MARK: - Tickets (#399)
+
+    /// Ticket attachments, on both the iOS and macOS editors.
+    ///
+    /// A ticket row is keyed on the task's `clientUUID`, which a task being created
+    /// for the first time does not have yet. Rather than refuse until the task is
+    /// saved — "save it first" being the editor's problem leaking out at the person —
+    /// the ticket is read immediately and held in `pendingTickets`, then written when
+    /// Add is pressed. Cancel discards it.
+    @ViewBuilder
+    private var ticketsBlock: some View {
+        TaskTicketSection(
+            todoId: todo?.id,
+            taskTitle: currentTitleForTickets,
+            pending: $pendingTickets,
+            onExtracted: applyExtractedTicket,
+            initialDocument: initialDocument,
+            isReadingInitialDocument: $isReadingInitialDocument
+        )
+    }
+
+    /// The blocking notice, over the form only so Cancel stays reachable (#402).
+    @ViewBuilder
+    private var readingOverlay: some View {
+        if isReadingInitialDocument, let initialDocument {
+            TaskDocumentReadingOverlay(isPDF: initialDocument.isPDF)
+        }
+    }
+
+    /// How much to soften the form while the notice is over it.
+    ///
+    /// A scrim alone was not enough: the notice card and the editor's own rounded
+    /// cards read as competing for the same space. Putting the form slightly out of
+    /// focus is what stops its text from competing, and it restores itself when the
+    /// values land.
+    private var formBlurWhileReading: CGFloat {
+        isReadingInitialDocument ? 4 : 0
+    }
+
+    /// Fill the task's own fields from what the ticket said (#399).
+    ///
+    /// This is the point of uploading: the ticket already carries the event name,
+    /// the date and the venue, so being asked to type them afterwards makes the
+    /// feature pointless. Only ever fills fields the person has left EMPTY — a
+    /// value they typed always wins over a parsed one.
+    private func applyExtractedTicket(_ read: TaskTicketRead) {
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let suggested = read.suggestedTitle {
+            title = suggested
+        }
+        if !hasDueDate, let due = read.suggestedDueDate {
+            dueDate = due
+            hasDueDate = true
+        }
+        if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let venue = read.suggestedAddress {
+            address = venue
+        }
+    }
+
+    /// What the ticket card falls back to for its headline. Uses the live field so
+    /// a card attached mid-compose is titled with what has been typed, not "".
+    private var currentTitleForTickets: String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? (todo?.title ?? "") : trimmed
+    }
+
+    /// An attachment whose own details are the only thing naming the task still needs
+    /// the task to have a title, since an untitled task cannot be saved. Filling it
+    /// from the file is `applyExtractedTicket`'s job; this is the last-resort name for
+    /// a file nothing could be read from, so the upload is never rejected outright.
+    private static let untitledTicketTaskName = "Untitled task"
+
+    /// Whether there is anything worth saving. A ticket on its own counts (#399): it
+    /// carries the event name that becomes the title, and one the extractor could
+    /// read nothing from still falls back to a generic name rather than trapping the
+    /// person in an editor they cannot commit.
+    private var canSave: Bool {
+        !title.trimmingCharacters(in: .whitespaces).isEmpty || !pendingTickets.isEmpty
+    }
 
     // MARK: - macOS editor (Reminders-style inspector popover, issue #287)
 
@@ -1281,8 +1567,8 @@ private struct TaskEditorSheet: View {
                 Button(isEditing ? "Save" : "Add") { Task { await save() } }
                     .buttonStyle(.plain)
                     .fontWeight(.semibold)
-                    .foregroundStyle(isTitleEmpty ? Tokens.muted : Tokens.accentTasks)
-                    .disabled(isTitleEmpty)
+                    .foregroundStyle(canSave ? Tokens.accentTasks : Tokens.muted)
+                    .disabled(!canSave)
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
@@ -1309,6 +1595,13 @@ private struct TaskEditorSheet: View {
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.sm)
                     }
+
+                    // Tickets sits high on the Mac deliberately. This editor is a
+                    // 360x520 popover, so a section at the bottom is below the
+                    // fold and effectively invisible — you cannot drop a file on
+                    // something you have to go looking for. iOS keeps it last,
+                    // where a full-height sheet makes scrolling to it natural.
+                    ticketsBlock
 
                     // Date & Time
                     macSectionHeader("Date & Time")
@@ -1431,13 +1724,21 @@ private struct TaskEditorSheet: View {
                         .padding(.horizontal, Space.md)
                         .padding(.vertical, Space.sm)
                     }
+
                 }
                 .padding(Space.lg)
             }
+            .blur(radius: formBlurWhileReading)
+            // Scoped to the scrolling form, so the header's Cancel stays clickable.
+            .overlay { readingOverlay }
         }
+        .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
         .frame(width: 360, height: 520)
         .background(Tokens.paper)
         .onAppear(perform: prefill)
+        // Covers Cancel and dismissing the popover by clicking away, and runs after
+        // a save has already emptied the array.
+        .onDisappear(perform: discardPendingTickets)
     }
 
     private var isTitleEmpty: Bool {
@@ -1520,18 +1821,46 @@ private struct TaskEditorSheet: View {
     }
 
     private func save() async {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        guard canSave else { return }
+        let typed = title.trimmingCharacters(in: .whitespaces)
+        let trimmed = typed.isEmpty ? Self.untitledTicketTaskName : typed
         let finalDescription = descriptionText.isEmpty ? nil : descriptionText
         let finalTag = tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag
         let finalDue = hasDueDate ? dueDate : nil
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
+
         if let existing = todo {
             await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            flushPendingTickets(to: existing.id)
         } else {
-            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            let created = await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            if let created { flushPendingTickets(to: created.id) }
         }
         dismiss()
+    }
+
+    /// Write the tickets attached while composing, now that the task exists (#399).
+    ///
+    /// Their owner id was a placeholder until this moment, so it is substituted
+    /// here. Clearing the array is what stops `.onDisappear` from then deleting the
+    /// files we just committed to.
+    private func flushPendingTickets(to todoId: UUID) {
+        guard !pendingTickets.isEmpty else { return }
+        _ = TaskTicketService().attachAll(pendingTickets, todoId: todoId)
+        pendingTickets = []
+    }
+
+    /// Abandoning the editor throws away anything attached but never committed.
+    ///
+    /// The bytes are written to disk during the read, before there is a task to hang
+    /// them on, so without this a cancelled compose would leak a file per upload.
+    private func discardPendingTickets() {
+        guard !pendingTickets.isEmpty else { return }
+        let service = TaskTicketService()
+        for ticket in pendingTickets {
+            service.discardUnattached(ticket)
+        }
+        pendingTickets = []
     }
 }

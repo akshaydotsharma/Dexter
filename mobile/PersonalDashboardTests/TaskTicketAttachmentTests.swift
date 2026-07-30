@@ -1,0 +1,834 @@
+import XCTest
+import SwiftData
+import CoreGraphics
+import CoreImage
+@testable import PersonalDashboard
+
+/// Task ticket attachments (#399).
+///
+/// Four things here can break silently and would not be caught by a build:
+///
+/// 1. **The barcode round trip.** The whole feature rests on the claim that a
+///    payload decoded off a ticket can be re-rendered into something a scanner
+///    reads back as the same string. If that is wrong the card is decorative and
+///    someone finds out at a turnstile. It is also perfectly deterministic, so
+///    there is no excuse for not asserting it.
+/// 2. **The archive round trip.** A new model is easy to add to the payload and
+///    forget in the exporter, the importer, or the attachment resolver. The
+///    failure looks like "my tickets vanished on restore".
+/// 3. **The delete cascade.** Orphaned rows and leaked files after a task goes.
+/// 4. **Sync registration.** The mapper has to know the entity or the rows never
+///    leave the device.
+///
+/// The LLM extraction step is deliberately not covered: it is one network call
+/// whose output every field of the UI treats as correctable, and stubbing
+/// `AnthropicClient` to assert on a prompt would test the mock. Rows are built
+/// directly instead, which is what the archive and cascade paths actually see.
+///
+/// Runs against an isolated in-memory store. File bytes necessarily go through
+/// the real `TicketStorage.taskTickets`, which writes into the test host's
+/// Documents container, so every test cleans up the paths it created.
+@MainActor
+final class TaskTicketAttachmentTests: XCTestCase {
+
+    private var store: SwiftDataStore!
+    /// Relative paths written during the test, removed in tearDown.
+    private var createdPaths: [String] = []
+
+    override func setUp() async throws {
+        try await super.setUp()
+        store = SwiftDataStore(container: SwiftDataStore.makeInMemory())
+        createdPaths = []
+    }
+
+    override func tearDown() async throws {
+        for path in createdPaths {
+            try? TicketStorage.taskTickets.delete(relativePath: path)
+        }
+        store = nil
+        createdPaths = []
+        try await super.tearDown()
+    }
+
+    // MARK: - Fixtures
+
+    private func insertTodo(title: String = "Coldplay at the National Stadium") -> LocalTodo {
+        let todo = LocalTodo(title: title)
+        store.context.insert(todo)
+        try? store.context.save()
+        return todo
+    }
+
+    /// Attach a ticket the way the extractor would, minus the network call: write
+    /// real bytes through the real storage, then insert the row pointing at them.
+    @discardableResult
+    private func attachTicket(
+        to todo: LocalTodo,
+        payload: String = "DEXTER-TEST-PAYLOAD-1",
+        symbology: BarcodeSymbology = .qr,
+        eventTitle: String = "Coldplay",
+        venue: String = "National Stadium",
+        seat: String = "8",
+        section: String? = "122",
+        row: String? = "14",
+        position: Int = 0
+    ) throws -> TaskTicket {
+        // A rendered barcode is a legitimate stand-in for a photographed ticket
+        // and keeps the fixture free of a checked-in binary. An empty `payload`
+        // means "a document with no barcode in it", so the file still needs real
+        // bytes — only the stored payload is blank.
+        let image = try XCTUnwrap(
+            BarcodeService.render(
+                payload: payload.isEmpty ? "FIXTURE-NO-BARCODE" : payload,
+                symbology: symbology
+            ),
+            "could not render a fixture barcode"
+        )
+        let jpeg = try XCTUnwrap(image.jpegDataCompat(quality: 0.9))
+        let relativePath = try TicketStorage.taskTickets.saveCompressedJpeg(jpeg)
+        createdPaths.append(relativePath)
+
+        var meta = TicketMeta()
+        meta.eventType = "Concert"
+        meta.section = section
+        meta.row = row
+
+        let ticket = LocalTaskTicket(
+            todoClientUUID: todo.clientUUID,
+            attachmentPath: relativePath,
+            barcodePayload: payload,
+            barcodeSymbology: symbology.rawValue,
+            eventTitle: eventTitle,
+            eventDate: Calendar(identifier: .gregorian)
+                .startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000)),
+            startTimeText: "20:00",
+            venue: venue,
+            seat: seat,
+            gate: "3",
+            reference: "ORD-99213",
+            ticketMetaJSON: meta.encodedString(),
+            position: position
+        )
+        store.context.insert(ticket)
+        try store.context.save()
+        return ticket.toDTO()
+    }
+
+    // MARK: - Barcode round trip
+
+    /// Can Vision decode a barcode at all in this environment?
+    ///
+    /// It cannot in the iOS Simulator: `VNDetectBarcodesRequest` fails there with
+    /// "Could not create inference context" for every input, including the
+    /// generator's own un-upscaled output. That is an environment limitation, not
+    /// a property of what we render, so the round-trip test below distinguishes
+    /// the two rather than reporting a green it has not earned or a red it cannot
+    /// fix.
+    ///
+    /// The probe deliberately uses `CIQRCodeGenerator` directly rather than
+    /// `BarcodeService.render`, so a bug in our upscale step cannot make the probe
+    /// skip the very test that would catch it.
+    private func visionCanDecodeBarcodes() -> Bool {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return false }
+        filter.setValue("PROBE".data(using: .utf8), forKey: "inputMessage")
+        guard let output = filter.outputImage,
+              let cg = CIContext().createCGImage(output, from: output.extent) else {
+            return false
+        }
+        return BarcodeService.decode(image: PlatformImage(cgImage: cg))?.payload == "PROBE"
+    }
+
+    /// The claim the feature rests on: re-rendering a decoded payload yields an
+    /// image that decodes back to the identical string.
+    ///
+    /// Covers the three symbologies the app can regenerate and that a real ticket
+    /// actually uses. Code128 is excluded on purpose: it cannot encode the
+    /// lowercase and control characters a QR payload routinely carries, so a
+    /// round-trip assertion on arbitrary text would be testing the wrong thing.
+    ///
+    /// Skipped where Vision cannot decode anything (the Simulator). On those runs
+    /// the guarantee is carried by device QA: scanning the card with a second
+    /// phone's camera and comparing against the original ticket.
+    func testRenderedBarcodeDecodesBackToTheSamePayload() throws {
+        try XCTSkipUnless(
+            visionCanDecodeBarcodes(),
+            "Vision cannot create a barcode inference context here (expected in the Simulator); run this on a device"
+        )
+
+        let cases: [(BarcodeSymbology, String)] = [
+            (.qr, "https://tickets.example.com/order/99213?seat=122-14-8"),
+            (.aztec, "DEXTER-AZTEC-PAYLOAD-0042"),
+            (.pdf417, "M1SHARMA/AKSHAY   EABC123 SINLHRSQ 0322 195Y012A0044 100")
+        ]
+
+        for (symbology, payload) in cases {
+            let image = try XCTUnwrap(
+                BarcodeService.render(payload: payload, symbology: symbology),
+                "\(symbology.rawValue): render returned nil"
+            )
+            let decoded = try XCTUnwrap(
+                BarcodeService.decode(image: image),
+                "\(symbology.rawValue): a freshly rendered code did not decode"
+            )
+            XCTAssertEqual(
+                decoded.payload, payload,
+                "\(symbology.rawValue): round trip changed the payload"
+            )
+            XCTAssertEqual(
+                decoded.symbology, symbology,
+                "\(symbology.rawValue): round trip changed the symbology"
+            )
+        }
+    }
+
+    /// A symbology we cannot regenerate must return nil rather than a wrong image,
+    /// because the card's fallback (crop the original) depends on that nil.
+    func testUnsupportedSymbologyRendersNothing() {
+        XCTAssertNil(BarcodeService.render(payload: "12345", symbology: .other))
+    }
+
+    // MARK: - Write path
+
+    func testAttachingTicketStoresRowAndFile() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        let attached = try attachTicket(to: todo)
+
+        let listed = try service.list(todoId: todo.clientUUID)
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertEqual(listed.first?.id, attached.id)
+        XCTAssertEqual(listed.first?.position, 0)
+
+        // Its own namespace, not alongside itinerary tickets or receipts.
+        XCTAssertTrue(
+            attached.attachmentPath.hasPrefix("task-tickets/"),
+            "expected a task-tickets/ path, got \(attached.attachmentPath)"
+        )
+        XCTAssertNotNil(service.fileURL(for: attached), "bytes did not land on disk")
+
+        // The extras that live in JSON rather than columns survive the round trip.
+        XCTAssertEqual(attached.ticketMeta?.section, "122")
+        XCTAssertEqual(attached.ticketMeta?.row, "14")
+        XCTAssertEqual(attached.ticketMeta?.eventType, "Concert")
+    }
+
+    /// A second ticket appends rather than replacing: one task, two seats.
+    func testTaskHoldsMoreThanOneTicket() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        try attachTicket(to: todo, payload: "SEAT-8", seat: "8", position: 0)
+        try attachTicket(to: todo, payload: "SEAT-9", seat: "9", position: 1)
+
+        let listed = try service.list(todoId: todo.clientUUID)
+        XCTAssertEqual(listed.count, 2)
+        XCTAssertEqual(listed.map(\.position), [0, 1])
+        XCTAssertEqual(listed.map(\.seat), ["8", "9"])
+    }
+
+    func testCountsReportPerTask() throws {
+        let withTickets = insertTodo(title: "Match")
+        let without = insertTodo(title: "Buy milk")
+        try attachTicket(to: withTickets, payload: "A")
+        try attachTicket(to: withTickets, payload: "B", position: 1)
+
+        let counts = try TaskTicketService(store: store)
+            .counts(todoIds: [withTickets.clientUUID, without.clientUUID])
+
+        XCTAssertEqual(counts[withTickets.clientUUID]?.count, 2)
+        XCTAssertNil(counts[without.clientUUID], "a task with no tickets should not appear")
+    }
+
+    /// The list chip says TICKET off the back of this, so a plain document must not
+    /// report a barcode it does not have (#402).
+    func testCountsReportWhetherAnythingIsScannable() throws {
+        let scannable = insertTodo(title: "Concert")
+        let paperwork = insertTodo(title: "Visa forms")
+        try attachTicket(to: scannable, payload: "SCAN-ME")
+        try attachTicket(to: paperwork, payload: "")
+
+        let counts = try TaskTicketService(store: store)
+            .counts(todoIds: [scannable.clientUUID, paperwork.clientUUID])
+
+        XCTAssertEqual(counts[scannable.clientUUID], .init(count: 1, hasBarcode: true))
+        XCTAssertEqual(
+            counts[paperwork.clientUUID], .init(count: 1, hasBarcode: false),
+            "a document with no barcode must not read as a ticket"
+        )
+    }
+
+    /// One scannable attachment among several is enough to call the task a ticket.
+    func testOneBarcodeAmongSeveralAttachmentsCountsAsScannable() throws {
+        let todo = insertTodo(title: "Trip paperwork")
+        try attachTicket(to: todo, payload: "")
+        try attachTicket(to: todo, payload: "BOARDING-PASS", position: 1)
+
+        let counts = try TaskTicketService(store: store).counts(todoIds: [todo.clientUUID])
+
+        XCTAssertEqual(counts[todo.clientUUID], .init(count: 2, hasBarcode: true))
+    }
+
+    // MARK: - Editing
+
+    /// Every extracted field is correctable — that is what makes an imperfect
+    /// extraction acceptable, so it needs to actually persist.
+    func testUpdateOverwritesFieldsAndClearsTheDate() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        let attached = try attachTicket(to: todo)
+
+        var meta = attached.ticketMeta ?? TicketMeta()
+        meta.section = "A"
+        meta.row = nil
+
+        let updated = try XCTUnwrap(try service.update(
+            id: attached.id,
+            eventTitle: "Coldplay · Music of the Spheres",
+            eventDate: .some(nil),
+            startTimeText: "Doors 19:00",
+            venue: "Singapore National Stadium",
+            seat: "12",
+            gate: "5",
+            reference: "ORD-00001",
+            meta: meta
+        ))
+
+        XCTAssertEqual(updated.eventTitle, "Coldplay · Music of the Spheres")
+        XCTAssertNil(updated.eventDate, "an explicit nil date should clear, not be ignored")
+        XCTAssertEqual(updated.startTimeText, "Doors 19:00")
+        XCTAssertEqual(updated.venue, "Singapore National Stadium")
+        XCTAssertEqual(updated.seat, "12")
+        XCTAssertEqual(updated.gate, "5")
+        XCTAssertEqual(updated.reference, "ORD-00001")
+        XCTAssertEqual(updated.ticketMeta?.section, "A")
+        XCTAssertNil(updated.ticketMeta?.row)
+
+        // The barcode is not user-editable and must be untouched by an edit.
+        XCTAssertEqual(updated.barcodePayload, attached.barcodePayload)
+        XCTAssertEqual(updated.attachmentPath, attached.attachmentPath)
+    }
+
+    /// A nil argument leaves the stored value alone, matching `TodoUpdateRequest`.
+    func testUpdateLeavesOmittedFieldsUntouched() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        let attached = try attachTicket(to: todo)
+
+        let updated = try XCTUnwrap(try service.update(id: attached.id, seat: "99"))
+
+        XCTAssertEqual(updated.seat, "99")
+        XCTAssertEqual(updated.eventTitle, attached.eventTitle)
+        XCTAssertEqual(updated.venue, attached.venue)
+        XCTAssertEqual(updated.eventDate, attached.eventDate)
+    }
+
+    // MARK: - Delete + cascade
+
+    func testDeletingTicketDetachesRowAndRemovesFile() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        let attached = try attachTicket(to: todo)
+        let url = try XCTUnwrap(service.fileURL(for: attached))
+
+        try service.delete(attached)
+
+        XCTAssertTrue(try service.list(todoId: todo.clientUUID).isEmpty)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: url.path),
+            "a detached ticket should not leak its file"
+        )
+    }
+
+    func testDeletingTaskTakesItsTicketsWithIt() async throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        let attached = try attachTicket(to: todo)
+        let url = try XCTUnwrap(service.fileURL(for: attached))
+
+        try await TodoService(store: store).delete(todo.toDTO())
+
+        XCTAssertTrue(
+            try service.list(todoId: todo.clientUUID).isEmpty,
+            "ticket rows outlived the task that owned them"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    // MARK: - Archive round trip
+
+    /// The regression that matters most: a new model reaching the payload but not
+    /// the exporter's attachment resolver ships an archive whose rows point at
+    /// files it never packed, and the restore looks like data loss.
+    func testTicketsSurviveExportAndImportIntoAFreshStore() async throws {
+        // ---- Device A: a task with two tickets. ----
+        let todo = insertTodo(title: "Coldplay")
+        let service = TaskTicketService(store: store)
+        let first = try attachTicket(to: todo, payload: "FIRST-SEAT", seat: "8", position: 0)
+        let second = try attachTicket(to: todo, payload: "SECOND-SEAT", seat: "9", position: 1)
+        let originalBytes = try Data(contentsOf: try XCTUnwrap(service.fileURL(for: first)))
+
+        let archiveURL = try await DataExportService(modelContext: store.context).export()
+        defer { try? FileManager.default.removeItem(at: archiveURL) }
+
+        // The zip must carry the ticket bytes, not just the rows.
+        let entries = try MiniZip.read(from: archiveURL)
+        let entryNames = Set(entries.map(\.name))
+        XCTAssertTrue(
+            entryNames.contains(first.attachmentPath),
+            "archive is missing \(first.attachmentPath); entries: \(entryNames.sorted())"
+        )
+        XCTAssertTrue(entryNames.contains(second.attachmentPath))
+
+        // ---- Device B: a fresh store, with the files removed from disk so the
+        // restore has to come from the archive rather than from what is already
+        // there. ----
+        for path in [first.attachmentPath, second.attachmentPath] {
+            try? TicketStorage.taskTickets.delete(relativePath: path)
+        }
+        let freshStore = SwiftDataStore(container: SwiftDataStore.makeInMemory())
+        let importer = DataImportService(modelContext: freshStore.context)
+        let preview = try importer.preview(url: archiveURL)
+
+        let ticketCounts = try XCTUnwrap(preview.counts(for: .skipExisting)[.taskTickets])
+        XCTAssertEqual(ticketCounts.total, 2, "importer did not see the ticket rows")
+        XCTAssertEqual(ticketCounts.new, 2)
+
+        try importer.commit(preview: preview, mode: .skipExisting)
+
+        // ---- Rows and bytes both restored, at full fidelity. ----
+        let restoredService = TaskTicketService(store: freshStore)
+        let restored = try restoredService.list(todoId: todo.clientUUID)
+        XCTAssertEqual(restored.count, 2)
+        XCTAssertEqual(restored.map(\.position), [0, 1])
+
+        let restoredFirst = try XCTUnwrap(restored.first)
+        XCTAssertEqual(restoredFirst.attachmentPath, first.attachmentPath)
+        XCTAssertEqual(restoredFirst.barcodePayload, "FIRST-SEAT")
+        XCTAssertEqual(restoredFirst.barcodeSymbology, BarcodeSymbology.qr.rawValue)
+        XCTAssertEqual(restoredFirst.eventTitle, first.eventTitle)
+        XCTAssertEqual(restoredFirst.eventDate, first.eventDate)
+        // The printed time is the field most at risk of being "helpfully"
+        // reformatted somewhere in the chain.
+        XCTAssertEqual(restoredFirst.startTimeText, "20:00")
+        XCTAssertEqual(restoredFirst.venue, first.venue)
+        XCTAssertEqual(restoredFirst.seat, "8")
+        XCTAssertEqual(restoredFirst.gate, first.gate)
+        XCTAssertEqual(restoredFirst.reference, first.reference)
+        XCTAssertEqual(restoredFirst.ticketMeta?.section, "122")
+
+        let restoredURL = try XCTUnwrap(restoredService.fileURL(for: restoredFirst))
+        XCTAssertEqual(
+            try Data(contentsOf: restoredURL), originalBytes,
+            "restored ticket bytes differ from what was exported"
+        )
+    }
+
+    /// Re-importing the same archive must not duplicate tickets.
+    func testReimportingTheSameArchiveIsANoOp() async throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        try attachTicket(to: todo)
+
+        let archiveURL = try await DataExportService(modelContext: store.context).export()
+        defer { try? FileManager.default.removeItem(at: archiveURL) }
+
+        let importer = DataImportService(modelContext: store.context)
+        let preview = try importer.preview(url: archiveURL)
+        XCTAssertEqual(preview.counts(for: .skipExisting)[.taskTickets]?.new, 0)
+        try importer.commit(preview: preview, mode: .skipExisting)
+
+        XCTAssertEqual(try service.list(todoId: todo.clientUUID).count, 1)
+    }
+
+    /// A row whose file the archive did not carry still restores, because it is a
+    /// real ticket sitting on the user's other device. Dropping it would lose the
+    /// barcode and the details as well as the scan.
+    func testRowWithoutBytesStillRestoresAndReportsNoFile() throws {
+        let todoID = UUID()
+        let orphanPath = "task-tickets/\(UUID().uuidString.lowercased()).jpg"
+        let dto = DataArchive.TaskTicketDTO(
+            clientUUID: UUID(),
+            todoClientUUID: todoID,
+            attachmentPath: orphanPath,
+            barcodePayload: "STILL-SCANNABLE",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            eventTitle: "Arsenal v Chelsea",
+            eventDate: nil,
+            startTimeText: "17:30",
+            venue: "Emirates Stadium",
+            seat: "42",
+            gate: "B",
+            reference: "REF-1",
+            ticketMetaJSON: "",
+            position: 0,
+            createdAt: Date(),
+            updatedAt: Date(),
+            deletedAt: nil
+        )
+        var payload = DataArchive.Payload.empty
+        payload.taskTickets = [dto]
+        let manifest = DataArchive.Manifest(
+            schemaVersion: DataArchive.currentSchemaVersion,
+            exportedAt: Date(),
+            appVersion: "test",
+            data: payload
+        )
+        let preview = DataImportService.Preview(
+            manifest: manifest,
+            archiveURL: URL(fileURLWithPath: "/dev/null"),
+            entries: [:],
+            counts: [:]
+        )
+
+        try DataImportService(modelContext: store.context)
+            .commit(preview: preview, mode: .skipExisting)
+
+        let service = TaskTicketService(store: store)
+        let restored = try service.list(todoId: todoID)
+        XCTAssertEqual(restored.count, 1, "a ticket row with no bytes was dropped")
+        // The importer must leave the path empty rather than pointing at bytes it
+        // never restored.
+        XCTAssertEqual(restored.first?.attachmentPath, "")
+        XCTAssertNil(
+            service.fileURL(for: try XCTUnwrap(restored.first)),
+            "no file should resolve, so the card renders the on-other-device state"
+        )
+        // The scannable part came across, which is why keeping the row is right.
+        XCTAssertEqual(restored.first?.barcodePayload, "STILL-SCANNABLE")
+        XCTAssertEqual(restored.first?.startTimeText, "17:30")
+    }
+
+    // MARK: - Filling the task's own fields from the ticket
+
+    /// Build a read the way `TaskTicketExtraction.read` would, without the network.
+    private func makeRead(
+        eventTitle: String? = "COLDPLAY",
+        eventDate: String? = "2026-09-12",
+        startTimeText: String? = "Show 20:00",
+        venue: String? = "National Stadium, Singapore",
+        yearWasPrinted: String? = "yes"
+    ) -> TaskTicketRead {
+        var input: [String: AnthropicJSONValue] = [:]
+        if let eventTitle { input["event_title"] = .string(eventTitle) }
+        if let eventDate { input["event_date"] = .string(eventDate) }
+        if let startTimeText { input["start_time_text"] = .string(startTimeText) }
+        if let venue { input["venue"] = .string(venue) }
+        if let yearWasPrinted { input["year_was_printed"] = .string(yearWasPrinted) }
+        return TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "P",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            extracted: ExtractedTaskTicket(input: input),
+            degradeMessage: nil
+        )
+    }
+
+    /// The regression behind two rounds of "it asks me for a title first": the
+    /// upload has to be able to NAME the task, so these suggestions must survive
+    /// even when nothing has been typed.
+    func testReadSuggestsTaskFieldsFromTheTicket() throws {
+        let read = makeRead()
+        XCTAssertEqual(read.suggestedTitle, "COLDPLAY")
+        XCTAssertEqual(read.suggestedAddress, "National Stadium, Singapore")
+
+        // The due date is the one place a real `Date` is correct, and it must land
+        // on the PRINTED day in the device's own timezone — an off-by-one here puts
+        // the reminder on the wrong day, which is the bug #163 / #168 were about.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let due = try XCTUnwrap(read.suggestedDueDate)
+        let parts = cal.dateComponents([.year, .month, .day, .hour, .minute], from: due)
+        XCTAssertEqual(parts.year, 2026)
+        XCTAssertEqual(parts.month, 9)
+        XCTAssertEqual(parts.day, 12, "due date landed on the wrong day")
+        XCTAssertEqual(parts.hour, 20, "the printed show time did not carry into the due date")
+        XCTAssertEqual(parts.minute, 0)
+    }
+
+    /// A ticket with a date but no readable time still yields a usable due date.
+    func testSuggestedDueDateWithoutATimeFallsBackToMorning() throws {
+        let read = makeRead(startTimeText: nil)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let parts = cal.dateComponents([.day, .hour], from: try XCTUnwrap(read.suggestedDueDate))
+        XCTAssertEqual(parts.day, 12)
+        XCTAssertEqual(parts.hour, 9)
+    }
+
+    /// Nothing readable means no suggestions, and the caller falls back rather than
+    /// refusing the upload.
+    func testUnreadableTicketSuggestsNothing() {
+        let bare = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: nil,
+            degradeMessage: "couldn't read"
+        )
+        XCTAssertNil(bare.suggestedTitle)
+        XCTAssertNil(bare.suggestedAddress)
+        XCTAssertNil(bare.suggestedDueDate)
+    }
+
+    /// A blank field from the model must not become a blank task title.
+    func testBlankExtractedFieldsAreTreatedAsAbsent() {
+        let read = makeRead(eventTitle: "   ", venue: "")
+        XCTAssertNil(read.suggestedTitle)
+        XCTAssertNil(read.suggestedAddress)
+    }
+
+    // MARK: - Working out a year the ticket never printed
+
+    private func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        return utc.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+
+    private func localDay(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        return cal.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+
+    /// The exact failure seen on a Chope restaurant confirmation: the card printed
+    /// "2 AUG · Sun" with no year, and the model — which has no idea what today is —
+    /// answered 2025-08-02, a Saturday, putting the task a year in the past. The
+    /// printed weekday pins the year, so this is recoverable without asking anyone.
+    func testUnprintedYearIsCorrectedFromThePrintedWeekday() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: "Sun",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 8, 2), "2 August falls on a Sunday in 2026, not 2025")
+    }
+
+    /// With no weekday to check against, the next occurrence is the answer: nobody
+    /// attaches a ticket for something that already happened.
+    func testUnprintedYearWithoutAWeekdayRollsForward() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: nil,
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 8, 2))
+    }
+
+    /// A date still to come this year is already right and must not be nudged.
+    func testUnprintedYearLeavesAnUpcomingDateAlone() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2026-09-12",
+            printedWeekday: "Sat",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 9, 12))
+    }
+
+    /// A printed year is authoritative even when it is in the past: filing a ticket
+    /// for something that already happened is a legitimate thing to do, and guessing
+    /// past it would be worse than the bug this fixes.
+    func testPrintedYearInThePastIsTrusted() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2024-08-02",
+            printedWeekday: "Fri",
+            yearWasPrinted: true,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2024, 8, 2))
+    }
+
+    /// Something in the weekday slot that is not a day name is ignored rather than
+    /// derailing the whole date.
+    func testAnUnrecognisedWeekdayIsIgnored() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: "party time",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 8, 2))
+    }
+
+    /// A printed weekday genuinely selects the year, including one further out: 2
+    /// August is a Thursday in 2029 and in no nearer year.
+    func testAPrintedWeekdayCanSelectALaterYear() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: "Thu",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2029, 8, 2))
+    }
+
+    /// 29 February exists only in a leap year, so the candidate scan has to skip the
+    /// years it does not. This only works because the month and day are read off the
+    /// string: a `DateFormatter` silently turns 2025-02-29 into 1 March, and the
+    /// answer would then be a date the ticket never mentioned.
+    func testLeapDayResolvesToALeapYear() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-02-29",
+            printedWeekday: nil,
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2028, 2, 29))
+    }
+
+    func testWeekdayNamesParseInTheFormsTicketsPrintThem() {
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("Sun"), 1)
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("sunday"), 1)
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("SAT"), 7)
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("Wed."), 4)
+        XCTAssertNil(TaskTicketExtraction.weekdayIndex(nil))
+        XCTAssertNil(TaskTicketExtraction.weekdayIndex("payday"))
+    }
+
+    /// The model states today's date to the extractor, because without it there is
+    /// nothing to reason from and it answers from its training cutoff instead.
+    func testUserPromptStatesTodaysDate() {
+        let prompt = TaskTicketExtraction.userPrompt(
+            taskTitle: "",
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertTrue(prompt.contains("Thursday, 30 July 2026"), prompt)
+    }
+
+    /// The stored day is local midnight, so every surface that formats it with the
+    /// local calendar shows the day printed on the ticket. Calling `startOfDay` on
+    /// the UTC value instead lands a day early anywhere west of UTC.
+    func testStoredEventDateIsLocalMidnightOfThePrintedDay() throws {
+        let ticket = makeRead().ticket(todoId: UUID())
+        XCTAssertEqual(try XCTUnwrap(ticket.eventDate), localDay(2026, 9, 12))
+    }
+
+    // MARK: - Attaching without creating a task
+
+    /// A ticket added while composing a new task must be renderable and editable
+    /// before anything is written, which is what lets Cancel actually cancel.
+    func testProvisionalTicketCarriesEveryExtractedField() throws {
+        let read = makeRead()
+        let ticket = read.ticket(todoId: UUID())
+        XCTAssertEqual(ticket.eventTitle, "COLDPLAY")
+        XCTAssertEqual(ticket.venue, "National Stadium, Singapore")
+        XCTAssertEqual(ticket.startTimeText, "Show 20:00")
+        XCTAssertEqual(ticket.attachmentPath, "task-tickets/x.jpg")
+        XCTAssertEqual(ticket.barcodePayload, "P")
+        XCTAssertTrue(ticket.hasBarcode)
+        XCTAssertFalse(ticket.isBare)
+    }
+
+    /// The same values whether it goes straight to disk or waits in the editor: one
+    /// derivation, so the card cannot change when it is committed.
+    func testAttachingAProvisionalTicketStoresWhatTheCardShowed() throws {
+        let todo = insertTodo(title: "Coldplay")
+        let provisional = makeRead().ticket(todoId: todo.clientUUID)
+        let service = TaskTicketService(store: store)
+
+        _ = try service.attach(provisional, todoId: todo.clientUUID)
+
+        let stored = try XCTUnwrap(try service.list(todoId: todo.clientUUID).first)
+        XCTAssertEqual(stored.eventTitle, provisional.eventTitle)
+        XCTAssertEqual(stored.eventDate, provisional.eventDate)
+        XCTAssertEqual(stored.startTimeText, provisional.startTimeText)
+        XCTAssertEqual(stored.venue, provisional.venue)
+        XCTAssertEqual(stored.barcodePayload, provisional.barcodePayload)
+        XCTAssertEqual(stored.attachmentPath, provisional.attachmentPath)
+    }
+
+    /// An edit made to a ticket before the task was saved has to be what gets
+    /// written, not the extractor's original reading of it.
+    func testEditsMadeBeforeSavingSurviveTheAttach() throws {
+        let todo = insertTodo(title: "Dinner")
+        var provisional = makeRead().ticket(todoId: todo.clientUUID)
+        provisional.eventTitle = "Corrected by hand"
+        provisional.seat = "12A"
+
+        let service = TaskTicketService(store: store)
+        _ = try service.attach(provisional, todoId: todo.clientUUID)
+
+        let stored = try XCTUnwrap(try service.list(todoId: todo.clientUUID).first)
+        XCTAssertEqual(stored.eventTitle, "Corrected by hand")
+        XCTAssertEqual(stored.seat, "12A")
+    }
+
+    /// Abandoning the editor has to take the stored bytes with it.
+    ///
+    /// The file is written during the read, before there is any task to hang it on,
+    /// so both Cancel and a read that was still in flight when the editor went away
+    /// have to clean up or every abandoned upload leaks a file.
+    func testDiscardingAnUnattachedTicketRemovesItsFile() throws {
+        let todo = insertTodo(title: "Never saved")
+        let provisional = makeRead().ticket(todoId: todo.clientUUID)
+        // Real bytes on disk at the provisional ticket's path.
+        let image = try XCTUnwrap(BarcodeService.render(payload: "ABANDONED", symbology: .qr))
+        let jpeg = try XCTUnwrap(image.jpegDataCompat(quality: 0.9))
+        let path = try TicketStorage.taskTickets.saveCompressedJpeg(jpeg)
+        createdPaths.append(path)
+        var stranded = provisional
+        stranded.attachmentPath = path
+        XCTAssertNotNil(TicketStorage.taskTickets.load(relativePath: path))
+
+        let service = TaskTicketService(store: store)
+        service.discardUnattached(stranded)
+
+        XCTAssertNil(
+            TicketStorage.taskTickets.load(relativePath: path),
+            "an abandoned upload left its file behind"
+        )
+        // The path-only form is what a cancelled in-flight read has to use, since it
+        // never got as far as a ticket.
+        service.discardStoredFile(at: path)
+        service.discardStoredFile(at: "")
+    }
+
+    /// Attaching several holds their order, since they are flushed as a batch when
+    /// the task is finally created.
+    func testAttachingSeveralPendingTicketsKeepsTheirOrder() throws {
+        let todo = insertTodo(title: "Two tickets")
+        let service = TaskTicketService(store: store)
+        let first = makeRead(eventTitle: "First").ticket(todoId: todo.clientUUID)
+        let second = makeRead(eventTitle: "Second").ticket(todoId: todo.clientUUID)
+
+        let ids = service.attachAll([first, second], todoId: todo.clientUUID)
+
+        XCTAssertEqual(ids.count, 2)
+        let stored = try service.list(todoId: todo.clientUUID)
+        XCTAssertEqual(stored.map(\.eventTitle), ["First", "Second"])
+        XCTAssertEqual(stored.map(\.position), [0, 1])
+    }
+
+    func testClockTimeParsingHandlesTheFormsTicketsUse() {
+        typealias E = TaskTicketExtraction
+        XCTAssertEqual(E.parseClockTime("Show 20:00").map { [$0.0, $0.1] }, [20, 0])
+        XCTAssertEqual(E.parseClockTime("20:00").map { [$0.0, $0.1] }, [20, 0])
+        XCTAssertEqual(E.parseClockTime("Doors 7.30pm").map { [$0.0, $0.1] }, [19, 30])
+        XCTAssertEqual(E.parseClockTime("8:05 AM").map { [$0.0, $0.1] }, [8, 5])
+        XCTAssertEqual(E.parseClockTime("12:15am").map { [$0.0, $0.1] }, [0, 15])
+        XCTAssertNil(E.parseClockTime("Doors open early"))
+        XCTAssertNil(E.parseClockTime(nil))
+        // Junk that looks numeric but is not a clock time.
+        XCTAssertNil(E.parseClockTime("Section 122"))
+    }
+
+    // MARK: - Sync registration
+
+    /// Sync carries the rows, so the mapper has to know about the entity.
+    /// Registered via `exportedModels`, which is easy to update without adding
+    /// the corresponding `map` call.
+    func testSyncMapperEmitsTaskTicketRecords() async throws {
+        let todo = insertTodo()
+        let attached = try attachTicket(to: todo)
+
+        let payload = try DataExportService(modelContext: store.context).buildPayload()
+        let records = try SyncRecordMapper.records(from: payload)
+
+        XCTAssertTrue(SyncRecordMapper.syncedEntities.contains("LocalTaskTicket"))
+        let ticketRecords = records.filter { $0.entity == "LocalTaskTicket" }
+        XCTAssertEqual(ticketRecords.count, 1)
+        XCTAssertEqual(ticketRecords.first?.recordID, attached.id.uuidString)
+    }
+}
