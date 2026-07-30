@@ -157,25 +157,6 @@ final class LocalTaskTicket {
         TicketMeta.decode(ticketMetaJSON)
     }
 
-    /// Whether this attachment earns a card in the Wallet (#405).
-    ///
-    /// The picker takes any document now (#400), so "attached to a task" stopped
-    /// meaning "is a pass" — a brunch reservation was landing in the Wallet next
-    /// to a boarding pass. Two things get one in:
-    ///
-    /// - Something scannable was decoded off it. Whatever it is for, you are going
-    ///   to hold it under a reader, so the Wallet is where it belongs.
-    /// - The extractor judged it a document you present at a door
-    ///   (`TicketMeta.presentedAtEntry`), which catches the event ticket that
-    ///   prints no code at all.
-    ///
-    /// An unjudged row falls back to the barcode alone. Every row written before
-    /// the field existed is in that state, and reading its silence as "yes" would
-    /// keep exactly the cards this is meant to remove.
-    var belongsInWallet: Bool {
-        hasBarcode || ticketMeta?.presentedAtEntry == true
-    }
-
     /// `true` when the extractor read nothing beyond the file itself, so the UI
     /// should open the fields for manual entry rather than present a card that is
     /// blank apart from a barcode.
@@ -208,3 +189,64 @@ final class LocalTaskTicket {
         )
     }
 }
+
+// MARK: - Wallet eligibility
+
+/// The rule deciding whether a task attachment earns a card in the Wallet,
+/// written once for both shapes it is asked about (#414).
+///
+/// The stored row is what the Wallet itself builds from, and the DTO is what the
+/// detail sheet holds while showing the switch that overrides it. Two copies of
+/// this predicate would be two chances for the switch to disagree with the shelf
+/// it moves things on and off.
+protocol WalletEligible {
+    var hasBarcode: Bool { get }
+    var ticketMeta: TicketMeta? { get }
+    var reference: String { get }
+    var seat: String { get }
+    var gate: String { get }
+}
+
+extension WalletEligible {
+    /// Whether this attachment earns a card in the Wallet (#405, narrowed by #414).
+    ///
+    /// The picker takes any document now (#400), so "attached to a task" stopped
+    /// meaning "is a pass" — a brunch reservation was landing in the Wallet next
+    /// to a boarding pass. Three things decide it, in this order:
+    ///
+    /// - The person said so (`TicketMeta.showInWallet`). Their answer beats every
+    ///   rule below, in both directions.
+    /// - Something scannable was decoded off it. Whatever it is for, you are going
+    ///   to hold it under a reader, so the Wallet is where it belongs.
+    /// - The extractor judged it a document you present at a door
+    ///   (`TicketMeta.presentedAtEntry`) AND the document prints something you can
+    ///   actually present. That last clause is #414: a padel court booking came
+    ///   back judged a pass with no barcode, no reference, no seat and no gate, so
+    ///   the Wallet held a card that could not be shown to anyone. A judgement
+    ///   with nothing behind it is an opinion, not a pass.
+    ///
+    /// An unjudged row falls back to the barcode alone. Every row written before
+    /// the field existed is in that state, and reading its silence as "yes" would
+    /// keep exactly the cards this is meant to remove.
+    var belongsInWallet: Bool {
+        if let override = ticketMeta?.showInWallet { return override }
+        if hasBarcode { return true }
+        guard ticketMeta?.presentedAtEntry == true else { return false }
+        return hasPresentableCredential
+    }
+
+    /// `true` when the document prints something the holder can show at the door:
+    /// a booking reference, a seat, a gate, or a section and row.
+    ///
+    /// Deliberately does NOT count the attachment file. Every task ticket has one
+    /// by construction, so admitting on that basis would make the rule above a
+    /// no-op — and the file arrives with a court booking, a menu or a receipt just
+    /// as readily as with a ticket.
+    var hasPresentableCredential: Bool {
+        let meta = ticketMeta
+        let candidates = [reference, seat, gate, meta?.section ?? "", meta?.row ?? ""]
+        return candidates.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+}
+
+extension LocalTaskTicket: WalletEligible {}

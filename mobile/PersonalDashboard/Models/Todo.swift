@@ -108,6 +108,10 @@ struct TaskTicket: Codable, Identifiable, Hashable, Sendable {
     /// Typed symbology for the barcode renderer. `nil` when there is no barcode
     /// or the stored token is unrecognised, in which case the card falls back to
     /// the original image.
+    ///
+    /// Wallet eligibility (`belongsInWallet`) comes from `WalletEligible`, shared
+    /// with the stored row so the switch on the detail sheet cannot disagree with
+    /// the shelf it moves this on and off.
     var symbology: BarcodeSymbology? {
         BarcodeSymbology(rawValue: barcodeSymbology)
     }
@@ -155,6 +159,8 @@ struct TaskTicket: Codable, Identifiable, Hashable, Sendable {
             && seat.trimmingCharacters(in: .whitespaces).isEmpty
     }
 }
+
+extension TaskTicket: WalletEligible {}
 
 struct TodoCreateRequest: Encodable {
     let title: String
