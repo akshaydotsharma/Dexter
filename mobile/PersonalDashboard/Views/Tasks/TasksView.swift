@@ -930,7 +930,14 @@ private struct TaskRow: View {
     @State private var editText: String = ""
     /// Presents the task's tickets. Separate from the editor so the card, and the
     /// scanner behind it, are two taps from the list rather than buried in a form.
-    @State private var showingTickets = false
+    /// The attachments sheet, and what it should do on arrival (#408).
+    ///
+    /// One piece of state rather than a bool pair. A separate "open the picker too"
+    /// flag written in the same event as the presentation was read back as false by
+    /// the sheet's content: the closure evaluates against a copy of this view, and
+    /// there is no ordering guarantee that makes the second flag visible in time.
+    /// Carried inside the item, it cannot be stale.
+    @State private var ticketsRequest: TaskTicketsRequest?
     @FocusState private var titleFocused: Bool
     @Environment(\.openURL) private var openURL
     // macOS: local presentation state for the Reminders-style detail popover
@@ -1075,7 +1082,14 @@ private struct TaskRow: View {
             // it visually belongs to this task. iOS keeps the parent `.sheet`.
             #if os(macOS)
             .popover(isPresented: $showingEditorPopover, arrowEdge: .leading) {
-                TaskEditorSheet(viewModel: viewModel, todo: todo)
+                TaskEditorSheet(viewModel: viewModel, todo: todo) {
+                    // Add, from a popover that the file panel would dismiss (#408).
+                    // Swap it for the attachments sheet and open the panel there: this
+                    // state lives on the ROW, in the window, so it survives both the
+                    // popover going away and the panel taking focus.
+                    showingEditorPopover = false
+                    ticketsRequest = TaskTicketsRequest(openPicker: true)
+                }
             }
             #endif
             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
@@ -1105,8 +1119,15 @@ private struct TaskRow: View {
         #if os(iOS)
         .onTapGesture { beginBodyTap() }
         #endif
-        .sheet(isPresented: $showingTickets) {
-            TaskTicketsSheet(todoId: todo.id, taskTitle: todo.title)
+        .sheet(item: $ticketsRequest) { request in
+            TaskTicketsSheet(
+                todoId: todo.id,
+                context: TaskTicketContext(todo: todo),
+                // True only when Add in the editor popover sent us here. Opening the
+                // same sheet from the TICKET pill must not throw a file panel at
+                // someone who came to look at a card.
+                opensPickerOnAppear: request.openPicker
+            )
         }
     }
 
@@ -1141,7 +1162,7 @@ private struct TaskRow: View {
             let count = attachments.count
             Button {
                 Haptics.light()
-                showingTickets = true
+                ticketsRequest = TaskTicketsRequest(openPicker: false)
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "ticket.fill")
@@ -1270,6 +1291,11 @@ private struct TaskEditorSheet: View {
     /// A file to read as soon as the editor appears, filling the draft from it
     /// (#402). Nil for a blank editor and for editing an existing task.
     var initialDocument: TaskDocumentUpload? = nil
+    /// Set only by the macOS popover presentation, which cannot host a file panel
+    /// (#408): Add in the attachments section calls this instead of opening one, and
+    /// the caller swaps the popover for the attachments sheet. Nil everywhere else,
+    /// where this editor is already a sheet and the panel is safe inline.
+    var onOpenAttachments: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
@@ -1290,6 +1316,13 @@ private struct TaskEditorSheet: View {
     /// blocking notice over the form (#402). Without it the editor opens by itself
     /// with every field empty and reads as broken.
     @State private var isReadingInitialDocument = false
+    /// True while the attachments section has a file panel open or a read in flight
+    /// (#408). On macOS this editor is a popover, and a popover is dismissed the
+    /// instant another window takes key — which the file panel does. The editor
+    /// disappeared the moment Add was pressed and the read carried on invisibly, so
+    /// the attach landed with nothing on screen to say so. This pins it open for the
+    /// duration.
+    @State private var isAttachmentBusy = false
 
     @Environment(\.openURL) private var openURL
 
@@ -1491,11 +1524,29 @@ private struct TaskEditorSheet: View {
     private var ticketsBlock: some View {
         TaskTicketSection(
             todoId: todo?.id,
-            taskTitle: currentTitleForTickets,
+            context: ticketContext,
             pending: $pendingTickets,
             onExtracted: applyExtractedTicket,
             initialDocument: initialDocument,
-            isReadingInitialDocument: $isReadingInitialDocument
+            isReadingInitialDocument: $isReadingInitialDocument,
+            isBusy: $isAttachmentBusy,
+            onRequestOwnSurface: onOpenAttachments
+        )
+    }
+
+    /// What the extractor is told about the event (#408), read off the LIVE editor
+    /// fields rather than the saved task.
+    ///
+    /// Live matters: someone who has just typed the venue into a draft, or corrected
+    /// the date, should have the ticket read against what is on screen. It is also
+    /// the only source available at all while composing a task that does not exist
+    /// yet.
+    private var ticketContext: TaskTicketContext {
+        TaskTicketContext(
+            title: currentTitleForTickets,
+            notes: descriptionText,
+            dueDate: hasDueDate ? dueDate : nil,
+            address: address
         )
     }
 
@@ -1747,6 +1798,11 @@ private struct TaskEditorSheet: View {
         .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
         .frame(width: 360, height: 520)
         .background(Tokens.paper)
+        // Hold the popover open while a file panel is up or a read is running (#408).
+        // Conditional on purpose: clicking away to dismiss is how this editor is
+        // meant to behave, and the exception lasts only as long as there is work that
+        // would be lost. Cancel and Save stay live throughout either way.
+        .interactiveDismissDisabled(isAttachmentBusy)
         .onAppear(perform: prefill)
         // Covers Cancel and dismissing the popover by clicking away, and runs after
         // a save has already emptied the array.

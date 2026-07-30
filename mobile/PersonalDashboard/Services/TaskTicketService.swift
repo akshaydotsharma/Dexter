@@ -92,11 +92,43 @@ struct TaskTicketService {
     func read(
         data: Data,
         isPDF: Bool,
-        taskTitle: String,
+        context: TaskTicketContext,
         extraction: TaskTicketExtraction? = nil
     ) async throws -> TaskTicketRead {
         let extraction = extraction ?? TaskTicketExtraction()
-        return try await extraction.read(data: data, isPDF: isPDF, taskTitle: taskTitle)
+        return try await extraction.read(data: data, isPDF: isPDF, context: context)
+    }
+
+    // MARK: - Duplicate detection (#408)
+
+    /// The attachment already on this task that `data` would be a second copy of,
+    /// or nil when the file is new to it.
+    ///
+    /// Runs BEFORE the file is stored or read, so a repeat costs neither a write nor
+    /// an extraction call. It catches the case that actually happens: the attach
+    /// appeared to do nothing, so it was done again. See `duplicate(ofBarcode:among:)`
+    /// for the half of the problem this cannot see.
+    func duplicate(of data: Data, among tickets: [TaskTicket]) -> TaskTicket? {
+        let hash = SyncHash.hex(data)
+        return tickets.first { $0.ticketMeta?.sourceHash == hash }
+    }
+
+    /// The attachment already on this task carrying the same barcode.
+    ///
+    /// The second half of the check, and it has to run AFTER the read because the
+    /// payload is only known once Vision has decoded it. Two things need it: a row
+    /// written before `sourceHash` existed carries no fingerprint at all, and the
+    /// same ticket re-exported or re-screenshotted is a different byte stream
+    /// entirely. What makes it safe is that a barcode is the ticket's own identity —
+    /// two files scanning to the same payload admit you once.
+    ///
+    /// Empty payloads never match: "no barcode" is not an identity.
+    func duplicate(ofBarcode payload: String, among tickets: [TaskTicket]) -> TaskTicket? {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return tickets.first {
+            $0.barcodePayload.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed
+        }
     }
 
     /// Attach a ticket to a task, returning the id of the stored row.
@@ -153,12 +185,12 @@ struct TaskTicketService {
     @discardableResult
     func add(
         todoId: UUID,
-        taskTitle: String,
+        context: TaskTicketContext,
         data: Data,
         isPDF: Bool,
         extraction: TaskTicketExtraction? = nil
     ) async throws -> UUID {
-        let read = try await read(data: data, isPDF: isPDF, taskTitle: taskTitle, extraction: extraction)
+        let read = try await read(data: data, isPDF: isPDF, context: context, extraction: extraction)
         return try attach(read.ticket(todoId: todoId), todoId: todoId, extraction: extraction)
     }
 

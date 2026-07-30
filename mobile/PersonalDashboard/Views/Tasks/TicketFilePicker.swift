@@ -66,6 +66,18 @@ struct TicketFilePickerModifier: ViewModifier {
 
     @MainActor
     private func presentOpenPanel() {
+        Self.presentOpenPanel(onPick: onPick)
+    }
+
+    /// Open the panel WITHOUT going through a SwiftUI presentation binding (#408).
+    ///
+    /// The binding route needs a false-to-true transition to be observed, and a flip
+    /// made as a view first appears is not reliably seen as one: the attachments sheet
+    /// came up on hand-off and no panel followed it. Nothing about this panel needs
+    /// SwiftUI — it is a free-floating window owned by no view — so a view that knows
+    /// it wants one can just ask.
+    @MainActor
+    static func presentOpenPanel(onPick: @escaping (Data?, Bool) -> Void) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = Self.acceptedTypes
         panel.allowsMultipleSelection = false

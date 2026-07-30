@@ -108,7 +108,10 @@ struct TaskTicketSection: View {
     /// The owning task, or `nil` when the editor is for a task that has not been
     /// saved yet.
     let todoId: UUID?
-    let taskTitle: String
+    /// Everything the app already knows about the event, which the extractor uses to
+    /// fill what the file does not show (#408). Carries the title the cards fall
+    /// back to, so it replaces the plain `taskTitle` this took before.
+    let context: TaskTicketContext
     /// Tickets read but not yet written, owned by the editor because it owns the
     /// Cancel / Add lifecycle that decides their fate. Always empty once `todoId`
     /// is non-nil.
@@ -128,6 +131,35 @@ struct TaskTicketSection: View {
     /// looking at the section it appears in and blocking the form would be heavier
     /// than the action deserves.
     var isReadingInitialDocument: Binding<Bool>? = nil
+    /// Reports that this section is mid-operation: a picker is open, or a read is in
+    /// flight (#408). The presenter refuses to be dismissed out from under it, so a
+    /// stray click cannot bin a read that is already running.
+    ///
+    /// Worth being precise about what this does NOT do: it does not save a macOS
+    /// popover from the system file panel. A popover is dismissed when another window
+    /// takes key, and `interactiveDismissDisabled` does not cover that — measured
+    /// both ways. That is why the panel is not opened from the popover at all any
+    /// more; see `onRequestOwnSurface`.
+    var isBusy: Binding<Bool>? = nil
+    /// Set when this section cannot host a file panel, so Add must hand off to a
+    /// surface that can (#408).
+    ///
+    /// The macOS editor for an existing task is a popover, and opening the file panel
+    /// makes it key, which dismisses the popover immediately. The read then carried on
+    /// against a view that was no longer on screen: the spinner went with the popover,
+    /// the fields it should have filled were gone, and a non-scannable attachment
+    /// earns no row pill (#403), so the list looked untouched. Nothing anywhere said
+    /// the attach had worked, and the reasonable response was to do it again — which
+    /// is how one task ended up with two identical tickets.
+    ///
+    /// Pinning the popover open does not work, so the panel moves out instead: this
+    /// hands off to the attachments sheet, which is presented from the window and does
+    /// survive the panel. Every other editor path is already a sheet and passes nil.
+    var onRequestOwnSurface: (() -> Void)? = nil
+    /// Open the file picker as soon as the section appears, for the sheet that Add in
+    /// the popover just handed off to (#408). Without it the hand-off costs a second
+    /// click for no reason: the person already said what they wanted.
+    var opensPickerOnAppear: Bool = false
 
     @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -135,9 +167,20 @@ struct TaskTicketSection: View {
     @State private var isTargetedForDrop = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    /// The attachment the long-press / right-click menu offered to remove, held for
+    /// the confirmation (#408). Removing deletes the file off the device, so it is
+    /// confirmed here the same way it is in the detail sheet.
+    @State private var pendingRemoval: TaskTicket?
+    /// True from presenting a picker until it hands something back (or is cancelled).
+    /// Part of `isBusy`: on macOS the panel outlives the view that opened it, so the
+    /// window between the two is exactly when the editor must not be dismissed.
+    @State private var awaitingPick = false
     /// `onAppear` can fire more than once for the same view; the document must be
     /// read exactly once or it would be stored and attached twice.
     @State private var consumedInitialDocument = false
+    /// Same guard for the handed-off picker: `onAppear` can fire more than once, and a
+    /// second panel over the first is not a thing anyone asked for.
+    @State private var consumedPickerOnAppear = false
     /// The in-flight read, so dismissing the editor can cancel it. The file is on
     /// disk before the read returns, so a read nobody is waiting for any more has to
     /// clean up after itself.
@@ -152,6 +195,12 @@ struct TaskTicketSection: View {
     private let service = TaskTicketService()
 
     private var accent: Color { Tokens.accent(for: .tasks) }
+
+    /// The task's title, which the cards fall back to for their headline.
+    private var taskTitle: String { context.title }
+
+    /// Whether an operation is in progress that the editor must stay open for.
+    private var isBusyNow: Bool { isIngesting || awaitingPick }
 
     /// Everything on screen: what is on disk, then what is waiting to be.
     private var tickets: [TaskTicket] { stored + pending }
@@ -208,8 +257,34 @@ struct TaskTicketSection: View {
             isTargetedForDrop = targeted
         }
         .animation(.easeOut(duration: 0.15), value: isTargetedForDrop)
+        // Keep the presenter informed for as long as there is work to lose.
+        .onChange(of: isBusyNow) { _, busy in
+            isBusy?.wrappedValue = busy
+        }
+        .confirmationDialog(
+            "Remove this attachment?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove attachment", role: .destructive) {
+                if let ticket = pendingRemoval { remove(ticket) }
+                pendingRemoval = nil
+            }
+            Button("Keep it", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text("The file will be deleted from this device. The task itself stays.")
+        }
         .onAppear {
             reload()
+            // Pick up where the hand-off left off: Add was already pressed, in a
+            // surface that could not host the panel (#408).
+            if opensPickerOnAppear, !consumedPickerOnAppear {
+                consumedPickerOnAppear = true
+                openPickerDirectly()
+            }
             // Read a file handed in from the plus menu. Deliberately does NOT open
             // the ticket sheet afterwards: the person asked to see the draft task,
             // and a sheet over it would hide the thing they came to check.
@@ -223,7 +298,12 @@ struct TaskTicketSection: View {
                 )
             }
         }
-        .onDisappear { ingestTask?.cancel() }
+        .onDisappear {
+            ingestTask?.cancel()
+            // Never leave the presenter pinned open by a section that is gone.
+            awaitingPick = false
+            isBusy?.wrappedValue = false
+        }
         .sheet(item: $selected) { ticket in
             // A pending ticket has no row to write to, so its edits and its removal
             // are applied to the editor's in-memory copy instead.
@@ -255,14 +335,20 @@ struct TaskTicketSection: View {
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
             CameraPicker { data in
+                awaitingPick = false
                 ingest(data: data, isPDF: false)
             }
         }
         .photoLibraryPicker(isPresented: $showingPhotoLibrary) { data in
+            awaitingPick = false
             ingest(data: data, isPDF: false)
         }
         #endif
         .ticketFilePicker(isPresented: $showingFilePicker) { data, isPDF in
+            // Cleared FIRST, and on every outcome including cancel: this is what
+            // releases the editor once the panel is done with, and a path that
+            // forgot it would pin the popover open for good.
+            awaitingPick = false
             ingest(data: data, isPDF: isPDF)
         }
     }
@@ -275,6 +361,25 @@ struct TaskTicketSection: View {
     /// through the file picker.
     @ViewBuilder
     private var addControl: some View {
+        // A section that cannot host a file panel hands the whole job over rather than
+        // opening one it would be dismissed by (#408). The label stays "Add", because
+        // that is still what happens: the sheet comes up with the panel already open.
+        if let onRequestOwnSurface {
+            Button {
+                Haptics.light()
+                onRequestOwnSurface()
+            } label: {
+                addLabel
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add an attachment to this task")
+        } else {
+            pickerAddControl
+        }
+    }
+
+    @ViewBuilder
+    private var pickerAddControl: some View {
         #if os(iOS)
         Menu {
             // Same gate the trip ticket menu uses: a simulator has no camera and
@@ -282,6 +387,7 @@ struct TaskTicketSection: View {
             if UIImagePickerController.isSourceTypeAvailable(.camera) {
                 Button {
                     Haptics.light()
+                    awaitingPick = true
                     showingCamera = true
                 } label: {
                     Label("Take a photo", systemImage: "camera")
@@ -289,12 +395,14 @@ struct TaskTicketSection: View {
             }
             Button {
                 Haptics.light()
+                awaitingPick = true
                 showingPhotoLibrary = true
             } label: {
                 Label("Choose from Photos", systemImage: "photo.on.rectangle")
             }
             Button {
                 Haptics.light()
+                awaitingPick = true
                 showingFilePicker = true
             } label: {
                 Label("Choose a file", systemImage: "folder")
@@ -308,6 +416,9 @@ struct TaskTicketSection: View {
         .accessibilityLabel("Add an attachment to this task")
         #else
         Button {
+            // Set BEFORE the panel is asked for, so the editor is already pinned by
+            // the time the panel takes key focus away from it (#408).
+            awaitingPick = true
             showingFilePicker = true
         } label: {
             addLabel
@@ -373,6 +484,25 @@ struct TaskTicketSection: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open attachment \(ticket.displayTitle(fallback: taskTitle))")
+        // Long-press on iPhone, right-click on the Mac: View and Remove on the card
+        // itself (#408). Removing WAS only reachable by opening the card, going to its
+        // actions and confirming, which is a long way round for the thing you most
+        // want when a card should not be there at all — a duplicate.
+        //
+        // Tap still opens the card. This is additive, and the detail sheet keeps its
+        // own Remove action for whoever is already in there.
+        .contextMenu {
+            Button {
+                selected = ticket
+            } label: {
+                Label("View attachment", systemImage: "doc.text.magnifyingglass")
+            }
+            Button(role: .destructive) {
+                pendingRemoval = ticket
+            } label: {
+                Label("Remove attachment", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Actions
@@ -388,6 +518,26 @@ struct TaskTicketSection: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Ask for the file picker on appear, for the hand-off from a surface that could
+    /// not host one (#408).
+    ///
+    /// macOS asks AppKit outright rather than flipping the presentation flag: the
+    /// modifier waits on an observed false-to-true transition, and a flip made as this
+    /// view first appears does not reliably read as one, which left the sheet up with
+    /// no panel behind it. iOS keeps the binding, where `fileImporter` is the only way
+    /// in and the timing is not in question.
+    private func openPickerDirectly() {
+        awaitingPick = true
+        #if os(macOS)
+        TicketFilePickerModifier.presentOpenPanel { data, isPDF in
+            awaitingPick = false
+            ingest(data: data, isPDF: isPDF)
+        }
+        #else
+        showingFilePicker = true
+        #endif
     }
 
     /// Read a dropped file and ingest it. Mirrors the picker's own read so a drop
@@ -421,6 +571,17 @@ struct TaskTicketSection: View {
         announceToEditor: Bool = false
     ) {
         guard let data, !data.isEmpty else { return }
+
+        // Refuse a file this task already has, BEFORE storing or reading it (#408).
+        // Cheap, and it is the case that actually happened: the first attach looked
+        // like it had done nothing, so it was done again and the task ended up with
+        // two identical cards.
+        if let existing = service.duplicate(of: data, among: tickets) {
+            statusMessage = nil
+            errorMessage = Self.duplicateMessage(existing, fallback: taskTitle)
+            return
+        }
+
         isIngesting = true
         statusMessage = nil
         errorMessage = nil
@@ -441,7 +602,7 @@ struct TaskTicketSection: View {
                 let read = try await service.read(
                     data: data,
                     isPDF: isPDF,
-                    taskTitle: taskTitle
+                    context: context
                 )
 
                 // The editor can be dismissed while this is in flight, and Cancel is
@@ -450,6 +611,18 @@ struct TaskTicketSection: View {
                 // task that will never exist.
                 if Task.isCancelled {
                     service.discardStoredFile(at: read.attachmentPath)
+                    return
+                }
+
+                // The other half of the duplicate check (#408), and it can only run
+                // here: the barcode is not known until Vision has decoded it. This is
+                // what catches the same ticket arriving as a different file — a fresh
+                // screenshot, a re-download — and any row written before ingest
+                // fingerprints existed. The bytes go back out, since nothing is going
+                // to reference them.
+                if let existing = service.duplicate(ofBarcode: read.barcodePayload, among: tickets) {
+                    service.discardStoredFile(at: read.attachmentPath)
+                    errorMessage = Self.duplicateMessage(existing, fallback: taskTitle)
                     return
                 }
 
@@ -487,6 +660,54 @@ struct TaskTicketSection: View {
             }
         }
     }
+
+    /// Remove an attachment, from wherever it currently lives.
+    ///
+    /// A pending ticket has no row, so it goes out of the editor's array and its
+    /// bytes off the disk; a stored one is soft-deleted through the service so the
+    /// removal propagates the way every other delete does. Same split the detail
+    /// sheet makes.
+    private func remove(_ ticket: TaskTicket) {
+        if let index = pending.firstIndex(where: { $0.id == ticket.id }) {
+            service.discardUnattached(pending[index])
+            pending.remove(at: index)
+            statusMessage = nil
+            errorMessage = nil
+            return
+        }
+        do {
+            try service.delete(ticket)
+            reload()
+            statusMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// What to say when the file is already on this task. Names the card it matched
+    /// so the claim is checkable rather than something the person has to take on
+    /// trust while looking at a list of similar cards.
+    private static func duplicateMessage(_ existing: TaskTicket, fallback: String) -> String {
+        let name = existing.displayTitle(fallback: fallback)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+            ? "That file is already attached to this task."
+            : "That file is already attached to this task, as \"\(trimmed)\"."
+    }
+}
+
+/// A request to show a task's attachments, and what to do on arrival (#408).
+///
+/// Exists so the "open the file panel too" instruction travels WITH the presentation
+/// rather than beside it. As a separate `@State` flag set in the same event, the
+/// sheet's content read it back as false: that closure evaluates against a copy of
+/// the presenting view, and nothing guarantees a second flag written in the same
+/// transaction is visible to it. One item, no ordering to get wrong.
+struct TaskTicketsRequest: Identifiable {
+    let id = UUID()
+    /// True when Add in the macOS editor popover handed off, because a popover cannot
+    /// host a file panel — see `TaskTicketSection.onRequestOwnSurface`.
+    let openPicker: Bool
 }
 
 /// Standalone sheet wrapping the section, presented from the pass chip on a task
@@ -499,9 +720,17 @@ struct TaskTicketSection: View {
 /// where someone will look for it once they know a task already has one.
 struct TaskTicketsSheet: View {
     let todoId: UUID
-    let taskTitle: String
+    /// The whole task, not just its title: a file added from here is read against
+    /// everything the task knows, exactly as one added from the editor is (#408).
+    let context: TaskTicketContext
+    /// True when this sheet was opened BY Add in the macOS editor popover, which
+    /// cannot host a file panel itself (#408). The panel comes straight up here, so
+    /// the hand-off costs no extra click.
+    var opensPickerOnAppear: Bool = false
 
     @Environment(\.dismiss) private var dismiss
+
+    private var taskTitle: String { context.title }
 
     var body: some View {
         NavigationStack {
@@ -512,8 +741,9 @@ struct TaskTicketsSheet: View {
                     // The task already exists here, so nothing is ever pending.
                     TaskTicketSection(
                         todoId: todoId,
-                        taskTitle: taskTitle,
-                        pending: .constant([])
+                        context: context,
+                        pending: .constant([]),
+                        opensPickerOnAppear: opensPickerOnAppear
                     )
                     .padding(Space.lg)
                 }

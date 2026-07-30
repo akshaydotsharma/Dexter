@@ -807,10 +807,138 @@ final class TaskTicketAttachmentTests: XCTestCase {
     /// nothing to reason from and it answers from its training cutoff instead.
     func testUserPromptStatesTodaysDate() {
         let prompt = TaskTicketExtraction.userPrompt(
-            taskTitle: "",
+            context: TaskTicketContext(),
             today: localDay(2026, 7, 30)
         )
         XCTAssertTrue(prompt.contains("Thursday, 30 July 2026"), prompt)
+    }
+
+    // MARK: - What the task already knows (#408)
+
+    /// The task's own details reach the model. The bug was a Luma check-in page —
+    /// a title and a QR code — attached to a task carrying the date, the time and
+    /// the address, and a card that came out with three empty fields because the
+    /// prompt named only the title and forbade using it.
+    func testUserPromptCarriesWhatTheTaskAlreadyKnows() {
+        let prompt = TaskTicketExtraction.userPrompt(
+            context: TaskTicketContext(
+                title: "Vibe Coders SG #2",
+                notes: "https://luma.com/4ptmrf91",
+                dueDate: localDay(2026, 7, 31).addingTimeInterval(18 * 3600 + 30 * 60),
+                address: "Lorong AI @ One-North"
+            ),
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertTrue(prompt.contains("Vibe Coders SG #2"), prompt)
+        XCTAssertTrue(prompt.contains("Lorong AI @ One-North"), prompt)
+        XCTAssertTrue(prompt.contains("luma.com/4ptmrf91"), prompt)
+        XCTAssertTrue(prompt.contains("Friday, 31 July 2026 at 6:30 PM"), prompt)
+        // The instruction that keeps the file authoritative. Losing it would let the
+        // task's own values overwrite what is printed on the ticket.
+        XCTAssertTrue(prompt.contains("always wins"), prompt)
+    }
+
+    /// A task with nothing filled in adds nothing to the prompt, rather than a block
+    /// of empty labels for the model to read meaning into.
+    func testUserPromptOmitsTheBlockWhenTheTaskKnowsNothing() {
+        let prompt = TaskTicketExtraction.userPrompt(
+            context: TaskTicketContext(),
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertFalse(prompt.contains("already recorded"), prompt)
+    }
+
+    /// The deterministic half of the same fix: whatever the file did not show is
+    /// filled from the task, so the card is complete even when the model call fails
+    /// outright and there is no extraction at all.
+    func testFieldsTheFileDidNotShowComeFromTheTask() throws {
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "https://luma.com/check-in/evt-oQFgiXtb",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            // Title only, which is all the check-in page showed.
+            extracted: ExtractedTaskTicket(eventTitle: "Vibe Coders SG #2"),
+            degradeMessage: nil,
+            context: TaskTicketContext(
+                title: "Vibe Coders SG #2 - Securing Vibe Coded Apps",
+                dueDate: localDay(2026, 7, 31).addingTimeInterval(18 * 3600 + 30 * 60),
+                address: "Lorong AI @ One-North"
+            )
+        )
+        let ticket = read.ticket(todoId: UUID())
+
+        // Read off the file, so it stands.
+        XCTAssertEqual(ticket.eventTitle, "Vibe Coders SG #2")
+        // Absent from the file, so the task supplies them.
+        XCTAssertEqual(ticket.venue, "Lorong AI @ One-North")
+        XCTAssertEqual(try XCTUnwrap(ticket.eventDate), localDay(2026, 7, 31))
+        XCTAssertEqual(ticket.startTimeText, "6:30 PM")
+    }
+
+    /// The rule that makes the fallback safe: a value printed on the file is never
+    /// replaced by the task's version of it.
+    func testWhatTheFileShowsBeatsWhatTheTaskSays() throws {
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: ExtractedTaskTicket(
+                eventTitle: "COLDPLAY",
+                eventDate: "2026-09-12",
+                startTimeText: "Show 20:00",
+                venue: "National Stadium, Singapore",
+                yearWasPrinted: true
+            ),
+            degradeMessage: nil,
+            context: TaskTicketContext(
+                title: "Buy merch",
+                dueDate: localDay(2026, 1, 1),
+                address: "Somewhere else entirely"
+            )
+        )
+        let ticket = read.ticket(todoId: UUID())
+        XCTAssertEqual(ticket.eventTitle, "COLDPLAY")
+        XCTAssertEqual(ticket.venue, "National Stadium, Singapore")
+        XCTAssertEqual(ticket.startTimeText, "Show 20:00")
+        XCTAssertEqual(try XCTUnwrap(ticket.eventDate), localDay(2026, 9, 12))
+    }
+
+    /// A file that printed its own date does NOT borrow the task's clock time: the
+    /// two are about different days, and 6:30 PM on the task's day says nothing about
+    /// the hour on the ticket's day.
+    func testTheTaskClockTimeIsOnlyUsedWhenItsDayIsToo() {
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: ExtractedTaskTicket(eventDate: "2026-09-12", yearWasPrinted: true),
+            degradeMessage: nil,
+            context: TaskTicketContext(
+                dueDate: localDay(2026, 7, 31).addingTimeInterval(18 * 3600 + 30 * 60)
+            )
+        )
+        XCTAssertEqual(read.ticket(todoId: UUID()).startTimeText, "")
+    }
+
+    /// Filling the card from the task must not turn round and suggest those same
+    /// values back to the task's own fields — that direction is for what the FILE
+    /// said, and echoing would make an empty read look like a productive one.
+    func testTaskContextNeverBecomesASuggestionBackToTheTask() {
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/x.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: nil,
+            degradeMessage: "couldn't read",
+            context: TaskTicketContext(
+                title: "Vibe Coders SG #2",
+                dueDate: localDay(2026, 7, 31),
+                address: "Lorong AI @ One-North"
+            )
+        )
+        XCTAssertNil(read.suggestedTitle)
+        XCTAssertNil(read.suggestedAddress)
+        XCTAssertNil(read.suggestedDueDate)
     }
 
     /// The stored day is local midnight, so every surface that formats it with the
@@ -819,6 +947,130 @@ final class TaskTicketAttachmentTests: XCTestCase {
     func testStoredEventDateIsLocalMidnightOfThePrintedDay() throws {
         let ticket = makeRead().ticket(todoId: UUID())
         XCTAssertEqual(try XCTUnwrap(ticket.eventDate), localDay(2026, 9, 12))
+    }
+
+    // MARK: - Refusing the same file twice (#408)
+
+    /// The failure this closes: the attach gave no visible sign it had worked, so it
+    /// was done again, and the task ended up with two identical cards. Byte-identical
+    /// files are recognised on the way in, before anything is stored or read.
+    func testTheSameFileIsRecognisedAsAlreadyAttached() throws {
+        let todo = insertTodo()
+        let bytes = Data("the-same-ticket-pdf".utf8)
+        let service = TaskTicketService(store: store)
+
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/first.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: ExtractedTaskTicket(eventTitle: "Vibe Coders SG #2"),
+            degradeMessage: nil,
+            sourceHash: SyncHash.hex(bytes)
+        )
+        try service.attach(read.ticket(todoId: todo.clientUUID), todoId: todo.clientUUID)
+
+        let existing = try service.list(todoId: todo.clientUUID)
+        let hit = service.duplicate(of: bytes, among: existing)
+        XCTAssertEqual(
+            hit?.eventTitle, "Vibe Coders SG #2",
+            "a second run at the identical file was not recognised"
+        )
+        XCTAssertNil(
+            service.duplicate(of: Data("a-different-ticket".utf8), among: existing),
+            "a different file must still be accepted"
+        )
+    }
+
+    /// The fingerprint has to survive the write, or the check only ever works within
+    /// one session.
+    func testTheIngestFingerprintIsStoredOnTheRow() throws {
+        let todo = insertTodo()
+        let bytes = Data("fingerprint-me".utf8)
+        let service = TaskTicketService(store: store)
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/f.jpg",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: nil,
+            degradeMessage: nil,
+            sourceHash: SyncHash.hex(bytes)
+        )
+        try service.attach(read.ticket(todoId: todo.clientUUID), todoId: todo.clientUUID)
+
+        let stored = try XCTUnwrap(try service.list(todoId: todo.clientUUID).first)
+        XCTAssertEqual(stored.ticketMeta?.sourceHash, SyncHash.hex(bytes))
+    }
+
+    /// The other half, for the two cases the hash cannot see: a row written before
+    /// fingerprints existed, and the same ticket arriving as a different file (a
+    /// fresh screenshot, a re-download). Both scan to the same payload.
+    func testTheSameBarcodeCountsAsAlreadyAttached() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        // No sourceHash at all: exactly the shape of the rows already in the store.
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/legacy.jpg",
+            barcodePayload: "https://luma.com/check-in/evt-oQFgiXtb",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            extracted: ExtractedTaskTicket(eventTitle: "Vibe Coders SG #2"),
+            degradeMessage: nil
+        )
+        try service.attach(read.ticket(todoId: todo.clientUUID), todoId: todo.clientUUID)
+
+        let existing = try service.list(todoId: todo.clientUUID)
+        XCTAssertNotNil(
+            service.duplicate(
+                ofBarcode: "https://luma.com/check-in/evt-oQFgiXtb",
+                among: existing
+            ),
+            "a re-exported copy of an attached ticket was not recognised"
+        )
+        XCTAssertNil(
+            service.duplicate(ofBarcode: "https://luma.com/check-in/evt-somethingelse", among: existing)
+        )
+    }
+
+    /// "No barcode" is not an identity. Two unscannable documents on one task are a
+    /// perfectly ordinary thing to have, so an empty payload must never match.
+    func testAnEmptyBarcodeNeverCountsAsADuplicate() throws {
+        let todo = insertTodo()
+        let service = TaskTicketService(store: store)
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/plain.pdf",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            extracted: ExtractedTaskTicket(eventTitle: "Booking confirmation"),
+            degradeMessage: nil
+        )
+        try service.attach(read.ticket(todoId: todo.clientUUID), todoId: todo.clientUUID)
+
+        let existing = try service.list(todoId: todo.clientUUID)
+        XCTAssertNil(service.duplicate(ofBarcode: "", among: existing))
+        XCTAssertNil(service.duplicate(ofBarcode: "   ", among: existing))
+    }
+
+    /// Scoped to the task, not the store: the same pass legitimately lives on two
+    /// different tasks (an outbound and a return, a match and the dinner after).
+    func testTheSameFileOnADifferentTaskIsNotADuplicate() throws {
+        let first = insertTodo(title: "Vibe Coders")
+        let second = insertTodo(title: "Dinner after")
+        let bytes = Data("shared-file".utf8)
+        let service = TaskTicketService(store: store)
+
+        let read = TaskTicketRead(
+            attachmentPath: "task-tickets/shared.jpg",
+            barcodePayload: "SAME-CODE",
+            barcodeSymbology: BarcodeSymbology.qr.rawValue,
+            extracted: nil,
+            degradeMessage: nil,
+            sourceHash: SyncHash.hex(bytes)
+        )
+        try service.attach(read.ticket(todoId: first.clientUUID), todoId: first.clientUUID)
+
+        // The section only ever checks against the tickets on the task in hand.
+        let onSecond = try service.list(todoId: second.clientUUID)
+        XCTAssertNil(service.duplicate(of: bytes, among: onSecond))
+        XCTAssertNil(service.duplicate(ofBarcode: "SAME-CODE", among: onSecond))
     }
 
     // MARK: - Attaching without creating a task
