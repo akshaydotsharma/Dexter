@@ -470,13 +470,15 @@ final class TaskTicketAttachmentTests: XCTestCase {
         eventTitle: String? = "COLDPLAY",
         eventDate: String? = "2026-09-12",
         startTimeText: String? = "Show 20:00",
-        venue: String? = "National Stadium, Singapore"
+        venue: String? = "National Stadium, Singapore",
+        yearWasPrinted: String? = "yes"
     ) -> TaskTicketRead {
         var input: [String: AnthropicJSONValue] = [:]
         if let eventTitle { input["event_title"] = .string(eventTitle) }
         if let eventDate { input["event_date"] = .string(eventDate) }
         if let startTimeText { input["start_time_text"] = .string(startTimeText) }
         if let venue { input["venue"] = .string(venue) }
+        if let yearWasPrinted { input["year_was_printed"] = .string(yearWasPrinted) }
         return TaskTicketRead(
             attachmentPath: "task-tickets/x.jpg",
             barcodePayload: "P",
@@ -538,6 +540,201 @@ final class TaskTicketAttachmentTests: XCTestCase {
         let read = makeRead(eventTitle: "   ", venue: "")
         XCTAssertNil(read.suggestedTitle)
         XCTAssertNil(read.suggestedAddress)
+    }
+
+    // MARK: - Working out a year the ticket never printed
+
+    private func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        return utc.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+
+    private func localDay(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        return cal.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+
+    /// The exact failure seen on a Chope restaurant confirmation: the card printed
+    /// "2 AUG · Sun" with no year, and the model — which has no idea what today is —
+    /// answered 2025-08-02, a Saturday, putting the task a year in the past. The
+    /// printed weekday pins the year, so this is recoverable without asking anyone.
+    func testUnprintedYearIsCorrectedFromThePrintedWeekday() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: "Sun",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 8, 2), "2 August falls on a Sunday in 2026, not 2025")
+    }
+
+    /// With no weekday to check against, the next occurrence is the answer: nobody
+    /// attaches a ticket for something that already happened.
+    func testUnprintedYearWithoutAWeekdayRollsForward() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: nil,
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 8, 2))
+    }
+
+    /// A date still to come this year is already right and must not be nudged.
+    func testUnprintedYearLeavesAnUpcomingDateAlone() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2026-09-12",
+            printedWeekday: "Sat",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 9, 12))
+    }
+
+    /// A printed year is authoritative even when it is in the past: filing a ticket
+    /// for something that already happened is a legitimate thing to do, and guessing
+    /// past it would be worse than the bug this fixes.
+    func testPrintedYearInThePastIsTrusted() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2024-08-02",
+            printedWeekday: "Fri",
+            yearWasPrinted: true,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2024, 8, 2))
+    }
+
+    /// Something in the weekday slot that is not a day name is ignored rather than
+    /// derailing the whole date.
+    func testAnUnrecognisedWeekdayIsIgnored() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: "party time",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2026, 8, 2))
+    }
+
+    /// A printed weekday genuinely selects the year, including one further out: 2
+    /// August is a Thursday in 2029 and in no nearer year.
+    func testAPrintedWeekdayCanSelectALaterYear() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-08-02",
+            printedWeekday: "Thu",
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2029, 8, 2))
+    }
+
+    /// 29 February exists only in a leap year, so the candidate scan has to skip the
+    /// years it does not. This only works because the month and day are read off the
+    /// string: a `DateFormatter` silently turns 2025-02-29 into 1 March, and the
+    /// answer would then be a date the ticket never mentioned.
+    func testLeapDayResolvesToALeapYear() {
+        let resolved = TaskTicketExtraction.resolveDay(
+            iso: "2025-02-29",
+            printedWeekday: nil,
+            yearWasPrinted: false,
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertEqual(resolved, day(2028, 2, 29))
+    }
+
+    func testWeekdayNamesParseInTheFormsTicketsPrintThem() {
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("Sun"), 1)
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("sunday"), 1)
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("SAT"), 7)
+        XCTAssertEqual(TaskTicketExtraction.weekdayIndex("Wed."), 4)
+        XCTAssertNil(TaskTicketExtraction.weekdayIndex(nil))
+        XCTAssertNil(TaskTicketExtraction.weekdayIndex("payday"))
+    }
+
+    /// The model states today's date to the extractor, because without it there is
+    /// nothing to reason from and it answers from its training cutoff instead.
+    func testUserPromptStatesTodaysDate() {
+        let prompt = TaskTicketExtraction.userPrompt(
+            taskTitle: "",
+            today: localDay(2026, 7, 30)
+        )
+        XCTAssertTrue(prompt.contains("Thursday, 30 July 2026"), prompt)
+    }
+
+    /// The stored day is local midnight, so every surface that formats it with the
+    /// local calendar shows the day printed on the ticket. Calling `startOfDay` on
+    /// the UTC value instead lands a day early anywhere west of UTC.
+    func testStoredEventDateIsLocalMidnightOfThePrintedDay() throws {
+        let ticket = makeRead().ticket(todoId: UUID())
+        XCTAssertEqual(try XCTUnwrap(ticket.eventDate), localDay(2026, 9, 12))
+    }
+
+    // MARK: - Attaching without creating a task
+
+    /// A ticket added while composing a new task must be renderable and editable
+    /// before anything is written, which is what lets Cancel actually cancel.
+    func testProvisionalTicketCarriesEveryExtractedField() throws {
+        let read = makeRead()
+        let ticket = read.ticket(todoId: UUID())
+        XCTAssertEqual(ticket.eventTitle, "COLDPLAY")
+        XCTAssertEqual(ticket.venue, "National Stadium, Singapore")
+        XCTAssertEqual(ticket.startTimeText, "Show 20:00")
+        XCTAssertEqual(ticket.attachmentPath, "task-tickets/x.jpg")
+        XCTAssertEqual(ticket.barcodePayload, "P")
+        XCTAssertTrue(ticket.hasBarcode)
+        XCTAssertFalse(ticket.isBare)
+    }
+
+    /// The same values whether it goes straight to disk or waits in the editor: one
+    /// derivation, so the card cannot change when it is committed.
+    func testAttachingAProvisionalTicketStoresWhatTheCardShowed() throws {
+        let todo = insertTodo(title: "Coldplay")
+        let provisional = makeRead().ticket(todoId: todo.clientUUID)
+        let service = TaskTicketService(store: store)
+
+        _ = try service.attach(provisional, todoId: todo.clientUUID)
+
+        let stored = try XCTUnwrap(try service.list(todoId: todo.clientUUID).first)
+        XCTAssertEqual(stored.eventTitle, provisional.eventTitle)
+        XCTAssertEqual(stored.eventDate, provisional.eventDate)
+        XCTAssertEqual(stored.startTimeText, provisional.startTimeText)
+        XCTAssertEqual(stored.venue, provisional.venue)
+        XCTAssertEqual(stored.barcodePayload, provisional.barcodePayload)
+        XCTAssertEqual(stored.attachmentPath, provisional.attachmentPath)
+    }
+
+    /// An edit made to a ticket before the task was saved has to be what gets
+    /// written, not the extractor's original reading of it.
+    func testEditsMadeBeforeSavingSurviveTheAttach() throws {
+        let todo = insertTodo(title: "Dinner")
+        var provisional = makeRead().ticket(todoId: todo.clientUUID)
+        provisional.eventTitle = "Corrected by hand"
+        provisional.seat = "12A"
+
+        let service = TaskTicketService(store: store)
+        _ = try service.attach(provisional, todoId: todo.clientUUID)
+
+        let stored = try XCTUnwrap(try service.list(todoId: todo.clientUUID).first)
+        XCTAssertEqual(stored.eventTitle, "Corrected by hand")
+        XCTAssertEqual(stored.seat, "12A")
+    }
+
+    /// Attaching several holds their order, since they are flushed as a batch when
+    /// the task is finally created.
+    func testAttachingSeveralPendingTicketsKeepsTheirOrder() throws {
+        let todo = insertTodo(title: "Two tickets")
+        let service = TaskTicketService(store: store)
+        let first = makeRead(eventTitle: "First").ticket(todoId: todo.clientUUID)
+        let second = makeRead(eventTitle: "Second").ticket(todoId: todo.clientUUID)
+
+        let ids = service.attachAll([first, second], todoId: todo.clientUUID)
+
+        XCTAssertEqual(ids.count, 2)
+        let stored = try service.list(todoId: todo.clientUUID)
+        XCTAssertEqual(stored.map(\.eventTitle), ["First", "Second"])
+        XCTAssertEqual(stored.map(\.position), [0, 1])
     }
 
     func testClockTimeParsingHandlesTheFormsTicketsUse() {

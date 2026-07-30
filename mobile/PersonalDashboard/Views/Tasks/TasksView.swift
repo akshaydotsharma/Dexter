@@ -1148,10 +1148,10 @@ private struct TaskEditorSheet: View {
     @State private var googleMapsLink: String = ""
     @State private var isResolvingAddress = false
     @State private var addressResolveTask: Task<Void, Never>?
-    /// Set when attaching a ticket forced this new task to be created early
-    /// (#399). `save()` must then UPDATE that row rather than create a second
-    /// task, and Cancel must not orphan the ticket.
-    @State private var createdTodoId: UUID?
+    /// Tickets attached while composing a task that does not exist yet (#399).
+    /// Written by `save()`, thrown away by Cancel. Held here rather than in the
+    /// ticket section because this view owns that lifecycle.
+    @State private var pendingTickets: [TaskTicket] = []
 
     @Environment(\.openURL) private var openURL
 
@@ -1316,11 +1316,14 @@ private struct TaskEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
-                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(!canSave)
                         .foregroundStyle(Tokens.ink)
                 }
             }
             .onAppear(perform: prefill)
+            // Covers both Cancel and a swipe-down dismiss, and runs after a save has
+            // already emptied the array.
+            .onDisappear(perform: discardPendingTickets)
         }
     }
 
@@ -1336,18 +1339,17 @@ private struct TaskEditorSheet: View {
 
     /// Ticket attachments, on both the iOS and macOS editors.
     ///
-    /// A ticket row is keyed on the task's `clientUUID`, which a task being
-    /// created for the first time does not have yet. Rather than refuse until the
-    /// task is saved, the section calls `ensureTask` and the task is created at
-    /// that moment: wanting to attach a ticket to a task you are in the middle of
-    /// writing is the obvious thing, and "save it first" is the editor's problem
-    /// leaking out at the person.
+    /// A ticket row is keyed on the task's `clientUUID`, which a task being created
+    /// for the first time does not have yet. Rather than refuse until the task is
+    /// saved — "save it first" being the editor's problem leaking out at the person —
+    /// the ticket is read immediately and held in `pendingTickets`, then written when
+    /// Add is pressed. Cancel discards it.
     @ViewBuilder
     private var ticketsBlock: some View {
         TaskTicketSection(
             todoId: todo?.id,
             taskTitle: currentTitleForTickets,
-            ensureTask: ensureTaskExists,
+            pending: $pendingTickets,
             onExtracted: applyExtractedTicket
         )
     }
@@ -1380,33 +1382,18 @@ private struct TaskEditorSheet: View {
         return trimmed.isEmpty ? (todo?.title ?? "") : trimmed
     }
 
-    /// Create the task being composed so an attachment has something to attach to,
-    /// returning its id.
-    ///
-    /// Never refuses. An earlier version required a title first, which put the
-    /// editor's sequencing in front of the person for no reason: the ticket carries
-    /// the event name, so `suggestedTitle` is the title. Only if the ticket could
-    /// not be read either does it fall back to a generic one, which is still better
-    /// than rejecting the upload and making them start over.
-    ///
-    /// Deliberately does NOT dismiss: the person is still editing, and the ticket
-    /// ingest continues against the returned id.
-    private func ensureTaskExists(suggestedTitle: String?) async -> UUID? {
-        if let todo { return todo.id }
-        let typed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fromTicket = suggestedTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let resolvedTitle = !typed.isEmpty ? typed : (!fromTicket.isEmpty ? fromTicket : "Ticket")
-        let created = await viewModel.create(
-            title: resolvedTitle,
-            description: descriptionText.isEmpty ? nil : descriptionText,
-            dueDate: hasDueDate ? dueDate : nil,
-            tag: tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag,
-            address: address.trimmingCharacters(in: .whitespacesAndNewlines),
-            googleMapsLink: googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines),
-            priority: priority.rawValue
-        )
-        if let created { createdTodoId = created.id }
-        return created?.id
+    /// A ticket whose event name is the only thing naming the task still needs the
+    /// task to have a title, since an untitled task cannot be saved. Filling it from
+    /// the ticket is `applyExtractedTicket`'s job; this is the last-resort name for a
+    /// ticket nothing could be read from, so the upload is never rejected outright.
+    private static let untitledTicketTaskName = "Ticket"
+
+    /// Whether there is anything worth saving. A ticket on its own counts (#399): it
+    /// carries the event name that becomes the title, and one the extractor could
+    /// read nothing from still falls back to a generic name rather than trapping the
+    /// person in an editor they cannot commit.
+    private var canSave: Bool {
+        !title.trimmingCharacters(in: .whitespaces).isEmpty || !pendingTickets.isEmpty
     }
 
     // MARK: - macOS editor (Reminders-style inspector popover, issue #287)
@@ -1429,8 +1416,8 @@ private struct TaskEditorSheet: View {
                 Button(isEditing ? "Save" : "Add") { Task { await save() } }
                     .buttonStyle(.plain)
                     .fontWeight(.semibold)
-                    .foregroundStyle(isTitleEmpty ? Tokens.muted : Tokens.accentTasks)
-                    .disabled(isTitleEmpty)
+                    .foregroundStyle(canSave ? Tokens.accentTasks : Tokens.muted)
+                    .disabled(!canSave)
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
@@ -1594,6 +1581,9 @@ private struct TaskEditorSheet: View {
         .frame(width: 360, height: 520)
         .background(Tokens.paper)
         .onAppear(perform: prefill)
+        // Covers Cancel and dismissing the popover by clicking away, and runs after
+        // a save has already emptied the array.
+        .onDisappear(perform: discardPendingTickets)
     }
 
     private var isTitleEmpty: Bool {
@@ -1676,24 +1666,46 @@ private struct TaskEditorSheet: View {
     }
 
     private func save() async {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        guard canSave else { return }
+        let typed = title.trimmingCharacters(in: .whitespaces)
+        let trimmed = typed.isEmpty ? Self.untitledTicketTaskName : typed
         let finalDescription = descriptionText.isEmpty ? nil : descriptionText
         let finalTag = tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag
         let finalDue = hasDueDate ? dueDate : nil
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        // `createdTodoId` means attaching a ticket already created this task
-        // (#399). Updating it is essential: creating again would leave two tasks,
-        // one of them holding the ticket.
-        let existingToUpdate = todo ?? createdTodoId.flatMap { id in
-            viewModel.todos.first { $0.id == id }
-        }
-        if let existing = existingToUpdate {
+
+        if let existing = todo {
             await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            flushPendingTickets(to: existing.id)
         } else {
-            await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            let created = await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            if let created { flushPendingTickets(to: created.id) }
         }
         dismiss()
+    }
+
+    /// Write the tickets attached while composing, now that the task exists (#399).
+    ///
+    /// Their owner id was a placeholder until this moment, so it is substituted
+    /// here. Clearing the array is what stops `.onDisappear` from then deleting the
+    /// files we just committed to.
+    private func flushPendingTickets(to todoId: UUID) {
+        guard !pendingTickets.isEmpty else { return }
+        _ = TaskTicketService().attachAll(pendingTickets, todoId: todoId)
+        pendingTickets = []
+    }
+
+    /// Abandoning the editor throws away anything attached but never committed.
+    ///
+    /// The bytes are written to disk during the read, before there is a task to hang
+    /// them on, so without this a cancelled compose would leak a file per upload.
+    private func discardPendingTickets() {
+        guard !pendingTickets.isEmpty else { return }
+        let service = TaskTicketService()
+        for ticket in pendingTickets {
+            service.discardUnattached(ticket)
+        }
+        pendingTickets = []
     }
 }

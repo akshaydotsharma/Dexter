@@ -83,17 +83,47 @@ struct TaskTicketService {
         return try await extraction.read(data: data, isPDF: isPDF, taskTitle: taskTitle)
     }
 
-    /// Attach a completed read to a task.
+    /// Attach a ticket to a task, returning the id of the stored row.
+    ///
+    /// Takes the DTO rather than the read so that a ticket held unsaved in the task
+    /// editor — and possibly edited there — is written as it stands.
     @discardableResult
     func attach(
-        _ read: TaskTicketRead,
+        _ ticket: TaskTicket,
         todoId: UUID,
         extraction: TaskTicketExtraction? = nil
-    ) throws -> TaskTicketExtractionResult {
+    ) throws -> UUID {
         let extraction = extraction ?? TaskTicketExtraction()
-        let result = try extraction.attach(read, toTodo: todoId, context: store.context)
+        let id = try extraction.attach(ticket, toTodo: todoId, context: store.context)
         touchTodo(todoId)
-        return result
+        return id
+    }
+
+    /// Attach several tickets in order, for flushing what the editor was holding
+    /// once the task it belongs to exists.
+    ///
+    /// Each is attempted independently: one bad row should not strand the others,
+    /// and the task has already been created by this point either way.
+    @discardableResult
+    func attachAll(_ tickets: [TaskTicket], todoId: UUID) -> [UUID] {
+        var stored: [UUID] = []
+        for ticket in tickets {
+            do {
+                stored.append(try attach(ticket, todoId: todoId))
+            } catch {
+                NSLog("TaskTicketService: could not attach a pending ticket: %@",
+                      error.localizedDescription)
+            }
+        }
+        return stored
+    }
+
+    /// Discard a ticket that was never attached, removing its stored file.
+    ///
+    /// The bytes land on disk during the read, before there is any task to hang them
+    /// on, so abandoning the editor has to clean them up or they leak.
+    func discardUnattached(_ ticket: TaskTicket) {
+        try? storage.delete(relativePath: ticket.attachmentPath)
     }
 
     /// Convenience for callers that already have a task: read then attach.
@@ -104,9 +134,9 @@ struct TaskTicketService {
         data: Data,
         isPDF: Bool,
         extraction: TaskTicketExtraction? = nil
-    ) async throws -> TaskTicketExtractionResult {
+    ) async throws -> UUID {
         let read = try await read(data: data, isPDF: isPDF, taskTitle: taskTitle, extraction: extraction)
-        return try attach(read, todoId: todoId, extraction: extraction)
+        return try attach(read.ticket(todoId: todoId), todoId: todoId, extraction: extraction)
     }
 
     /// Overwrite the user-editable fields on a ticket. Every extracted value is

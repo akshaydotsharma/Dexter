@@ -27,6 +27,9 @@ struct TicketOriginalViewer: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    /// Driven by the zoom buttons, which are the only way in for a mouse user.
+    @State private var scale: CGFloat = PinchZoomImageView.minScale
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -36,12 +39,35 @@ struct TicketOriginalViewer: View {
             .navigationTitle("Original ticket")
             .inlineNavigationTitle()
             .toolbar {
+                #if os(macOS)
+                // A trackpad pinch is the only gesture into the zoom view on macOS
+                // and a mouse has none at all, so the buttons are not optional here.
+                ToolbarItem(placement: .automatic) {
+                    if isZoomableImage { ZoomControls(scale: $scale) }
+                }
+                #endif
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .foregroundStyle(Tokens.ink)
                 }
             }
         }
+        #if os(macOS)
+        // Without an explicit size a macOS sheet shrinks to its content's ideal
+        // width, which for a scroll-view-backed image is next to nothing: the
+        // original ticket came up as a thumbnail in a box barely taller than its own
+        // toolbar. A ticket is a portrait document and this is the surface for
+        // reading the small print on it, so it opens large.
+        .frame(minWidth: 560, idealWidth: 720, minHeight: 560, idealHeight: 860)
+        #endif
+    }
+
+    /// Whether the stored file is an image we hand to the zoom view, as opposed to a
+    /// PDF (which does its own zooming) or a file that has gone missing.
+    private var isZoomableImage: Bool {
+        guard !TicketStorage.isPDF(attachmentPath),
+              let url = TicketStorage.shared.load(relativePath: attachmentPath) else { return false }
+        return loadReceiptPlatformImage(url) != nil
     }
 
     @ViewBuilder
@@ -49,9 +75,11 @@ struct TicketOriginalViewer: View {
         if let url = TicketStorage.shared.load(relativePath: attachmentPath) {
             if TicketStorage.isPDF(attachmentPath) {
                 TicketPDFView(url: url)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(edges: .bottom)
             } else if let image = loadReceiptPlatformImage(url) {
-                PinchZoomImageView(image: image)
+                PinchZoomImageView(image: image, scale: $scale)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(edges: .bottom)
             } else {
                 unavailable

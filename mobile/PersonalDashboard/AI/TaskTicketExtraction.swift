@@ -6,18 +6,6 @@ import UIKit
 import AppKit
 #endif
 
-/// Outcome of running one uploaded task ticket through the on-device pipeline
-/// (#399). A row is ALWAYS created when the file persisted — the upload is never
-/// lost. `degraded` flags the case where the LLM step failed and we fell back to
-/// a row carrying only the attachment plus whatever the barcode yielded, which
-/// the UI turns into "open the fields for manual entry" rather than an error.
-struct TaskTicketExtractionResult: Sendable {
-    let ticketUUID: UUID
-    let degraded: Bool
-    /// User-facing note when `degraded`.
-    let message: String?
-}
-
 /// Thrown when the owning task disappeared while extraction was in flight.
 enum TaskTicketExtractionError: LocalizedError {
     case taskGone
@@ -43,6 +31,9 @@ struct TaskTicketRead {
     let extracted: ExtractedTaskTicket?
     /// User-facing note when the LLM step failed. The file is still stored.
     let degradeMessage: String?
+    /// When the read happened, which is the reference point for working out an
+    /// unprinted year. Injectable so that resolution is testable.
+    var readAt: Date = Date()
 
     /// The event name, for the task's title when it has none.
     var suggestedTitle: String? {
@@ -58,6 +49,17 @@ struct TaskTicketRead {
         return t.isEmpty ? nil : t
     }
 
+    /// The day the ticket is valid, as UTC midnight, with the year corrected when
+    /// the ticket did not print one. See `TaskTicketExtraction.resolveDay`.
+    var eventDay: Date? {
+        TaskTicketExtraction.resolveDay(
+            iso: extracted?.eventDate,
+            printedWeekday: extracted?.printedWeekday,
+            yearWasPrinted: extracted?.yearWasPrinted ?? false,
+            today: readAt
+        )
+    }
+
     /// The event moment as a real `Date`, for the task's due date.
     ///
     /// This is the one place a `Date` is the right shape: a due date is a reminder
@@ -65,22 +67,67 @@ struct TaskTicketRead {
     /// must stay verbatim (see `LocalTaskTicket`). Built in the CURRENT calendar
     /// and timezone for that reason. Nil when no date was read.
     var suggestedDueDate: Date? {
-        guard let day = TaskTicketExtraction.parseISODateOnly(extracted?.eventDate) else { return nil }
+        guard let day = eventDay,
+              var local = TaskTicketExtraction.localMidnight(ofUTCDay: day) else { return nil }
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = .current
-        // The day was parsed in UTC; re-anchor it to local midnight so a due date
-        // set from it lands on the printed day rather than the one before.
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        let parts = utc.dateComponents([.year, .month, .day], from: day)
-        guard var local = cal.date(from: DateComponents(
-            year: parts.year, month: parts.month, day: parts.day, hour: 9
-        )) else { return nil }
-        if let (h, m) = TaskTicketExtraction.parseClockTime(extracted?.startTimeText),
-           let withTime = cal.date(bySettingHour: h, minute: m, second: 0, of: local) {
+        // Default to 9am when the ticket prints no time, so the reminder is not at
+        // midnight the night before the person means to be somewhere.
+        let (h, m) = TaskTicketExtraction.parseClockTime(extracted?.startTimeText) ?? (9, 0)
+        if let withTime = cal.date(bySettingHour: h, minute: m, second: 0, of: local) {
             local = withTime
         }
         return local
+    }
+
+    /// The ticket exactly as it would be stored, WITHOUT storing it.
+    ///
+    /// One derivation serves both paths (#399): an attachment on an existing task
+    /// goes straight to disk, while one added while composing a brand-new task is
+    /// held in memory until Add is pressed, and both need the same fields. Building
+    /// the DTO here rather than inside the insert is what lets the unsaved case
+    /// render a real card and be edited before anything is written.
+    func ticket(id: UUID = UUID(), todoId: UUID, position: Int = 0, now: Date = Date()) -> TaskTicket {
+        // Extras go in the JSON blob so a new ticket shape never forces another
+        // @Model migration. `TicketMeta` already carries these three fields.
+        var meta = TicketMeta()
+        meta.eventType = Self.clean(extracted?.eventType)
+        meta.section = Self.clean(extracted?.section)
+        meta.row = Self.clean(extracted?.row)
+
+        // Stored at LOCAL midnight of the printed day, because every surface that
+        // renders or edits it uses the local calendar.
+        let localDay = eventDay.flatMap { TaskTicketExtraction.localMidnight(ofUTCDay: $0) }
+        let metaJSON = meta.isEmpty ? "" : meta.encodedString()
+
+        return TaskTicket(
+            id: id,
+            todoId: todoId,
+            attachmentPath: attachmentPath,
+            barcodePayload: barcodePayload,
+            barcodeSymbology: barcodeSymbology,
+            eventTitle: Self.clean(extracted?.eventTitle) ?? "",
+            eventDate: localDay,
+            startTimeText: Self.clean(extracted?.startTimeText) ?? "",
+            venue: Self.clean(extracted?.venue) ?? "",
+            seat: Self.clean(extracted?.seat) ?? "",
+            // Short codes are the error-prone ones: a bare "T" or a dash read off
+            // the ticket is worse than showing nothing, so the gate goes through
+            // the same sanitizer the itinerary card uses.
+            gate: TicketField.code(extracted?.gate) ?? "",
+            reference: Self.clean(extracted?.reference) ?? "",
+            ticketMetaJSON: metaJSON,
+            position: position,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: nil
+        )
+    }
+
+    private static func clean(_ s: String?) -> String? {
+        guard let s else { return nil }
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (t.isEmpty || t.lowercased() == "null") ? nil : t
     }
 }
 
@@ -183,36 +230,47 @@ struct TaskTicketExtraction {
         )
     }
 
-    /// STEP 2 — attach a completed read to a task.
+    /// STEP 2 — attach a ticket to a task.
     ///
-    /// Separate from `read` so the caller can create the task from the read's own
-    /// suggestions in between. Addresses the task by `clientUUID` and fetches it
-    /// here, after every suspension is behind us, so it never holds a live `@Model`
-    /// across one (#328).
+    /// Takes the DTO rather than the read (#399) so the caller can hold an unsaved
+    /// ticket in memory, let it be edited, and write those edits rather than
+    /// re-deriving the extractor's original values. Addresses the task by
+    /// `clientUUID` and fetches it here, after every suspension is behind us, so it
+    /// never holds a live `@Model` across one (#328).
     ///
     /// - Throws when the task vanished mid-flight, cleaning up the orphaned file
     ///   first.
     @discardableResult
     func attach(
-        _ read: TaskTicketRead,
+        _ ticket: TaskTicket,
         toTodo todoUUID: UUID,
         context: ModelContext
-    ) throws -> TaskTicketExtractionResult {
+    ) throws -> UUID {
         guard let todo = Self.fetchTodo(uuid: todoUUID, context: context) else {
-            try? TicketStorage.taskTickets.delete(relativePath: read.attachmentPath)
+            try? TicketStorage.taskTickets.delete(relativePath: ticket.attachmentPath)
             throw TaskTicketExtractionError.taskGone
         }
 
-        let ticket = buildTicket(todoUUID: todo.clientUUID, read: read, context: context)
-        context.insert(ticket)
+        let row = LocalTaskTicket(
+            todoClientUUID: todo.clientUUID,
+            attachmentPath: ticket.attachmentPath,
+            barcodePayload: ticket.barcodePayload,
+            barcodeSymbology: ticket.barcodeSymbology,
+            eventTitle: ticket.eventTitle,
+            eventDate: ticket.eventDate,
+            startTimeText: ticket.startTimeText,
+            venue: ticket.venue,
+            seat: ticket.seat,
+            gate: ticket.gate,
+            reference: ticket.reference,
+            ticketMetaJSON: ticket.ticketMetaJSON,
+            position: Self.nextPosition(todoUUID: todo.clientUUID, context: context)
+        )
+        context.insert(row)
         todo.updatedAt = Date()
         try? context.save()
 
-        return TaskTicketExtractionResult(
-            ticketUUID: ticket.clientUUID,
-            degraded: read.extracted == nil,
-            message: read.extracted == nil ? read.degradeMessage : nil
-        )
+        return row.clientUUID
     }
 
     /// Fetch a live task by UUID, excluding soft-deleted rows. Called after every
@@ -223,50 +281,6 @@ struct TaskTicketExtraction {
         )
         descriptor.fetchLimit = 1
         return (try? context.fetch(descriptor))?.first
-    }
-
-    // MARK: - Row construction
-
-    private func buildTicket(
-        todoUUID: UUID,
-        read: TaskTicketRead,
-        context: ModelContext
-    ) -> LocalTaskTicket {
-        let extracted = read.extracted
-        let cal = Calendar(identifier: .gregorian)
-
-        // Extras go in the JSON blob so a new ticket shape never forces another
-        // @Model migration. `TicketMeta` already carries these three fields.
-        var meta = TicketMeta()
-        meta.eventType = trimmedOrNil(extracted?.eventType)
-        meta.section = trimmedOrNil(extracted?.section)
-        meta.row = trimmedOrNil(extracted?.row)
-
-        // Day only. The printed time lives in `startTimeText` — see the type doc
-        // on `LocalTaskTicket` for why it is not folded into a Date.
-        let eventDate = Self.parseISODateOnly(extracted?.eventDate).map { cal.startOfDay(for: $0) }
-
-        // Short codes are the error-prone ones: a bare "T" or a dash read off the
-        // ticket is worse than showing nothing, so both go through the same
-        // sanitizer the itinerary card uses.
-        let gate = TicketField.code(extracted?.gate) ?? ""
-        let seat = trimmedOrNil(extracted?.seat) ?? ""
-
-        return LocalTaskTicket(
-            todoClientUUID: todoUUID,
-            attachmentPath: read.attachmentPath,
-            barcodePayload: read.barcodePayload,
-            barcodeSymbology: read.barcodeSymbology,
-            eventTitle: trimmedOrNil(extracted?.eventTitle) ?? "",
-            eventDate: eventDate,
-            startTimeText: trimmedOrNil(extracted?.startTimeText) ?? "",
-            venue: trimmedOrNil(extracted?.venue) ?? "",
-            seat: seat,
-            gate: gate,
-            reference: trimmedOrNil(extracted?.reference) ?? "",
-            ticketMetaJSON: meta.isEmpty ? "" : meta.encodedString(),
-            position: Self.nextPosition(todoUUID: todoUUID, context: context)
-        )
     }
 
     /// Append to the end of the task's existing tickets.
@@ -308,12 +322,6 @@ struct TaskTicketExtraction {
 
     // MARK: - Small helpers
 
-    private func trimmedOrNil(_ s: String?) -> String? {
-        guard let s else { return nil }
-        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (t.isEmpty || t.lowercased() == "null") ? nil : t
-    }
-
     /// Pull an `HH:mm` out of the free-text printed time, so a due date can carry
     /// the hour. Tolerates a label ("Show 20:00", "Doors 7.30pm") and 12-hour form.
     /// Nil when there is no clock time in there at all.
@@ -333,6 +341,127 @@ struct TaskTicketExtraction {
             if suffix == "am", h == 12 { h = 0 }
         }
         return (h, mm)
+    }
+
+    /// The day the ticket is valid, with the year worked out when the ticket did
+    /// not print one.
+    ///
+    /// ## Why this exists
+    ///
+    /// Tickets and booking confirmations routinely print the day and month and no
+    /// year — "2 AUG · Sun" is the whole of it — because to the person holding one
+    /// the year is obvious. It is not obvious to the model, which has no idea what
+    /// today is and so answers from whenever its training data thinned out. A
+    /// Google/Chope restaurant confirmation for Sunday 2 August 2026 came back as
+    /// `2025-08-02`, which is a Saturday, and the task landed a year in the past.
+    ///
+    /// The prompt now states today's date, which is most of the fix. This is the
+    /// deterministic backstop, and it is worth having because the correction is
+    /// pure arithmetic: pick the nearest year that puts the date in the future and,
+    /// when the ticket printed a weekday, whose weekday agrees with it. A printed
+    /// weekday pins the year outright — 2 August falls on a Sunday only in 2026 of
+    /// the years nearby.
+    ///
+    /// A printed year is authoritative and never second-guessed: filing a ticket
+    /// for something that already happened is a legitimate thing to do. The flag
+    /// defaults to "not printed" when the model omits it, because a guessed year is
+    /// the failure actually seen and the field stays editable either way.
+    nonisolated static func resolveDay(
+        iso: String?,
+        printedWeekday: String?,
+        yearWasPrinted: Bool,
+        today: Date = Date()
+    ) -> Date? {
+        guard let parsed = parseISODateOnly(iso) else { return nil }
+        guard !yearWasPrinted else { return parsed }
+
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        // Read the month and day off the STRING rather than off `parsed`: a
+        // formatter turns an impossible date into a real one, so "29 February" in a
+        // year the model guessed wrong arrives here as 1 March and would then
+        // resolve to the wrong day entirely.
+        guard let (month, day) = parseMonthDay(iso) else { return parsed }
+
+        // Today in the person's own calendar, compared as a plain y/m/d tuple so
+        // no timezone arithmetic is involved in a decision about years.
+        let todayParts = Calendar(identifier: .gregorian)
+            .dateComponents([.year, .month, .day], from: today)
+        guard let thisYear = todayParts.year,
+              let todayMonth = todayParts.month,
+              let todayDay = todayParts.day else { return parsed }
+
+        let wantedWeekday = weekdayIndex(printedWeekday)
+
+        func best(matchingWeekday: Bool) -> Date? {
+            var soonestFuture: Date?
+            var mostRecentPast: Date?
+            // One year back covers a ticket from last month; five forward covers
+            // anything anyone books in advance.
+            for year in (thisYear - 1)...(thisYear + 5) {
+                guard let candidate = utc.date(from: DateComponents(
+                    year: year, month: month, day: day
+                )) else { continue }
+                // Reject a day that rolled over, e.g. 29 February in a non-leap year.
+                let check = utc.dateComponents([.year, .month, .day], from: candidate)
+                guard check.month == month, check.day == day else { continue }
+                if matchingWeekday, let wantedWeekday,
+                   utc.component(.weekday, from: candidate) != wantedWeekday { continue }
+
+                if (year, month, day) >= (thisYear, todayMonth, todayDay) {
+                    if soonestFuture == nil { soonestFuture = candidate }
+                } else {
+                    mostRecentPast = candidate
+                }
+            }
+            return soonestFuture ?? mostRecentPast
+        }
+
+        // Falling through to `matchingWeekday: false` covers a misread weekday: a
+        // future date beats insisting on a day name we may have got wrong.
+        if wantedWeekday != nil, let hit = best(matchingWeekday: true) { return hit }
+        return best(matchingWeekday: false) ?? parsed
+    }
+
+    /// Month and day exactly as written in a `yyyy-MM-dd` string, with no calendar
+    /// arithmetic applied, so an impossible date stays impossible and the candidate
+    /// scan can reject the years it does not exist in.
+    nonisolated static func parseMonthDay(_ raw: String?) -> (month: Int, day: Int)? {
+        guard let raw else { return nil }
+        let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(10)
+            .split(separator: "-")
+        guard parts.count == 3,
+              let month = Int(parts[1]), let day = Int(parts[2]),
+              (1...12).contains(month), (1...31).contains(day) else { return nil }
+        return (month, day)
+    }
+
+    /// Gregorian weekday number (Sunday = 1) for a printed day name, matched on its
+    /// first three letters so "Sun", "Sunday" and "sun." all land. Nil when the
+    /// ticket printed no weekday or it is not one we recognise.
+    nonisolated static func weekdayIndex(_ raw: String?) -> Int? {
+        guard let raw else { return nil }
+        let key = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines).prefix(3)
+        let names = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+        return names.firstIndex(of: String(key)).map { $0 + 1 }
+    }
+
+    /// Re-anchor a UTC-parsed day to midnight in the person's own timezone.
+    ///
+    /// Every surface that renders or edits the date uses the local calendar, so the
+    /// stored value has to be local midnight of the printed day. Calling
+    /// `startOfDay` on the UTC value directly is NOT the same thing: anywhere west
+    /// of UTC it lands on the day before.
+    nonisolated static func localMidnight(ofUTCDay day: Date) -> Date? {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let parts = utc.dateComponents([.year, .month, .day], from: day)
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = .current
+        return local.date(from: DateComponents(
+            year: parts.year, month: parts.month, day: parts.day
+        ))
     }
 
     /// Parse a bare `yyyy-MM-dd`. Anchored in UTC so the parsed day is the day
@@ -374,6 +503,12 @@ struct ExtractedTaskTicket {
     var eventType: String?
     var section: String?
     var row: String?
+    /// The weekday printed on the ticket, when it prints one. Used to pin down an
+    /// unprinted year — see `TaskTicketExtraction.resolveDay`.
+    var printedWeekday: String?
+    /// Whether the ticket actually printed a year, as opposed to the model working
+    /// one out. Only a printed year is taken at face value.
+    var yearWasPrinted: Bool = false
 
     init(input: [String: AnthropicJSONValue]) {
         func s(_ key: String) -> String? { input[key]?.stringValue }
@@ -387,6 +522,41 @@ struct ExtractedTaskTicket {
         eventType = s("event_type")
         section = s("section")
         row = s("row")
+        printedWeekday = s("printed_weekday")
+        // Asked for as a string rather than a JSON boolean to match every other
+        // field in this schema, and read leniently.
+        yearWasPrinted = ["yes", "true"].contains(
+            (s("year_was_printed") ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+        )
+    }
+
+    /// Direct init for tests and for building a read by hand.
+    init(
+        eventTitle: String? = nil,
+        eventDate: String? = nil,
+        startTimeText: String? = nil,
+        venue: String? = nil,
+        seat: String? = nil,
+        gate: String? = nil,
+        reference: String? = nil,
+        eventType: String? = nil,
+        section: String? = nil,
+        row: String? = nil,
+        printedWeekday: String? = nil,
+        yearWasPrinted: Bool = false
+    ) {
+        self.eventTitle = eventTitle
+        self.eventDate = eventDate
+        self.startTimeText = startTimeText
+        self.venue = venue
+        self.seat = seat
+        self.gate = gate
+        self.reference = reference
+        self.eventType = eventType
+        self.section = section
+        self.row = row
+        self.printedWeekday = printedWeekday
+        self.yearWasPrinted = yearWasPrinted
     }
 }
 
@@ -402,7 +572,9 @@ extension TaskTicketExtraction {
             "type": .string("object"),
             "properties": .object([
                 "event_title": field("The name of the event or booking as printed (e.g. \"Coldplay · Music of the Spheres\", \"Arsenal v Chelsea\", \"Dr Tan — dental check-up\"). Omit if the ticket shows no name."),
-                "event_date": field("The date the ticket is valid, as ISO 8601 yyyy-MM-dd. Read the printed date. If the year is not printed, omit the field rather than guessing a year."),
+                "event_date": field("The date the ticket is valid, as ISO 8601 yyyy-MM-dd. Read the printed day and month exactly. Tickets often print no year: in that case work it out from today's date, given in the message, choosing the NEXT occurrence of that day and month, and cross-check it against printed_weekday if the ticket shows a day name. Never assume the current year is the year of your training data."),
+                "printed_weekday": field("The day of the week printed on the ticket, if any, as printed (e.g. \"Sun\", \"Saturday\"). Omit when the ticket shows no day name. This is what pins down an unprinted year, so do not skip it when it is there."),
+                "year_was_printed": field("\"yes\" when a four-digit year is actually printed on the ticket, \"no\" when you worked the year out from the day and month. Be honest about this: a printed year is trusted as-is, an inferred one is double-checked."),
                 "start_time_text": field("The time the event actually STARTS, EXACTLY as printed, verbatim (e.g. \"20:00\", \"7.30pm\", \"Boards 18:20\"). When BOTH a doors/entry time and a start/show time are printed, use the START time — prefer \"Show 20:00\" over \"Doors 18:30\" — because that is the time the person is trying to be somewhere for. Fall back to the doors time only when no start time is printed, and keep its label then. Do NOT convert to 24-hour, do NOT add a timezone, do NOT reformat. Omit if no time is shown."),
                 "venue": field("Venue or location name as printed (e.g. \"National Stadium, Singapore\", \"The O2, London\"). Omit if none."),
                 "seat": field("Seat as printed (e.g. \"12A\", \"Seat 8\"). Omit if none."),
@@ -426,16 +598,31 @@ extension TaskTicketExtraction {
     Read values verbatim. Do not guess, round, translate or reformat. Omit any field you cannot read with confidence: a blank field renders as nothing, whereas a wrong one sends the person to the wrong door. Short codes like gate are especially error-prone — emit them ONLY when a real value is explicitly printed, never a lone letter, a dash or a placeholder.
 
     The start time is a special case: return it as printed, character for character. Never normalise it and never attach a timezone. When a ticket prints both a doors time and a show time, the show time is the one to return.
+
+    The date is the other special case. Many tickets print a day and month with no year, because to the person holding one the year is obvious. It is not obvious to you: today's date is given in the message and it is the only thing you should reason from, never your own sense of what year it is. When no year is printed, take the next occurrence of that day and month on or after today, and if the ticket also prints a day of the week, use it to check yourself — the year is wrong if the weekday does not match.
     """
 
-    static func userPrompt(taskTitle: String) -> String {
+    static func userPrompt(taskTitle: String, today: Date = Date()) -> String {
         let trimmed = taskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let context = trimmed.isEmpty
             ? ""
             : "\n\nFor context only, the task this ticket is attached to is called \"\(trimmed)\". Use it to disambiguate what you are reading, but never copy it into a field — every value must be read off the image itself."
 
         return """
+        Today is \(todayFormatter.string(from: today)). Use that as your reference for any date the ticket leaves partly unwritten.
+
         Extract the details of the ticket in the image by calling extract_task_ticket.\(context)
         """
     }
+
+    /// "Thursday, 30 July 2026" — the weekday is included so the model can check an
+    /// inferred year against a printed day name without doing calendar arithmetic
+    /// from a bare number.
+    nonisolated(unsafe) static let todayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEEE, d MMMM yyyy"
+        return f
+    }()
 }

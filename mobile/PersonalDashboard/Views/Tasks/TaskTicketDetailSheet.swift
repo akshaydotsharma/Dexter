@@ -15,6 +15,12 @@ struct TaskTicketDetailSheet: View {
     let taskTitle: String
     /// Invoked after a save or a delete so the parent can reload its strip.
     let onChange: () -> Void
+    /// Applies the edit instead of writing it through the service. Set for a ticket
+    /// attached to a task that has not been saved yet: there is no row to update, so
+    /// the edited copy goes back to whoever is holding it.
+    var onSave: ((TaskTicket) -> Void)? = nil
+    /// Removes the ticket instead of soft-deleting a row, for the same reason.
+    var onDelete: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -113,7 +119,13 @@ struct TaskTicketDetailSheet: View {
             Button("Remove ticket", role: .destructive) { delete() }
             Button("Keep it", role: .cancel) {}
         } message: {
-            Text("The ticket file will be deleted from this device. The task itself stays.")
+            // A pending ticket has no task behind it yet, so promising that the task
+            // stays would be describing something that does not exist.
+            Text(
+                onDelete == nil
+                    ? "The ticket file will be deleted from this device. The task itself stays."
+                    : "The ticket file will be deleted from this device."
+            )
         }
     }
 
@@ -312,11 +324,32 @@ struct TaskTicketDetailSheet: View {
         meta.section = trimmedOrNil(section)
         meta.row = trimmedOrNil(row)
 
+        let day = hasEventDate ? Calendar.current.startOfDay(for: eventDate) : nil
+
+        // A ticket held unsaved in the editor has no row yet, so the edit goes back
+        // to its holder instead of to the store.
+        if let onSave {
+            var edited = ticket
+            edited.eventTitle = eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            edited.eventDate = day
+            edited.startTimeText = startTimeText.trimmingCharacters(in: .whitespacesAndNewlines)
+            edited.venue = venue.trimmingCharacters(in: .whitespacesAndNewlines)
+            edited.seat = seat.trimmingCharacters(in: .whitespacesAndNewlines)
+            edited.gate = gate.trimmingCharacters(in: .whitespacesAndNewlines)
+            edited.reference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            edited.ticketMetaJSON = meta.isEmpty ? "" : meta.encodedString()
+            onSave(edited)
+            errorMessage = nil
+            isEditing = false
+            dismiss()
+            return
+        }
+
         do {
             _ = try service.update(
                 id: ticket.id,
                 eventTitle: eventTitle.trimmingCharacters(in: .whitespacesAndNewlines),
-                eventDate: .some(hasEventDate ? Calendar.current.startOfDay(for: eventDate) : nil),
+                eventDate: .some(day),
                 startTimeText: startTimeText.trimmingCharacters(in: .whitespacesAndNewlines),
                 venue: venue.trimmingCharacters(in: .whitespacesAndNewlines),
                 seat: seat.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -334,6 +367,11 @@ struct TaskTicketDetailSheet: View {
     }
 
     private func delete() {
+        if let onDelete {
+            onDelete()
+            dismiss()
+            return
+        }
         do {
             try service.delete(ticket)
             onChange()

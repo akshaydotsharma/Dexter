@@ -23,30 +23,35 @@ import UIKit
 /// pick one from Finder / Files, or take a photo (iPhone only). There is no
 /// separate "image" and "PDF" entry — one file picker accepts either, because the
 /// distinction is not a choice worth surfacing. See `TicketFilePicker`.
+///
+/// ## Attaching to a task that does not exist yet
+///
+/// A ticket added while composing a NEW task is held in `pending` and written only
+/// when the editor is committed. An earlier version created the task the moment a
+/// file arrived, which meant Cancel left a task behind — the editor deciding on the
+/// person's behalf that they had finished. The ticket still reads immediately, so
+/// the parsed title, date and venue fill the form straight away; it is only the
+/// write that waits.
 struct TaskTicketSection: View {
     /// The owning task, or `nil` when the editor is for a task that has not been
     /// saved yet.
     let todoId: UUID?
     let taskTitle: String
-    /// Creates the task and returns its id, for an attachment that arrives before
-    /// the task exists. Receives the event name read off the ticket, to use as the
-    /// title when nothing has been typed. Never returns nil in practice — the
-    /// editor falls back to a generic title rather than refusing the upload.
-    let ensureTask: (String?) async -> UUID?
+    /// Tickets read but not yet written, owned by the editor because it owns the
+    /// Cancel / Add lifecycle that decides their fate. Always empty once `todoId`
+    /// is non-nil.
+    @Binding var pending: [TaskTicket]
     /// Hands the values read off the ticket up to the editor so the task's own
     /// fields fill in: title, due date, address. The whole point of uploading is
     /// that you should not then have to type what the ticket already says.
     var onExtracted: (TaskTicketRead) -> Void = { _ in }
 
-    @State private var tickets: [TaskTicket] = []
+    @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
     @State private var isIngesting = false
     @State private var isTargetedForDrop = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
-    /// Set once a task has been created on demand, so subsequent attachments in
-    /// the same editor session reuse it instead of creating another.
-    @State private var createdTodoId: UUID?
 
     #if os(iOS)
     @State private var showingCamera = false
@@ -58,8 +63,12 @@ struct TaskTicketSection: View {
 
     private var accent: Color { Tokens.accent(for: .tasks) }
 
-    /// The task these tickets belong to, once known.
-    private var effectiveTodoId: UUID? { todoId ?? createdTodoId }
+    /// Everything on screen: what is on disk, then what is waiting to be.
+    private var tickets: [TaskTicket] { stored + pending }
+
+    private func isPending(_ ticket: TaskTicket) -> Bool {
+        pending.contains { $0.id == ticket.id }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
@@ -111,11 +120,32 @@ struct TaskTicketSection: View {
         .animation(.easeOut(duration: 0.15), value: isTargetedForDrop)
         .onAppear(perform: reload)
         .sheet(item: $selected) { ticket in
-            TaskTicketDetailSheet(
-                ticket: ticket,
-                taskTitle: taskTitle,
-                onChange: reload
-            )
+            // A pending ticket has no row to write to, so its edits and its removal
+            // are applied to the editor's in-memory copy instead.
+            if isPending(ticket) {
+                TaskTicketDetailSheet(
+                    ticket: ticket,
+                    taskTitle: taskTitle,
+                    onChange: {},
+                    onSave: { edited in
+                        if let i = pending.firstIndex(where: { $0.id == edited.id }) {
+                            pending[i] = edited
+                        }
+                    },
+                    onDelete: {
+                        if let i = pending.firstIndex(where: { $0.id == ticket.id }) {
+                            service.discardUnattached(pending[i])
+                            pending.remove(at: i)
+                        }
+                    }
+                )
+            } else {
+                TaskTicketDetailSheet(
+                    ticket: ticket,
+                    taskTitle: taskTitle,
+                    onChange: reload
+                )
+            }
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
@@ -243,12 +273,12 @@ struct TaskTicketSection: View {
     // MARK: - Actions
 
     private func reload() {
-        guard let id = effectiveTodoId else {
-            tickets = []
+        guard let id = todoId else {
+            stored = []
             return
         }
         do {
-            tickets = try service.list(todoId: id)
+            stored = try service.list(todoId: id)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -292,26 +322,26 @@ struct TaskTicketSection: View {
                 //    and then being asked to type what it says is the bug.
                 onExtracted(read)
 
-                // 3. Only now make sure a task exists, named from the ticket when
-                //    nothing has been typed. Written out rather than with `??`
-                //    because the right-hand side is async.
-                var resolved = effectiveTodoId
-                if resolved == nil { resolved = await ensureTask(read.suggestedTitle) }
-                guard let id = resolved else {
-                    isIngesting = false
-                    errorMessage = "Couldn't create a task for this ticket."
-                    return
+                // 3. Write it if the task exists; otherwise hold it until the
+                //    editor is committed, so Cancel really cancels.
+                let addedId: UUID
+                if let id = todoId {
+                    let ticket = read.ticket(todoId: id, position: stored.count)
+                    addedId = try service.attach(ticket, todoId: id)
+                    reload()
+                } else {
+                    // A placeholder owner id: the real one is not known yet and is
+                    // substituted when the pending ticket is flushed.
+                    let ticket = read.ticket(todoId: UUID(), position: pending.count)
+                    pending.append(ticket)
+                    addedId = ticket.id
                 }
-                if todoId == nil { createdTodoId = id }
 
-                // 4. Attach.
-                let result = try service.attach(read, todoId: id)
                 isIngesting = false
-                reload()
-                statusMessage = result.message
+                statusMessage = read.degradeMessage
                 // Open the new ticket: on a clean read so the card can be seen,
                 // and on a degraded one so the fields are right there.
-                if let added = tickets.first(where: { $0.id == result.ticketUUID }) {
+                if let added = tickets.first(where: { $0.id == addedId }) {
                     selected = added
                 }
             } catch {
@@ -342,11 +372,11 @@ struct TaskTicketsSheet: View {
                 Tokens.paper.ignoresSafeArea()
 
                 ScrollView {
+                    // The task already exists here, so nothing is ever pending.
                     TaskTicketSection(
                         todoId: todoId,
                         taskTitle: taskTitle,
-                        // The task already exists here, so this is never called.
-                        ensureTask: { _ in todoId }
+                        pending: .constant([])
                     )
                     .padding(Space.lg)
                 }
