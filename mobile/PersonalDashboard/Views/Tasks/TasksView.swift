@@ -111,6 +111,9 @@ struct TasksView: View {
             .allowsHitTesting(draftBucket == nil)
             .animation(.easeOut(duration: 0.15), value: draftBucket)
         }
+        // Dim the list while an attachment is being read, so the operation reads as
+        // app-wide rather than as something happening in one small card (#416).
+        .dimsWhileReadingAnAttachment()
         .activeSection(.tasks)
         .macSectionChrome("Tasks") {
             // macOS home for the calendar (#385): the native window toolbar,
@@ -930,14 +933,12 @@ private struct TaskRow: View {
     @State private var editText: String = ""
     /// Presents the task's tickets. Separate from the editor so the card, and the
     /// scanner behind it, are two taps from the list rather than buried in a form.
-    /// The attachments sheet, and what it should do on arrival (#408).
-    ///
-    /// One piece of state rather than a bool pair. A separate "open the picker too"
-    /// flag written in the same event as the presentation was read back as false by
-    /// the sheet's content: the closure evaluates against a copy of this view, and
-    /// there is no ordering guarantee that makes the second flag visible in time.
-    /// Carried inside the item, it cannot be stale.
-    @State private var ticketsRequest: TaskTicketsRequest?
+    @State private var showingTickets = false
+    /// True while the editor popover has a file panel open or a read running (#416).
+    /// Lives on the ROW because the popover's behaviour is set from out here: busy
+    /// means it closes only when we say so, so neither Finder taking key nor a stray
+    /// click behind it can bin a read in progress.
+    @State private var isAttachmentBusy = false
     @FocusState private var titleFocused: Bool
     @Environment(\.openURL) private var openURL
     // macOS: local presentation state for the Reminders-style detail popover
@@ -1081,25 +1082,22 @@ private struct TaskRow: View {
             // macOS: the editor emanates from the info button as a popover, so
             // it visually belongs to this task. iOS keeps the parent `.sheet`.
             #if os(macOS)
-            .popover(isPresented: $showingEditorPopover, arrowEdge: .leading) {
-                TaskEditorSheet(viewModel: viewModel, todo: todo) {
-                    // Add, from a popover that the file panel would dismiss (#408).
-                    //
-                    // Ask for the panel HERE rather than handing off to a surface that
-                    // then asks again (#412): Add meant "choose a file", so Finder is
-                    // what should appear. This closure and the state it writes belong to
-                    // the ROW, which lives in the window, so both survive the popover
-                    // being torn down the instant the panel takes key.
-                    showingEditorPopover = false
-                    TicketFilePickerModifier.presentOpenPanel { data, isPDF in
-                        guard let data, !data.isEmpty else { return }
-                        // The sheet opens already reading, with the same darkened notice
-                        // as making a task from a document, and the card lands in it.
-                        ticketsRequest = TaskTicketsRequest(
-                            upload: TaskDocumentUpload(data: data, isPDF: isPDF)
-                        )
-                    }
-                }
+            // Deliberately NOT SwiftUI's `.popover` (#416): that one is transient, so
+            // it was destroyed the moment Finder took key, and the whole attach then
+            // happened off screen. `MacAnchoredPopover` owns the NSPopover and can
+            // keep it open, which is what lets ONE surface carry the operation end to
+            // end: Add, choose a file, watch it parse, see the card, edit it.
+            .macAnchoredPopover(
+                isPresented: $showingEditorPopover,
+                isBusy: isAttachmentBusy,
+                preferredEdge: .minX
+            ) {
+                TaskEditorSheet(
+                    viewModel: viewModel,
+                    todo: todo,
+                    isAttachmentBusy: $isAttachmentBusy,
+                    onClose: { showingEditorPopover = false }
+                )
             }
             #endif
             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
@@ -1129,15 +1127,8 @@ private struct TaskRow: View {
         #if os(iOS)
         .onTapGesture { beginBodyTap() }
         #endif
-        .sheet(item: $ticketsRequest) { request in
-            TaskTicketsSheet(
-                todoId: todo.id,
-                context: TaskTicketContext(todo: todo),
-                // Non-nil only when Add in the editor popover already picked a file.
-                // Opening the same sheet from the TICKET pill carries nothing, so it
-                // just shows the cards.
-                initialDocument: request.upload
-            )
+        .sheet(isPresented: $showingTickets) {
+            TaskTicketsSheet(todoId: todo.id, context: TaskTicketContext(todo: todo))
         }
     }
 
@@ -1172,7 +1163,7 @@ private struct TaskRow: View {
             let count = attachments.count
             Button {
                 Haptics.light()
-                ticketsRequest = TaskTicketsRequest()
+                showingTickets = true
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "ticket.fill")
@@ -1301,11 +1292,14 @@ private struct TaskEditorSheet: View {
     /// A file to read as soon as the editor appears, filling the draft from it
     /// (#402). Nil for a blank editor and for editing an existing task.
     var initialDocument: TaskDocumentUpload? = nil
-    /// Set only by the macOS popover presentation, which cannot host a file panel
-    /// (#408): Add in the attachments section calls this instead of opening one, and
-    /// the caller swaps the popover for the attachments sheet. Nil everywhere else,
-    /// where this editor is already a sheet and the panel is safe inline.
-    var onOpenAttachments: (() -> Void)? = nil
+    /// Reports an in-flight attachment operation up to the presenter (#416). The
+    /// macOS popover reads it to hold itself open across Finder; iOS uses it to
+    /// refuse an interactive dismiss.
+    var isAttachmentBusy: Binding<Bool>? = nil
+    /// How to close, for a presenter with no working `dismiss` in the environment —
+    /// which is the case inside `MacAnchoredPopover`, where this content is hosted in
+    /// an `NSHostingController` rather than presented by SwiftUI.
+    var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
@@ -1322,17 +1316,8 @@ private struct TaskEditorSheet: View {
     /// Written by `save()`, thrown away by Cancel. Held here rather than in the
     /// ticket section because this view owns that lifecycle.
     @State private var pendingTickets: [TaskTicket] = []
-    /// True while a file picked from the plus menu is being read, which puts a
-    /// blocking notice over the form (#402). Without it the editor opens by itself
-    /// with every field empty and reads as broken.
-    @State private var isReadingInitialDocument = false
-    /// True while the attachments section has a file panel open or a read in flight
-    /// (#408). On macOS this editor is a popover, and a popover is dismissed the
-    /// instant another window takes key — which the file panel does. The editor
-    /// disappeared the moment Add was pressed and the read carried on invisibly, so
-    /// the attach landed with nothing on screen to say so. This pins it open for the
-    /// duration.
-    @State private var isAttachmentBusy = false
+    /// The read in flight, which puts the blocking notice over this form (#416).
+    @State private var reading: TaskReadingNotice?
 
     @Environment(\.openURL) private var openURL
 
@@ -1493,7 +1478,7 @@ private struct TaskEditorSheet: View {
                 // Inside the ZStack, so the navigation bar's Cancel sits above it.
                 readingOverlay
             }
-            .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
+            .animation(.easeOut(duration: 0.2), value: reading)
             .navigationTitle(isEditing ? "Edit task" : "New task")
             .inlineNavigationTitle()
             .toolbar {
@@ -1538,9 +1523,8 @@ private struct TaskEditorSheet: View {
             pending: $pendingTickets,
             onExtracted: applyExtractedTicket,
             initialDocument: initialDocument,
-            isReadingInitialDocument: $isReadingInitialDocument,
-            isBusy: $isAttachmentBusy,
-            onRequestOwnSurface: onOpenAttachments
+            reading: $reading,
+            isBusy: isAttachmentBusy ?? .constant(false)
         )
     }
 
@@ -1563,8 +1547,8 @@ private struct TaskEditorSheet: View {
     /// The blocking notice, over the form only so Cancel stays reachable (#402).
     @ViewBuilder
     private var readingOverlay: some View {
-        if isReadingInitialDocument, let initialDocument {
-            TaskDocumentReadingOverlay(isPDF: initialDocument.isPDF)
+        if let reading {
+            TaskDocumentReadingOverlay(isPDF: reading.isPDF)
         }
     }
 
@@ -1575,7 +1559,7 @@ private struct TaskEditorSheet: View {
     /// focus is what stops its text from competing, and it restores itself when the
     /// values land.
     private var formBlurWhileReading: CGFloat {
-        isReadingInitialDocument ? 4 : 0
+        reading == nil ? 0 : 4
     }
 
     /// Fill the task's own fields from what the ticket said (#399).
@@ -1629,7 +1613,7 @@ private struct TaskEditorSheet: View {
             // grammar. Commit/dismiss live here instead of a window toolbar
             // because this content is presented as a popover / compact sheet.
             HStack {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { closeEditor() }
                     .buttonStyle(.plain)
                     .foregroundStyle(Tokens.muted)
                 Spacer()
@@ -1805,14 +1789,9 @@ private struct TaskEditorSheet: View {
             // Scoped to the scrolling form, so the header's Cancel stays clickable.
             .overlay { readingOverlay }
         }
-        .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
+        .animation(.easeOut(duration: 0.2), value: reading)
         .frame(width: 360, height: 520)
         .background(Tokens.paper)
-        // Hold the popover open while a file panel is up or a read is running (#408).
-        // Conditional on purpose: clicking away to dismiss is how this editor is
-        // meant to behave, and the exception lasts only as long as there is work that
-        // would be lost. Cancel and Save stay live throughout either way.
-        .interactiveDismissDisabled(isAttachmentBusy)
         .onAppear(perform: prefill)
         // Covers Cancel and dismissing the popover by clicking away, and runs after
         // a save has already emptied the array.
@@ -1863,6 +1842,15 @@ private struct TaskEditorSheet: View {
             )
     }
     #endif
+
+    /// Close the editor, whichever way it was presented (#416).
+    ///
+    /// `MacAnchoredPopover` hosts this content in an `NSHostingController`, so the
+    /// environment's `dismiss` does nothing there — there is no SwiftUI presentation
+    /// to dismiss, and the presenter has to be told instead.
+    private func closeEditor() {
+        if let onClose { onClose() } else { dismiss() }
+    }
 
     private func prefill() {
         guard let todo else { return }
@@ -1915,7 +1903,7 @@ private struct TaskEditorSheet: View {
             let created = await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
             if let created { flushPendingTickets(to: created.id) }
         }
-        dismiss()
+        closeEditor()
     }
 
     /// Write the tickets attached while composing, now that the task exists (#399).

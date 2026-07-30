@@ -75,6 +75,13 @@ struct TaskDocumentReadingOverlay: View {
     }
 }
 
+/// A read in flight, and what it is reading (#416). Carried rather than a bare Bool
+/// so the notice can say "file" or "image" without the presenter holding a second
+/// piece of state that could disagree with the first.
+struct TaskReadingNotice: Equatable {
+    let isPDF: Bool
+}
+
 /// File attachments for a task, shown as a stack of wallet cards inside the task
 /// editor with an add control (#399, generalised in #402).
 ///
@@ -125,37 +132,24 @@ struct TaskTicketSection: View {
     /// screen with its spinner running rather than the person waiting on a blank
     /// screen for a parse they cannot see.
     var initialDocument: TaskDocumentUpload? = nil
-    /// Reports whether `initialDocument` is still being read, so the editor can say
-    /// so over the whole form. Only the initial document drives this: an attachment
-    /// added from inside the editor keeps the inline spinner, because you are already
-    /// looking at the section it appears in and blocking the form would be heavier
-    /// than the action deserves.
-    var isReadingInitialDocument: Binding<Bool>? = nil
+    /// The read in flight, so the editor can say so across its whole form (#416).
+    ///
+    /// EVERY read announces now, not just one that arrived with the editor. The
+    /// original reasoning — you are already looking at the section, so a small inline
+    /// spinner is proportionate — assumed you had been looking at it the whole time.
+    /// You have not: you have been in Finder, and you come back to a popover that has
+    /// to tell you what it is doing. Carries `isPDF` so the notice can name what it is
+    /// reading.
+    var reading: Binding<TaskReadingNotice?>? = nil
     /// Reports that this section is mid-operation: a picker is open, or a read is in
-    /// flight (#408). The presenter refuses to be dismissed out from under it, so a
-    /// stray click cannot bin a read that is already running.
+    /// flight (#408, #416).
     ///
-    /// Worth being precise about what this does NOT do: it does not save a macOS
-    /// popover from the system file panel. A popover is dismissed when another window
-    /// takes key, and `interactiveDismissDisabled` does not cover that — measured
-    /// both ways. That is why the panel is not opened from the popover at all any
-    /// more; see `onRequestOwnSurface`.
+    /// On macOS this is what holds the editor popover open. `MacAnchoredPopover`
+    /// switches to `.applicationDefined` while busy, so neither Finder taking key nor
+    /// a stray click behind it can bin a read that is already running. On iOS it
+    /// drives `interactiveDismissDisabled` on the sheet, for the stray-click half of
+    /// the same problem.
     var isBusy: Binding<Bool>? = nil
-    /// Set when this section cannot host a file panel, so Add must hand off to a
-    /// surface that can (#408).
-    ///
-    /// The macOS editor for an existing task is a popover, and opening the file panel
-    /// makes it key, which dismisses the popover immediately. The read then carried on
-    /// against a view that was no longer on screen: the spinner went with the popover,
-    /// the fields it should have filled were gone, and a non-scannable attachment
-    /// earns no row pill (#403), so the list looked untouched. Nothing anywhere said
-    /// the attach had worked, and the reasonable response was to do it again — which
-    /// is how one task ended up with two identical tickets.
-    ///
-    /// Pinning the popover open does not work, so the panel moves out instead: this
-    /// hands off to the attachments sheet, which is presented from the window and does
-    /// survive the panel. Every other editor path is already a sheet and passes nil.
-    var onRequestOwnSurface: (() -> Void)? = nil
 
     @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -277,12 +271,7 @@ struct TaskTicketSection: View {
             // and a sheet over it would hide the thing they came to check.
             if let initialDocument, !consumedInitialDocument {
                 consumedInitialDocument = true
-                ingest(
-                    data: initialDocument.data,
-                    isPDF: initialDocument.isPDF,
-                    autoOpen: false,
-                    announceToEditor: true
-                )
+                ingest(data: initialDocument.data, isPDF: initialDocument.isPDF, autoOpen: false)
             }
         }
         .onDisappear {
@@ -290,6 +279,8 @@ struct TaskTicketSection: View {
             // Never leave the presenter pinned open by a section that is gone.
             awaitingPick = false
             isBusy?.wrappedValue = false
+            reading?.wrappedValue = nil
+            TaskAttachmentActivity.shared.ended()
         }
         .sheet(item: $selected) { ticket in
             // A pending ticket has no row to write to, so its edits and its removal
@@ -348,25 +339,6 @@ struct TaskTicketSection: View {
     /// through the file picker.
     @ViewBuilder
     private var addControl: some View {
-        // A section that cannot host a file panel hands the whole job over rather than
-        // opening one it would be dismissed by (#408). The label stays "Add", because
-        // that is still what happens: the sheet comes up with the panel already open.
-        if let onRequestOwnSurface {
-            Button {
-                Haptics.light()
-                onRequestOwnSurface()
-            } label: {
-                addLabel
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Add an attachment to this task")
-        } else {
-            pickerAddControl
-        }
-    }
-
-    @ViewBuilder
-    private var pickerAddControl: some View {
         #if os(iOS)
         Menu {
             // Same gate the trip ticket menu uses: a simulator has no camera and
@@ -528,14 +500,10 @@ struct TaskTicketSection: View {
     /// everything to fill in. Off for a file that created the task, where the draft
     /// itself is what the person is waiting to see.
     ///
-    /// `announceToEditor` puts the blocking notice over the whole form, for the read
-    /// nobody asked for from inside this section. Both flags are set together for the
-    /// plus-menu path and left alone everywhere else.
     private func ingest(
         data: Data?,
         isPDF: Bool,
-        autoOpen: Bool = true,
-        announceToEditor: Bool = false
+        autoOpen: Bool = true
     ) {
         guard let data, !data.isEmpty else { return }
 
@@ -552,7 +520,10 @@ struct TaskTicketSection: View {
         isIngesting = true
         statusMessage = nil
         errorMessage = nil
-        if announceToEditor { isReadingInitialDocument?.wrappedValue = true }
+        reading?.wrappedValue = TaskReadingNotice(isPDF: isPDF)
+        // Also app-wide, so the window behind the popover dims and stops taking
+        // clicks for the duration (#416).
+        TaskAttachmentActivity.shared.began(isPDF: isPDF)
 
         ingestTask = Task {
             // A `defer` rather than a line on each exit: the notice blocks the form,
@@ -560,7 +531,8 @@ struct TaskTicketSection: View {
             // spinner.
             defer {
                 isIngesting = false
-                if announceToEditor { isReadingInitialDocument?.wrappedValue = false }
+                reading?.wrappedValue = nil
+                TaskAttachmentActivity.shared.ended()
             }
             do {
                 // 1. Read the ticket FIRST. This step needs no task at all, which
@@ -663,27 +635,6 @@ struct TaskTicketSection: View {
     }
 }
 
-/// A request to show a task's attachments, optionally carrying a file that is already
-/// on its way in (#408, reshaped in #412).
-///
-/// The file travels WITH the presentation rather than beside it. As a separate
-/// `@State` flag set in the same event, the sheet's content read it back as false:
-/// that closure evaluates against a copy of the presenting view, and nothing orders
-/// the two writes. One item, no ordering to get wrong.
-///
-/// Carrying the BYTES (rather than "and now open a panel") is what removes a click.
-/// Add opens the panel where it stands; the sheet then opens already reading, which
-/// is the same shape as making a task from a document.
-struct TaskTicketsRequest: Identifiable {
-    let id = UUID()
-    /// A file picked before this sheet existed, read as soon as it appears.
-    let upload: TaskDocumentUpload?
-
-    init(upload: TaskDocumentUpload? = nil) {
-        self.upload = upload
-    }
-}
-
 /// Standalone sheet wrapping the section, presented from the pass chip on a task
 /// row (#399).
 ///
@@ -697,17 +648,10 @@ struct TaskTicketsSheet: View {
     /// The whole task, not just its title: a file added from here is read against
     /// everything the task knows, exactly as one added from the editor is (#408).
     let context: TaskTicketContext
-    /// A file picked before this sheet opened, read the moment it appears (#412).
-    ///
-    /// Set when Add in the macOS editor popover handed off. The read announces itself
-    /// over the whole sheet, which is deliberately the SAME treatment as making a task
-    /// from a document: darkened, blurred, one spinner saying what is happening. That
-    /// consistency is the point — it is the same operation.
-    var initialDocument: TaskDocumentUpload? = nil
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var isReadingInitialDocument = false
+    @State private var reading: TaskReadingNotice?
 
     private var taskTitle: String { context.title }
 
@@ -722,18 +666,17 @@ struct TaskTicketsSheet: View {
                         todoId: todoId,
                         context: context,
                         pending: .constant([]),
-                        initialDocument: initialDocument,
-                        isReadingInitialDocument: $isReadingInitialDocument
+                        reading: $reading
                     )
                     .padding(Space.lg)
                 }
-                .blur(radius: isReadingInitialDocument ? 4 : 0)
+                .blur(radius: reading == nil ? 0 : 4)
 
-                if isReadingInitialDocument, let initialDocument {
-                    TaskDocumentReadingOverlay(isPDF: initialDocument.isPDF)
+                if let reading {
+                    TaskDocumentReadingOverlay(isPDF: reading.isPDF)
                 }
             }
-            .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
+            .animation(.easeOut(duration: 0.2), value: reading)
             .navigationTitle(taskTitle)
             .inlineNavigationTitle()
             .toolbar {
