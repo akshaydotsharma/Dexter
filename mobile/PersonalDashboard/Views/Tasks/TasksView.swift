@@ -251,8 +251,13 @@ struct TasksView: View {
             let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
             return cal.date(byAdding: .day, value: 1, to: eod)
         case .thisWeek:
-            let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
-            return cal.date(byAdding: .day, value: 3, to: eod)
+            // The last day the section covers, not a fixed +3 (#418). Now that This
+            // Week ends with the week, +3 can land in Later and the task would
+            // vanish out of the section it was typed into. Falls back to the day
+            // after tomorrow, which is the earliest day the section can hold.
+            let window = TaskBucketWindow()
+            let day = window.lastDayOfThisWeek ?? window.dayAfterTomorrow
+            return cal.date(bySettingHour: 23, minute: 0, second: 0, of: day)
         case .later:
             let eod = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today)!
             return cal.date(byAdding: .day, value: 14, to: eod)
@@ -477,23 +482,22 @@ struct TasksView: View {
     }
 
     private func computeBuckets() -> TaskBuckets {
-        let now = Date()
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: now)
-        let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
-        let dayAfterTomorrow = cal.date(byAdding: .day, value: 2, to: today)!
-        let weekEnd = cal.date(byAdding: .day, value: 7, to: today)!
+        // Boundaries live in `TaskBucketWindow` (#418): This Week ends when the week
+        // ends, not seven rolling days out, and the arithmetic is testable there.
+        let window = TaskBucketWindow()
 
         var b = TaskBuckets()
         b.completed = viewModel.todos.filter { $0.completed }
         let open = viewModel.todos.filter { !$0.completed }
         for todo in open {
             guard let due = todo.dueDate else { b.noDate.append(todo); continue }
-            if due < today { b.overdue.append(todo) }
-            else if due < tomorrow { b.today.append(todo) }
-            else if due < dayAfterTomorrow { b.tomorrow.append(todo) }
-            else if due < weekEnd { b.thisWeek.append(todo) }
-            else { b.later.append(todo) }
+            switch window.bucket(for: due) {
+            case .overdue:  b.overdue.append(todo)
+            case .today:    b.today.append(todo)
+            case .tomorrow: b.tomorrow.append(todo)
+            case .thisWeek: b.thisWeek.append(todo)
+            case .later:    b.later.append(todo)
+            }
         }
         b.overdue = chronoSorted(b.overdue)
         b.today = chronoSorted(b.today)
