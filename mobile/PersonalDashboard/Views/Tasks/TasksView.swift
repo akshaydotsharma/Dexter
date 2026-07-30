@@ -1433,6 +1433,7 @@ private struct TaskEditorSheet: View {
                     .padding(Space.lg)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .blur(radius: formBlurWhileReading)
 
                 // Inside the ZStack, so the navigation bar's Cancel sits above it.
                 readingOverlay
@@ -1492,6 +1493,16 @@ private struct TaskEditorSheet: View {
         if isReadingInitialDocument, let initialDocument {
             TaskDocumentReadingOverlay(isPDF: initialDocument.isPDF)
         }
+    }
+
+    /// How much to soften the form while the notice is over it.
+    ///
+    /// A scrim alone was not enough: the notice card and the editor's own rounded
+    /// cards read as competing for the same space. Putting the form slightly out of
+    /// focus is what stops its text from competing, and it restores itself when the
+    /// values land.
+    private var formBlurWhileReading: CGFloat {
+        isReadingInitialDocument ? 4 : 0
     }
 
     /// Fill the task's own fields from what the ticket said (#399).
@@ -1717,6 +1728,7 @@ private struct TaskEditorSheet: View {
                 }
                 .padding(Space.lg)
             }
+            .blur(radius: formBlurWhileReading)
             // Scoped to the scrolling form, so the header's Cancel stays clickable.
             .overlay { readingOverlay }
         }

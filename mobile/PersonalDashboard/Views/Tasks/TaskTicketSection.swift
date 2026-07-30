@@ -34,14 +34,19 @@ struct TaskDocumentUpload: Identifiable, Equatable {
 /// The read has no timeout of its own and a stalled network would otherwise trap
 /// someone behind a spinner with no way out.
 ///
-/// Matches `TripDetailView`'s ticket-processing overlay so the two reads look like
-/// the same operation, which they are.
+/// Takes the card-and-spinner shape from `TripDetailView`'s ticket-processing
+/// overlay, so the two reads look like the same operation — which they are — but
+/// dims harder than that one does. At the 0.12 scrim the trip overlays use, this
+/// card and the form behind it read as competing for the same space: the editor is
+/// dense with rounded cards in a similar tone, so a floating card needs the form to
+/// visibly recede rather than merely tint. The caller pairs this with a blur, which
+/// is what actually stops the text behind from competing.
 struct TaskDocumentReadingOverlay: View {
     let isPDF: Bool
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.12).ignoresSafeArea()
+            Color.black.opacity(0.45).ignoresSafeArea()
             VStack(spacing: Space.md) {
                 ProgressView()
                     .tint(Tokens.accent(for: .tasks))
@@ -58,7 +63,7 @@ struct TaskDocumentReadingOverlay: View {
             .padding(Space.xl)
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
             .paperBorder(Tokens.border, radius: Radius.lg)
-            .shadowMd()
+            .shadowLg()
         }
         .transition(.opacity)
         .accessibilityElement(children: .combine)
