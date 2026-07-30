@@ -692,7 +692,11 @@ struct TaskCalendarPopover: View {
         }
     }
 
-    /// Tasks due on `day`, incomplete first, then by priority, then by time.
+    /// Tasks due on `day`, in the order the day happens: incomplete first, then
+    /// earliest due time. A time pinned to midnight means "no particular time"
+    /// (see `taskDetail`) and so leads the list on its own. Priority only breaks
+    /// ties between tasks at the same time — ranking by it first read as random
+    /// on a card that prints a clock beside every row (#422).
     private func tasks(on day: Date) -> [LocalTodo] {
         let cal = Calendar.current
         return todos
@@ -702,10 +706,12 @@ struct TaskCalendarPopover: View {
             }
             .sorted { lhs, rhs in
                 if lhs.completed != rhs.completed { return !lhs.completed }
+                let lDue = lhs.dueDate ?? .distantPast
+                let rDue = rhs.dueDate ?? .distantPast
+                if lDue != rDue { return lDue < rDue }
                 let lRank = (TaskPriority(rawValue: lhs.priority) ?? .none).sortRank
                 let rRank = (TaskPriority(rawValue: rhs.priority) ?? .none).sortRank
-                if lRank != rRank { return lRank < rRank }
-                return (lhs.dueDate ?? .distantPast) < (rhs.dueDate ?? .distantPast)
+                return lRank < rRank
             }
     }
 
