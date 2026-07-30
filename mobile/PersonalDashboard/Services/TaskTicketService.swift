@@ -139,7 +139,14 @@ struct TaskTicketService {
     /// The bytes land on disk during the read, before there is any task to hang them
     /// on, so abandoning the editor has to clean them up or they leak.
     func discardUnattached(_ ticket: TaskTicket) {
-        try? storage.delete(relativePath: ticket.attachmentPath)
+        discardStoredFile(at: ticket.attachmentPath)
+    }
+
+    /// Same, for a file whose read never got far enough to produce a ticket — the
+    /// editor was dismissed while the read was still in flight.
+    func discardStoredFile(at relativePath: String) {
+        guard !relativePath.isEmpty else { return }
+        try? storage.delete(relativePath: relativePath)
     }
 
     /// Convenience for callers that already have a task: read then attach.

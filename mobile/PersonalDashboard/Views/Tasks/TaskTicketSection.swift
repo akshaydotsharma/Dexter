@@ -21,6 +21,55 @@ struct TaskDocumentUpload: Identifiable, Equatable {
     }
 }
 
+/// Blocking notice shown over the task editor's form while a file picked from the
+/// plus menu is being read (#402).
+///
+/// The inline spinner in the attachments section is not enough for this case. The
+/// editor opens on its own with every field empty, and the one thing saying why is
+/// a small spinner next to a section heading — on the Mac's 360-point popover that
+/// section can be below the fold, so it is somewhere you cannot even see. What the
+/// person is looking at reads as a form that failed to load.
+///
+/// Deliberately scoped to the form and NOT the toolbar, so Cancel stays reachable.
+/// The read has no timeout of its own and a stalled network would otherwise trap
+/// someone behind a spinner with no way out.
+///
+/// Matches `TripDetailView`'s ticket-processing overlay so the two reads look like
+/// the same operation, which they are.
+struct TaskDocumentReadingOverlay: View {
+    let isPDF: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.12).ignoresSafeArea()
+            VStack(spacing: Space.md) {
+                ProgressView()
+                    .tint(Tokens.accent(for: .tasks))
+                VStack(spacing: Space.xs) {
+                    Text(isPDF ? "Reading from file…" : "Reading from image…")
+                        .font(.edBodyMedium)
+                        .foregroundStyle(Tokens.ink)
+                    Text("Filling in what it says.")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                }
+                .multilineTextAlignment(.center)
+            }
+            .padding(Space.xl)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.lg)
+            .shadowMd()
+        }
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            isPDF
+                ? "Reading the file and filling in the task."
+                : "Reading the image and filling in the task."
+        )
+    }
+}
+
 /// File attachments for a task, shown as a stack of wallet cards inside the task
 /// editor with an add control (#399, generalised in #402).
 ///
@@ -68,6 +117,12 @@ struct TaskTicketSection: View {
     /// screen with its spinner running rather than the person waiting on a blank
     /// screen for a parse they cannot see.
     var initialDocument: TaskDocumentUpload? = nil
+    /// Reports whether `initialDocument` is still being read, so the editor can say
+    /// so over the whole form. Only the initial document drives this: an attachment
+    /// added from inside the editor keeps the inline spinner, because you are already
+    /// looking at the section it appears in and blocking the form would be heavier
+    /// than the action deserves.
+    var isReadingInitialDocument: Binding<Bool>? = nil
 
     @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -78,6 +133,10 @@ struct TaskTicketSection: View {
     /// `onAppear` can fire more than once for the same view; the document must be
     /// read exactly once or it would be stored and attached twice.
     @State private var consumedInitialDocument = false
+    /// The in-flight read, so dismissing the editor can cancel it. The file is on
+    /// disk before the read returns, so a read nobody is waiting for any more has to
+    /// clean up after itself.
+    @State private var ingestTask: Task<Void, Never>?
 
     #if os(iOS)
     @State private var showingCamera = false
@@ -151,9 +210,15 @@ struct TaskTicketSection: View {
             // and a sheet over it would hide the thing they came to check.
             if let initialDocument, !consumedInitialDocument {
                 consumedInitialDocument = true
-                ingest(data: initialDocument.data, isPDF: initialDocument.isPDF, autoOpen: false)
+                ingest(
+                    data: initialDocument.data,
+                    isPDF: initialDocument.isPDF,
+                    autoOpen: false,
+                    announceToEditor: true
+                )
             }
         }
+        .onDisappear { ingestTask?.cancel() }
         .sheet(item: $selected) { ticket in
             // A pending ticket has no row to write to, so its edits and its removal
             // are applied to the editor's in-memory copy instead.
@@ -340,13 +405,30 @@ struct TaskTicketSection: View {
     /// nothing of, which is the case where there is nothing to look at and
     /// everything to fill in. Off for a file that created the task, where the draft
     /// itself is what the person is waiting to see.
-    private func ingest(data: Data?, isPDF: Bool, autoOpen: Bool = true) {
+    ///
+    /// `announceToEditor` puts the blocking notice over the whole form, for the read
+    /// nobody asked for from inside this section. Both flags are set together for the
+    /// plus-menu path and left alone everywhere else.
+    private func ingest(
+        data: Data?,
+        isPDF: Bool,
+        autoOpen: Bool = true,
+        announceToEditor: Bool = false
+    ) {
         guard let data, !data.isEmpty else { return }
         isIngesting = true
         statusMessage = nil
         errorMessage = nil
+        if announceToEditor { isReadingInitialDocument?.wrappedValue = true }
 
-        Task {
+        ingestTask = Task {
+            // A `defer` rather than a line on each exit: the notice blocks the form,
+            // so a path that forgot to clear it would strand the person behind a
+            // spinner.
+            defer {
+                isIngesting = false
+                if announceToEditor { isReadingInitialDocument?.wrappedValue = false }
+            }
             do {
                 // 1. Read the ticket FIRST. This step needs no task at all, which
                 //    is exactly why it is separate: the ticket is what tells us
@@ -356,6 +438,15 @@ struct TaskTicketSection: View {
                     isPDF: isPDF,
                     taskTitle: taskTitle
                 )
+
+                // The editor can be dismissed while this is in flight, and Cancel is
+                // the way out of a read that has stalled. The file is already on disk
+                // by now, so leaving here without deleting it strands the bytes for a
+                // task that will never exist.
+                if Task.isCancelled {
+                    service.discardStoredFile(at: read.attachmentPath)
+                    return
+                }
 
                 // 2. Push what it said up into the editor's own fields, so title,
                 //    due date and address fill themselves in. Uploading a ticket
@@ -377,7 +468,6 @@ struct TaskTicketSection: View {
                     addedId = ticket.id
                 }
 
-                isIngesting = false
                 statusMessage = read.degradeMessage
                 // A read that yielded nothing opens its form, since a card blank
                 // apart from a barcode has nothing to look at. A good read does
@@ -388,7 +478,6 @@ struct TaskTicketSection: View {
                     selected = added
                 }
             } catch {
-                isIngesting = false
                 errorMessage = error.localizedDescription
             }
         }

@@ -755,6 +755,36 @@ final class TaskTicketAttachmentTests: XCTestCase {
         XCTAssertEqual(stored.seat, "12A")
     }
 
+    /// Abandoning the editor has to take the stored bytes with it.
+    ///
+    /// The file is written during the read, before there is any task to hang it on,
+    /// so both Cancel and a read that was still in flight when the editor went away
+    /// have to clean up or every abandoned upload leaks a file.
+    func testDiscardingAnUnattachedTicketRemovesItsFile() throws {
+        let todo = insertTodo(title: "Never saved")
+        let provisional = makeRead().ticket(todoId: todo.clientUUID)
+        // Real bytes on disk at the provisional ticket's path.
+        let image = try XCTUnwrap(BarcodeService.render(payload: "ABANDONED", symbology: .qr))
+        let jpeg = try XCTUnwrap(image.jpegDataCompat(quality: 0.9))
+        let path = try TicketStorage.taskTickets.saveCompressedJpeg(jpeg)
+        createdPaths.append(path)
+        var stranded = provisional
+        stranded.attachmentPath = path
+        XCTAssertNotNil(TicketStorage.taskTickets.load(relativePath: path))
+
+        let service = TaskTicketService(store: store)
+        service.discardUnattached(stranded)
+
+        XCTAssertNil(
+            TicketStorage.taskTickets.load(relativePath: path),
+            "an abandoned upload left its file behind"
+        )
+        // The path-only form is what a cancelled in-flight read has to use, since it
+        // never got as far as a ticket.
+        service.discardStoredFile(at: path)
+        service.discardStoredFile(at: "")
+    }
+
     /// Attaching several holds their order, since they are flushed as a batch when
     /// the task is finally created.
     func testAttachingSeveralPendingTicketsKeepsTheirOrder() throws {

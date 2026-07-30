@@ -1274,6 +1274,10 @@ private struct TaskEditorSheet: View {
     /// Written by `save()`, thrown away by Cancel. Held here rather than in the
     /// ticket section because this view owns that lifecycle.
     @State private var pendingTickets: [TaskTicket] = []
+    /// True while a file picked from the plus menu is being read, which puts a
+    /// blocking notice over the form (#402). Without it the editor opens by itself
+    /// with every field empty and reads as broken.
+    @State private var isReadingInitialDocument = false
 
     @Environment(\.openURL) private var openURL
 
@@ -1429,7 +1433,11 @@ private struct TaskEditorSheet: View {
                     .padding(Space.lg)
                 }
                 .scrollDismissesKeyboard(.interactively)
+
+                // Inside the ZStack, so the navigation bar's Cancel sits above it.
+                readingOverlay
             }
+            .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
             .navigationTitle(isEditing ? "Edit task" : "New task")
             .inlineNavigationTitle()
             .toolbar {
@@ -1473,8 +1481,17 @@ private struct TaskEditorSheet: View {
             taskTitle: currentTitleForTickets,
             pending: $pendingTickets,
             onExtracted: applyExtractedTicket,
-            initialDocument: initialDocument
+            initialDocument: initialDocument,
+            isReadingInitialDocument: $isReadingInitialDocument
         )
+    }
+
+    /// The blocking notice, over the form only so Cancel stays reachable (#402).
+    @ViewBuilder
+    private var readingOverlay: some View {
+        if isReadingInitialDocument, let initialDocument {
+            TaskDocumentReadingOverlay(isPDF: initialDocument.isPDF)
+        }
     }
 
     /// Fill the task's own fields from what the ticket said (#399).
@@ -1700,7 +1717,10 @@ private struct TaskEditorSheet: View {
                 }
                 .padding(Space.lg)
             }
+            // Scoped to the scrolling form, so the header's Cancel stays clickable.
+            .overlay { readingOverlay }
         }
+        .animation(.easeOut(duration: 0.2), value: isReadingInitialDocument)
         .frame(width: 360, height: 520)
         .background(Tokens.paper)
         .onAppear(perform: prefill)
