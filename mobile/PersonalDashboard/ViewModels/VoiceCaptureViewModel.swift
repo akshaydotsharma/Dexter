@@ -43,7 +43,12 @@ final class VoiceCaptureViewModel {
     /// the session: it does NOT return to `.listening`; instead the overlay
     /// auto-dismisses after the flash. `.empty` / `.error` stay open for retry.
     enum State: Equatable {
-        case listening          // recording, InkOrb reactive, socket alive
+        /// Mic is up but the transcription socket hasn't confirmed yet (#429).
+        /// Previously the overlay showed "Listening" here, which on a weak link
+        /// was a real second of claiming to hear the user while nothing was
+        /// connected. Resolves to `.listening` on `transcriber.isConnected`.
+        case connecting
+        case listening          // recording, waveform reactive, socket alive
         case executing          // the one utterance's AI call is in flight
         case flashSuccess       // its result rows, ~1.2s, then auto-dismiss
         case empty              // silence / nothing captured yet (informational)
@@ -89,8 +94,47 @@ final class VoiceCaptureViewModel {
     /// overlay binds to this while listening to show the running text.
     var transcript: String { transcriber.transcript }
 
-    /// Normalized mic amplitude (0–1) for the InkOrb.
+    /// Normalized mic amplitude (0–1) for the waveform.
     var audioLevel: Float { transcriber.audioLevel }
+
+    /// Rolling amplitude history shared by the waveform and the aurora, so both
+    /// move on the same rhythm (issue #429). Fed by the overlay on every
+    /// `audioLevel` change; owned here so it survives view redraws.
+    private(set) var levelTrace = VoiceLevelTrace()
+
+    /// Unsettled text for the utterance being transcribed. Rendered muted by the
+    /// overlay and superseded by `transcript` when the normalized final lands.
+    /// Never mixed into `transcriber.transcript` — see the note on
+    /// `SpeechTranscriber.provisionalText`.
+    var provisionalText: String { transcriber.provisionalText }
+
+    /// Record one amplitude sample. Called from the overlay's `onChange`, which
+    /// is the only place with a redraw cadence to hang it off.
+    func recordLevel(_ level: Float) {
+        levelTrace.record(level)
+    }
+
+    /// Progress through the server-VAD silence window (0...1), or nil when
+    /// nothing is pending. Drives the depleting baseline under the waveform.
+    /// Only meaningful while listening: in every other state the mic is closed
+    /// and a countdown would be describing a deadline that no longer exists.
+    func silenceProgress(now: Date) -> Double? {
+        guard state == .listening else { return nil }
+        return VoiceLevelTrace.silenceProgress(
+            since: transcriber.silenceStartedAt,
+            now: now,
+            window: SpeechTranscriber.vadSilenceWindow
+        )
+    }
+
+    /// The socket came up. Promote `.connecting` to `.listening` and nothing
+    /// else: a later state (an error, or an utterance that already executed)
+    /// must not be dragged backwards by a late connect (issue #429).
+    func handleConnected() {
+        guard state == .connecting else { return }
+        Self.log.info("socket connected → connecting resolves to listening")
+        state = .listening
+    }
 
     /// The text of the utterance currently executing / just flashed. Shown muted
     /// under the working / success rows so the user sees which command it maps to.
@@ -101,7 +145,7 @@ final class VoiceCaptureViewModel {
     /// success anyway). Permission / hard-error states allow it as an escape hatch.
     var allowsInteractiveDismiss: Bool {
         switch state {
-        case .listening, .executing, .flashSuccess, .empty: return false
+        case .connecting, .listening, .executing, .flashSuccess, .empty: return false
         case .permissionDenied, .error: return true
         }
     }
@@ -150,9 +194,14 @@ final class VoiceCaptureViewModel {
         // signal so the previous open's flags never leak into this one (issue #156).
         hasConsumedUtterance = false
         shouldDismiss = false
-        // Reset to .listening SYNCHRONOUSLY so the first render on (re)open never
-        // shows a stale terminal state from a prior session (issue #151).
-        state = .listening
+        // Clear the previous session's amplitude tail so the first frame of this
+        // one renders at rest rather than replaying old energy (issue #429).
+        levelTrace.reset()
+        // Reset SYNCHRONOUSLY so the first render on (re)open never shows a
+        // stale terminal state from a prior session (issue #151). Opens on
+        // `.connecting` rather than `.listening`: the socket isn't up yet, and
+        // saying otherwise was the lie this state exists to fix (issue #429).
+        state = .connecting
         startProcessingLoop()
         Task { await startListening() }
     }
@@ -215,7 +264,10 @@ final class VoiceCaptureViewModel {
         successLabels = []
         errorMessageText = nil
         currentUtterance = ""
-        state = .listening
+        // `.connecting` until the transcriber confirms its socket. For the
+        // on-device engine that confirmation is synchronous, so this is a single
+        // frame there rather than a visible state (issue #429).
+        state = .connecting
 
         // Permission gate up front so denial routes to the permission state.
         if Self.permissionDenied {
@@ -240,7 +292,10 @@ final class VoiceCaptureViewModel {
     /// utterances, which is an acceptable degrade; the user can Try Again).
     func handleTranscriberError(_ message: String) {
         switch state {
-        case .listening, .empty:
+        case .connecting, .listening, .empty:
+            // `.connecting` matters here: a socket that never comes up surfaces
+            // as an error while still in this state, and it must route to the
+            // message rather than hang on "Connecting" forever (issue #429).
             Self.log.info("transcriber error while idle-listening → error state")
             errorMessageText = Self.stripTechnicalPrefix(message)
             state = .error(errorMessageText ?? "Something went wrong.")

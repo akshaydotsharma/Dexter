@@ -28,10 +28,14 @@ import Speech
 ///   - `transcript` behaves per engine. SFSpeech updates it incrementally
 ///     (the system hands back the full running string each partial). The
 ///     OpenAI engine reveals it only ONCE per utterance, on the normalized
-///     `…completed` — raw deltas are not surfaced, because pre-normalization
-///     they can be in Urdu script and caused a visible Urdu→Devanagari flash
-///     (issue #151). Either way it holds the full text by the time
+///     `…completed`. Either way it holds the full text by the time
 ///     `VoiceCaptureViewModel` snapshots it on silence.
+///   - Raw OpenAI deltas go to `provisionalText`, NEVER `transcript` (issue
+///     #429). #151 discarded them outright because pre-normalization they can
+///     be in Urdu script and the correction read as a flash; keeping them in a
+///     separate, visibly-unsettled channel is what made surfacing them safe.
+///     `ChatView` still mirrors only `transcript`, so the inline chat bar is
+///     unaffected by this and never sees pre-normalization text.
 ///   - The OpenAI engine uses server VAD: each pause is finalized as its own
 ///     `…completed`, and utterances are accumulated (so multi-phrase dictation
 ///     in one recording doesn't lose earlier text). A manual `stop()` commits
@@ -101,11 +105,58 @@ final class SpeechTranscriber {
     /// Normalized microphone amplitude (0.0–1.0), computed as RMS of each
     /// audio buffer in the input tap, mapped from a -40dBFS floor, and
     /// low-pass filtered (rolling average over the last 4 frames) so it
-    /// doesn't strobe. Drives the voice-capture InkOrb animation (issue #150).
+    /// doesn't strobe. Drives the voice-capture waveform (issues #150, #429).
     /// Resets to 0 on stop. No extra permission needed — it reads the same
     /// buffer the recognizer already taps. Independent of the transcription
     /// engine; computed identically for OpenAI and SFSpeech paths.
     private(set) var audioLevel: Float = 0
+
+    // MARK: Live capture signals (issue #429)
+
+    /// Unsettled text for the utterance currently being transcribed, built by
+    /// appending each `…transcription.delta`. Rendered muted by the voice
+    /// overlay and replaced by the normalized `…completed` (which lands in
+    /// `transcript`) a moment later.
+    ///
+    /// Deliberately NOT folded into `transcript`. Two reasons, both load-bearing:
+    ///
+    /// 1. `ChatView` mirrors `transcript` straight into the chat input field.
+    ///    Putting raw deltas there would type pre-normalization text (possibly
+    ///    Urdu script) into the user's message.
+    /// 2. A delta is not authoritative. Keeping the two apart is what lets the
+    ///    overlay render "provisional" and "settled" as visibly different
+    ///    states, which is what makes the Urdu→Devanagari correction read as
+    ///    the text resolving rather than as a glitch (the reason deltas were
+    ///    suppressed outright before this issue).
+    ///
+    /// Cleared when the utterance finalizes and on stop.
+    private(set) var provisionalText: String = ""
+
+    /// True between server VAD's `speech_started` and `speech_stopped`.
+    ///
+    /// This is the only signal that arrives WHILE the user is talking:
+    /// `gpt-4o-transcribe` does not transcribe mid-utterance, so text can't
+    /// carry live feedback. Unlike `audioLevel` this is voice-gated by the
+    /// server, so a door slam won't trip it. Always false on the on-device
+    /// engine, which has no equivalent marker.
+    private(set) var isSpeechDetected: Bool = false
+
+    /// When the last `speech_stopped` landed, i.e. when the VAD silence window
+    /// started. The overlay derives its countdown from this. Nil while speech
+    /// is active or before the first utterance.
+    private(set) var silenceStartedAt: Date?
+
+    /// How long server VAD waits after speech stops before finalizing a turn.
+    /// Mirrors `OpenAIRealtimeTranscriber.vadSilenceMs` so the countdown the
+    /// user sees is the real deadline rather than a guess. Kept in sync by
+    /// `SpeechTranscriberTests.testVADWindowMatchesSocketConfig`.
+    static let vadSilenceWindow: TimeInterval = 0.7
+
+    /// True once the transcription socket is confirmed up. The overlay holds a
+    /// "Connecting" state until this flips, so the status never claims to be
+    /// listening while the WebSocket is still coming up. Always true
+    /// immediately for the on-device engine, which has no socket.
+    private(set) var isConnected: Bool = false
 
     // MARK: Private state
 
@@ -198,6 +249,13 @@ final class SpeechTranscriber {
         isRecording = false
         audioLevel = 0
         levelWindow.removeAll()
+        // No more VAD markers will arrive, so freeze the live signals rather
+        // than leave a stale countdown running in the overlay (issue #429).
+        // `provisionalText` is deliberately NOT cleared here: the socket drain
+        // still delivers this utterance's deltas after stop(), and the overlay
+        // should keep showing them until the normalized final supersedes them.
+        isSpeechDetected = false
+        silenceStartedAt = nil
 
         // Tear down the mic tap + engine first (shared by both engines).
         if audioEngine.isRunning {
@@ -258,12 +316,22 @@ final class SpeechTranscriber {
         committedTranscript = ""
         loggedFirstChunk = false
         loggedFirstDelta = false
+        // Fresh capture signals (issue #429). `isConnected` is set below once
+        // the engine is chosen: the on-device path has no socket to wait on.
+        provisionalText = ""
+        isSpeechDetected = false
+        silenceStartedAt = nil
+        isConnected = false
 
         // Pick the engine for this session: OpenAI when a key is present,
         // on-device SFSpeech otherwise (keyless / offline fallback).
         let keyPresent = (AppConfig.openAIAPIKey?.isEmpty == false)
         let useOpenAI = keyPresent
         engine = useOpenAI ? .openAI : .onDevice
+        // The on-device recognizer has no socket, so there is nothing to wait
+        // for: report connected immediately or the overlay would sit in its
+        // "Connecting" state forever on the keyless path (issue #429).
+        isConnected = !useOpenAI
         Self.log.info("engine chosen: \(useOpenAI ? "openAI" : "onDevice", privacy: .public) (openAI key present: \(keyPresent, privacy: .public))")
         // idevicesyslog-visible (os.Logger .info lines aren't relayed). Never
         // logs the key itself — only whether one is present.
@@ -336,20 +404,27 @@ final class SpeechTranscriber {
                     // flipped `isRecording` false. Dropping them on that guard
                     // is exactly the discarded-transcript bug (issue #151). The
                     // engine guard alone is enough to ignore a stale session.
-                    _ = delta
                     Task { @MainActor in
                         guard let self, self.engine == .openAI else { return }
-                        // Deliberately do NOT surface raw deltas. With server VAD
-                        // they arrive only AFTER the user pauses, and before
-                        // normalization they can be in Urdu (Perso-Arabic) script
-                        // — showing them produced a visible Urdu→Devanagari flash.
-                        // We wait for the normalized `…completed` (below) and
-                        // reveal the transcript once, already in Hindi/English
-                        // (issue #151). This model doesn't stream mid-speech, so
-                        // no live feedback is lost.
+                        // Deltas ARE surfaced as of issue #429, but only into
+                        // `provisionalText`, never `transcript`.
+                        //
+                        // History: #151 discarded them outright, because before
+                        // normalization a delta can be in Urdu (Perso-Arabic)
+                        // script and the swap to Devanagari on `…completed`
+                        // read as a glitch. The fix isn't to hide the text, it's
+                        // to mark it unsettled: the overlay renders this muted
+                        // and crossfades to ink on the final, so the correction
+                        // looks like the text resolving.
+                        //
+                        // Unchanged from #151: this still isn't mid-speech
+                        // feedback. With server VAD the whole delta stream
+                        // arrives AFTER the pause, so this buys a progressive
+                        // reveal over roughly half a second, not live dictation.
+                        self.provisionalText += delta
                         if !self.loggedFirstDelta {
                             self.loggedFirstDelta = true
-                            Self.log.info("delta received (not surfaced; awaiting normalized final)")
+                            Self.log.info("delta received (surfaced as provisional)")
                         }
                     }
                 },
@@ -381,6 +456,9 @@ final class SpeechTranscriber {
                             ? normalized
                             : self.committedTranscript + " " + normalized
                         self.transcript = self.committedTranscript
+                        // This utterance has settled: the provisional buffer has
+                        // been superseded by the normalized text above (#429).
+                        self.provisionalText = ""
                         self.didFinalizeTranscript &+= 1
                         // Surface THIS utterance as a discrete event (issue #156).
                         // The continuous voice overlay consumes these one at a
@@ -414,6 +492,29 @@ final class SpeechTranscriber {
                             NSLog("[voice] error: connection failed; stopping session")
                             self.stop()
                         }
+                    }
+                },
+                onConnected: { [weak self] in
+                    // The socket is genuinely up (issue #429). Until this lands
+                    // the overlay shows "Connecting" rather than claiming to
+                    // listen, which on a weak link was a real second of lying.
+                    Task { @MainActor in
+                        guard let self, self.engine == .openAI else { return }
+                        self.isConnected = true
+                        Self.log.info("socket connected → isConnected true")
+                    }
+                },
+                onSpeechActivity: { [weak self] active in
+                    // Server VAD turn markers. The only in-speech signal there
+                    // is, and voice-gated by the server, so unlike raw amplitude
+                    // it can't be tripped by a door slam (issue #429).
+                    Task { @MainActor in
+                        guard let self, self.engine == .openAI else { return }
+                        self.isSpeechDetected = active
+                        // Start the countdown from speech_stopped. Clearing it on
+                        // speech_started is what makes a resumed sentence refill
+                        // the arc instead of finalizing under the user.
+                        self.silenceStartedAt = active ? nil : Date()
                     }
                 }
             )
@@ -549,7 +650,7 @@ final class SpeechTranscriber {
             // The tap fires on a background queue, but the request's
             // append is thread-safe per Apple's docs.
             self?.request?.append(buffer)
-            // Compute a normalized, smoothed amplitude for the InkOrb. Done on
+            // Compute a normalized, smoothed amplitude for the waveform. Done on
             // this background queue (cheap RMS over the buffer), then the
             // smoothed scalar is hopped to the main actor for publishing.
             guard let self else { return }

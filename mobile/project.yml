@@ -164,8 +164,8 @@ targets:
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
       # Chat (issue #281). Text chat only — the voice capture path
-      # (VoiceCaptureViewModel / SpeechTranscriber / overlay / InkOrb /
-      # WaveformBars) is AVFoundation/Speech-coupled and gated off with
+      # (VoiceCaptureViewModel / SpeechTranscriber / overlay / VoiceWaveform /
+      # VoiceAurora / WaveformBars) is AVFoundation/Speech-coupled, gated with
       # `#if os(iOS)` inside ChatView, so those files stay out of this target.
       - path: PersonalDashboard/App/AppConfig.swift
       # User-supplied API key, Keychain-backed (#337). The scheme's env var is
