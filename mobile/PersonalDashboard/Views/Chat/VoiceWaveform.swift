@@ -63,6 +63,7 @@ struct VoiceWaveform: View {
     var silenceProgress: (Date) -> Double?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     // Sized to fill the overlay's animation zone, which is 38% of the screen.
     // The first cut used a 116pt track and read as a row of dots stranded in a
@@ -126,7 +127,7 @@ struct VoiceWaveform: View {
     private func bar(index: Int, time: Double, trace: VoiceLevelTrace) -> some View {
         let fraction = heightFraction(index: index, time: time, trace: trace)
         Capsule(style: .continuous)
-            .fill(EmberRamp.color(fraction: colorFraction(fraction), opacity: opacity(for: fraction)))
+            .fill(EmberRamp.color(fraction: colorFraction(fraction), opacity: opacity(for: fraction), dark: colorScheme == .dark))
             .frame(width: barWidth, height: max(barWidth, trackHeight * fraction))
             // Springs the bar to its new height rather than snapping. Fast
             // enough to keep up with syllables, damped enough not to jitter.
@@ -143,7 +144,7 @@ struct VoiceWaveform: View {
             .fill(
                 silenceProgress == nil
                     ? Tokens.border
-                    : EmberRamp.color(fraction: 0.5 * progress, opacity: 0.75)
+                    : EmberRamp.color(fraction: 0.5 * progress, opacity: 0.75, dark: colorScheme == .dark)
             )
             .frame(
                 width: max(barWidth, totalWidth * (silenceProgress == nil ? 1 : remaining)),
@@ -223,18 +224,18 @@ enum EmberRamp {
         (0xB91C1C, 0xF87171)   // Tokens.danger
     ]
 
-    /// Colour at `fraction` (0...1) along the ramp at the given opacity.
-    static func color(fraction: Double, opacity: Double) -> Color {
-        #if canImport(UIKit)
-        return Color(UIColor { trait in
-            let isDark = trait.userInterfaceStyle == .dark
-            let (r, g, b) = components(fraction: fraction, dark: isDark)
-            return UIColor(red: r, green: g, blue: b, alpha: CGFloat(min(max(opacity, 0), 1)))
-        })
-        #else
-        let (r, g, b) = components(fraction: fraction, dark: false)
-        return Color(red: r, green: g, blue: b).opacity(opacity)
-        #endif
+    /// Colour at `fraction` (0...1) along the ramp at the given opacity, for an
+    /// already-known colour scheme.
+    ///
+    /// Takes the scheme rather than building a dynamic `UIColor` that resolves
+    /// per trait. The dynamic form allocated a colour and a closure for every
+    /// bar on every frame (~210/sec at 30fps) and had to be resolved by the
+    /// render pass each time. Callers read `@Environment(\.colorScheme)` once,
+    /// which SwiftUI already invalidates on a theme change, so nothing is lost.
+    static func color(fraction: Double, opacity: Double, dark: Bool) -> Color {
+        let (r, g, b) = components(fraction: fraction, dark: dark)
+        return Color(red: Double(r), green: Double(g), blue: Double(b))
+            .opacity(min(max(opacity, 0), 1))
     }
 
     /// Linear sRGB interpolation across the stops. Exposed for tests.

@@ -119,7 +119,20 @@ final class SpeechTranscriber {
     /// Owned here rather than in the view layer because the audio tap is the
     /// only thing that knows when a new sample exists; sampling it from a
     /// SwiftUI `onChange` starved the buffer and pinned the bars at rest.
-    private(set) var levelTrace = VoiceLevelTrace()
+    ///
+    /// `@ObservationIgnored` is REQUIRED, not an optimisation. This is written
+    /// ~47 times a second. Observed, every write invalidated every view reading
+    /// it, so the whole voice overlay (including five full-screen blurred
+    /// gradients) re-rendered at 47 Hz on top of its own 30 Hz timelines. The
+    /// main thread saturated the moment audio streamed continuously and SwiftUI
+    /// dropped frames, which on device looked like the waveform working at the
+    /// start of a sentence, freezing for the rest of it, then recovering the
+    /// instant speech stopped.
+    ///
+    /// Consumers must POLL this from a `TimelineView` tick rather than observe
+    /// it. That is the correct shape for animation data anyway: the display
+    /// drives the sampling rate, not the microphone.
+    @ObservationIgnored private(set) var levelTrace = VoiceLevelTrace()
 
     // MARK: Live capture signals (issue #429)
 

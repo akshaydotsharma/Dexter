@@ -112,7 +112,12 @@ struct VoiceAurora: View {
                     // atmosphere, not information, so freezing it loses nothing.
                     field(in: geo.size, time: 3.2, trace: nil)
                 } else {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: intensity <= 0)) { context in
+                    // 20fps, not 30. This is five full-screen blurred gradients;
+                    // at 30 it shared a frame budget with the waveform's own
+                    // timeline and the two together starved the main thread
+                    // while audio was streaming (issue #429). The field drifts
+                    // slowly enough that 20 is indistinguishable.
+                    TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: intensity <= 0)) { context in
                         field(
                             in: geo.size,
                             time: context.date.timeIntervalSinceReferenceDate,
@@ -166,9 +171,12 @@ struct VoiceAurora: View {
                     .animation(.spring(response: 0.42, dampingFraction: 0.78), value: energy)
             }
         }
-        // Additive blending has to resolve within this stack, not against the
-        // app's background, or `.plusLighter` would wash the whole screen.
-        .compositingGroup()
+        // Rasterise the whole field offscreen through Metal, once per tick.
+        // This both isolates the additive blending (which must resolve within
+        // this stack, not against the app's background, or `.plusLighter` would
+        // wash the whole screen) and moves the blur off the CPU. Composites the
+        // five gradients as a single texture instead of five layered passes.
+        .drawingGroup(opaque: false)
         // Softer than the first cut (0.14). A wider blur spreads the same
         // colour over more area, which is most of why this arrived dim.
         .blur(radius: size.width * 0.085)
