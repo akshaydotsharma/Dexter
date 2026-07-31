@@ -586,15 +586,19 @@ final class DataImportService {
                 // pointing at a file that is not on disk would make the row claim
                 // a cover it cannot draw.
                 //
-                // Leaving the path nil is not a loss and needs no repair flag:
-                // `coverImageSourceURL` survives, and the launch sweep treats
-                // `resolved`-with-no-file as un-fetched and re-derives the cover.
-                // That is the same branch the sync path relies on, where there is
-                // no byte channel at all.
+                // Leaving the path nil is not a loss and needs no repair flag: the
+                // launch sweep treats `resolved`-with-no-file as un-generated and
+                // re-derives the art from the trip's name. That is the same branch the
+                // sync path relies on, where there is no byte channel at all. Cover art
+                // is always re-derivable, so this can never be data loss.
+                trip.coverImageState          = dto.coverImageState
+                trip.coverArtPromptVersion    = dto.coverArtPromptVersion
+                // Dead fields, restored verbatim rather than dropped: an archive from
+                // build 1102 carries values in them, and a DTO that silently discarded
+                // fields is the lossy-restore shape #366 had to add a repair path for.
                 trip.coverImageSourceURL      = dto.coverImageSourceURL
                 trip.coverImageAttribution    = dto.coverImageAttribution
                 trip.coverImageAttributionURL = dto.coverImageAttributionURL
-                trip.coverImageState          = dto.coverImageState
                 let restoredCover = try restoreTripCover(
                     relativePath: dto.coverImagePath,
                     archiveEntries: preview.entries

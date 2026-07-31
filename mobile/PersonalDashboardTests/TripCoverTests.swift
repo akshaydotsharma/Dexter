@@ -1,19 +1,25 @@
 import XCTest
+import CoreGraphics
+import ImageIO
 @testable import PersonalDashboard
 
-/// Trip cover photography (#428).
+/// Trip cover illustration (#428).
 ///
-/// Three pieces of this feature are pure functions with no network and no store,
-/// and all three are the kind of thing that fails silently:
+/// The photography-era tests are gone with the code they pinned: the corpus order,
+/// the ~20 filename reject rules, the stub-page threshold, the `imageinfo` metadata
+/// shapes and the attribution rendering. They asserted behaviour that no longer
+/// exists, and leaving them would have been worse than deleting them. Git history has
+/// them if photography is ever revisited.
 ///
-/// - The hue is derived from a byte hash of `clientUUID` specifically because
-///   `String.hashValue` is randomly seeded per process. Using it would change
-///   every trip's colour on every launch, which reads as a rendering glitch and
-///   is close to impossible to attribute. Pinning a known UUID to a known palette
-///   entry is what makes that regression a test failure instead of a mystery.
-/// - The quality gate is the only thing between an encyclopedic lead image and a
-///   flag stretched across the band.
-/// - The query normaliser is what turns a trip label into a page title.
+/// What is tested here is what can fail silently:
+///
+/// - The **crop**, which is the fiddly part. It runs on artwork nobody has inspected,
+///   and both of its failure modes look plausible in code — anchoring on the sky
+///   instead of the ground, or clipping a tower instead of scaling.
+/// - The **hue**, still derived from a byte hash rather than `String.hashValue`.
+/// - **Place-ness**, which is the only thing keeping `coverImageState`'s `none` case
+///   meaningful now that an image model will illustrate any string on request.
+/// - The **prompt version**, which is the only mechanism for invalidating cached art.
 final class TripCoverTests: XCTestCase {
 
     // MARK: - Deterministic hue
@@ -32,9 +38,9 @@ final class TripCoverTests: XCTestCase {
         }
     }
 
-    /// Pins the algorithm to concrete outputs, recorded from the implementation.
-    /// A change here re-colours every existing trip, so it should read as a
-    /// deliberate decision rather than slip through inside a refactor.
+    /// Pins the algorithm to concrete outputs, recorded from the implementation. A
+    /// change here re-colours every existing trip, so it should read as a deliberate
+    /// decision rather than slip through inside a refactor.
     func testPaletteIndexPinsKnownUUIDs() {
         let expected: [String: Int] = [
             "00000000-0000-0000-0000-000000000000": 0,
@@ -49,9 +55,8 @@ final class TripCoverTests: XCTestCase {
         }
     }
 
-    /// Different trips should not all land on one colour. Not a distribution
-    /// proof, just a guard against a hash that collapses (e.g. summing bytes with
-    /// no multiplier, where two swapped bytes collide).
+    /// Not a distribution proof, just a guard against a hash that collapses (e.g.
+    /// summing bytes with no multiplier, where two swapped bytes collide).
     func testPaletteIndexSpreadsAcrossThePalette() {
         var seen = Set<Int>()
         for _ in 0..<200 {
@@ -63,29 +68,26 @@ final class TripCoverTests: XCTestCase {
         )
     }
 
-    // MARK: - Glyph table
+    // MARK: - Glyph fallback
 
+    /// Still load-bearing after the pivot: this art is what a trip whose name is not a
+    /// place keeps permanently, and what every trip shows for the tens of seconds
+    /// before its illustration lands.
     func testGlyphMapsTripShapedKeywords() {
         XCTAssertEqual(TripCoverArt.glyph(for: "Bali beach break"), "beach.umbrella")
         XCTAssertEqual(TripCoverArt.glyph(for: "Hakuba ski week"), "snowflake")
         XCTAssertEqual(TripCoverArt.glyph(for: "Lisbon work offsite"), "briefcase")
-        XCTAssertEqual(TripCoverArt.glyph(for: "West coast road trip"), "beach.umbrella")
         XCTAssertEqual(TripCoverArt.glyph(for: "Rohan's wedding"), "gift")
         XCTAssertEqual(TripCoverArt.glyph(for: "Annapurna trek"), "mountain.2")
         XCTAssertEqual(TripCoverArt.glyph(for: "Interrail Europe"), "tram")
         XCTAssertEqual(TripCoverArt.glyph(for: "Family Christmas"), "house")
     }
 
-    /// The default is a plane, not `checklist`. `ListAppearance.infer(from:)`
-    /// would have given the latter, which is why this feature has its own table.
     func testGlyphFallsBackToAirplane() {
-        XCTAssertEqual(TripCoverArt.glyph(for: "Vietnam"), "airplane")
+        XCTAssertEqual(TripCoverArt.glyph(for: "Hong Kong"), "airplane")
         XCTAssertEqual(TripCoverArt.glyph(for: ""), "airplane")
-        XCTAssertEqual(TripCoverArt.glyph(for: "Japan 2026"), "airplane")
     }
 
-    /// Both of the less common symbols must exist on the deployment baseline, or
-    /// the band renders blank.
     func testUncommonSymbolsExistOnTheBaseline() {
         XCTAssertTrue(ListAppearance.isValidSymbol("mountain.2"))
         XCTAssertTrue(ListAppearance.isValidSymbol("snowflake"))
@@ -93,459 +95,240 @@ final class TripCoverTests: XCTestCase {
         XCTAssertTrue(ListAppearance.isValidSymbol("tram"))
     }
 
-    // MARK: - Query normalisation
+    // MARK: - Place-ness
 
-    func testPageTitleStripsYearsAndPossessives() {
-        let t = WikimediaTripCoverProvider.pageTitle(from:)
-        XCTAssertEqual(t("Japan 2026"), "Japan")
-        XCTAssertEqual(t("2027 Vietnam"), "Vietnam")
-        XCTAssertEqual(t("Rohan's wedding"), "Rohan wedding")
-        XCTAssertEqual(t("Rohan’s wedding"), "Rohan wedding")
-        XCTAssertEqual(t("  Bali   "), "Bali")
-        XCTAssertEqual(t("Hanoi, Vietnam"), "Hanoi Vietnam")
+    /// Fetching got this for free: a corpus lookup for "Work offsite" simply 404'd,
+    /// and that 404 was what made the `none` state meaningful. An image model has no
+    /// such honesty, so this local check is now the only thing standing between a
+    /// non-place trip name and a confidently generated illustration of nowhere — plus
+    /// tens of seconds and real money per attempt, repeatedly, since `failed` retries.
+    func testPlacenessAcceptsRealDestinations() {
+        for name in ["Hong Kong", "Pune", "Italy", "Bali beach break", "New York", "Hakuba"] {
+            XCTAssertTrue(TripCoverPlaceness.isLikelyPlace(name), "\(name) is a place")
+        }
     }
 
-    /// A four-digit number that is not a year must survive: stripping any four
-    /// digits would mangle real place names.
-    func testPageTitleKeepsNonYearNumbers() {
-        XCTAssertEqual(WikimediaTripCoverProvider.pageTitle(from: "Area 51"), "Area 51")
-        XCTAssertEqual(WikimediaTripCoverProvider.pageTitle(from: "Highway 1620"), "Highway 1620")
+    func testPlacenessRejectsOccasions() {
+        for name in ["Work offsite", "Rohan's wedding", "Dad's birthday", "Team offsite", "AWS conference"] {
+            XCTAssertFalse(TripCoverPlaceness.isLikelyPlace(name), "\(name) is an occasion, not a place")
+        }
     }
 
-    func testPageTitleOfAnEmptyOrYearOnlyNameIsEmpty() {
-        XCTAssertEqual(WikimediaTripCoverProvider.pageTitle(from: ""), "")
-        XCTAssertEqual(WikimediaTripCoverProvider.pageTitle(from: "2026"), "")
+    func testPlacenessRejectsEmptyNames() {
+        XCTAssertFalse(TripCoverPlaceness.isLikelyPlace(""))
+        XCTAssertFalse(TripCoverPlaceness.isLikelyPlace("   "))
     }
 
-    // MARK: - Quality gate
-
-    private func candidate(_ url: String, _ w: Int, _ h: Int) -> TripCoverCandidate {
-        TripCoverCandidate(
-            imageURL: URL(string: url)!,
-            pixelWidth: w,
-            pixelHeight: h,
-            attribution: nil,
-            attributionURL: nil
-        )
+    /// `work` is letter-bounded so it cannot fire inside an ordinary word. Without the
+    /// bound, "Networking trip" would be judged a non-place and never get art.
+    func testPlacenessWorkIsLetterBounded() {
+        XCTAssertTrue(TripCoverPlaceness.isLikelyPlace("Networking trip"))
+        XCTAssertFalse(TripCoverPlaceness.isLikelyPlace("Work trip to Berlin"))
     }
 
-    func testGateAcceptsARealLandscapePhotograph() {
-        XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/Hanoi_Old_Quarter.jpg", 2400, 1600)
-        ))
-        // Right at the bounds: the 1400px floor, 3.0:1, and 1.1:1.
-        XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/City.jpg", 1400, 467)
-        ))
-        XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/City.jpg", 1540, 1400)
-        ))
+    // MARK: - The pinned prompt
+
+    /// The version is the ONLY mechanism for invalidating cached art. If it stops being
+    /// stored, or stops being compared, a prompt change leaves a device showing a mix of
+    /// old and new art with no way to tell which is which by looking.
+    func testPromptVersionIsPinned() {
+        XCTAssertEqual(TripCoverPrompt.version, "1")
+        XCTAssertEqual(TripCoverPrompt.model, "gpt-image-1-mini")
+        XCTAssertEqual(TripCoverPrompt.size, "1536x1024")
     }
 
-    /// The floor was raised from 900 to 1400 (see `minimumPixelWidth`). 1024x768
-    /// is the real `Pho_quay.JPG`, which used to win for "Vietnam" and is the
-    /// specific weak result the raise was measured against.
-    func testGateEnforcesTheRaisedResolutionFloor() {
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/Pho_quay.JPG", 1024, 768)
-        ))
-        XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/Cua_Tung_Beach.jpg", 2822, 1829)
-        ))
-    }
+    /// One prompt for every destination, with the name substituted in. The crop depends
+    /// on the composition this asks for, so the constraints that matter to it are
+    /// asserted rather than left to a reading of the string.
+    func testPromptSubstitutesDestinationAndKeepsItsConstraints() {
+        let prompt = TripCoverPrompt.text(for: "Hong Kong")
+        XCTAssertTrue(prompt.contains("Hong Kong"))
+        XCTAssertTrue(prompt.contains("BOTTOM QUARTER"), "the crop's whole premise")
+        XCTAssertTrue(prompt.contains("single common groundline"), "what makes a base detectable")
+        XCTAssertTrue(prompt.contains("no text"), "lettering in generated art is unfixable")
 
-    // MARK: - Corpus order
-
-    /// Wikivoyage BEFORE Wikipedia, pinned.
-    ///
-    /// This is the whole design and it is invisible at every call site. A travel
-    /// guide's image pool is scenery by construction; an encyclopedia's is not, and
-    /// searching Wikipedia first is what produced an 1859 painting of the Siege of
-    /// Saigon for "Vietnam" and a medieval scroll for "Japan". If a future change
-    /// reorders these, that regression comes straight back and nothing else in the
-    /// suite would notice.
-    func testCorpusOrderPutsWikivoyageFirst() {
+        // Same prompt, different destination: nothing else varies.
+        let other = TripCoverPrompt.text(for: "Pune")
         XCTAssertEqual(
-            WikimediaTripCoverProvider.corpusOrder,
-            [.wikivoyage, .wikipedia]
-        )
-        XCTAssertEqual(WikimediaTripCoverProvider.Corpus.wikivoyage.rawValue, "en.wikivoyage.org")
-        XCTAssertEqual(WikimediaTripCoverProvider.Corpus.wikipedia.rawValue, "en.wikipedia.org")
-        // Every corpus in the enum must be in the search order, or adding one
-        // silently does nothing.
-        XCTAssertEqual(
-            Set(WikimediaTripCoverProvider.corpusOrder),
-            Set(WikimediaTripCoverProvider.Corpus.allCases)
+            prompt.replacingOccurrences(of: "Hong Kong", with: "{d}"),
+            other.replacingOccurrences(of: "Pune", with: "{d}")
         )
     }
 
-    /// Wikivoyage's `summary` lead image is deliberately NOT trusted: measured, it
-    /// is a globe SVG for Vietnam and a district map for Lisbon. Its `media-list`
-    /// is the useful part.
-    func testOnlyWikipediaContributesALeadImage() {
-        XCTAssertFalse(WikimediaTripCoverProvider.Corpus.wikivoyage.usesLeadImage)
-        XCTAssertTrue(WikimediaTripCoverProvider.Corpus.wikipedia.usesLeadImage)
+    // MARK: - The crop
+
+    /// The band proportion is one decision expressed in two files. If they drift, the
+    /// cached art no longer matches the band it was cropped for.
+    func testCropRatioMatchesTheBandMetric() {
+        XCTAssertEqual(TripCoverCrop.bandRatio, Double(TripCoverMetrics.ratio))
     }
 
-    /// Both corpora lead with a map for the destinations this feature was tuned on,
-    /// so the gate has to reject them or every trip gets a map. Real filenames and
-    /// real measured dimensions from live responses.
+    /// A silhouette that fits is bottom-anchored on its base, so the skyline rises out
+    /// of the seam divider with sky above it.
+    func testCropAnchorsWhenTheSilhouetteFits() throws {
+        // 1536x1024 → 384px band, 15px pad. A 200px silhouette fits easily.
+        let image = makeSkyline(width: 1536, height: 1024, top: 800, base: 1000, bars: 5)
+        let result = try XCTUnwrap(TripCoverCrop.crop(image))
+
+        XCTAssertEqual(result.path, .anchored)
+        XCTAssertEqual(result.scale, 1.0)
+        XCTAssertEqual(result.bandHeight, 384)
+        XCTAssertEqual(result.silhouetteTop, 800)
+        XCTAssertEqual(result.silhouetteBase, 1000)
+
+        let out = try XCTUnwrap(decode(result.imageData))
+        XCTAssertEqual(out.width, 1536)
+        XCTAssertEqual(out.height, 384)
+    }
+
+    /// Orientation, asserted on pixels rather than trusted.
     ///
-    /// Both are now caught by NAME. Lisbon's used to be caught only by the 1.1:1
-    /// aspect floor, which meant one landscape administrative map would have won;
-    /// `districts` and `freguesias` closed that.
-    func testGateRejectsTheLeadingMapOfEachCorpus() {
-        let vietnamRegions = candidate(
-            "https://upload.wikimedia.org/x/Vietnam_Regions_Map.png", 1992, 3331
-        )
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(vietnamRegions))
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Vietnam_Regions_Map.png"))
+    /// Getting the bitmap's row order backwards would anchor the crop on the SKY and
+    /// still compile, still run, and still produce a plausible-looking 4:1 image. The
+    /// only way to catch it is to look at where the buildings ended up.
+    func testCropPutsTheSkylineAtTheBottomWithSkyAbove() throws {
+        let image = makeSkyline(width: 1536, height: 1024, top: 800, base: 1000, bars: 5)
+        let result = try XCTUnwrap(TripCoverCrop.crop(image))
+        let decoded = try XCTUnwrap(decode(result.imageData))
+        let bitmap = try XCTUnwrap(TripCoverCrop.Bitmap(decoded))
 
-        let lisbonDistricts = candidate(
-            "https://upload.wikimedia.org/x/Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png",
-            3249, 3036
+        // The band opens on empty sky.
+        XCTAssertTrue(isBackgroundRow(bitmap, y: 4), "band should open on empty sky")
+        XCTAssertTrue(isBackgroundRow(bitmap, y: 100), "upper band should still be sky")
+
+        // The base sits `pad` above the bottom edge, so the very last rows are the
+        // background pad and the rows just above them are silhouette.
+        let pad = Int(Double(result.bandHeight) * TripCoverCrop.padFraction)
+        XCTAssertTrue(
+            isBackgroundRow(bitmap, y: result.bandHeight - 2),
+            "the 4% pad below the base should be background"
         )
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(lisbonDistricts))
         XCTAssertFalse(
-            WikimediaTripCoverProvider.passesNameGate(
-                "File:Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png"
-            ),
-            "By name, not by luck of the aspect floor"
+            isBackgroundRow(bitmap, y: result.bandHeight - pad - 5),
+            "rows just above the pad should carry the skyline"
         )
     }
 
-    // MARK: - The administrative-map class
+    /// A silhouette taller than the band is SCALED, never clipped. Losing the top of a
+    /// tower is far more visible than a few percent of vertical compression on flat
+    /// geometric shapes.
+    func testCropScalesRatherThanClippingATallSilhouette() throws {
+        // A 700px silhouette against a 384px band cannot fit.
+        let image = makeSkyline(width: 1536, height: 1024, top: 300, base: 1000, bars: 5)
+        let result = try XCTUnwrap(TripCoverCrop.crop(image))
 
-    /// Maps whose filenames never contain the word "map". Every name here is a real
-    /// live response for one of the user's own destinations, so this is a
-    /// regression test against his actual data rather than an invented case.
-    func testNameGateRejectsAdministrativeMaps() {
-        let rejects = [
-            "File:Italy_regions.png",                                             // Italy
-            "File:Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png",     // Lisbon
-            "File:Japan_topo_en.jpg",                                             // Japan
-            "File:Bali2022OSM.png",                                               // Bali
-            "File:Spain_provinces.png",
-            "File:France_administrative_divisions.png",
-            "File:Germany_political.png",
-            "File:India_subdivisions.png",
-            "File:Nepal_topographic.jpg"
-        ]
-        for name in rejects {
-            XCTAssertFalse(
-                WikimediaTripCoverProvider.passesNameGate(name),
-                "\(name) is an administrative map and should not have passed"
-            )
-        }
+        XCTAssertEqual(result.path, .scaled)
+        XCTAssertEqual(result.bandHeight, 384)
+        XCTAssertLessThan(result.scale, 1.0)
+        XCTAssertGreaterThan(result.scale, 0.4)
+        // A 369px target over a 701px strip.
+        XCTAssertEqual(result.scale, 369.0 / 701.0, accuracy: 0.001)
+
+        let out = try XCTUnwrap(decode(result.imageData))
+        XCTAssertEqual(out.height, 384, "the band height is fixed whichever path is taken")
+
+        // Nothing clipped: the whole silhouette is present, so the top of the band
+        // carries building rather than sky.
+        let bitmap = try XCTUnwrap(TripCoverCrop.Bitmap(out))
+        XCTAssertFalse(
+            isBackgroundRow(bitmap, y: 3),
+            "a scaled strip starts at the top of the band, so no tower is lost"
+        )
     }
 
-    /// The strongest single case in the class: this was the FIRST name-plausible
-    /// candidate for "Hong Kong", one of the user's four real trips, at 4416x3312 —
-    /// comfortably through every geometry check, so nothing else would have stopped
-    /// it. It is a close-up of a boundary marker stone.
+    /// A lone spire above the main mass must be part of the silhouette.
     ///
-    /// Also the case that killed the date-filter idea: its `DateTimeOriginal` is
-    /// 2010-04-17, because it is a modern photograph OF an old stone, not an old
-    /// photograph. A pre-1970 reject would not have touched it.
-    func testNameGateRejectsTheHongKongBoundaryStone() {
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate(
-            "File:City_Boundary_1903_-_Old_Peak_Road.jpg"
-        ))
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/City_Boundary_1903_-_Old_Peak_Road.jpg", 4416, 3312)
-        ))
-    }
-
-    /// Plurals are deliberate. The singular forms appear in ordinary place names,
-    /// so matching them would reject real photographs of real places.
-    func testAdministrativeRejectsAreScopedToPlurals() {
-        for name in [
-            "File:Mapo_District_Seoul.jpg",
-            "File:Yunnan_Province_terraces.jpg",
-            "File:Region_of_Tuscany_sunset.jpg"
-        ] {
-            XCTAssertTrue(
-                WikimediaTripCoverProvider.passesNameGate(name),
-                "\(name) is a place photograph and should have passed"
-            )
-        }
-    }
-
-    /// `osm` is letter-bounded so it catches `Bali2022OSM.png` without eating a
-    /// word that merely contains those letters.
-    func testOSMRejectIsLetterBounded() {
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Bali2022OSM.png"))
-        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("File:Cosmos_flowers_Hokkaido.jpg"))
-        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("File:Osmania_University_Hyderabad.jpg"))
-    }
-
-    /// The three covers the user will actually see. Pinned so a future reject word
-    /// cannot quietly take one of his trips back to generated art.
-    func testTheUsersRealCoversStillPassTheNameGate() {
-        for name in [
-            "File:13-08-08-hongkong-by-RalfR-Panorama2.jpg",                        // Hong Kong
-            "File:Pu_La_Deshpande_garden_1.JPG",                                    // Pune
-            "File:Vue_des_toits_depuis_la_Sainte-Trinité-des-Monts,_Rome,_Italy.jpg" // Italy
-        ] {
-            XCTAssertTrue(
-                WikimediaTripCoverProvider.passesNameGate(name),
-                "\(name) is a live-verified cover for one of the user's trips"
-            )
-        }
-    }
-
-    // MARK: - Stub corpus rule
-
-    /// A Wikivoyage page offering one or two images is a stub, not a guide, so the
-    /// "scenery by construction" argument does not hold and Wikipedia is the better
-    /// source. Measured: Hakuba's Wikivoyage page has exactly one image — a train —
-    /// which beat Wikipedia's ski-resort photo purely by corpus order.
-    func testStubThresholdAppliesToWikivoyageOnly() {
-        XCTAssertEqual(WikimediaTripCoverProvider.Corpus.wikivoyage.stubThreshold, 3)
-        // nil, not a number: Wikipedia is already the fallback, and a threshold
-        // there would only turn usable covers into `none`.
-        XCTAssertNil(WikimediaTripCoverProvider.Corpus.wikipedia.stubThreshold)
-    }
-
-    /// The stub decision is counted on name-plausible candidates, so it costs no
-    /// extra request. This is the function that count comes from: it dedupes on the
-    /// API's own title normalisation, drops rejects, and caps.
-    func testNamePlausibleTitlesDedupesGatesAndCaps() {
-        let input = [
-            "File:Hanoi_Old_Quarter.jpg",
-            "File:Hanoi Old Quarter.jpg",        // same file, API spelling
-            "File:Vietnam_Regions_Map.png",      // rejected by name
-            "File:Cua_Tung_Beach.jpg"
-        ]
-        let out = WikimediaTripCoverProvider.namePlausibleTitles(input, limit: 12)
-        XCTAssertEqual(out.count, 2, "one duplicate collapsed, one map rejected")
-        XCTAssertEqual(out.first, "File:Hanoi_Old_Quarter.jpg", "page order preserved")
-
-        // The cap is honoured, which is what keeps a 74-image page cheap.
-        let many = (0..<40).map { "File:Photo_\($0).jpg" }
-        XCTAssertEqual(WikimediaTripCoverProvider.namePlausibleTitles(many, limit: 12).count, 12)
-
-        // A page of nothing but maps counts as zero, so it reads as a stub and
-        // falls through rather than resolving to a map.
-        let allMaps = ["File:A_regions.png", "File:B_districts.png", "File:C_locator.svg"]
-        XCTAssertTrue(WikimediaTripCoverProvider.namePlausibleTitles(allMaps, limit: 12).isEmpty)
-    }
-
-    /// The encyclopedic-lead-image problem, which is the reason the gate exists.
-    func testGateRejectsEncyclopedicArtwork() {
-        let rejects = [
-            "Flag_of_Vietnam.svg",
-            "Flag_of_Japan.png",
-            "Coat_of_arms_of_Portugal.png",
-            "Coat%20of%20Arms_of_Spain.png",
-            "Vietnam_locator_map.png",
-            // The case that exposed the ticket's `\bmap\b`: `_` is a word
-            // character, so `\b` never fires between "Map" and "_of", and every
-            // locator map sailed through the gate. Now bounded on letters.
-            "Map_of_Bali.jpg",
-            "world-map.png",
-            "Great_Seal_of_the_United_States.png",
-            "Company_logo.png",
-            "National_emblem.png",
-            "Tokyo_montage.jpg",
-            "Paris_collage.jpg",
-            "Timelapse.ogv"
-        ]
-        for name in rejects {
-            XCTAssertFalse(
-                WikimediaTripCoverProvider.passesGate(
-                    candidate("https://upload.wikimedia.org/x/\(name)", 2400, 1600)
-                ),
-                "\(name) should not have passed the gate"
-            )
-        }
-    }
-
-    func testGateRejectsBadGeometry() {
-        // Too small to fill an 868pt band at 2x without upscaling.
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/Hanoi.jpg", 640, 400)
-        ))
-        // Portrait: a 2.4:1 band would throw most of it away.
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/Tower.jpg", 1200, 1600)
-        ))
-        // Panorama: the band would show a slice of its middle.
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/Skyline.jpg", 4000, 800)
-        ))
-        // Degenerate.
-        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/Broken.jpg", 1200, 0)
-        ))
-    }
-
-    /// The gate reads the FILENAME, so a rejected word in the host or the
-    /// directory path must not reject an otherwise good photograph.
-    func testGateOnlyInspectsTheFilename() {
-        XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/maps/logo/Hanoi_Old_Quarter.jpg", 2400, 1600)
-        ))
-    }
-
-    /// The other half of tightening `map`: real place names that merely contain
-    /// the letters must still get their photograph.
-    func testGateDoesNotRejectPlacesThatContainMap() {
-        for name in ["Maputo_skyline.jpg", "Mapo_District_Seoul.jpg", "Sanmap.jpg", "Kathmandu_valley.jpg"] {
-            XCTAssertTrue(
-                WikimediaTripCoverProvider.passesGate(
-                    candidate("https://upload.wikimedia.org/x/\(name)", 2400, 1600)
-                ),
-                "\(name) is a place photograph and should have passed"
-            )
-        }
-    }
-
-    // MARK: - Name gate (runs before any metadata request)
-
-    /// A rasterised SVG thumbnail is named `NNNpx-Foo.svg.png`, so its extension
-    /// says "png" while the artwork is vector. This is what let
-    /// `Bali_in_Indonesia_(special_marker).svg.png` through in a live run.
-    func testNameGateRejectsRasterisedVectors() {
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("960px-Flag_of_Vietnam.svg.png"))
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("1280px-Bali_in_Indonesia_(special_marker).svg.png"))
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Vietnam_(orthographic_projection).svg"))
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Location_Vietnam_ASEAN.svg"))
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("Timelapse.webm"))
-        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("Animation.gif"))
-    }
-
-    func testNameGateAcceptsPhotographs() {
-        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("File:Ho_Chi_Minh_City_Skyline.jpg"))
-        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("Hakuba_Happo-one_Winter_Resort.JPG"))
-        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("Lisboa_-_Portugal_(52597836992).jpg"))
-    }
-
-    // MARK: - Upload URL unwrapping
-
-    /// `summary` hands back a thumbnail URL, not the original. Both of the
-    /// thumbnailer's transformations have to be undone or the metadata lookup that
-    /// supplies the real dimensions and the credit line misses.
-    func testFileNameUnwrapsThumbnailURLs() {
-        let f = { (s: String) in
-            WikimediaTripCoverProvider.fileName(fromUploadURL: URL(string: s)!)
-        }
-        // Size prefix plus a raster extension bolted onto a vector original.
-        XCTAssertEqual(
-            f("https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Flag_of_Vietnam.svg/960px-Flag_of_Vietnam.svg.png"),
-            "Flag_of_Vietnam.svg"
+    /// This is the bug that shipped clipped art in the first live run. A single spire
+    /// crossing a row scores exactly two transitions, so the 6-transition threshold that
+    /// correctly finds the groundline silently excluded every narrow feature standing
+    /// above it: 124px above Hong Kong's detected top, 106px above Pune's, which cut the
+    /// Bank of China Tower's antennae and sheared Pune's clock tower flat against the
+    /// frame. Italy was unaffected, which is how it survived the first review.
+    func testCropIncludesALoneSpireAboveTheMass() throws {
+        // Mass 700...900, plus one thin spire reaching up to row 500.
+        let image = makeSkyline(
+            width: 1536, height: 1024, top: 700, base: 900, bars: 5, spireTop: 500
         )
-        // Size prefix only.
-        XCTAssertEqual(
-            f("https://upload.wikimedia.org/wikipedia/commons/thumb/a/b/Hanoi.jpg/1280px-Hanoi.jpg"),
-            "Hanoi.jpg"
-        )
-        // An original, untouched.
-        XCTAssertEqual(
-            f("https://upload.wikimedia.org/wikipedia/commons/9/95/Ho_Chi_Minh_City_Skyline.jpg"),
-            "Ho_Chi_Minh_City_Skyline.jpg"
-        )
-        // Percent-encoded parentheses survive as characters.
-        XCTAssertEqual(
-            f("https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/Vietnam_%28orthographic_projection%29.svg/500px-Vietnam_%28orthographic_projection%29.svg.png"),
-            "Vietnam_(orthographic_projection).svg"
-        )
-        // A real `.png` photograph must NOT be mistaken for a rasterised vector.
-        XCTAssertEqual(
-            f("https://upload.wikimedia.org/wikipedia/commons/thumb/a/b/Skyline.png/900px-Skyline.png"),
-            "Skyline.png"
-        )
+        let result = try XCTUnwrap(TripCoverCrop.crop(image))
+
+        XCTAssertEqual(result.silhouetteTop, 500, "the spire's tip is the silhouette's top")
+        XCTAssertEqual(result.silhouetteBase, 900, "the base still comes from the mass")
     }
 
-    /// The MediaWiki API answers with spaces where the request had underscores, so
-    /// candidates are matched on a canonical form or every lookup misses.
-    func testNormalisedTitleMatchesTheAPIsOwnCasing() {
-        XCTAssertEqual(
-            WikimediaTripCoverProvider.normalisedTitle("File:Flag_of_Vietnam.svg"),
-            WikimediaTripCoverProvider.normalisedTitle("File:Flag of Vietnam.svg")
+    /// With the spire included, the anchored path's no-clipping guarantee becomes real:
+    /// `silhouetteHeight + pad <= bandHeight` rearranges to `cropTop <= silhouetteTop`,
+    /// so the window always opens at or above the tip. It was previously vacuous,
+    /// because the "top" it guaranteed was not the real top.
+    func testAnchoredCropNeverOpensBelowTheSpireTip() throws {
+        let image = makeSkyline(
+            width: 1536, height: 1024, top: 800, base: 1000, bars: 5, spireTop: 760
         )
+        let result = try XCTUnwrap(TripCoverCrop.crop(image))
+        XCTAssertEqual(result.path, .anchored)
+        XCTAssertEqual(result.silhouetteTop, 760)
+
+        // The tip is inside the band, so the band's top row is sky and the spire is
+        // fully present below it.
+        let bitmap = try XCTUnwrap(TripCoverCrop.Bitmap(XCTUnwrap(decode(result.imageData))))
+        let cropTop = result.silhouetteBase
+            + Int(Double(result.bandHeight) * TripCoverCrop.padFraction)
+            - result.bandHeight
+        XCTAssertLessThanOrEqual(cropTop, result.silhouetteTop)
+        XCTAssertTrue(isBackgroundRow(bitmap, y: 2), "sky above the tip")
     }
 
-    // MARK: - URL hygiene
-
-    /// Wikivoyage appends `utm_source` / `utm_campaign` / `utm_content` to the URLs
-    /// it hands back. They must never reach `coverImageSourceURL`, which is the
-    /// portable identity of a cover: the self-heal re-fetch reads it on a device
-    /// that has the row but not the file, and two rows differing only by
-    /// `utm_content` would read as two different covers.
-    func testTrackingParametersAreStripped() {
-        let strip = { (s: String) in
-            WikimediaTripCoverProvider.strippingTrackingParameters(s)?.absoluteString
-        }
-        XCTAssertEqual(
-            strip("https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Cua_Tung_Beach.jpg/500px-Cua_Tung_Beach.jpg?utm_source=en.wikivoyage.org&utm_campaign=parser&utm_content=thumbnail"),
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Cua_Tung_Beach.jpg/500px-Cua_Tung_Beach.jpg"
-        )
-        // No query at all: unchanged, and no stray "?" left behind.
-        XCTAssertEqual(
-            strip("https://upload.wikimedia.org/wikipedia/commons/1/15/Cua_Tung_Beach.jpg"),
-            "https://upload.wikimedia.org/wikipedia/commons/1/15/Cua_Tung_Beach.jpg"
-        )
-        // A non-tracking parameter is preserved rather than blanket-stripped.
-        XCTAssertEqual(
-            strip("https://example.org/a.jpg?page=2&utm_source=x"),
-            "https://example.org/a.jpg?page=2"
-        )
+    /// A blank or near-uniform image has no silhouette. Reporting failure is right: the
+    /// caller records `failed`, draws the glyph art, and re-rolls later. Cropping an
+    /// empty band would look like a rendering bug instead.
+    func testCropRejectsArtWithNoSilhouette() {
+        let blank = makeSkyline(width: 1536, height: 1024, top: 0, base: 0, bars: 0)
+        XCTAssertNil(TripCoverCrop.crop(blank))
     }
 
-    /// Wikimedia's API etiquette enforces a descriptive agent with a contact route;
-    /// a bare default gets HTTP errors from the Commons API, which in this feature
-    /// would surface as a `failed` state and a silent retry loop. One constant, so
-    /// the metadata calls and the byte download cannot drift apart.
-    func testUserAgentIsDescriptiveAndContactable() {
-        let ua = TripCoverUserAgent.value
-        XCTAssertTrue(ua.hasPrefix("Dexter/"))
-        XCTAssertTrue(ua.contains("https://"), "Wikimedia asks for a contact route in the UA")
+    /// A source shorter than the band it has to fill has nothing sensible to crop.
+    func testCropRejectsASourceShorterThanTheBand() {
+        let squat = makeSkyline(width: 1536, height: 200, top: 100, base: 150, bars: 5)
+        XCTAssertNil(TripCoverCrop.crop(squat))
     }
 
-    // MARK: - Attribution cleanup
-
-    func testAttributionStripsHTML() {
-        XCTAssertEqual(
-            WikimediaTripCoverProvider.strippingHTML(
-                "<a href=\"//commons.wikimedia.org/wiki/User:Someone\" title=\"User:Someone\">Someone</a>"
-            ),
-            "Someone"
-        )
-        XCTAssertEqual(
-            WikimediaTripCoverProvider.strippingHTML("Jane &amp; John Doe"),
-            "Jane & John Doe"
-        )
-        XCTAssertEqual(WikimediaTripCoverProvider.strippingHTML("  <span>CC BY-SA 4.0</span> "), "CC BY-SA 4.0")
+    /// Sky and open water are near-uniform and must not register as silhouette. This is
+    /// the failure that made "anchor to the lowest non-background pixel" worse than
+    /// useless: a wide flat band of water counted as content, so the crop found the
+    /// bottom of the water instead of the base of the buildings.
+    func testTransitionCountIgnoresFlatBandsOfColour() {
+        // One wide block spans the width with only two edges, well under the
+        // 6-transition threshold, so it reads as water rather than as buildings.
+        let water = makeSkyline(width: 1536, height: 1024, top: 900, base: 1000, bars: 1)
+        XCTAssertNil(TripCoverCrop.crop(water), "one flat block is water, not a skyline")
     }
 
     // MARK: - Three-valued state
 
-    /// `none` must be a settled answer and `failed` must not be, or a placeless
-    /// trip re-hits the network on every launch forever.
     @MainActor
     func testNeedsFetchTreatsTheThreeStatesDifferently() {
         let service = TripCoverService()
-        let trip = LocalTrip(name: "Work offsite", startDate: .now, endDate: .now)
+        let trip = LocalTrip(name: "Hong Kong", startDate: .now, endDate: .now)
 
         // Never attempted.
         XCTAssertTrue(service.needsFetch(trip))
 
-        // Searched, nothing suitable. Settled — this is the runaway guard.
+        // Not a place. Settled — the runaway guard, and it now guards real money per
+        // attempt rather than three cheap HTTP calls.
         trip.coverImageState = TripCoverState.none.rawValue
         XCTAssertFalse(service.needsFetch(trip))
 
-        // Transient failure. Retry.
+        // Generation failed. Retry.
         trip.coverImageState = TripCoverState.failed.rawValue
         XCTAssertTrue(service.needsFetch(trip))
 
-        // Resolved but with no path at all: nothing to draw, so re-fetch.
+        // Resolved with no path at all: nothing to draw, so regenerate.
         trip.coverImageState = TripCoverState.resolved.rawValue
+        trip.coverArtPromptVersion = TripCoverPrompt.version
         trip.coverImagePath = nil
         XCTAssertTrue(service.needsFetch(trip))
 
-        // Resolved with a path whose file is not on this device — the sync case.
-        // Must read as un-fetched so the sweep re-derives it from the source URL.
+        // Resolved with a path whose file is not on this device — the sync case. Must
+        // read as un-generated so the sweep re-derives it from the trip's name.
         trip.coverImagePath = "trip-covers/does-not-exist-on-this-device.jpg"
         XCTAssertTrue(service.needsFetch(trip))
 
@@ -554,18 +337,98 @@ final class TripCoverTests: XCTestCase {
         XCTAssertTrue(service.needsFetch(trip))
     }
 
+    /// Art from a superseded prompt must regenerate. This also covers every fetched
+    /// PHOTOGRAPH left on the device by build 1102: those have a path, a `resolved`
+    /// state and a nil prompt version, so they are replaced by illustrations rather
+    /// than lingering as the one photo in a list of drawings.
+    @MainActor
+    func testNeedsFetchRegeneratesArtFromASupersededPrompt() {
+        let service = TripCoverService()
+        let trip = LocalTrip(name: "Hong Kong", startDate: .now, endDate: .now)
+        trip.coverImageState = TripCoverState.resolved.rawValue
+        trip.coverImagePath = "trip-covers/whatever.jpg"
+
+        trip.coverArtPromptVersion = nil
+        XCTAssertTrue(service.needsFetch(trip), "a build-1102 photograph must be replaced")
+
+        trip.coverArtPromptVersion = "0"
+        XCTAssertTrue(service.needsFetch(trip), "art from an older prompt must be replaced")
+    }
+
     // MARK: - Migration safety
 
-    /// Every cover field must be optional with a nil default. A trip constructed
-    /// the way every pre-existing row will be read back must report no cover and
-    /// no attempt, or the lightweight migration is not the additive one this
-    /// change claims to be.
-    func testNewFieldsDefaultToNil() {
-        let trip = LocalTrip(name: "Vietnam", startDate: .now, endDate: .now)
+    /// Every cover field optional with a nil default, and NOTHING removed. Build 1102 is
+    /// installed, so the store already has the five original columns; removing an
+    /// attribute triggers a lightweight migration this feature has no reason to risk.
+    /// The two attribution fields are dead but deliberately kept.
+    func testCoverFieldsDefaultToNilAndNoneAreRemoved() {
+        let trip = LocalTrip(name: "Hong Kong", startDate: .now, endDate: .now)
         XCTAssertNil(trip.coverImagePath)
+        XCTAssertNil(trip.coverImageState)
+        XCTAssertNil(trip.coverArtPromptVersion)
+        // Dead, kept, and still nil-defaulted.
         XCTAssertNil(trip.coverImageSourceURL)
         XCTAssertNil(trip.coverImageAttribution)
         XCTAssertNil(trip.coverImageAttributionURL)
-        XCTAssertNil(trip.coverImageState)
+    }
+
+    // MARK: - Fixtures
+
+    /// A synthetic illustration: flat background, plus `bars` evenly spaced vertical
+    /// blocks spanning rows `top...base`. Each bar contributes two transitions, so
+    /// `bars` of 3 or more clears the 6-transition threshold and `bars` of 1 does not.
+    ///
+    /// `spireTop`, when given, adds ONE narrow bar reaching from that row down to
+    /// `top` — a lone spire above the mass, scoring only two transitions on its own
+    /// rows, which is the case the two thresholds exist for.
+    private func makeSkyline(
+        width: Int, height: Int, top: Int, base: Int, bars: Int, spireTop: Int? = nil
+    ) -> CGImage {
+        let space = CGColorSpaceCreateDeviceRGB()
+        let ctx = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: space,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        )!
+        // Warm off-white, matching what the prompt asks the model for.
+        ctx.setFillColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        if bars > 0 {
+            ctx.setFillColor(red: 0.25, green: 0.22, blue: 0.19, alpha: 1)
+            let barWidth = width / (bars * 2 + 1)
+            for i in 0..<bars {
+                let x = barWidth + i * barWidth * 2
+                // CGContext user space is bottom-left and `top`/`base` are measured from
+                // the TOP, so flip here. Doing it in the fixture rather than in the
+                // assertions keeps the tests reading in image coordinates.
+                let yBottom = height - base - 1
+                let barHeight = base - top + 1
+                ctx.fill(CGRect(x: x, y: yBottom, width: barWidth, height: barHeight))
+            }
+            if let spireTop {
+                // Narrow, and over one bar only, so its own rows score exactly two
+                // transitions.
+                let spireWidth = max(4, barWidth / 8)
+                ctx.fill(CGRect(
+                    x: barWidth + barWidth / 2,
+                    y: height - top - 1,
+                    width: spireWidth,
+                    height: top - spireTop + 1
+                ))
+            }
+        }
+        return ctx.makeImage()!
+    }
+
+    private func decode(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    /// Whether a row is (near enough) all background, sampled the way the crop samples.
+    private func isBackgroundRow(_ bitmap: TripCoverCrop.Bitmap, y: Int) -> Bool {
+        let background = bitmap.pixel(4, 4)
+        return bitmap.transitions(row: y, background: background) < TripCoverCrop.minTransitions
     }
 }

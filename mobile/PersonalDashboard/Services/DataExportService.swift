@@ -527,7 +527,8 @@ final class DataExportService {
             coverImageSourceURL: trip.coverImageSourceURL,
             coverImageAttribution: trip.coverImageAttribution,
             coverImageAttributionURL: trip.coverImageAttributionURL,
-            coverImageState: trip.coverImageState
+            coverImageState: trip.coverImageState,
+            coverArtPromptVersion: trip.coverArtPromptVersion
         )
     }
 

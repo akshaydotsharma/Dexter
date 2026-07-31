@@ -974,18 +974,16 @@ private struct TripEditorSheet: View {
                 existing.participantPersonUUIDs = participantUUIDs
                 existing.updatedAt = Date()
                 if renamed {
-                    // The destination changed, so whatever cover is cached is now
-                    // a photograph of the wrong place. Clearing the state (rather
-                    // than leaving it `resolved`) is what puts the trip back into
-                    // the never-attempted state the service fetches for. The old
-                    // file is dropped here because nothing references it any more.
+                    // The destination changed, so the cached illustration is now of the
+                    // wrong city. Clearing the state (rather than leaving it
+                    // `resolved`) is what puts the trip back into the never-attempted
+                    // state the service generates for. The old file is dropped here
+                    // because nothing references it any more.
                     if let stale = existing.coverImagePath {
                         try? ReceiptStorage.tripCovers.delete(relativePath: stale)
                     }
                     existing.coverImagePath = nil
-                    existing.coverImageSourceURL = nil
-                    existing.coverImageAttribution = nil
-                    existing.coverImageAttributionURL = nil
+                    existing.coverArtPromptVersion = nil
                     existing.coverImageState = nil
                     needsCoverFetch = uuid
                 }

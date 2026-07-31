@@ -261,6 +261,18 @@ enum DataArchive {
         var coverImageAttribution: String? = nil
         var coverImageAttributionURL: String? = nil
         var coverImageState: String? = nil
+
+        // MARK: Added in #428 (illustration pivot)
+        //
+        // Which pinned prompt produced the cached art. Carried so a restored archive
+        // does not force a regeneration of art that is already current — and so a
+        // restore of art from a SUPERSEDED prompt correctly does.
+        //
+        // The three fields above it are now dead on the model and are still carried
+        // here rather than dropped: an archive written by build 1102 has values in
+        // them, and a DTO that silently discarded fields is exactly the lossy-restore
+        // shape #366 had to add a repair path for.
+        var coverArtPromptVersion: String? = nil
     }
 
     /// "Itinerary day" in the manifest is a single timeline item on a trip

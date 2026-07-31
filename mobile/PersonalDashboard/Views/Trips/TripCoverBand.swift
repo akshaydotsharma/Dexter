@@ -15,18 +15,21 @@ enum TripPhase {
 
 /// The full-bleed destination photo band across the top of a trip tile (#428).
 ///
-/// Nothing is ever drawn on the photograph. The alternative — full-cover art with
-/// a scrim and the text on top — was measured and rejected: white text needs a
+/// Nothing is ever drawn on the artwork. The alternative — full-cover art with a
+/// scrim and the text on top — was measured and rejected: white text needs a
 /// backdrop luminance at or below 0.183 to clear 4.5:1, a bright sky sits near
-/// 0.85, so the scrim would need roughly 0.85 opacity to be safe and would
-/// destroy the photo it sat on. A photograph also does not respond to light or
-/// dark mode, so the usual per-theme escape hatch does not exist. Keeping text
-/// off the image means this tile introduces no new contrast pair at all.
+/// 0.85, so the scrim would need roughly 0.85 opacity to be safe and would destroy
+/// the image it sat on. Keeping text off the image means this tile introduces no new
+/// contrast pair at all.
+///
+/// The cover is a generated illustration, cropped at cache time so the skyline's base
+/// sits on the seam divider with empty sky above it. See `TripCoverCrop`.
 ///
 /// Reads a local file, synchronously, through `TripCoverImageCache`. Makes NO
-/// network call on any render path — the fetch happens on write and in the
-/// launch repair sweep — which is what makes "there is no loading state" a fact
-/// rather than an aspiration.
+/// network call on any render path — generation happens on write and in the launch
+/// repair sweep — which is what makes "there is no loading state" a fact rather than
+/// an aspiration. It matters more here than it did for photography: a spinner tied to
+/// a 30-second generation would be a 30-second spinner.
 ///
 /// No `Material` and no `.blur` is introduced anywhere in this view, so
 /// `accessibilityReduceTransparency` does not apply to it. Stated so a future
@@ -95,9 +98,11 @@ struct TripCoverBand: View {
             // The band is decorative-redundant: the destination is named in text
             // immediately below it.
             .accessibilityHidden(true)
-            // A repair sweep can resolve a cover while the list is on screen, so
-            // generated art swaps to a photograph in place. Opacity only, 200ms,
-            // and skipped entirely under reduce-motion (precedent: `InkOrb`).
+            // A repair sweep or a write-time generation can land while the list is on
+            // screen, so the glyph art swaps to the illustration in place. Opacity
+            // only, 200ms, skipped under reduce-motion (precedent: `InkOrb`). This
+            // fade is the ONLY thing the user sees of a 30-second generation, which is
+            // why it earns its keep here more than it did under photography.
             .animation(
                 reduceMotion ? nil : .easeOut(duration: 0.2),
                 value: trip.coverImagePath
@@ -111,21 +116,26 @@ struct TripCoverBand: View {
         if let image = TripCoverImageCache.image(forRelativePath: trip.coverImagePath) {
             Image(platformImage: image)
                 .resizable()
-                // `.fill` with the default CENTRE focal point. Not `.top`:
-                // destination photos are sky-heavy, and a top crop reads as an
-                // empty gradient with a sliver of city along the bottom.
+                // `.fill` with the default CENTRE focal point. The cached file is
+                // ALREADY cropped to the band's 4:1 at cache time, so in practice
+                // there is nothing left to crop here and this only absorbs the few
+                // points of rounding between the file's ratio and the resolved band.
+                // Doing the real cropping here instead would put it on the render
+                // path, where a bad result would be intermittent rather than
+                // inspectable.
                 .aspectRatio(contentMode: .fill)
                 .saturation(saturation)
                 .clipped()
                 .transition(.opacity)
         } else {
-            // Not a placeholder. Same band height, same seam rule, same text
-            // block below it, so the list's rhythm is identical either way and a
-            // photo-less trip reads as a citizen of the app.
+            // Not a placeholder. Same band height, same seam rule, same text block
+            // below it, so the list's rhythm is identical either way. This is what a
+            // trip whose name is not a place keeps permanently, and what every trip
+            // shows for the tens of seconds before its illustration lands.
             TripCoverGeneratedArt(
                 hue: TripCoverArt.hue(for: trip.clientUUID),
                 glyph: TripCoverArt.glyph(for: trip.name),
-                watermark: watermark
+                watermark: TripCoverMetrics.watermark
             )
             .saturation(saturation)
             .transition(.opacity)
@@ -134,30 +144,22 @@ struct TripCoverBand: View {
 
     // MARK: - Geometry
 
-    private var ratio: CGFloat {
-        phase == .past ? TripCoverMetrics.pastRatio : TripCoverMetrics.ratio
-    }
+    /// One geometry for every phase. Past recedes by treatment, not by size.
+    private var ratio: CGFloat { TripCoverMetrics.ratio }
 
-    private var minHeight: CGFloat {
-        phase == .past ? TripCoverMetrics.pastMinHeight : TripCoverMetrics.minHeight
-    }
+    private var minHeight: CGFloat { TripCoverMetrics.minHeight }
 
-    /// The accessibility clamp is a `min`, not a replacement: Past's ceiling is
-    /// already 132, so the clamp is a no-op there rather than a value that could
-    /// accidentally make a Past band taller than an Active one.
+    /// The accessibility clamp is a `min`, not a replacement, so it can only ever
+    /// shorten the band and never accidentally grow it.
     private var maxHeight: CGFloat {
-        let base = phase == .past ? TripCoverMetrics.pastMaxHeight : TripCoverMetrics.maxHeight
-        guard dynamicTypeSize >= .accessibility1 else { return base }
-        return min(base, TripCoverMetrics.accessibilityMaxHeight)
+        guard dynamicTypeSize >= .accessibility1 else { return TripCoverMetrics.maxHeight }
+        return min(TripCoverMetrics.maxHeight, TripCoverMetrics.accessibilityMaxHeight)
     }
 
     private var saturation: Double {
         phase == .past ? TripCoverMetrics.pastSaturation : 1.0
     }
 
-    private var watermark: CGFloat {
-        phase == .past ? TripCoverMetrics.pastWatermark : TripCoverMetrics.watermark
-    }
 }
 
 // MARK: - Generated cover art

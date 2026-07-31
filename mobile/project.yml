@@ -276,12 +276,14 @@ targets:
       - path: PersonalDashboard/Views/Trips/TripCalendarPopover.swift
       - path: PersonalDashboard/Views/Trips/TicketCardView.swift
       - path: PersonalDashboard/Views/Trips/TicketViewers.swift
-      # Trip cover photography (issue #428). Fully portable: the fetcher is
-      # Foundation + URLSession, the on-disk cache is the already-shimmed
-      # ReceiptStorage, and the band renders through `Image(platformImage:)`.
-      # `TripCoverMetrics` and `Tokens.coverSeamVeil` live under Design/, which
-      # this target globs, so they need no entry.
+      # Trip cover illustration (issue #428). Fully portable: the generator is
+      # Foundation + URLSession against the OpenAI images API, the silhouette crop is
+      # pure ImageIO + CoreGraphics with no UIKit/AppKit, the on-disk cache is the
+      # already-shimmed ReceiptStorage, and the band renders through
+      # `Image(platformImage:)`. `TripCoverMetrics` and `Tokens.coverSeamVeil` live
+      # under Design/, which this target globs, so they need no entry.
       - path: PersonalDashboard/Services/TripCoverProvider.swift
+      - path: PersonalDashboard/Services/TripCoverCrop.swift
       - path: PersonalDashboard/Services/TripCoverService.swift
       - path: PersonalDashboard/Views/Trips/TripCoverBand.swift
       # #428 wires the launch repair sweep through AppMaintenance, so the Mac
