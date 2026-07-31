@@ -121,6 +121,30 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
             case .wikipedia:  return true
             }
         }
+
+        /// Minimum number of name-plausible candidates before this corpus is
+        /// trusted, or nil for no minimum.
+        ///
+        /// A Wikivoyage page offering one or two images is a stub, not a guide, so
+        /// the "scenery by construction" argument does not hold for it and
+        /// Wikipedia is the better read of intent. Measured: `Hakuba`'s Wikivoyage
+        /// page has exactly ONE image, a photograph of a train on the Chuo Main
+        /// Line, which beat Wikipedia's `Hakuba_Happo-one_Winter_Resort.JPG`
+        /// purely by corpus order. Every other destination tested offers 9 to 74.
+        ///
+        /// Counted on the NAME gate rather than the full gate so the decision costs
+        /// no extra request. Nothing is lost when the threshold trips: a skipped
+        /// stub's candidates are retried as a last resort if no corpus yields
+        /// anything (see `cover(forDestination:)`).
+        ///
+        /// nil for Wikipedia: it is already the fallback, and a threshold there
+        /// would only convert usable covers into `none`.
+        var stubThreshold: Int? {
+            switch self {
+            case .wikivoyage: return 3
+            case .wikipedia:  return nil
+            }
+        }
     }
 
     static let corpusOrder: [Corpus] = [.wikivoyage, .wikipedia]
@@ -144,6 +168,10 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
         // continues past an error, and if nothing is found AND something failed,
         // the failure is rethrown so the caller records `failed` and retries.
         var firstError: Error?
+        /// Candidates from a corpus that was skipped for being a stub. Retried at
+        /// the very end rather than discarded: a thin guide's one good photograph
+        /// still beats no cover at all.
+        var deferredStubTitles: [String] = []
 
         for corpus in Self.corpusOrder {
             do {
@@ -152,7 +180,25 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
                     fileTitles.append(lead)
                 }
                 fileTitles += try await mediaListFileTitles(corpus: corpus, page: page)
-                if let hit = try await firstPassingCandidate(fileTitles: fileTitles) {
+
+                let plausible = Self.namePlausibleTitles(fileTitles, limit: candidateLimit)
+                if let minimum = corpus.stubThreshold, plausible.count < minimum {
+                    deferredStubTitles += plausible
+                    continue
+                }
+                if let hit = try await firstPassingCandidate(namePlausible: plausible) {
+                    return hit
+                }
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+
+        // Last resort: whatever a skipped stub had to offer.
+        if !deferredStubTitles.isEmpty {
+            do {
+                let plausible = Self.namePlausibleTitles(deferredStubTitles, limit: candidateLimit)
+                if let hit = try await firstPassingCandidate(namePlausible: plausible) {
                     return hit
                 }
             } catch {
@@ -167,23 +213,30 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
         return nil
     }
 
-    /// Gate a corpus's titles and resolve the first one that passes.
-    private func firstPassingCandidate(fileTitles: [String]) async throws -> TripCoverCandidate? {
-        // Filename gate BEFORE spending the metadata request. A flag, an emblem or
-        // a rasterised SVG is identifiable from its name alone, so there is no
-        // reason to ask how big it is.
+    /// Dedupe, apply the filename gate, and cap.
+    ///
+    /// The name gate runs BEFORE any metadata request. A flag, an emblem, a
+    /// rasterised SVG or an administrative map is identifiable from its name
+    /// alone, so there is no reason to ask how big it is — and the surviving count
+    /// is what the stub threshold is measured on.
+    static func namePlausibleTitles(_ fileTitles: [String], limit: Int) -> [String] {
         var seen = Set<String>()
-        let plausible = fileTitles
-            .filter { seen.insert(Self.normalisedTitle($0)).inserted }
-            .filter { Self.passesNameGate($0) }
-            .prefix(candidateLimit)
-        guard !plausible.isEmpty else { return nil }
+        return fileTitles
+            .filter { seen.insert(normalisedTitle($0)).inserted }
+            .filter { passesNameGate($0) }
+            .prefix(limit)
+            .map { $0 }
+    }
 
-        let described = try await imageInfo(fileTitles: Array(plausible))
+    /// Resolve the first name-plausible title that also passes the geometry gate.
+    private func firstPassingCandidate(namePlausible: [String]) async throws -> TripCoverCandidate? {
+        guard !namePlausible.isEmpty else { return nil }
+
+        let described = try await imageInfo(fileTitles: namePlausible)
 
         // Preserve the order they were offered in: lead image (if any), then page
         // order. This is what makes the corpus choice matter.
-        for title in plausible {
+        for title in namePlausible {
             guard let candidate = described[Self.normalisedTitle(title)] else { continue }
             if Self.passesGate(candidate) { return candidate }
         }
@@ -257,10 +310,40 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     /// responses: `Bali` returns `Bali_in_Indonesia_(special_marker).svg` and
     /// `Vietnam` returns `Location_Vietnam_ASEAN.svg` and
     /// `Vietnam_(orthographic_projection).svg`. None contains the word "map".
+    ///
+    /// ## The administrative-map class
+    ///
+    /// The second group below exists because a whole family of maps never contains
+    /// the word "map". All of these are real filenames from live responses for the
+    /// user's own destinations: `Italy_regions.png`,
+    /// `Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png`,
+    /// `Japan_topo_en.jpg`, `Bali2022OSM.png`. Relying on the aspect floor to catch
+    /// them is relying on luck — `Italy_regions.png` is only excluded because it
+    /// happens to be portrait, and one landscape administrative map would win.
+    ///
+    /// `boundary` is in this group and earns its place on the strongest evidence
+    /// here: `City_Boundary_1903_-_Old_Peak_Road.jpg` was the FIRST name-plausible
+    /// candidate for "Hong Kong", one of the user's actual trips, at 4416x3312 —
+    /// comfortably through every geometry check. It is a close-up of a boundary
+    /// marker stone, and it was winning.
+    ///
+    /// Plurals are deliberate on `regions`, `districts`, `provinces` and
+    /// `subdivisions`. The singular forms appear in ordinary place names
+    /// (`Mapo_District_Seoul.jpg`, `Yunnan_Province_...`), so matching them would
+    /// reject real photographs. This distinction is asserted by a test.
+    ///
+    /// `blank_map` from the brief is deliberately absent: the bounded `map` rule
+    /// above already matches it, and a redundant alternative in a regex is a place
+    /// for a future edit to disagree with itself.
     private static let rejectedNamePattern = [
-        "flag", "coat[_ ]?of[_ ]?arms", "locator", "(?<![a-z])map(?![a-z])",
-        "seal", "logo", "emblem", "montage", "collage",
-        "location", "marker", "orthographic"
+        // Insignia and non-photographic artwork.
+        "flag", "coat[_ ]?of[_ ]?arms", "seal", "logo", "emblem", "montage", "collage",
+        // Maps, by name.
+        "locator", "(?<![a-z])map(?![a-z])", "location", "marker", "orthographic",
+        // Maps, by everything except the word "map".
+        "regions", "districts", "freguesias", "provinces", "administrative",
+        "political", "subdivisions", "topographic", "topo", "boundary",
+        "(?<![a-z])osm(?![a-z])"
     ].joined(separator: "|")
 
     /// Extensions that cannot be shown in the band at all: vector artwork (which

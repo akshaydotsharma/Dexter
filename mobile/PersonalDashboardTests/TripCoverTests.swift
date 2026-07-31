@@ -187,15 +187,13 @@ final class TripCoverTests: XCTestCase {
         XCTAssertTrue(WikimediaTripCoverProvider.Corpus.wikipedia.usesLeadImage)
     }
 
-    /// Both corpora lead with a map for the destinations this feature was tuned
-    /// on, so the gate has to reject them or every trip gets a map. Real filenames
-    /// and real measured dimensions from live responses.
+    /// Both corpora lead with a map for the destinations this feature was tuned on,
+    /// so the gate has to reject them or every trip gets a map. Real filenames and
+    /// real measured dimensions from live responses.
     ///
-    /// Note WHICH half of the gate catches each, because they differ and it is not
-    /// obvious: Vietnam's is caught by name AND geometry, but Lisbon's district map
-    /// has no rejected word in it at all and is caught ONLY by the 1.1:1 aspect
-    /// floor. That makes the aspect bound load-bearing for correctness and not just
-    /// for cropping quality.
+    /// Both are now caught by NAME. Lisbon's used to be caught only by the 1.1:1
+    /// aspect floor, which meant one landscape administrative map would have won;
+    /// `districts` and `freguesias` closed that.
     func testGateRejectsTheLeadingMapOfEachCorpus() {
         let vietnamRegions = candidate(
             "https://upload.wikimedia.org/x/Vietnam_Regions_Map.png", 1992, 3331
@@ -208,14 +206,129 @@ final class TripCoverTests: XCTestCase {
             3249, 3036
         )
         XCTAssertFalse(WikimediaTripCoverProvider.passesGate(lisbonDistricts))
-        // Deliberately asserted: the NAME gate lets this one through. If someone
-        // later loosens the aspect floor, this map starts winning for Lisbon.
-        XCTAssertTrue(
+        XCTAssertFalse(
             WikimediaTripCoverProvider.passesNameGate(
                 "File:Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png"
             ),
-            "If the name gate now catches this, the comment above is stale — update it"
+            "By name, not by luck of the aspect floor"
         )
+    }
+
+    // MARK: - The administrative-map class
+
+    /// Maps whose filenames never contain the word "map". Every name here is a real
+    /// live response for one of the user's own destinations, so this is a
+    /// regression test against his actual data rather than an invented case.
+    func testNameGateRejectsAdministrativeMaps() {
+        let rejects = [
+            "File:Italy_regions.png",                                             // Italy
+            "File:Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png",     // Lisbon
+            "File:Japan_topo_en.jpg",                                             // Japan
+            "File:Bali2022OSM.png",                                               // Bali
+            "File:Spain_provinces.png",
+            "File:France_administrative_divisions.png",
+            "File:Germany_political.png",
+            "File:India_subdivisions.png",
+            "File:Nepal_topographic.jpg"
+        ]
+        for name in rejects {
+            XCTAssertFalse(
+                WikimediaTripCoverProvider.passesNameGate(name),
+                "\(name) is an administrative map and should not have passed"
+            )
+        }
+    }
+
+    /// The strongest single case in the class: this was the FIRST name-plausible
+    /// candidate for "Hong Kong", one of the user's four real trips, at 4416x3312 —
+    /// comfortably through every geometry check, so nothing else would have stopped
+    /// it. It is a close-up of a boundary marker stone.
+    ///
+    /// Also the case that killed the date-filter idea: its `DateTimeOriginal` is
+    /// 2010-04-17, because it is a modern photograph OF an old stone, not an old
+    /// photograph. A pre-1970 reject would not have touched it.
+    func testNameGateRejectsTheHongKongBoundaryStone() {
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate(
+            "File:City_Boundary_1903_-_Old_Peak_Road.jpg"
+        ))
+        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
+            candidate("https://upload.wikimedia.org/x/City_Boundary_1903_-_Old_Peak_Road.jpg", 4416, 3312)
+        ))
+    }
+
+    /// Plurals are deliberate. The singular forms appear in ordinary place names,
+    /// so matching them would reject real photographs of real places.
+    func testAdministrativeRejectsAreScopedToPlurals() {
+        for name in [
+            "File:Mapo_District_Seoul.jpg",
+            "File:Yunnan_Province_terraces.jpg",
+            "File:Region_of_Tuscany_sunset.jpg"
+        ] {
+            XCTAssertTrue(
+                WikimediaTripCoverProvider.passesNameGate(name),
+                "\(name) is a place photograph and should have passed"
+            )
+        }
+    }
+
+    /// `osm` is letter-bounded so it catches `Bali2022OSM.png` without eating a
+    /// word that merely contains those letters.
+    func testOSMRejectIsLetterBounded() {
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Bali2022OSM.png"))
+        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("File:Cosmos_flowers_Hokkaido.jpg"))
+        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("File:Osmania_University_Hyderabad.jpg"))
+    }
+
+    /// The three covers the user will actually see. Pinned so a future reject word
+    /// cannot quietly take one of his trips back to generated art.
+    func testTheUsersRealCoversStillPassTheNameGate() {
+        for name in [
+            "File:13-08-08-hongkong-by-RalfR-Panorama2.jpg",                        // Hong Kong
+            "File:Pu_La_Deshpande_garden_1.JPG",                                    // Pune
+            "File:Vue_des_toits_depuis_la_Sainte-Trinité-des-Monts,_Rome,_Italy.jpg" // Italy
+        ] {
+            XCTAssertTrue(
+                WikimediaTripCoverProvider.passesNameGate(name),
+                "\(name) is a live-verified cover for one of the user's trips"
+            )
+        }
+    }
+
+    // MARK: - Stub corpus rule
+
+    /// A Wikivoyage page offering one or two images is a stub, not a guide, so the
+    /// "scenery by construction" argument does not hold and Wikipedia is the better
+    /// source. Measured: Hakuba's Wikivoyage page has exactly one image — a train —
+    /// which beat Wikipedia's ski-resort photo purely by corpus order.
+    func testStubThresholdAppliesToWikivoyageOnly() {
+        XCTAssertEqual(WikimediaTripCoverProvider.Corpus.wikivoyage.stubThreshold, 3)
+        // nil, not a number: Wikipedia is already the fallback, and a threshold
+        // there would only turn usable covers into `none`.
+        XCTAssertNil(WikimediaTripCoverProvider.Corpus.wikipedia.stubThreshold)
+    }
+
+    /// The stub decision is counted on name-plausible candidates, so it costs no
+    /// extra request. This is the function that count comes from: it dedupes on the
+    /// API's own title normalisation, drops rejects, and caps.
+    func testNamePlausibleTitlesDedupesGatesAndCaps() {
+        let input = [
+            "File:Hanoi_Old_Quarter.jpg",
+            "File:Hanoi Old Quarter.jpg",        // same file, API spelling
+            "File:Vietnam_Regions_Map.png",      // rejected by name
+            "File:Cua_Tung_Beach.jpg"
+        ]
+        let out = WikimediaTripCoverProvider.namePlausibleTitles(input, limit: 12)
+        XCTAssertEqual(out.count, 2, "one duplicate collapsed, one map rejected")
+        XCTAssertEqual(out.first, "File:Hanoi_Old_Quarter.jpg", "page order preserved")
+
+        // The cap is honoured, which is what keeps a 74-image page cheap.
+        let many = (0..<40).map { "File:Photo_\($0).jpg" }
+        XCTAssertEqual(WikimediaTripCoverProvider.namePlausibleTitles(many, limit: 12).count, 12)
+
+        // A page of nothing but maps counts as zero, so it reads as a stub and
+        // falls through rather than resolving to a map.
+        let allMaps = ["File:A_regions.png", "File:B_districts.png", "File:C_locator.svg"]
+        XCTAssertTrue(WikimediaTripCoverProvider.namePlausibleTitles(allMaps, limit: 12).isEmpty)
     }
 
     /// The encyclopedic-lead-image problem, which is the reason the gate exists.
