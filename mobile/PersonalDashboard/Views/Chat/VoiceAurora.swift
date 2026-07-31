@@ -59,23 +59,43 @@ struct VoiceAurora: View {
     /// values disappear against warm paper.
     private var blobs: [Blob] {
         [
-            Blob(colour: Color(hex: 0xF97316), origin: UnitPoint(x: 0.28, y: 0.20),
-                 radius: 0.62, period: 11.0, phase: 0.0, drift: 0.16, traceTap: 2),
-            Blob(colour: Color(hex: 0xF59E0B), origin: UnitPoint(x: 0.74, y: 0.30),
-                 radius: 0.54, period: 14.5, phase: 1.7, drift: 0.13, traceTap: 8),
-            Blob(colour: Color(hex: 0xA3E635), origin: UnitPoint(x: 0.50, y: 0.46),
-                 radius: 0.70, period: 9.2, phase: 3.1, drift: 0.18, traceTap: 0),
-            Blob(colour: Color(hex: 0x10B981), origin: UnitPoint(x: 0.18, y: 0.58),
-                 radius: 0.52, period: 16.8, phase: 4.4, drift: 0.11, traceTap: 14),
-            Blob(colour: Color(hex: 0x2DD4BF), origin: UnitPoint(x: 0.82, y: 0.66),
-                 radius: 0.48, period: 12.6, phase: 5.9, drift: 0.14, traceTap: 20)
+            Blob(colour: Color(hex: 0xF97316), origin: UnitPoint(x: 0.28, y: 0.18),
+                 radius: 0.86, period: 11.0, phase: 0.0, drift: 0.16, traceTap: 2),
+            Blob(colour: Color(hex: 0xF59E0B), origin: UnitPoint(x: 0.76, y: 0.28),
+                 radius: 0.74, period: 14.5, phase: 1.7, drift: 0.13, traceTap: 8),
+            Blob(colour: Color(hex: 0xA3E635), origin: UnitPoint(x: 0.50, y: 0.44),
+                 radius: 0.94, period: 9.2, phase: 3.1, drift: 0.18, traceTap: 0),
+            Blob(colour: Color(hex: 0x10B981), origin: UnitPoint(x: 0.16, y: 0.56),
+                 radius: 0.72, period: 16.8, phase: 4.4, drift: 0.11, traceTap: 14),
+            Blob(colour: Color(hex: 0x2DD4BF), origin: UnitPoint(x: 0.84, y: 0.64),
+                 radius: 0.68, period: 12.6, phase: 5.9, drift: 0.14, traceTap: 20)
         ]
     }
 
     /// Warm paper needs a lighter touch than the dark ground, where the same
     /// wash reads as a glow rather than a stain.
+    ///
+    /// These are far higher than the first cut (0.42 / 0.30), which looked right
+    /// in a browser prototype and arrived on device as a barely-visible smudge.
+    /// Two things ate it that the prototype didn't model: SwiftUI's `.blur`
+    /// spreads a fixed amount of colour over a much larger area than a canvas
+    /// upscale does, and the vertical mask then multiplied what was left.
     private var baseOpacity: Double {
-        colorScheme == .dark ? 0.42 : 0.30
+        colorScheme == .dark ? 0.95 : 0.62
+    }
+
+    /// On the dark ground the blobs are composited additively, so overlaps
+    /// bloom into hot centres and the field reads as emitted light rather than
+    /// as paint. On warm paper additive would just wash everything to white, so
+    /// there it stays normal source-over.
+    private var blend: BlendMode {
+        colorScheme == .dark ? .plusLighter : .normal
+    }
+
+    /// Per-blob core alpha. Lower in dark because `.plusLighter` accumulates:
+    /// five blobs at full strength would clip to white wherever they cross.
+    private var coreAlpha: Double {
+        colorScheme == .dark ? 0.62 : 1.0
     }
 
     var body: some View {
@@ -118,8 +138,8 @@ struct VoiceAurora: View {
                     .fill(
                         RadialGradient(
                             gradient: Gradient(stops: [
-                                .init(color: blob.colour.opacity(0.90), location: 0),
-                                .init(color: blob.colour.opacity(0.34), location: 0.55),
+                                .init(color: blob.colour.opacity(coreAlpha), location: 0),
+                                .init(color: blob.colour.opacity(coreAlpha * 0.58), location: 0.48),
                                 .init(color: blob.colour.opacity(0), location: 1)
                             ]),
                             center: .center,
@@ -132,12 +152,19 @@ struct VoiceAurora: View {
                         x: blob.origin.x * size.width + dx,
                         y: blob.origin.y * size.height + dy
                     )
+                    .blendMode(blend)
                     // Springs the swell so a syllable pushes the field rather
                     // than making it flicker.
                     .animation(.spring(response: 0.42, dampingFraction: 0.78), value: energy)
             }
         }
-        .blur(radius: size.width * 0.14)
+        // Additive blending has to resolve within this stack, not against the
+        // app's background, or `.plusLighter` would wash the whole screen.
+        .compositingGroup()
+        // Softer than the first cut (0.14). A wider blur spreads the same
+        // colour over more area, which is most of why this arrived dim.
+        .blur(radius: size.width * 0.085)
+        .saturation(1.15)
         .opacity(baseOpacity)
     }
 
@@ -149,10 +176,10 @@ struct VoiceAurora: View {
         LinearGradient(
             gradient: Gradient(stops: [
                 .init(color: .black, location: 0.00),
-                .init(color: .black, location: 0.42),
-                .init(color: .black.opacity(0.34), location: 0.62),
-                .init(color: .black.opacity(0.12), location: 0.82),
-                .init(color: .black.opacity(0.06), location: 1.00)
+                .init(color: .black, location: 0.52),
+                .init(color: .black.opacity(0.62), location: 0.70),
+                .init(color: .black.opacity(0.34), location: 0.86),
+                .init(color: .black.opacity(0.24), location: 1.00)
             ]),
             startPoint: .top,
             endPoint: .bottom

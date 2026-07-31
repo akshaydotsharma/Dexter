@@ -50,9 +50,12 @@ struct VoiceWaveform: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let barWidth: CGFloat = 7
-    private let barSpacing: CGFloat = 11
-    private let trackHeight: CGFloat = 116
+    // Sized to fill the overlay's animation zone, which is 38% of the screen.
+    // The first cut used a 116pt track and read as a row of dots stranded in a
+    // 320pt space, even while reacting correctly.
+    private let barWidth: CGFloat = 9
+    private let barSpacing: CGFloat = 13
+    private let trackHeight: CGFloat = 184
 
     var body: some View {
         if reduceMotion {

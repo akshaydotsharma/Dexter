@@ -98,21 +98,20 @@ final class VoiceCaptureViewModel {
     var audioLevel: Float { transcriber.audioLevel }
 
     /// Rolling amplitude history shared by the waveform and the aurora, so both
-    /// move on the same rhythm (issue #429). Fed by the overlay on every
-    /// `audioLevel` change; owned here so it survives view redraws.
-    private(set) var levelTrace = VoiceLevelTrace()
+    /// move on the same rhythm (issue #429).
+    ///
+    /// Read through to the transcriber, which records it on the audio thread's
+    /// metering cadence. An earlier cut kept the buffer here and fed it from a
+    /// SwiftUI `onChange(of: audioLevel)`; that samples only when the view body
+    /// re-evaluates, which starved the history and left the bars pinned at rest
+    /// on device while still passing every unit test.
+    var levelTrace: VoiceLevelTrace { transcriber.levelTrace }
 
     /// Unsettled text for the utterance being transcribed. Rendered muted by the
     /// overlay and superseded by `transcript` when the normalized final lands.
     /// Never mixed into `transcriber.transcript` — see the note on
     /// `SpeechTranscriber.provisionalText`.
     var provisionalText: String { transcriber.provisionalText }
-
-    /// Record one amplitude sample. Called from the overlay's `onChange`, which
-    /// is the only place with a redraw cadence to hang it off.
-    func recordLevel(_ level: Float) {
-        levelTrace.record(level)
-    }
 
     /// Progress through the server-VAD silence window (0...1), or nil when
     /// nothing is pending. Drives the depleting baseline under the waveform.
@@ -194,9 +193,8 @@ final class VoiceCaptureViewModel {
         // signal so the previous open's flags never leak into this one (issue #156).
         hasConsumedUtterance = false
         shouldDismiss = false
-        // Clear the previous session's amplitude tail so the first frame of this
-        // one renders at rest rather than replaying old energy (issue #429).
-        levelTrace.reset()
+        // The amplitude history is cleared by the transcriber's own start/stop
+        // (issue #429), so there is nothing to reset here.
         // Reset SYNCHRONOUSLY so the first render on (re)open never shows a
         // stale terminal state from a prior session (issue #151). Opens on
         // `.connecting` rather than `.listening`: the socket isn't up yet, and

@@ -111,11 +111,6 @@ struct VoiceCaptureOverlay: View {
                 vm.handleTranscriberError(message)
             }
         }
-        // Feed the shared amplitude history that both the waveform and the
-        // aurora read (issue #429). One writer, so the two stay in phase.
-        .onChange(of: vm.audioLevel) { _, level in
-            vm.recordLevel(level)
-        }
         // Resolve `.connecting` the moment the socket is confirmed.
         // `initial: true` covers the on-device engine, which reports connected
         // synchronously inside `begin()` and would otherwise never fire a change.

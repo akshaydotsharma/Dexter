@@ -111,6 +111,16 @@ final class SpeechTranscriber {
     /// engine; computed identically for OpenAI and SFSpeech paths.
     private(set) var audioLevel: Float = 0
 
+    /// Short rolling history of `audioLevel`, written on every metering frame
+    /// (issue #429). The voice overlay's waveform and aurora both read delayed
+    /// taps off this, which is what makes energy ripple outward through the bars
+    /// and the background surge on the same rhythm rather than in lockstep.
+    ///
+    /// Owned here rather than in the view layer because the audio tap is the
+    /// only thing that knows when a new sample exists; sampling it from a
+    /// SwiftUI `onChange` starved the buffer and pinned the bars at rest.
+    private(set) var levelTrace = VoiceLevelTrace()
+
     // MARK: Live capture signals (issue #429)
 
     /// Unsettled text for the utterance currently being transcribed, built by
@@ -249,6 +259,7 @@ final class SpeechTranscriber {
         isRecording = false
         audioLevel = 0
         levelWindow.removeAll()
+        levelTrace.reset()
         // No more VAD markers will arrive, so freeze the live signals rather
         // than leave a stale countdown running in the overlay (issue #429).
         // `provisionalText` is deliberately NOT cleared here: the socket drain
@@ -322,6 +333,7 @@ final class SpeechTranscriber {
         isSpeechDetected = false
         silenceStartedAt = nil
         isConnected = false
+        levelTrace.reset()
 
         // Pick the engine for this session: OpenAI when a key is present,
         // on-device SFSpeech otherwise (keyless / offline fallback).
@@ -809,8 +821,17 @@ final class SpeechTranscriber {
         if levelWindow.count > levelWindowSize {
             levelWindow.removeFirst(levelWindow.count - levelWindowSize)
         }
-        let avg = levelWindow.reduce(0, +) / Float(levelWindow.count)
+        let avg = levelWindow.reduce(0, +) / Float(levelWindowSize == 0 ? 1 : levelWindow.count)
         audioLevel = avg
+        // Record into the history the waveform and aurora read (issue #429).
+        //
+        // This MUST happen here, at the metering cadence (~47 buffers/sec), and
+        // not in a SwiftUI `onChange`. The first cut recorded from the view and
+        // the bars never left their rest position: `onChange` only samples when
+        // the body happens to re-evaluate, so the history was starved and every
+        // delayed tap read silence. The audio path is the only clock that
+        // actually knows when a new amplitude exists.
+        levelTrace.record(avg)
     }
 
     private static func requestSpeechAuthorization() async -> Bool {
