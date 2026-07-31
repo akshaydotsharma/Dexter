@@ -63,7 +63,9 @@ struct MarkdownEditor: UIViewRepresentable {
         tv.inputAccessoryView = toolbar
         context.coordinator.toolbar = toolbar
 
-        // Placeholder support
+        // Placeholder support. Assigned BEFORE the body is loaded below, and
+        // `setNoteMarkdown` refreshes visibility itself, so a note that already
+        // has content never shows the hint behind its first line (#424).
         tv.placeholderText = placeholder
 
         // Inline images (#395). Render the stored markdown as attributed text so
@@ -290,7 +292,34 @@ extension UITextView {
 
 final class PaddedTextView: UITextView {
     var placeholderText: String = "" {
-        didSet { placeholderLabel.text = placeholderText }
+        didSet {
+            placeholderLabel.text = placeholderText
+            refreshPlaceholder()
+        }
+    }
+
+    /// Derive the placeholder's visibility from the text on EVERY assignment,
+    /// including the programmatic ones (#424).
+    ///
+    /// UIKit posts `textDidChangeNotification` only for user edits, so loading a
+    /// note's body — `setNoteMarkdown`, `applyDisplayString`, an image insertion —
+    /// left the label at its default `isHidden = false` and it drew on top of the
+    /// note's first line until the next keystroke. Overriding the setters means
+    /// no caller has to remember to refresh.
+    override var attributedText: NSAttributedString! {
+        get { super.attributedText }
+        set {
+            super.attributedText = newValue
+            refreshPlaceholder()
+        }
+    }
+
+    override var text: String! {
+        get { super.text }
+        set {
+            super.text = newValue
+            refreshPlaceholder()
+        }
     }
 
     /// Persists pasted image bytes and returns the relative path (#395).
@@ -315,10 +344,17 @@ final class PaddedTextView: UITextView {
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         addSubview(placeholderLabel)
+        // Pinned to the FRAME guide, not the view's own anchors (#424).
+        //
+        // UITextView is a UIScrollView, so its plain leading/trailing anchors
+        // describe the scrollable content area: a label pinned to those defines
+        // content width from its own intrinsic size, and the placeholder laid out
+        // as one long line running off the right edge instead of wrapping. The
+        // frame guide is the visible column, which is what the text wraps to.
         NSLayoutConstraint.activate([
-            placeholderLabel.topAnchor.constraint(equalTo: topAnchor),
-            placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-            placeholderLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
+            placeholderLabel.topAnchor.constraint(equalTo: frameLayoutGuide.topAnchor),
+            placeholderLabel.leadingAnchor.constraint(equalTo: frameLayoutGuide.leadingAnchor),
+            placeholderLabel.trailingAnchor.constraint(equalTo: frameLayoutGuide.trailingAnchor),
         ])
         NotificationCenter.default.addObserver(
             self,
@@ -351,9 +387,13 @@ final class PaddedTextView: UITextView {
     }
 
     @objc func refreshPlaceholder() {
-        placeholderLabel.isHidden = !text.isEmpty
+        placeholderLabel.isHidden = !(text ?? "").isEmpty
         invalidateIntrinsicContentSize()
     }
+
+    /// Whether the hint is currently drawn. Read by the regression test for
+    /// #424, since the overlap is a visibility bug with no other observable.
+    var isPlaceholderVisible: Bool { !placeholderLabel.isHidden }
 
     // MARK: - Image paste (#395)
 
