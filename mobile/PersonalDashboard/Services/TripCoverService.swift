@@ -67,25 +67,51 @@ final class TripCoverService {
 
     /// Ceiling on how many trips one sweep will generate.
     ///
-    /// Cut from 6 to 2 for the pivot to generated art. Under photography a sweep was
-    /// three quick HTTP requests per trip and six of them took about ten seconds;
-    /// generation is tens of seconds EACH, so six would be several minutes of
-    /// background work and several images' worth of spend on every cold launch. Two
-    /// keeps a launch bounded, and the rest are picked up by the next launch's sweep.
-    /// Write-time generation is the path that is meant to do the work.
-    private let sweepBudget = 2
+    /// 12, so a normal library finishes in ONE pass. It was 2, which meant four trips
+    /// needed two launches and the list stayed visibly half-filled in between — the
+    /// backfill behaviour that was actually reported as wrong. This is not a
+    /// performance budget any more, it is a stampede guard: the point is that a store
+    /// with 200 trips cannot open 200 generations, not that a store with four should be
+    /// rationed across launches.
+    ///
+    /// Safe to raise because the work is idempotent and bounded from both ends. A trip
+    /// holding current-version art is never regenerated (`needsFetch`), so a relaunch
+    /// with a filled library costs zero generations and zero spend.
+    private let sweepBudget = 12
 
-    /// Gap between generations inside a sweep. Now trivial next to the generation
-    /// time itself, kept so the sweep never becomes a tight loop if generation starts
-    /// failing fast.
-    private let sweepGap: Duration = .seconds(1)
+    /// How many generations may be in flight at once.
+    ///
+    /// Each generation is 20 to 45 seconds of almost entirely waiting on the network, so
+    /// running them strictly serially made a four-trip backfill take minutes of wall
+    /// clock for seconds of work. Three at a time gets a normal library done in about
+    /// the time one image takes, and caps concurrent spend and memory.
+    private let maxConcurrentGenerations = 3
+
+    /// Stagger between STARTS, so a sweep opens three requests over a moment rather
+    /// than in the same instant.
+    private let sweepGap: Duration = .milliseconds(250)
+
+    /// The context every read and write in this service goes through.
+    ///
+    /// Injectable, and that is load-bearing rather than tidiness: the failure this
+    /// feature actually shipped — art that appeared and was gone on relaunch — is
+    /// invisible to any test that cannot open a SECOND container on the same store
+    /// file and check what landed. Resolving `SwiftDataStore.shared.context` inside
+    /// each method made that untestable, so the bug had to be found by hand on a
+    /// device.
+    ///
+    /// Resolved once at init rather than per call, so every mutation and the save
+    /// that follows it are provably against the same context.
+    private let context: ModelContext
 
     init(
         provider: TripCoverArtProvider = OpenAITripCoverArtProvider(),
-        storage: ReceiptStorage = .tripCovers
+        storage: ReceiptStorage = .tripCovers,
+        context: ModelContext? = nil
     ) {
         self.provider = provider
         self.storage = storage
+        self.context = context ?? SwiftDataStore.shared.context
     }
 
     // MARK: - Entry points
@@ -117,21 +143,48 @@ final class TripCoverService {
         guard !didRunRepairSweep else { return }
         didRunRepairSweep = true
 
-        let context = SwiftDataStore.shared.context
-        guard let trips = try? context.fetch(FetchDescriptor<LocalTrip>()) else { return }
+        let trips: [LocalTrip]
+        do {
+            trips = try context.fetch(FetchDescriptor<LocalTrip>())
+        } catch {
+            NSLog("TripCoverService: sweep could not read trips: %@", String(describing: error))
+            return
+        }
 
-        // Soonest-starting first, so the trips the user is about to look at get
-        // the budget before a five-year-old one does.
+        // Soonest-starting first, so the trips the user is about to look at get the
+        // budget before a five-year-old one does. UUIDs, not models: the identifiers
+        // cross into child tasks below and `LocalTrip` is not `Sendable`.
         let pending = trips
             .filter { needsFetch($0) }
             .sorted { abs($0.startDate.timeIntervalSinceNow) < abs($1.startDate.timeIntervalSinceNow) }
             .prefix(sweepBudget)
+            .map(\.clientUUID)
 
         guard !pending.isEmpty else { return }
+        NSLog("TripCoverService: sweep generating %d cover(s), %d at a time",
+              pending.count, maxConcurrentGenerations)
 
-        for trip in pending {
-            await resolveIfNeeded(tripUUID: trip.clientUUID)
-            try? await Task.sleep(for: sweepGap)
+        // Bounded concurrency: seed up to `maxConcurrentGenerations`, then start one
+        // more each time one finishes. A plain `for` loop over `addTask` would launch
+        // every pending generation at once and defeat the cap.
+        await withTaskGroup(of: Void.self) { group in
+            var queue = pending.makeIterator()
+            var started = 0
+
+            while started < maxConcurrentGenerations, let id = queue.next() {
+                group.addTask { [weak self] in
+                    await self?.resolveIfNeeded(tripUUID: id)
+                }
+                started += 1
+                try? await Task.sleep(for: sweepGap)
+            }
+
+            while await group.next() != nil {
+                guard let id = queue.next() else { continue }
+                group.addTask { [weak self] in
+                    await self?.resolveIfNeeded(tripUUID: id)
+                }
+            }
         }
     }
 
@@ -174,9 +227,7 @@ final class TripCoverService {
     /// single-flight.
     private func resolveIfNeeded(tripUUID: UUID) async {
         guard !inFlight.contains(tripUUID) else { return }
-        let context = SwiftDataStore.shared.context
-
-        guard let trip = fetchTrip(tripUUID, in: context), needsFetch(trip) else { return }
+        guard let trip = fetchTrip(tripUUID), needsFetch(trip) else { return }
         let destination = trip.name
 
         // A name that is not a place at all. Settled, not a failure: the tile draws
@@ -184,7 +235,7 @@ final class TripCoverService {
         // request, because an image model will happily illustrate "Work offsite" and
         // charge for the privilege.
         guard TripCoverPlaceness.isLikelyPlace(destination) else {
-            stamp(tripUUID, in: context) { trip in
+            stamp(tripUUID) { trip in
                 trip.coverImagePath = nil
                 trip.coverArtPromptVersion = nil
                 trip.coverImageState = TripCoverState.none.rawValue
@@ -219,7 +270,7 @@ final class TripCoverService {
             // Re-read the trip: a generation takes tens of seconds, so it may well
             // have been deleted or renamed again meanwhile. If it is gone or renamed,
             // drop the file rather than orphaning it or captioning the wrong city.
-            guard let current = fetchTrip(tripUUID, in: context) else {
+            guard let current = fetchTrip(tripUUID) else {
                 try? storage.delete(relativePath: relativePath)
                 return
             }
@@ -238,11 +289,35 @@ final class TripCoverService {
             current.coverImageSourceURL = nil
             current.coverImageState = TripCoverState.resolved.rawValue
             current.updatedAt = Date()
-            try? context.save()
 
-            // The old file, if any, is now unreferenced. Deleting it after the
-            // save (not before) means a failed save leaves the tile showing the
-            // cover it already had.
+            // The ONE durability point in this whole feature, so the error is handled
+            // rather than discarded.
+            //
+            // A `try?` here is what turns a persistence failure into "it worked, then it
+            // vanished": the in-memory model is already mutated, the view has already
+            // observed it, and the illustration has already faded in. Everything looks
+            // correct until the process restarts. That is a defect nobody can diagnose
+            // from the outside, and it costs a device QA round trip to even notice.
+            do {
+                try context.save()
+            } catch {
+                // The mutation never reached the store, so roll it back and make memory
+                // agree with disk rather than leaving the UI asserting something false.
+                // The file just written is unreferenced now, so drop it. `failed` (not
+                // `none`) so the next sweep retries.
+                NSLog("TripCoverService: SAVE FAILED for %@, rolling back: %@",
+                      destination, String(describing: error))
+                context.rollback()
+                try? storage.delete(relativePath: relativePath)
+                stamp(tripUUID) { trip in
+                    trip.coverImageState = TripCoverState.failed.rawValue
+                }
+                return
+            }
+
+            // The old file, if any, is now unreferenced. Deleting it AFTER the save,
+            // never before, so a failed save leaves the tile showing the cover it
+            // already had rather than nothing at all.
             if let previousPath, previousPath != relativePath {
                 try? storage.delete(relativePath: previousPath)
             }
@@ -253,7 +328,7 @@ final class TripCoverService {
             // and is reserved for "this name is not a place".
             NSLog("TripCoverService: cover generation failed for %@: %@",
                   destination, String(describing: error))
-            stamp(tripUUID, in: context) { trip in
+            stamp(tripUUID) { trip in
                 trip.coverImageState = TripCoverState.failed.rawValue
             }
         }
@@ -261,25 +336,42 @@ final class TripCoverService {
 
     // MARK: - Store helpers
 
-    private func fetchTrip(_ uuid: UUID, in context: ModelContext) -> LocalTrip? {
+    /// A fetch failure is logged rather than silently read as "the trip is gone",
+    /// because those two mean very different things and only one of them is normal.
+    private func fetchTrip(_ uuid: UUID) -> LocalTrip? {
         let descriptor = FetchDescriptor<LocalTrip>(
             predicate: #Predicate { $0.clientUUID == uuid }
         )
-        return try? context.fetch(descriptor).first
+        do {
+            return try context.fetch(descriptor).first
+        } catch {
+            NSLog("TripCoverService: trip fetch failed: %@", String(describing: error))
+            return nil
+        }
     }
 
-    /// Apply a mutation to a trip that may have been deleted while we were
-    /// awaiting. `updatedAt` is deliberately NOT bumped for the failure/none
-    /// paths: those record a fetch attempt, not a user edit, and bumping it would
-    /// republish the row to every sync peer on every failed launch.
+    /// Apply a mutation to a trip that may have been deleted while we were awaiting.
+    ///
+    /// `updatedAt` is deliberately NOT bumped for the failure / `none` paths: those
+    /// record an ATTEMPT, not a user edit, and bumping it would republish the row to
+    /// every sync peer on every failed launch.
+    ///
+    /// The save is checked here too. This one only ever writes a state string, so a
+    /// failure is less damaging than losing a path — but a silently unsaved `none` is a
+    /// trip that re-generates forever, and a silently unsaved `failed` is a retry
+    /// decision that never sticks. Both are worth a log line.
     private func stamp(
         _ uuid: UUID,
-        in context: ModelContext,
         _ mutate: (LocalTrip) -> Void
     ) {
-        guard let trip = fetchTrip(uuid, in: context) else { return }
+        guard let trip = fetchTrip(uuid) else { return }
         mutate(trip)
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            NSLog("TripCoverService: state save failed for %@: %@",
+                  uuid.uuidString, String(describing: error))
+        }
     }
 }
 
@@ -292,23 +384,50 @@ final class TripCoverService {
 /// decode per render would be far too expensive in a scrolling `List`, so the
 /// first render decodes and every later one is a dictionary lookup.
 ///
-/// Self-invalidating: a re-fetch writes a NEW UUID filename, so the key changes
-/// and the stale entry is simply never asked for again. Misses are cached too
-/// (as `nil`), so a missing file does not cost a `fileExists` per render — the
-/// repair sweep is what notices and mints a new path.
+/// Self-invalidating: a re-generation writes a NEW UUID filename, so the key changes
+/// and the stale entry is simply never asked for again.
+///
+/// ## SUCCESSES ONLY. A miss is never cached.
+///
+/// It used to cache misses too, as `[String: PlatformImage?]`, to save a `fileExists`
+/// per render. That was wrong, and wrong in a way that produced exactly the symptom
+/// device QA reported — art that is there and then is not.
+///
+/// `if let cached = entries[path]` on a dictionary of OPTIONALS unwraps one level, so a
+/// stored `nil` is a cache HIT that returns nil. One transient miss for a path
+/// therefore blanked that trip for the entire remaining life of the process, no matter
+/// what appeared on disk afterwards. Nothing could recover it: the sweep only mints a
+/// new path when it decides to regenerate, and a trip whose art is present and correct
+/// on disk is never regenerated, so the poisoned entry was permanent and invisible.
+///
+/// The cost of dropping it is one `fileExists` stat per render for a trip with no
+/// readable art. That is microseconds, it only applies to the bounded set of trips the
+/// sweep is actively filling, and it buys back the ability to recover. Blanking a
+/// trip for a whole session to save a stat is not a trade worth making.
 @MainActor
 enum TripCoverImageCache {
-    private static var entries: [String: PlatformImage?] = [:]
+    /// Non-optional values on purpose: it must be impossible to store a miss here.
+    private static var entries: [String: PlatformImage] = [:]
 
     /// The decoded cover for a relative path, or nil when there is no usable file.
     /// Never touches the network.
     static func image(forRelativePath path: String?) -> PlatformImage? {
         guard let path, !path.isEmpty else { return nil }
         if let cached = entries[path] { return cached }
-        let resolved: PlatformImage? = ReceiptStorage.tripCovers
-            .load(relativePath: path)
-            .flatMap { PlatformImage(contentsOfFile: $0.path) }
-        entries[path] = resolved
-        return resolved
+        guard let url = ReceiptStorage.tripCovers.load(relativePath: path),
+              let image = PlatformImage(contentsOfFile: url.path) else {
+            // Deliberately NOT recorded. The next render tries again, which is what
+            // makes a file arriving late — or a path stamped a moment before its
+            // bytes are visible — recoverable rather than terminal.
+            return nil
+        }
+        entries[path] = image
+        return image
+    }
+
+    /// Drop everything. Test hook only; the cache needs no invalidation in the app
+    /// because every regeneration mints a new key.
+    static func reset() {
+        entries.removeAll()
     }
 }
