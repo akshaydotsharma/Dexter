@@ -113,8 +113,9 @@ struct SyncApplier {
         let (verified, corrupt) = try verify(upserts)
         outcome.rejectedCorrupt = corrupt
 
+        var mergedHashes: [String: String] = [:]
         if !verified.isEmpty {
-            try applyUpserts(verified)
+            mergedHashes = try applyUpserts(verified)
             outcome.applied = verified.count
         }
         if !deletes.isEmpty {
@@ -126,7 +127,7 @@ struct SyncApplier {
         // simply retries next pass.
         shadows = try shadowIndex()
         for op in verified + deletes {
-            recordShadow(for: op, existing: shadows)
+            recordShadow(for: op, existing: shadows, mergedHashes: mergedHashes)
         }
         try modelContext.save()
 
@@ -189,12 +190,50 @@ struct SyncApplier {
     /// `restoreReceipt` no-ops, leaving the expense pointing at its original
     /// relative path. A synced expense can therefore reference a receipt this
     /// device does not have. That is the documented phase 2 limitation, not a bug.
-    private func applyUpserts(_ ops: [SyncOp]) throws {
+    private func applyUpserts(_ ops: [SyncOp]) throws -> [String: String] {
         var payload = DataArchive.Payload.empty
         let decoder = DataArchive.makeDecoder()
 
+        // Snapshot the LOCAL rows before anything is written, as the same per-record
+        // JSON the diff publishes, so an incoming payload can be overlaid onto it.
+        //
+        // This is what stops an older peer erasing a column it has never heard of:
+        // `.replaceMatching` below DELETES the local row and re-inserts it from the
+        // peer's DTO, so any key the peer omits becomes NULL. See
+        // `JSONValue.preservingFieldsAbsentHere(from:)` for the measured failure.
+        //
+        // A full `buildPayload()` is 13 fetches plus DTO mapping, which the engine
+        // already pays once per pass for the diff. Paying it again here is deliberate:
+        // this method must not depend on the caller having done it, and correctness on
+        // a data-loss path beats saving a fetch.
+        var localJSON: [String: JSONValue] = [:]
+        do {
+            let localPayload = try DataExportService(modelContext: modelContext).buildPayload()
+            for record in try SyncRecordMapper.records(from: localPayload) {
+                localJSON[SyncKey.make(entity: record.entity, recordID: record.recordID)] = record.json
+            }
+        } catch {
+            // Without the snapshot the merge cannot run, and applying unmerged ops is
+            // exactly the destructive behaviour being fixed. Refuse the batch instead:
+            // it retries next pass.
+            SyncLog.line("SyncApplier: could not snapshot local rows, skipping apply: \(error)")
+            throw error
+        }
+
+        /// Content hash of what each row actually BECAME, keyed for the shadow.
+        ///
+        /// The shadow must record the merged state, not `op.contentHash`. Recording the
+        /// peer's hash would leave this device's own row disagreeing with its shadow, so
+        /// the next local diff would read the preserved fields as a fresh local edit and
+        /// re-publish them — this device amplifying the very skew it just absorbed.
+        var mergedHashes: [String: String] = [:]
+
         for op in ops {
-            guard let data = try? op.payload?.encodedData() else { continue }
+            let key = SyncKey.make(entity: op.entity, recordID: op.recordID)
+            guard let incoming = op.payload else { continue }
+            let merged = localJSON[key].map { incoming.preservingFieldsAbsentHere(from: $0) } ?? incoming
+            guard let data = try? merged.encodedData() else { continue }
+            mergedHashes[key] = SyncHash.hex(data)
             switch op.entity {
             case "LocalTodo":
                 payload.tasks.append(try decoder.decode(DataArchive.TaskDTO.self, from: data))
@@ -265,6 +304,8 @@ struct SyncApplier {
         )
         try DataImportService(modelContext: modelContext)
             .commit(preview: preview, mode: .replaceMatching)
+
+        return mergedHashes
     }
 
     // MARK: - Deletes
@@ -342,11 +383,18 @@ struct SyncApplier {
     ///
     /// This is the ping-pong guard. Without it: apply, re-emit, peer applies,
     /// re-emits, forever.
-    private func recordShadow(for op: SyncOp, existing: [String: SyncShadow]) {
+    private func recordShadow(
+        for op: SyncOp,
+        existing: [String: SyncShadow],
+        mergedHashes: [String: String]
+    ) {
         let key = SyncKey.make(entity: op.entity, recordID: op.recordID)
         switch op.kind {
         case .upsert:
-            guard let hash = op.contentHash else { return }
+            // The MERGED hash, falling back to the op's own. See `mergedHashes` in
+            // `applyUpserts`: recording the peer's hash for a row we preserved fields on
+            // would make the next local diff re-publish them.
+            guard let hash = mergedHashes[key] ?? op.contentHash else { return }
             if let shadow = existing[key] {
                 shadow.contentHash = hash
                 shadow.lastEmittedLamport = op.lamport

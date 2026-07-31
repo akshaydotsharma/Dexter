@@ -1095,20 +1095,34 @@ final class DataImportService {
     /// re-derives the cover. A cover is always re-derivable, so this can never be
     /// data loss — which is why it does not need the overwrite-repair treatment
     /// #366 had to add for lossy expense rows.
+    /// The local-file check comes FIRST, and that ordering is the fix for a real data
+    /// loss (#428).
+    ///
+    /// The other three restorers only accept a path whose bytes are in the archive,
+    /// which is right for them. Applying that rule here destroyed cover art on every
+    /// sync: `SyncApplier` passes `entries: [:]` because attachment bytes do not travel
+    /// in the oplog, so `archiveEntries[relativePath]` never matched, the caller left
+    /// `coverImagePath` unset, and `.replaceMatching` had already deleted the row — so
+    /// the path was gone. Measured on the user's phone: five trips with NULL cover
+    /// fields and fifteen orphaned JPEGs on disk.
+    ///
+    /// Checking disk first is correct for both callers. On the sync path the local file
+    /// is already there and its path is exactly what must be kept. On an archive restore
+    /// a file already at that UUID-keyed path is the same logical cover, so it wins
+    /// rather than being rewritten — which is the rule receipts already follow.
+    ///
+    /// Returning the path when the file is absent from BOTH disk and archive would be
+    /// wrong for the opposite reason: the row would claim art it cannot draw. It stays
+    /// nil, and the launch sweep regenerates from the trip's name.
     private func restoreTripCover(
         relativePath: String?,
         archiveEntries: [String: Data]
     ) throws -> String? {
-        guard let relativePath,
-              !relativePath.isEmpty,
-              let archivedData = archiveEntries[relativePath] else {
-            return nil
-        }
-        // An existing file at the same UUID-keyed path is the same logical cover,
-        // so it wins rather than being rewritten. Same rule as receipts.
+        guard let relativePath, !relativePath.isEmpty else { return nil }
         if tripCoverStorage.load(relativePath: relativePath) != nil {
             return relativePath
         }
+        guard let archivedData = archiveEntries[relativePath] else { return nil }
         return try tripCoverStorage.write(data: archivedData, relativePath: relativePath)
     }
 }
