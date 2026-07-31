@@ -212,6 +212,71 @@ final class TripCoverTests: XCTestCase {
         }
     }
 
+    // MARK: - Name gate (runs before any metadata request)
+
+    /// A rasterised SVG thumbnail is named `NNNpx-Foo.svg.png`, so its extension
+    /// says "png" while the artwork is vector. This is what let
+    /// `Bali_in_Indonesia_(special_marker).svg.png` through in a live run.
+    func testNameGateRejectsRasterisedVectors() {
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("960px-Flag_of_Vietnam.svg.png"))
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("1280px-Bali_in_Indonesia_(special_marker).svg.png"))
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Vietnam_(orthographic_projection).svg"))
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Location_Vietnam_ASEAN.svg"))
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("Timelapse.webm"))
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("Animation.gif"))
+    }
+
+    func testNameGateAcceptsPhotographs() {
+        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("File:Ho_Chi_Minh_City_Skyline.jpg"))
+        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("Hakuba_Happo-one_Winter_Resort.JPG"))
+        XCTAssertTrue(WikimediaTripCoverProvider.passesNameGate("Lisboa_-_Portugal_(52597836992).jpg"))
+    }
+
+    // MARK: - Upload URL unwrapping
+
+    /// `summary` hands back a thumbnail URL, not the original. Both of the
+    /// thumbnailer's transformations have to be undone or the metadata lookup that
+    /// supplies the real dimensions and the credit line misses.
+    func testFileNameUnwrapsThumbnailURLs() {
+        let f = { (s: String) in
+            WikimediaTripCoverProvider.fileName(fromUploadURL: URL(string: s)!)
+        }
+        // Size prefix plus a raster extension bolted onto a vector original.
+        XCTAssertEqual(
+            f("https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Flag_of_Vietnam.svg/960px-Flag_of_Vietnam.svg.png"),
+            "Flag_of_Vietnam.svg"
+        )
+        // Size prefix only.
+        XCTAssertEqual(
+            f("https://upload.wikimedia.org/wikipedia/commons/thumb/a/b/Hanoi.jpg/1280px-Hanoi.jpg"),
+            "Hanoi.jpg"
+        )
+        // An original, untouched.
+        XCTAssertEqual(
+            f("https://upload.wikimedia.org/wikipedia/commons/9/95/Ho_Chi_Minh_City_Skyline.jpg"),
+            "Ho_Chi_Minh_City_Skyline.jpg"
+        )
+        // Percent-encoded parentheses survive as characters.
+        XCTAssertEqual(
+            f("https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/Vietnam_%28orthographic_projection%29.svg/500px-Vietnam_%28orthographic_projection%29.svg.png"),
+            "Vietnam_(orthographic_projection).svg"
+        )
+        // A real `.png` photograph must NOT be mistaken for a rasterised vector.
+        XCTAssertEqual(
+            f("https://upload.wikimedia.org/wikipedia/commons/thumb/a/b/Skyline.png/900px-Skyline.png"),
+            "Skyline.png"
+        )
+    }
+
+    /// The MediaWiki API answers with spaces where the request had underscores, so
+    /// candidates are matched on a canonical form or every lookup misses.
+    func testNormalisedTitleMatchesTheAPIsOwnCasing() {
+        XCTAssertEqual(
+            WikimediaTripCoverProvider.normalisedTitle("File:Flag_of_Vietnam.svg"),
+            WikimediaTripCoverProvider.normalisedTitle("File:Flag of Vietnam.svg")
+        )
+    }
+
     // MARK: - Attribution cleanup
 
     func testAttributionStripsHTML() {

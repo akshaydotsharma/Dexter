@@ -5,12 +5,12 @@ import Foundation
 struct TripCoverCandidate: Sendable, Equatable {
     /// Direct URL to the full-resolution image file.
     let imageURL: URL
-    /// Pixel dimensions, as reported by the provider. Both are required — the
-    /// quality gate cannot run without them, and admitting an unmeasured
+    /// True pixel dimensions, as reported by the provider. Both are required —
+    /// the geometry gate cannot run without them, and admitting an unmeasured
     /// candidate is how a portrait or a panorama gets into a 2.4:1 band.
     let pixelWidth: Int
     let pixelHeight: Int
-    /// "Artist — License", ready to render. Nil when the provider had nothing.
+    /// "Artist · License", ready to render. Nil when the provider had nothing.
     let attribution: String?
     /// Link to the file's description page, where the full licence lives.
     let attributionURL: URL?
@@ -47,16 +47,50 @@ enum TripCoverProviderError: LocalizedError {
 
 // MARK: - Wikimedia
 
-/// Wikipedia REST + Wikimedia Commons. No API key, no account, no attribution
-/// requirement on the surface where the photo appears — which is what makes the
-/// "nothing is ever drawn on the photograph" layout rule possible. (Unsplash was
-/// rejected for precisely the opposite reason: its terms force a credit line onto
-/// the tile.)
+/// Wikipedia REST + the MediaWiki `imageinfo` API. No API key, no account, and no
+/// attribution requirement on the surface where the photo appears — which is what
+/// makes the "nothing is ever drawn on the photograph" layout rule possible.
+/// (Unsplash was rejected for precisely the opposite reason: its terms force a
+/// credit line onto the tile.)
 ///
-/// Up to three requests, once per trip, then cached on disk indefinitely:
-///   1. `/page/summary/<title>` for the lead image.
-///   2. `/page/media-list/<title>` only if the lead image fails the gate.
-///   3. Commons `imageinfo` for the credit line.
+/// Three requests, once per trip, then cached on disk indefinitely:
+///   1. `/page/summary/<title>` for the lead image's file name.
+///   2. `/page/media-list/<title>` for the rest of the page's images, in page
+///      order, which is roughly best-first.
+///   3. ONE batched `action=query&prop=imageinfo` for every plausible candidate:
+///      original URL, true dimensions, artist and licence, all together.
+///
+/// ## Why the metadata call is not optional, and not per-candidate
+///
+/// Measured against the live API, not assumed. `media-list` returns
+/// `"width": null, "height": null, "original": null` for every item — its only
+/// usable field is the file title, and its `srcset` offers a 500px thumbnail,
+/// which is under the resolution floor anyway. An earlier version of this file
+/// read dimensions straight off `media-list` and therefore rejected every
+/// fallback candidate for being unmeasured, which made the fallback path dead
+/// code: "Vietnam" and "Japan" resolved to no cover at all, because their lead
+/// images are a flag and an emblem and nothing was allowed to replace them.
+///
+/// `imageinfo` fixes that and folds the credit lookup into the same request, so
+/// the request count is unchanged. It is batched (up to 50 titles per call) so
+/// the fallback costs one request rather than one per candidate.
+///
+/// ## Known limitation: page order is not relevance order
+///
+/// Candidates are taken in the article's own image order, and for a large
+/// country article the History section comes before Geography. Measured against
+/// the live API: "Lisbon", "Bali" and "Hakuba" all resolve to real scenery, but
+/// "Vietnam" resolves to an 1859 painting of the Siege of Saigon and "Japan" to a
+/// medieval scroll. Both are large, landscape, correctly licensed images of the
+/// right subject, so no reasonable gate rejects them — they are simply not
+/// photography.
+///
+/// This is a ranking problem, not a correctness one, and fixing it properly means
+/// choosing a better page for the query (`Geography of X`, `Tourism in X`) or a
+/// different candidate ordering. That is a product decision, deliberately left to
+/// its own ticket rather than guessed at here. Recorded so nobody has to
+/// rediscover it: the feature works, and a broad destination name can still pick
+/// a museum piece.
 struct WikimediaTripCoverProvider: TripCoverProvider {
 
     /// Same 10 s ceiling and status check `FXService.fetchRemote(code:)` uses for
@@ -64,20 +98,41 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     /// shapes in this app behave the same way when the network is bad.
     private let timeout: TimeInterval = 10
 
+    /// How far down a page's media list to look. Lead images come first and
+    /// relevance drops off fast, so a page's 80th image is not worth a look.
+    private let candidateLimit = 12
+
     func cover(forDestination destination: String) async throws -> TripCoverCandidate? {
-        let title = Self.pageTitle(from: destination)
-        guard !title.isEmpty else { return nil }
+        let page = Self.pageTitle(from: destination)
+        guard !page.isEmpty else { return nil }
 
-        // 1. Lead image.
-        if let lead = try await leadImage(title: title), Self.passesGate(lead) {
-            return try await withAttribution(lead)
+        // Lead image first: it is the page's own choice of representative image,
+        // so when it is a photograph it is almost always the right one.
+        var fileTitles: [String] = []
+        if let lead = try await leadImageFileTitle(page: page) {
+            fileTitles.append(lead)
         }
+        // Wikipedia lead images are encyclopedic, so a flag, an emblem, an
+        // orthographic projection or a locator map is a very common first answer.
+        // The rest of the page is the fallback.
+        fileTitles += try await mediaListFileTitles(page: page)
 
-        // 2. Wikipedia lead images are encyclopedic, so a flag, a coat of arms or
-        //    a locator map is a common first answer. Fall through to the page's
-        //    full media list and take the first candidate that passes.
-        if let fromMedia = try await firstPassingMediaItem(title: title) {
-            return try await withAttribution(fromMedia)
+        // Filename gate BEFORE spending the metadata request. A flag, an emblem
+        // or a rasterised SVG is identifiable from its name alone, so there is no
+        // reason to ask how big it is.
+        var seen = Set<String>()
+        let plausible = fileTitles
+            .filter { seen.insert(Self.normalisedTitle($0)).inserted }
+            .filter { Self.passesNameGate($0) }
+            .prefix(candidateLimit)
+        guard !plausible.isEmpty else { return nil }
+
+        let described = try await imageInfo(fileTitles: Array(plausible))
+
+        // Preserve the order they were offered in: lead image, then page order.
+        for title in plausible {
+            guard let candidate = described[Self.normalisedTitle(title)] else { continue }
+            if Self.passesGate(candidate) { return candidate }
         }
 
         // Nothing suitable. Not a failure: the caller draws generated art, which
@@ -127,26 +182,40 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
         return underscored.addingPercentEncoding(withAllowedCharacters: allowed)
     }
 
+    /// The MediaWiki API normalises `File:Flag_of_Vietnam.svg` to
+    /// `File:Flag of Vietnam.svg` in its response keys, so titles are matched on a
+    /// canonical form rather than on the exact string that was sent.
+    static func normalisedTitle(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "_", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     // MARK: - Quality gate
 
     /// Filename patterns that mean "this is not a photograph of a place".
-    /// Wikipedia's lead image for a country is very often one of these.
     ///
     /// `map` is bounded by `(?<![a-z]) … (?![a-z])` rather than by `\b`, and this
     /// is a correction to the pattern this ticket specified, not a stylistic
     /// choice. Wikimedia filenames use UNDERSCORES where a title has spaces, and
     /// `_` is a word character, so `\b` finds no boundary inside `Map_of_Bali`:
-    /// `\bmap\b` let every locator map straight through the gate, which is the
-    /// single thing it most exists to stop. Caught by a unit test, not by eye.
+    /// `\bmap\b` let every locator map straight through the gate it most exists to
+    /// stop. Caught by a unit test, not by eye. A letter-boundary keeps the intent
+    /// that made `\b` attractive: it still refuses to fire on `Maputo`,
+    /// `Mapo_District` or `roadmap`.
     ///
-    /// A letter-boundary keeps the intent that made `\b` attractive: it still
-    /// refuses to fire on `Maputo`, `Mapo_District` or `roadmap`.
-    private static let rejectedNamePattern =
-        "flag|coat[_ ]?of[_ ]?arms|locator|(?<![a-z])map(?![a-z])|seal|logo|emblem|montage|collage"
+    /// `location`, `marker` and `orthographic` are additions, all from live
+    /// responses: `Bali` returns `Bali_in_Indonesia_(special_marker).svg` and
+    /// `Vietnam` returns `Location_Vietnam_ASEAN.svg` and
+    /// `Vietnam_(orthographic_projection).svg`. None contains the word "map".
+    private static let rejectedNamePattern = [
+        "flag", "coat[_ ]?of[_ ]?arms", "locator", "(?<![a-z])map(?![a-z])",
+        "seal", "logo", "emblem", "montage", "collage",
+        "location", "marker", "orthographic"
+    ].joined(separator: "|")
 
     /// Extensions that cannot be shown in the band at all: vector artwork (which
-    /// is what a flag or emblem usually is) and video.
-    private static let rejectedExtensions: Set<String> = ["svg", "ogv"]
+    /// is what a flag, an emblem or a locator map usually is) and video.
+    private static let rejectedExtensions: Set<String> = ["svg", "ogv", "webm", "gif"]
 
     /// Minimum long-edge resolution. The band is 868pt wide at its widest tested
     /// macOS pane, so anything under 900 px would be upscaled.
@@ -158,18 +227,33 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     private static let maximumAspect: Double = 3.0
     private static let minimumAspect: Double = 1.1
 
-    /// Whether a candidate is worth showing. Static and pure so it is directly
-    /// testable without a network.
-    static func passesGate(_ candidate: TripCoverCandidate) -> Bool {
-        let filename = candidate.imageURL.lastPathComponent
-            .removingPercentEncoding ?? candidate.imageURL.lastPathComponent
+    /// The name half of the gate, runnable on a bare file title before any
+    /// metadata has been fetched. Split out from `passesGate` so an obvious flag
+    /// costs no request.
+    static func passesNameGate(_ rawName: String) -> Bool {
+        let name = rawName.removingPercentEncoding ?? rawName
 
-        if rejectedExtensions.contains(candidate.imageURL.pathExtension.lowercased()) {
+        // A rasterised SVG thumbnail is named `NNNpx-Foo.svg.png`, so the file
+        // extension says "png" while the artwork is vector. Anything Wikimedia
+        // holds as an SVG is a diagram, a flag, an emblem or a map — never a
+        // photograph — so the marker to check is `.svg.` anywhere in the name.
+        // This is what let `Bali_in_Indonesia_(special_marker).svg.png` through in
+        // a live run.
+        if name.range(of: "\\.svg\\.", options: [.regularExpression, .caseInsensitive]) != nil {
             return false
         }
-        if filename.range(of: rejectedNamePattern, options: [.regularExpression, .caseInsensitive]) != nil {
-            return false
-        }
+        let ext = (name as NSString).pathExtension.lowercased()
+        if rejectedExtensions.contains(ext) { return false }
+
+        return name.range(
+            of: rejectedNamePattern, options: [.regularExpression, .caseInsensitive]
+        ) == nil
+    }
+
+    /// The full gate: the name rules above plus geometry. Static and pure so it is
+    /// directly testable without a network.
+    static func passesGate(_ candidate: TripCoverCandidate) -> Bool {
+        guard passesNameGate(candidate.imageURL.lastPathComponent) else { return false }
         guard candidate.pixelWidth >= minimumPixelWidth, candidate.pixelHeight > 0 else {
             return false
         }
@@ -179,13 +263,19 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
 
     // MARK: - Requests
 
-    private func leadImage(title: String) async throws -> TripCoverCandidate? {
-        guard let segment = Self.encodedPathSegment(title),
+    /// The page's lead image, as a `File:` title.
+    ///
+    /// `summary` hands back a THUMBNAIL URL (`960px-Flag_of_Vietnam.svg.png`), not
+    /// the original, so the name is unwrapped back to the file title rather than
+    /// used directly: a `NNNpx-` prefix would break the metadata lookup, and the
+    /// thumbnail's dimensions are not the file's.
+    private func leadImageFileTitle(page: String) async throws -> String? {
+        guard let segment = Self.encodedPathSegment(page),
               let url = URL(string: "https://en.wikipedia.org/api/rest_v1/page/summary/\(segment)") else {
             throw TripCoverProviderError.badRequest
         }
-        // A 404 here means "no such page", which is a legitimate `none`, so it is
-        // not treated as a transient failure.
+        // A 404 means "no such page", which is a legitimate `none` rather than a
+        // transient failure.
         guard let data = try await get(url, notFoundIsEmpty: true) else { return nil }
         let decoded: SummaryResponse
         do {
@@ -193,105 +283,102 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
         } catch {
             throw TripCoverProviderError.undecodable(error)
         }
-        guard let image = decoded.originalimage,
-              let source = URL(string: image.source),
-              let width = image.width, let height = image.height else {
-            return nil
-        }
-        return TripCoverCandidate(
-            imageURL: source,
-            pixelWidth: width,
-            pixelHeight: height,
-            attribution: nil,
-            attributionURL: nil
-        )
+        guard let source = decoded.originalimage?.source,
+              let url = URL(string: source) else { return nil }
+        return "File:" + Self.fileName(fromUploadURL: url)
     }
 
-    private func firstPassingMediaItem(title: String) async throws -> TripCoverCandidate? {
-        guard let segment = Self.encodedPathSegment(title),
+    /// Every image on the page, as `File:` titles, in page order.
+    private func mediaListFileTitles(page: String) async throws -> [String] {
+        guard let segment = Self.encodedPathSegment(page),
               let url = URL(string: "https://en.wikipedia.org/api/rest_v1/page/media-list/\(segment)") else {
             throw TripCoverProviderError.badRequest
         }
-        guard let data = try await get(url, notFoundIsEmpty: true) else { return nil }
+        guard let data = try await get(url, notFoundIsEmpty: true) else { return [] }
         let decoded: MediaListResponse
         do {
             decoded = try JSONDecoder().decode(MediaListResponse.self, from: data)
         } catch {
             throw TripCoverProviderError.undecodable(error)
         }
-        for item in decoded.items ?? [] {
-            guard item.type == "image",
-                  let width = item.width, let height = item.height,
-                  let source = item.resolvedSourceURL else { continue }
-            let candidate = TripCoverCandidate(
-                imageURL: source,
+        return (decoded.items ?? [])
+            .filter { $0.type == "image" }
+            .compactMap { $0.title }
+    }
+
+    /// One batched metadata call for up to 50 file titles: original URL, true
+    /// dimensions, artist and licence. Keyed by `normalisedTitle`.
+    ///
+    /// Queried against `en.wikipedia.org` rather than Commons directly, because
+    /// en.wikipedia resolves BOTH its own local uploads and shared Commons files,
+    /// while Commons knows nothing about a locally-uploaded file. The description
+    /// URL it returns points at whichever wiki actually holds the file, so the
+    /// credit link is correct either way.
+    private func imageInfo(fileTitles: [String]) async throws -> [String: TripCoverCandidate] {
+        guard !fileTitles.isEmpty else { return [:] }
+        let joined = fileTitles.prefix(50).joined(separator: "|")
+        guard let encoded = joined.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
+              let url = URL(string:
+                "https://en.wikipedia.org/w/api.php?action=query&format=json"
+                + "&prop=imageinfo&iiprop=url%7Csize%7Cextmetadata&titles=\(encoded)"
+              ) else {
+            throw TripCoverProviderError.badRequest
+        }
+        guard let data = try await get(url, notFoundIsEmpty: true) else { return [:] }
+        let decoded: ImageInfoResponse
+        do {
+            decoded = try JSONDecoder().decode(ImageInfoResponse.self, from: data)
+        } catch {
+            throw TripCoverProviderError.undecodable(error)
+        }
+
+        var out: [String: TripCoverCandidate] = [:]
+        for page in decoded.query?.pages?.values ?? [:].values {
+            guard let title = page.title,
+                  let info = page.imageinfo?.first,
+                  let source = info.url, let imageURL = URL(string: source),
+                  let width = info.width, let height = info.height else { continue }
+
+            let meta = info.extmetadata
+            let artist = meta?.Artist?.value.map(Self.strippingHTML)
+            let licence = meta?.LicenseShortName?.value.map(Self.strippingHTML)
+            let credit = [artist, licence]
+                .compactMap { ($0?.isEmpty == false) ? $0 : nil }
+                .joined(separator: " · ")
+
+            out[Self.normalisedTitle(title)] = TripCoverCandidate(
+                imageURL: imageURL,
                 pixelWidth: width,
                 pixelHeight: height,
-                attribution: nil,
-                attributionURL: nil
+                attribution: credit.isEmpty ? nil : credit,
+                attributionURL: info.descriptionurl.flatMap(URL.init(string:))
             )
-            if Self.passesGate(candidate) { return candidate }
         }
-        return nil
+        return out
     }
 
-    /// One extra Commons call for the credit line. A failure here downgrades the
-    /// candidate to "no credit recorded" rather than losing the photograph: a
-    /// missing credit is a gap in metadata, and the layout owes nothing on the
-    /// surface, so failing the whole fetch over it would be the wrong trade.
-    private func withAttribution(_ candidate: TripCoverCandidate) async throws -> TripCoverCandidate {
-        let rawName = candidate.imageURL.lastPathComponent
-        let fileName = rawName.removingPercentEncoding ?? rawName
-        guard let encodedTitle = "File:\(fileName)"
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string:
-                "https://commons.wikimedia.org/w/api.php?action=query&format=json"
-                + "&prop=imageinfo&iiprop=extmetadata&titles=\(encodedTitle)"
-              ) else {
-            return candidate
+    // MARK: - Name helpers
+
+    /// Recover a file name from an upload URL, undoing the two things Wikimedia's
+    /// thumbnailer does to it: a `NNNpx-` size prefix, and a raster extension
+    /// appended to a vector original (`Foo.svg` becomes `500px-Foo.svg.png`).
+    static func fileName(fromUploadURL url: URL) -> String {
+        let raw = url.lastPathComponent
+        var name = raw.removingPercentEncoding ?? raw
+
+        if let match = name.range(of: "^[0-9]+px-", options: .regularExpression) {
+            name.removeSubrange(match)
         }
-        let filePageURL = URL(string:
-            "https://commons.wikimedia.org/wiki/File:"
-            + ((fileName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)) ?? fileName)
-        )
-
-        // `try?` on a `Data?`-returning throwing call flattens to `Data?`, so one
-        // optional binding covers both "the request failed" and "404".
-        guard let data = try? await get(url, notFoundIsEmpty: true) else {
-            return Self.replacing(candidate, attribution: nil, attributionURL: filePageURL)
+        // `Foo.svg.png` → `Foo.svg`. Only unwraps ONE raster suffix, and only when
+        // the name underneath still has an extension of its own.
+        for suffix in [".png", ".jpg", ".jpeg"] where name.lowercased().hasSuffix(suffix) {
+            let stem = String(name.dropLast(suffix.count))
+            if (stem as NSString).pathExtension.lowercased() == "svg" {
+                name = stem
+            }
+            break
         }
-        guard let decoded = try? JSONDecoder().decode(CommonsQueryResponse.self, from: data),
-              let meta = decoded.query?.pages?.values
-                .compactMap({ $0.imageinfo?.first?.extmetadata })
-                .first else {
-            return Self.replacing(candidate, attribution: nil, attributionURL: filePageURL)
-        }
-
-        let artist = meta.Artist?.value.map(Self.strippingHTML)
-        let licence = meta.LicenseShortName?.value.map(Self.strippingHTML)
-        let credit = [artist, licence]
-            .compactMap { $0?.isEmpty == false ? $0 : nil }
-            .joined(separator: " · ")
-
-        return Self.replacing(
-            candidate,
-            attribution: credit.isEmpty ? nil : credit,
-            attributionURL: filePageURL
-        )
-    }
-
-    private static func replacing(
-        _ candidate: TripCoverCandidate,
-        attribution: String?,
-        attributionURL: URL?
-    ) -> TripCoverCandidate {
-        TripCoverCandidate(
-            imageURL: candidate.imageURL,
-            pixelWidth: candidate.pixelWidth,
-            pixelHeight: candidate.pixelHeight,
-            attribution: attribution,
-            attributionURL: attributionURL
-        )
+        return name
     }
 
     /// Commons returns `Artist` as an HTML fragment (usually an anchor). Reduce it
@@ -336,7 +423,6 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
             throw TripCoverProviderError.transport(error)
         }
     }
-
 }
 
 // MARK: - Byte download
@@ -375,48 +461,40 @@ enum TripCoverDownload {
 private struct SummaryResponse: Decodable {
     struct ImageInfo: Decodable {
         let source: String
-        let width: Int?
-        let height: Int?
     }
     let originalimage: ImageInfo?
 }
 
 /// Subset of `/api/rest_v1/page/media-list/<title>`.
+///
+/// Only `title` and `type` are read. `width`, `height` and `original` are present
+/// in the schema but come back null in practice, which is the whole reason the
+/// `imageinfo` call exists — see the type doc comment above.
 private struct MediaListResponse: Decodable {
     struct Item: Decodable {
-        struct Original: Decodable { let source: String? }
-        struct SrcSetEntry: Decodable { let src: String? }
-
+        let title: String?
         let type: String?
-        let width: Int?
-        let height: Int?
-        let original: Original?
-        let srcset: [SrcSetEntry]?
-
-        /// `original.source` when present, else the first `srcset` entry. Both
-        /// arrive protocol-relative (`//upload.wikimedia.org/…`), which `URL`
-        /// will happily parse into something unusable, so the scheme is filled in.
-        var resolvedSourceURL: URL? {
-            let raw = original?.source ?? srcset?.first?.src
-            guard var raw else { return nil }
-            if raw.hasPrefix("//") { raw = "https:" + raw }
-            return URL(string: raw)
-        }
     }
     let items: [Item]?
 }
 
-/// Subset of the Commons `action=query&prop=imageinfo&iiprop=extmetadata`
-/// response. Field names match the API's own casing, which is capitalised.
-private struct CommonsQueryResponse: Decodable {
+/// Subset of `action=query&prop=imageinfo&iiprop=url|size|extmetadata`.
+/// Field names match the API's own casing, which is capitalised for extmetadata.
+private struct ImageInfoResponse: Decodable {
     struct Query: Decodable {
-        /// Keyed by page id, which is unknown ahead of time.
+        /// Keyed by page id, which is unknown ahead of time (and is `-1` for a
+        /// title the wiki does not have).
         let pages: [String: Page]?
     }
     struct Page: Decodable {
-        let imageinfo: [ImageInfo]?
+        let title: String?
+        let imageinfo: [Info]?
     }
-    struct ImageInfo: Decodable {
+    struct Info: Decodable {
+        let url: String?
+        let descriptionurl: String?
+        let width: Int?
+        let height: Int?
         let extmetadata: ExtMetadata?
     }
     struct ExtMetadata: Decodable {
