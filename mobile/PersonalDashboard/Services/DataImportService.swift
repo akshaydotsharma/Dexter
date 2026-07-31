@@ -250,19 +250,24 @@ final class DataImportService {
     /// #399: task ticket files, read out of the archive into
     /// `Documents/task-tickets/`.
     private let taskTicketStorage: TicketStorage
+    /// #428: trip cover photographs, read out of the archive into
+    /// `Documents/trip-covers/`.
+    private let tripCoverStorage: ReceiptStorage
 
     init(
         modelContext: ModelContext,
         receiptStorage: ReceiptStorage = .shared,
         ticketStorage: TicketStorage = .shared,
         noteImageStorage: ReceiptStorage = .noteImages,
-        taskTicketStorage: TicketStorage = .taskTickets
+        taskTicketStorage: TicketStorage = .taskTickets,
+        tripCoverStorage: ReceiptStorage = .tripCovers
     ) {
         self.modelContext = modelContext
         self.receiptStorage = receiptStorage
         self.ticketStorage = ticketStorage
         self.noteImageStorage = noteImageStorage
         self.taskTicketStorage = taskTicketStorage
+        self.tripCoverStorage = tripCoverStorage
     }
 
     // MARK: - Preview
@@ -443,6 +448,8 @@ final class DataImportService {
         var writtenNoteImagePaths: [String] = []
         // #399: same, for task ticket files.
         var writtenTaskTicketPaths: [String] = []
+        // #428: same, for trip cover photographs.
+        var writtenTripCoverPaths: [String] = []
 
         do {
             for dto in payload.noteFolders where !existingFolderUUIDs.contains(dto.clientUUID) {
@@ -573,6 +580,29 @@ final class DataImportService {
                 // after init, so the round trip is byte-for-byte and we don't
                 // decode/re-encode a structure the model already guards.
                 trip.participantsData = dto.participantsData
+                // Cover photography (#428). The portable fields always travel;
+                // `coverImagePath` is set ONLY when the file was actually restored
+                // from the archive, exactly like `attachmentPath` below. A path
+                // pointing at a file that is not on disk would make the row claim
+                // a cover it cannot draw.
+                //
+                // Leaving the path nil is not a loss and needs no repair flag:
+                // `coverImageSourceURL` survives, and the launch sweep treats
+                // `resolved`-with-no-file as un-fetched and re-derives the cover.
+                // That is the same branch the sync path relies on, where there is
+                // no byte channel at all.
+                trip.coverImageSourceURL      = dto.coverImageSourceURL
+                trip.coverImageAttribution    = dto.coverImageAttribution
+                trip.coverImageAttributionURL = dto.coverImageAttributionURL
+                trip.coverImageState          = dto.coverImageState
+                let restoredCover = try restoreTripCover(
+                    relativePath: dto.coverImagePath,
+                    archiveEntries: preview.entries
+                )
+                if let restoredCover {
+                    writtenTripCoverPaths.append(restoredCover)
+                    trip.coverImagePath = restoredCover
+                }
                 modelContext.insert(trip)
             }
 
@@ -853,6 +883,9 @@ final class DataImportService {
             for path in writtenTaskTicketPaths {
                 try? taskTicketStorage.delete(relativePath: path)
             }
+            for path in writtenTripCoverPaths {
+                try? tripCoverStorage.delete(relativePath: path)
+            }
             throw ImportError.commitFailed(error)
         }
     }
@@ -1047,5 +1080,31 @@ final class DataImportService {
             return relativePath
         }
         return try taskTicketStorage.write(data: archivedData, relativePath: relativePath)
+    }
+
+    /// #428 counterpart for trip cover photographs. Returns nil when the archive
+    /// carries no file for this trip, and the caller then leaves `coverImagePath`
+    /// nil rather than pointing at a file that isn't there.
+    ///
+    /// nil is the ordinary case on the SYNC path, which has no byte channel, and it
+    /// is harmless: `coverImageSourceURL` came through, so the launch repair sweep
+    /// re-derives the cover. A cover is always re-derivable, so this can never be
+    /// data loss — which is why it does not need the overwrite-repair treatment
+    /// #366 had to add for lossy expense rows.
+    private func restoreTripCover(
+        relativePath: String?,
+        archiveEntries: [String: Data]
+    ) throws -> String? {
+        guard let relativePath,
+              !relativePath.isEmpty,
+              let archivedData = archiveEntries[relativePath] else {
+            return nil
+        }
+        // An existing file at the same UUID-keyed path is the same logical cover,
+        // so it wins rather than being rewritten. Same rule as receipts.
+        if tripCoverStorage.load(relativePath: relativePath) != nil {
+            return relativePath
+        }
+        return try tripCoverStorage.write(data: archivedData, relativePath: relativePath)
     }
 }

@@ -61,6 +61,11 @@ struct DexterMacApp: App {
                 .textFieldStyle(.plain)
                 .modelContainer(SwiftDataStore.shared.container)
                 .frame(minWidth: 900, minHeight: 600)
+                // Trip cover repair sweep (#428). `.task` fires per WINDOW on
+                // macOS, not per process, and the OS restores several windows on
+                // relaunch — the latch that makes that safe lives in
+                // `TripCoverService`, not here.
+                .task { await AppMaintenance.runTripCoverSweep() }
         }
         .windowResizability(.contentMinSize)
         // Menu bar commands (issue #295). They act on whichever window is

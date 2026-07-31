@@ -142,6 +142,19 @@ enum Tokens {
     static let ticketStubInk    = Color(hex: 0x1B1712)
     static let ticketStubMuted  = Color(hex: 0x6B6255)
 
+    /// Bottom-edge veil under a trip cover photograph (#428). A blown-out sky
+    /// meeting the card's paper dissolves into it and the band loses its bottom
+    /// edge; a few percent of black over the last 24pt gives the photo somewhere
+    /// to land before the seam rule.
+    ///
+    /// Deliberately NOT an adaptive `Color.paper(light, dark)` pair, and this is
+    /// the reason: a photograph does not respond to the colour scheme, so the
+    /// veil guarding its edge must not either. A veil that lifted in light mode
+    /// would be guarding a photo that had not changed. Same reasoning as
+    /// `ticketStub` above, which is fixed near-white in both themes because the
+    /// rendered barcode it backs is fixed too.
+    static let coverSeamVeil    = Color.black.opacity(0.06)
+
     // Semantics
     static let success      = Color.paper(0x15803D, 0x4ADE80)
     static let successSoft  = Color.paper(0xDCFCE7, 0x052E16)

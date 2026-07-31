@@ -202,6 +202,104 @@ enum RowMetrics {
     }
 }
 
+// MARK: - Trip cover band (issue #428)
+
+/// Metrics for the destination-photo band on a trip tile.
+///
+/// These live here, next to `RowMetrics`, rather than as literals inside the row
+/// for the reason `RowMetrics` already spells out: Past's band is a
+/// *relationship* to the normal band (shorter, wider ratio, lower ceiling), and
+/// this codebase has twice had a numeric relationship silently invert because it
+/// was asserted in a comment instead of expressed in code. Side by side the two
+/// sets can be read as one table.
+///
+/// Nothing here is `.infinity`. A band that could grow without bound inside a
+/// `List` row is the layout-feedback hazard this ticket set out to avoid.
+enum TripCoverMetrics {
+    // MARK: Active / Upcoming band
+
+    /// Width-to-height ratio of the band. Height derives from the card's width,
+    /// with no `GeometryReader` — a `GeometryReader` that determines its own
+    /// row's height inside a `List` feeds the layout back into itself.
+    static let ratio: CGFloat = 2.4
+    static let minHeight: CGFloat = 120
+    static let maxHeight: CGFloat = 220
+
+    // MARK: Past band
+
+    /// Past is materially shorter and wider so a lush old photograph cannot
+    /// out-shout a trip the user is currently on. Fixed on the band, never with
+    /// card-wide opacity, which would dim the text with it and drop
+    /// `Tokens.muted` below 4.5:1.
+    static let pastRatio: CGFloat = 4.0
+    static let pastMinHeight: CGFloat = 84
+    static let pastMaxHeight: CGFloat = 132
+
+    /// Ceiling once the user is at an accessibility text size. The text block
+    /// grows several lines taller there, so the band has to give way or a single
+    /// tile fills the screen.
+    static let accessibilityMaxHeight: CGFloat = 132
+
+    // MARK: Band edge treatment
+
+    /// Height of the clear-to-`Tokens.coverSeamVeil` gradient at the band's
+    /// bottom edge.
+    static let veilHeight: CGFloat = 24
+    /// The seam rule under the band. `Tokens.border`, not `Tokens.divider`,
+    /// which vanishes on lighter surfaces in light mode.
+    static let seamHeight: CGFloat = 0.5
+    /// Partial desaturation for a Past photo. `.saturation(0.55)` reads as an
+    /// archival print; `.grayscale(1.0)` reads as disabled, which would be a lie
+    /// — Past trips are still tappable and still carry expenses.
+    static let pastSaturation: Double = 0.55
+    /// Adaptive veil over the whole Past band. `Tokens.paper` because it IS an
+    /// adaptive pair, so it lifts in light mode and darkens in dark mode, which
+    /// is the correct direction in both.
+    static let pastVeilOpacity: Double = 0.10
+
+    // MARK: Generated cover art
+
+    /// Oversized watermark glyph on the generated fallback art. Same 150pt the
+    /// wallet card's `heroPanel` uses, so a photo-less trip reads as a citizen
+    /// of the app rather than a degraded state.
+    static let watermark: CGFloat = 150
+    /// Smaller on the shorter Past band, in proportion with it.
+    static let pastWatermark: CGFloat = 110
+
+    // MARK: Text block
+
+    /// Horizontal padding of the text block under the band.
+    ///
+    /// A deliberate departure from `RowMetrics.horizontalPadding` (12pt on iOS),
+    /// which reads tight against a 328pt-wide photograph. The band sets the
+    /// tile's optical width now, so the text has to be inset to match it.
+    static let textHorizontalPadding: CGFloat = Space.lg
+    /// Vertical padding of the text block.
+    static let textVerticalPadding: CGFloat = Space.md
+
+    /// The Active status dot on the meta line.
+    static let statusDotSize: CGFloat = 6
+    /// Gap between that dot and the meta text.
+    static let statusDotGap: CGFloat = 6
+
+    /// Horizontal inset of the whole card.
+    ///
+    /// Trips opts out of `flatContentRow()` (see `TripRow`), so it is the one
+    /// section that stays a card on macOS. `contentRowInsets` zeroes the
+    /// horizontal row inset there, which is right for a flat row and wrong for a
+    /// 220pt photograph: it would put the photo directly on the sidebar seam.
+    /// The project has already added `accentRailInset` and `priorityWashInset`
+    /// for exactly this, at far lower volume. iOS needs nothing — its row inset
+    /// already supplies the gutter its cards float in.
+    static var cardHorizontalInset: CGFloat {
+        #if os(macOS)
+        Space.lg
+        #else
+        0
+        #endif
+    }
+}
+
 extension View {
     /// The one construction for a row that lists a record.
     ///

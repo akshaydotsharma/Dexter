@@ -41,6 +41,12 @@ struct PersonalDashboardApp: App {
                     // peer would change here.
                     await SyncCoordinator.shared.runForegroundPass(reason: "launch")
                     SyncCoordinator.shared.startPeriodic()
+                    // Trip cover repair sweep (#428). Last, because it is the only
+                    // pass here that is purely cosmetic, and because a sync pass
+                    // may have just delivered trips whose cover file this device
+                    // does not have. Once per process, budgeted, and a no-op when
+                    // every trip already has a cover or has settled on `none`.
+                    await AppMaintenance.runTripCoverSweep()
                 }
         }
         .modelContainer(SwiftDataStore.shared.container)

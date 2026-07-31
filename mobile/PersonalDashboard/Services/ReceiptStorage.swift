@@ -53,6 +53,17 @@ final class ReceiptStorage {
     /// so only the subdirectory is injected.
     static let noteImages = ReceiptStorage(directoryName: "note-images")
 
+    /// Fetched trip cover photographs (#428), stored under
+    /// `Documents/trip-covers/`.
+    ///
+    /// A third instance for the same reason `noteImages` is a second one: only
+    /// the subdirectory differs. The inherited `compress(imageData:)` treatment
+    /// (1600 px longest edge, JPEG q0.75) is also the right size here rather
+    /// than a coincidence — an 868pt-wide band at 2x wants ~1736 px, so 1600 is
+    /// one notch under native and lands around 200–350 KB per cover. At 30 trips
+    /// that is ~10 MB, which needs no eviction policy.
+    static let tripCovers = ReceiptStorage(directoryName: "trip-covers")
+
     private let fileManager: FileManager
     private let directoryName: String
     private let jpegQuality: CGFloat = 0.75

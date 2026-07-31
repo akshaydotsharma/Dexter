@@ -239,6 +239,28 @@ enum DataArchive {
         // `ExpenseDTO.splitsData` is handled: the model's accessor already
         // decodes defensively and falls back to empty.
         let participantsData: Data?
+
+        // MARK: Added in #428 — fetched destination cover photography.
+        //
+        // Optional with a nil default so archives written before covers existed
+        // still decode, restoring their trips as never-having-been-fetched, which
+        // is the truth.
+        //
+        // `coverImagePath` is DEVICE-LOCAL: it names a file whose UUID was minted
+        // on the writing device. The bytes travel in the archive's flat
+        // `attachments` array (see `DataExportService.resolveTripCoverSources`), so
+        // a restore on a fresh device can put them back at the same path. Over
+        // SYNC there is no byte channel at all, so the reading device gets a path
+        // with no file — which is fine and self-healing, because
+        // `coverImageSourceURL` is the portable identity and a cover is always
+        // re-derivable from it. The launch repair sweep notices and re-fetches, and
+        // the tile draws generated art in the meantime. This can never be data
+        // loss.
+        var coverImagePath: String? = nil
+        var coverImageSourceURL: String? = nil
+        var coverImageAttribution: String? = nil
+        var coverImageAttributionURL: String? = nil
+        var coverImageState: String? = nil
     }
 
     /// "Itinerary day" in the manifest is a single timeline item on a trip
