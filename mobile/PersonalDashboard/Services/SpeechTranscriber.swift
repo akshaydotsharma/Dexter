@@ -808,8 +808,21 @@ final class SpeechTranscriber {
 
     // MARK: Audio level metering
 
-    /// RMS of the buffer's first channel, mapped from a -40dBFS floor to 0–1.
+    /// RMS of the buffer's first channel, mapped from `meterFloorDB` to 0–1.
     /// Pure function, safe to call on the audio tap's background queue.
+    ///
+    /// The floor was -40 dBFS and that made this meter effectively dead (issue
+    /// #429). The session runs in `.measurement` mode, which deliberately
+    /// disables Apple's input processing and automatic gain control, so the tap
+    /// sees RAW microphone audio. Unprocessed conversational speech has an RMS
+    /// around -45 to -35 dBFS, so a -40 floor clamped most of a sentence to
+    /// exactly zero. Only a hard consonant at the start of a phrase punched
+    /// above it, which is why the waveform twitched at the top of a sentence and
+    /// then flatlined for the rest of it.
+    ///
+    /// -60 dBFS covers quiet and distant speech. The wider range does let room
+    /// tone register, which is what the adaptive gain in `VoiceLevelTrace`
+    /// exists to absorb.
     private nonisolated static func normalizedRMS(_ buffer: AVAudioPCMBuffer) -> Float {
         guard let channelData = buffer.floatChannelData else { return 0 }
         let frameCount = Int(buffer.frameLength)
@@ -821,12 +834,15 @@ final class SpeechTranscriber {
             sumSquares += s * s
         }
         let rms = sqrt(sumSquares / Float(frameCount))
-        // Convert to dBFS, clamp to a -40dB floor, then linear-map to 0–1.
+        // Convert to dBFS, clamp to the floor, then linear-map to 0–1.
         let db = 20 * log10(max(rms, 1e-7))
-        let floorDB: Float = -40
+        let floorDB = meterFloorDB
         let clamped = max(floorDB, min(0, db))
         return (clamped - floorDB) / -floorDB
     }
+
+    /// Quietest level the meter resolves. See `normalizedRMS`.
+    nonisolated static let meterFloorDB: Float = -60
 
     /// Append a new reading to the rolling window and publish the average.
     private func publishLevel(_ level: Float) {

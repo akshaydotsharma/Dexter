@@ -27,6 +27,24 @@ struct VoiceLevelTrace: Equatable {
     /// Index the NEXT sample will be written to.
     private var writeIndex: Int = 0
 
+    /// Decaying running peak, the basis of the adaptive gain.
+    private var peak: Float = Self.minimumPeak
+
+    /// Per-frame decay applied to `peak`. At the tap's ~47 Hz this halves the
+    /// reference roughly every second.
+    ///
+    /// Tuned by `testPeakDecaysSoQuietSpeechRecoversAfterALoudBurst`: at 0.993
+    /// (a two-second half-life) one loud burst left the following quiet speech
+    /// reading under half scale four seconds later, so a single raised voice
+    /// flattened the waveform for the rest of the sentence. A syllable gap is
+    /// only ~5 frames, which this barely moves, so faster recovery costs no
+    /// visible pumping inside a word.
+    static let peakDecay: Float = 0.985
+
+    /// Floor on the gain reference. Without it a silent room would be amplified
+    /// until room tone filled the bars.
+    static let minimumPeak: Float = 0.08
+
     init() {
         samples = Array(repeating: 0, count: Self.capacity)
     }
@@ -38,9 +56,33 @@ struct VoiceLevelTrace: Equatable {
     /// pipeline assumes. Out-of-range input is a caller bug, but clamping here
     /// keeps a bad frame from producing a bar taller than its track.
     mutating func record(_ level: Float) {
-        samples[writeIndex] = min(max(level, 0), 1)
+        let clamped = min(max(level, 0), 1)
+        samples[writeIndex] = clamped
         writeIndex = (writeIndex + 1) % Self.capacity
+        // Adaptive gain reference: rises instantly to a new peak, decays slowly.
+        peak = max(peak * Self.peakDecay, max(clamped, Self.minimumPeak))
     }
+
+    /// Current gain multiplier. The visualisation is scaled by this so it spans
+    /// its full range whatever the input level actually is.
+    var gain: Float { 1 / max(peak, Self.minimumPeak) }
+
+    /// Amplitude `frames` ago, scaled by the adaptive gain and clamped to 0...1.
+    ///
+    /// This is what the visualisation should read, and it is the part that was
+    /// missing (issue #429). Mapping raw dBFS straight to bar height assumes the
+    /// microphone delivers a predictable level, which it does not: `.measurement`
+    /// mode disables AGC, so the raw signal depends on the room, the distance to
+    /// the phone, and how loudly the user happens to be speaking. Normalising
+    /// against a decaying peak is what makes a waveform look alive for everyone
+    /// rather than only for people who shout, and it is what the voice UIs this
+    /// is modelled on actually do.
+    func normalizedLevel(delayedBy frames: Int) -> Float {
+        min(1, level(delayedBy: frames) * gain)
+    }
+
+    /// Gain-scaled most recent sample.
+    var normalizedCurrent: Float { normalizedLevel(delayedBy: 0) }
 
     /// The sample `frames` readings ago. 0 is the most recent. Reads deeper than
     /// `capacity` saturate at the oldest retained sample rather than wrapping
@@ -56,6 +98,7 @@ struct VoiceLevelTrace: Equatable {
     mutating func reset() {
         samples = Array(repeating: 0, count: Self.capacity)
         writeIndex = 0
+        peak = Self.minimumPeak
     }
 
     // MARK: - Waveform mapping
@@ -94,7 +137,8 @@ struct VoiceLevelTrace: Equatable {
             let shimmer = sin(time * 1.5 - Double(index) * 0.55)
             return restFraction * (1 + 0.22 * shimmer)
         }
-        let delayed = Double(trace.level(delayedBy: delayFrames(forBar: index, barCount: barCount)))
+        // Gain-scaled, not raw. See `normalizedLevel`.
+        let delayed = Double(trace.normalizedLevel(delayedBy: delayFrames(forBar: index, barCount: barCount)))
         let centre = Double(barCount - 1) / 2
         let taper = 1 - abs(Double(index) - centre) / centre * 0.12
         // The 0.85 exponent lifts quiet speech off the floor; a linear map left
@@ -102,10 +146,13 @@ struct VoiceLevelTrace: Equatable {
         return restFraction + (1 - restFraction) * pow(delayed, 0.85) * taper
     }
 
-    /// Amplitude below which the waveform is considered at rest. Just above the
-    /// noise floor a quiet room produces, so the bars settle between phrases
-    /// instead of twitching on room tone.
-    static let speechFloor: Float = 0.06
+    /// Raw amplitude below which the waveform is considered at rest.
+    ///
+    /// Deliberately compared against the RAW level, not the gain-scaled one:
+    /// adaptive gain would happily amplify a silent room to full scale, and this
+    /// is the gate that stops it. Retuned for the -60 dBFS meter floor, where
+    /// room tone lands far lower than it did at -40.
+    static let speechFloor: Float = 0.055
 
     // MARK: - Silence countdown
 

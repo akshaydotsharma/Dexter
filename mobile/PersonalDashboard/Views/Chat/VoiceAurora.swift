@@ -141,7 +141,7 @@ struct VoiceAurora: View {
     private func field(in size: CGSize, time: Double, trace: VoiceLevelTrace?) -> some View {
         ZStack {
             ForEach(Array(blobs.enumerated()), id: \.offset) { _, blob in
-                let energy = trace.map { CGFloat($0.level(delayedBy: blob.traceTap)) } ?? 0.45
+                let energy = trace.map { CGFloat($0.normalizedLevel(delayedBy: blob.traceTap)) } ?? 0.45
                 let angle = (time / blob.period) * 2 * .pi + blob.phase
                 let dx = (cos(angle) * blob.drift + cos(angle * 1.7) * energy * 0.10) * size.width
                 let dy = (sin(angle * 0.8) * blob.drift * 0.7 + sin(angle * 1.3) * energy * 0.07) * size.height

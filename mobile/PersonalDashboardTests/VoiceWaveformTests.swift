@@ -158,6 +158,75 @@ final class VoiceWaveformTests: XCTestCase {
         XCTAssertGreaterThan(centre, 0.18, "the 0.85 exponent should lift quiet speech clear of rest")
     }
 
+    // MARK: - Adaptive gain
+    //
+    // The bug this exists to prevent: `.measurement` mode disables AGC, so raw
+    // speech RMS can sit near the meter floor. Mapping raw amplitude straight to
+    // bar height produced a waveform that only moved for loud, close talkers,
+    // and looked completely dead the rest of the time.
+
+    func testGainAmplifiesAConsistentlyQuietSignalToFullScale() {
+        var trace = VoiceLevelTrace()
+        for _ in 0..<80 { trace.record(0.14) }
+        XCTAssertEqual(trace.normalizedCurrent, 1.0, accuracy: 0.05,
+                       "a steady quiet voice should still fill the bars")
+        XCTAssertGreaterThan(trace.gain, 1.0)
+    }
+
+    /// The gate that stops the gain turning an empty room into a light show.
+    func testSilenceIsNotAmplified() {
+        var trace = VoiceLevelTrace()
+        for _ in 0..<80 { trace.record(0.004) }
+        XCTAssertLessThan(trace.normalizedCurrent, 0.1)
+        XCTAssertLessThan(trace.current, VoiceLevelTrace.speechFloor,
+                          "room tone must stay under the rest gate")
+        for index in 0..<VoiceLevelTrace.barCount {
+            XCTAssertLessThan(
+                VoiceLevelTrace.heightFraction(forBar: index, trace: trace, time: 4),
+                0.12,
+                "bar \(index) should be at rest in a silent room"
+            )
+        }
+    }
+
+    func testGainNeverExceedsFullScale() {
+        var trace = VoiceLevelTrace()
+        for _ in 0..<VoiceLevelTrace.capacity { trace.record(1.0) }
+        XCTAssertLessThanOrEqual(trace.normalizedCurrent, 1.0)
+        XCTAssertEqual(trace.gain, 1.0, accuracy: 0.0001, "a full-scale signal needs no gain")
+    }
+
+    /// A loud burst must not permanently flatten a following quiet passage; the
+    /// reference has to decay back down.
+    func testPeakDecaysSoQuietSpeechRecoversAfterALoudBurst() {
+        var trace = VoiceLevelTrace()
+        for _ in 0..<10 { trace.record(1.0) }
+        let immediatelyAfter = trace.gain
+        // ~4 seconds at the tap's ~47 Hz.
+        for _ in 0..<190 { trace.record(0.12) }
+        XCTAssertGreaterThan(trace.gain, immediatelyAfter,
+                             "the gain reference should decay back toward the quieter signal")
+        XCTAssertGreaterThan(trace.normalizedCurrent, 0.5,
+                             "quiet speech after a shout should still register")
+    }
+
+    func testResetClearsTheGainReference() {
+        var trace = VoiceLevelTrace()
+        for _ in 0..<20 { trace.record(1.0) }
+        trace.reset()
+        XCTAssertEqual(trace.gain, 1 / VoiceLevelTrace.minimumPeak, accuracy: 0.0001)
+    }
+
+    /// The meter floor and the rest gate are tuned together. If someone widens
+    /// one without the other, either speech clamps to zero again (the original
+    /// defect) or room tone starts driving the bars.
+    func testMeterFloorIsWideEnoughForUnprocessedSpeech() {
+        XCTAssertLessThanOrEqual(
+            SpeechTranscriber.meterFloorDB, -55,
+            "measurement mode disables AGC; a floor above about -55 dBFS clamps normal speech to zero"
+        )
+    }
+
     /// The ripple itself: with a spike only in the newest frames, the centre bar
     /// should already be tall while the outermost is still reading the old quiet.
     func testEnergyReachesCentreBeforeEdges() {
