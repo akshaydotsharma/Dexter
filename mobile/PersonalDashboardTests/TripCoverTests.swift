@@ -133,13 +133,89 @@ final class TripCoverTests: XCTestCase {
         XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
             candidate("https://upload.wikimedia.org/x/Hanoi_Old_Quarter.jpg", 2400, 1600)
         ))
-        // Right at the bounds.
+        // Right at the bounds: the 1400px floor, 3.0:1, and 1.1:1.
         XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/City.jpg", 900, 300)   // exactly 3.0:1
+            candidate("https://upload.wikimedia.org/x/City.jpg", 1400, 467)
         ))
         XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
-            candidate("https://upload.wikimedia.org/x/City.jpg", 990, 900)   // exactly 1.1:1
+            candidate("https://upload.wikimedia.org/x/City.jpg", 1540, 1400)
         ))
+    }
+
+    /// The floor was raised from 900 to 1400 (see `minimumPixelWidth`). 1024x768
+    /// is the real `Pho_quay.JPG`, which used to win for "Vietnam" and is the
+    /// specific weak result the raise was measured against.
+    func testGateEnforcesTheRaisedResolutionFloor() {
+        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(
+            candidate("https://upload.wikimedia.org/x/Pho_quay.JPG", 1024, 768)
+        ))
+        XCTAssertTrue(WikimediaTripCoverProvider.passesGate(
+            candidate("https://upload.wikimedia.org/x/Cua_Tung_Beach.jpg", 2822, 1829)
+        ))
+    }
+
+    // MARK: - Corpus order
+
+    /// Wikivoyage BEFORE Wikipedia, pinned.
+    ///
+    /// This is the whole design and it is invisible at every call site. A travel
+    /// guide's image pool is scenery by construction; an encyclopedia's is not, and
+    /// searching Wikipedia first is what produced an 1859 painting of the Siege of
+    /// Saigon for "Vietnam" and a medieval scroll for "Japan". If a future change
+    /// reorders these, that regression comes straight back and nothing else in the
+    /// suite would notice.
+    func testCorpusOrderPutsWikivoyageFirst() {
+        XCTAssertEqual(
+            WikimediaTripCoverProvider.corpusOrder,
+            [.wikivoyage, .wikipedia]
+        )
+        XCTAssertEqual(WikimediaTripCoverProvider.Corpus.wikivoyage.rawValue, "en.wikivoyage.org")
+        XCTAssertEqual(WikimediaTripCoverProvider.Corpus.wikipedia.rawValue, "en.wikipedia.org")
+        // Every corpus in the enum must be in the search order, or adding one
+        // silently does nothing.
+        XCTAssertEqual(
+            Set(WikimediaTripCoverProvider.corpusOrder),
+            Set(WikimediaTripCoverProvider.Corpus.allCases)
+        )
+    }
+
+    /// Wikivoyage's `summary` lead image is deliberately NOT trusted: measured, it
+    /// is a globe SVG for Vietnam and a district map for Lisbon. Its `media-list`
+    /// is the useful part.
+    func testOnlyWikipediaContributesALeadImage() {
+        XCTAssertFalse(WikimediaTripCoverProvider.Corpus.wikivoyage.usesLeadImage)
+        XCTAssertTrue(WikimediaTripCoverProvider.Corpus.wikipedia.usesLeadImage)
+    }
+
+    /// Both corpora lead with a map for the destinations this feature was tuned
+    /// on, so the gate has to reject them or every trip gets a map. Real filenames
+    /// and real measured dimensions from live responses.
+    ///
+    /// Note WHICH half of the gate catches each, because they differ and it is not
+    /// obvious: Vietnam's is caught by name AND geometry, but Lisbon's district map
+    /// has no rejected word in it at all and is caught ONLY by the 1.1:1 aspect
+    /// floor. That makes the aspect bound load-bearing for correctness and not just
+    /// for cropping quality.
+    func testGateRejectsTheLeadingMapOfEachCorpus() {
+        let vietnamRegions = candidate(
+            "https://upload.wikimedia.org/x/Vietnam_Regions_Map.png", 1992, 3331
+        )
+        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(vietnamRegions))
+        XCTAssertFalse(WikimediaTripCoverProvider.passesNameGate("File:Vietnam_Regions_Map.png"))
+
+        let lisbonDistricts = candidate(
+            "https://upload.wikimedia.org/x/Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png",
+            3249, 3036
+        )
+        XCTAssertFalse(WikimediaTripCoverProvider.passesGate(lisbonDistricts))
+        // Deliberately asserted: the NAME gate lets this one through. If someone
+        // later loosens the aspect floor, this map starts winning for Lisbon.
+        XCTAssertTrue(
+            WikimediaTripCoverProvider.passesNameGate(
+                "File:Lisboa_freguesias_-_Wikivoyage_City_districts_divison.png"
+            ),
+            "If the name gate now catches this, the comment above is stale — update it"
+        )
     }
 
     /// The encyclopedic-lead-image problem, which is the reason the gate exists.
@@ -275,6 +351,43 @@ final class TripCoverTests: XCTestCase {
             WikimediaTripCoverProvider.normalisedTitle("File:Flag_of_Vietnam.svg"),
             WikimediaTripCoverProvider.normalisedTitle("File:Flag of Vietnam.svg")
         )
+    }
+
+    // MARK: - URL hygiene
+
+    /// Wikivoyage appends `utm_source` / `utm_campaign` / `utm_content` to the URLs
+    /// it hands back. They must never reach `coverImageSourceURL`, which is the
+    /// portable identity of a cover: the self-heal re-fetch reads it on a device
+    /// that has the row but not the file, and two rows differing only by
+    /// `utm_content` would read as two different covers.
+    func testTrackingParametersAreStripped() {
+        let strip = { (s: String) in
+            WikimediaTripCoverProvider.strippingTrackingParameters(s)?.absoluteString
+        }
+        XCTAssertEqual(
+            strip("https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Cua_Tung_Beach.jpg/500px-Cua_Tung_Beach.jpg?utm_source=en.wikivoyage.org&utm_campaign=parser&utm_content=thumbnail"),
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Cua_Tung_Beach.jpg/500px-Cua_Tung_Beach.jpg"
+        )
+        // No query at all: unchanged, and no stray "?" left behind.
+        XCTAssertEqual(
+            strip("https://upload.wikimedia.org/wikipedia/commons/1/15/Cua_Tung_Beach.jpg"),
+            "https://upload.wikimedia.org/wikipedia/commons/1/15/Cua_Tung_Beach.jpg"
+        )
+        // A non-tracking parameter is preserved rather than blanket-stripped.
+        XCTAssertEqual(
+            strip("https://example.org/a.jpg?page=2&utm_source=x"),
+            "https://example.org/a.jpg?page=2"
+        )
+    }
+
+    /// Wikimedia's API etiquette enforces a descriptive agent with a contact route;
+    /// a bare default gets HTTP errors from the Commons API, which in this feature
+    /// would surface as a `failed` state and a silent retry loop. One constant, so
+    /// the metadata calls and the byte download cannot drift apart.
+    func testUserAgentIsDescriptiveAndContactable() {
+        let ua = TripCoverUserAgent.value
+        XCTAssertTrue(ua.hasPrefix("Dexter/"))
+        XCTAssertTrue(ua.contains("https://"), "Wikimedia asks for a contact route in the UA")
     }
 
     // MARK: - Attribution cleanup

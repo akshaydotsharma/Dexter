@@ -47,78 +47,130 @@ enum TripCoverProviderError: LocalizedError {
 
 // MARK: - Wikimedia
 
-/// Wikipedia REST + the MediaWiki `imageinfo` API. No API key, no account, and no
-/// attribution requirement on the surface where the photo appears — which is what
-/// makes the "nothing is ever drawn on the photograph" layout rule possible.
-/// (Unsplash was rejected for precisely the opposite reason: its terms force a
-/// credit line onto the tile.)
+/// Wikivoyage + Wikipedia REST, resolved through the MediaWiki `imageinfo` API.
+/// No API key, no account, and no attribution requirement on the surface where
+/// the photo appears — which is what makes the "nothing is ever drawn on the
+/// photograph" layout rule possible. (Unsplash was rejected for precisely the
+/// opposite reason: its terms force a credit line onto the tile.)
 ///
-/// Three requests, once per trip, then cached on disk indefinitely:
-///   1. `/page/summary/<title>` for the lead image's file name.
-///   2. `/page/media-list/<title>` for the rest of the page's images, in page
-///      order, which is roughly best-first.
-///   3. ONE batched `action=query&prop=imageinfo` for every plausible candidate:
-///      original URL, true dimensions, artist and licence, all together.
+/// ## Corpus order is the whole design
+///
+/// **Wikivoyage first, Wikipedia second.** Wikivoyage is a travel guide on the
+/// same foundation, pointing at the same Commons files under the same licences,
+/// so its image pool is scenery *by construction* rather than by ranking luck.
+/// Wikipedia is an encyclopedia, and an encyclopedia article about a country
+/// leads with the flag and puts History before Geography.
+///
+/// Measured, not assumed. Wikipedia alone gave: Vietnam → an 1859 painting of the
+/// Siege of Saigon, Japan → a medieval scroll. Both are large, landscape,
+/// correctly licensed images of the right subject, so no reasonable gate rejects
+/// them; they are simply not photography. The gate was working and the *corpus*
+/// was wrong.
+///
+/// Wikipedia is still the fallback, and is not vestigial: plenty of specific
+/// places exist in one corpus and not the other.
+///
+/// ## Requests
+///
+/// Per corpus, in order, stopping at the first corpus that yields a candidate:
+///   1. `/page/summary/<title>` for the lead image — **Wikipedia only**, see
+///      `Corpus.usesLeadImage`.
+///   2. `/page/media-list/<title>` for the page's images, in page order.
+///   3. ONE batched `action=query&prop=imageinfo` for every name-plausible
+///      candidate: original URL, true dimensions, artist and licence together.
+///
+/// So the common case (the place is on Wikivoyage) is TWO requests, fewer than
+/// the Wikipedia-only path it replaces. The worst case (no Wikivoyage page) is
+/// five. The ticket's "up to three requests" budget is superseded by the corpus
+/// change, deliberately.
 ///
 /// ## Why the metadata call is not optional, and not per-candidate
 ///
-/// Measured against the live API, not assumed. `media-list` returns
-/// `"width": null, "height": null, "original": null` for every item — its only
-/// usable field is the file title, and its `srcset` offers a 500px thumbnail,
-/// which is under the resolution floor anyway. An earlier version of this file
-/// read dimensions straight off `media-list` and therefore rejected every
-/// fallback candidate for being unmeasured, which made the fallback path dead
-/// code: "Vietnam" and "Japan" resolved to no cover at all, because their lead
-/// images are a flag and an emblem and nothing was allowed to replace them.
+/// `media-list` returns `"width": null, "height": null, "original": null` for
+/// every item — its only usable field is the file title, and its `srcset` offers
+/// a 500px thumbnail, under the resolution floor anyway. An earlier version read
+/// dimensions straight off `media-list` and therefore rejected every candidate
+/// for being unmeasured, which made the whole fallback path dead code.
 ///
-/// `imageinfo` fixes that and folds the credit lookup into the same request, so
-/// the request count is unchanged. It is batched (up to 50 titles per call) so
-/// the fallback costs one request rather than one per candidate.
-///
-/// ## Known limitation: page order is not relevance order
-///
-/// Candidates are taken in the article's own image order, and for a large
-/// country article the History section comes before Geography. Measured against
-/// the live API: "Lisbon", "Bali" and "Hakuba" all resolve to real scenery, but
-/// "Vietnam" resolves to an 1859 painting of the Siege of Saigon and "Japan" to a
-/// medieval scroll. Both are large, landscape, correctly licensed images of the
-/// right subject, so no reasonable gate rejects them — they are simply not
-/// photography.
-///
-/// This is a ranking problem, not a correctness one, and fixing it properly means
-/// choosing a better page for the query (`Geography of X`, `Tourism in X`) or a
-/// different candidate ordering. That is a product decision, deliberately left to
-/// its own ticket rather than guessed at here. Recorded so nobody has to
-/// rediscover it: the feature works, and a broad destination name can still pick
-/// a museum piece.
+/// `imageinfo` fixes that and folds the credit lookup into the same request. It
+/// is batched (up to 50 titles per call) so a corpus costs one request rather
+/// than one per candidate. It is always addressed to `en.wikipedia.org`
+/// regardless of which corpus supplied the titles, because that host resolves
+/// BOTH its own local uploads and shared Commons files, and every Wikivoyage
+/// image is a Commons file. (Such titles come back with negative page ids and
+/// `missing`, and carry full `imageinfo` anyway — verified live.)
 struct WikimediaTripCoverProvider: TripCoverProvider {
+
+    /// The corpora searched, in order. Order is load-bearing and pinned by a test.
+    enum Corpus: String, CaseIterable {
+        case wikivoyage = "en.wikivoyage.org"
+        case wikipedia  = "en.wikipedia.org"
+
+        /// Whether to trust this corpus's `summary` lead image as a first
+        /// candidate.
+        ///
+        /// False for Wikivoyage, and this is measured rather than cautious: its
+        /// lead image is good for Japan and Bali but is a globe SVG for Vietnam
+        /// and a district-boundary map for Lisbon. Its `media-list` is the useful
+        /// part. True for Wikipedia, where the lead image is the article's own
+        /// choice of representative image and is worth a look before the body
+        /// even though it is often a flag.
+        var usesLeadImage: Bool {
+            switch self {
+            case .wikivoyage: return false
+            case .wikipedia:  return true
+            }
+        }
+    }
+
+    static let corpusOrder: [Corpus] = [.wikivoyage, .wikipedia]
 
     /// Same 10 s ceiling and status check `FXService.fetchRemote(code:)` uses for
     /// its public JSON API. Copied rather than reinvented so both network call
     /// shapes in this app behave the same way when the network is bad.
     private let timeout: TimeInterval = 10
 
-    /// How far down a page's media list to look. Lead images come first and
-    /// relevance drops off fast, so a page's 80th image is not worth a look.
+    /// How far down a page's media list to look. Relevance drops off fast, so a
+    /// page's 80th image is not worth a look. Japan's Wikivoyage page has 74.
     private let candidateLimit = 12
 
     func cover(forDestination destination: String) async throws -> TripCoverCandidate? {
         let page = Self.pageTitle(from: destination)
         guard !page.isEmpty else { return nil }
 
-        // Lead image first: it is the page's own choice of representative image,
-        // so when it is a photograph it is almost always the right one.
-        var fileTitles: [String] = []
-        if let lead = try await leadImageFileTitle(page: page) {
-            fileTitles.append(lead)
-        }
-        // Wikipedia lead images are encyclopedic, so a flag, an emblem, an
-        // orthographic projection or a locator map is a very common first answer.
-        // The rest of the page is the fallback.
-        fileTitles += try await mediaListFileTitles(page: page)
+        // A transient failure in one corpus must NOT be reported as "nothing
+        // suitable exists": `none` is a permanent answer and would leave the trip
+        // with generated art forever after one bad network moment. So the search
+        // continues past an error, and if nothing is found AND something failed,
+        // the failure is rethrown so the caller records `failed` and retries.
+        var firstError: Error?
 
-        // Filename gate BEFORE spending the metadata request. A flag, an emblem
-        // or a rasterised SVG is identifiable from its name alone, so there is no
+        for corpus in Self.corpusOrder {
+            do {
+                var fileTitles: [String] = []
+                if corpus.usesLeadImage, let lead = try await leadImageFileTitle(corpus: corpus, page: page) {
+                    fileTitles.append(lead)
+                }
+                fileTitles += try await mediaListFileTitles(corpus: corpus, page: page)
+                if let hit = try await firstPassingCandidate(fileTitles: fileTitles) {
+                    return hit
+                }
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+
+        if let firstError { throw firstError }
+
+        // Nothing suitable in either corpus. Not a failure: the caller draws
+        // generated art, which is a first-class state, and stops retrying.
+        return nil
+    }
+
+    /// Gate a corpus's titles and resolve the first one that passes.
+    private func firstPassingCandidate(fileTitles: [String]) async throws -> TripCoverCandidate? {
+        // Filename gate BEFORE spending the metadata request. A flag, an emblem or
+        // a rasterised SVG is identifiable from its name alone, so there is no
         // reason to ask how big it is.
         var seen = Set<String>()
         let plausible = fileTitles
@@ -129,14 +181,12 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
 
         let described = try await imageInfo(fileTitles: Array(plausible))
 
-        // Preserve the order they were offered in: lead image, then page order.
+        // Preserve the order they were offered in: lead image (if any), then page
+        // order. This is what makes the corpus choice matter.
         for title in plausible {
             guard let candidate = described[Self.normalisedTitle(title)] else { continue }
             if Self.passesGate(candidate) { return candidate }
         }
-
-        // Nothing suitable. Not a failure: the caller draws generated art, which
-        // is a first-class state, and stops retrying.
         return nil
     }
 
@@ -217,9 +267,31 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     /// is what a flag, an emblem or a locator map usually is) and video.
     private static let rejectedExtensions: Set<String> = ["svg", "ogv", "webm", "gif"]
 
-    /// Minimum long-edge resolution. The band is 868pt wide at its widest tested
-    /// macOS pane, so anything under 900 px would be upscaled.
-    private static let minimumPixelWidth = 900
+    /// Minimum long-edge resolution.
+    ///
+    /// Raised from 900 to 1400 on measurement. Three reasons, in order of weight:
+    ///
+    /// 1. **The band genuinely needs it.** 900 px was derived from an 868pt band at
+    ///    1x, but the band renders at 2x or 3x: 398pt at 3x is 1194 px and an
+    ///    868pt macOS pane at 2x is 1736 px. 900 px was always an upscale on every
+    ///    real device. 1400 is a compromise rather than a fit — it covers the iOS
+    ///    band natively and keeps enough candidate supply to matter.
+    /// 2. **It fixes the ticket's headline example.** At 900, "Vietnam" resolved to
+    ///    `Pho_quay.JPG`, a 1024x768 photograph of a food stall: real, but a weak
+    ///    cover, and only just over the floor. At 1400 it resolves to
+    ///    `Cua_Tung_Beach.jpg` at 2822x1829. "Bali" and "Lisbon" are unaffected.
+    /// 3. **It reduces the chance of an inappropriate cover.** Article-order
+    ///    selection over an encyclopedic corpus can surface war and disaster
+    ///    imagery — Wikivoyage's "Japan" list carries `AtomicEffects-p42a.jpg`
+    ///    ahead of the image that currently wins. It is excluded here only
+    ///    incidentally, by being 640x514, and scanned historical photographs are
+    ///    systematically low-resolution, so a higher floor screens more of them.
+    ///    That is a real benefit and NOT a substitute for a content check: nothing
+    ///    in this gate understands what an image depicts.
+    ///
+    /// This is a strengthening of the gate, not a weakening. The cost is more trips
+    /// settling on `none`, which draws generated cover art — a first-class state.
+    private static let minimumPixelWidth = 1400
 
     /// Aspect bounds. A 2.4:1 band crops a portrait by throwing away most of it
     /// and crops a panorama into a slice of its middle, so both are rejected
@@ -269,9 +341,9 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     /// the original, so the name is unwrapped back to the file title rather than
     /// used directly: a `NNNpx-` prefix would break the metadata lookup, and the
     /// thumbnail's dimensions are not the file's.
-    private func leadImageFileTitle(page: String) async throws -> String? {
+    private func leadImageFileTitle(corpus: Corpus, page: String) async throws -> String? {
         guard let segment = Self.encodedPathSegment(page),
-              let url = URL(string: "https://en.wikipedia.org/api/rest_v1/page/summary/\(segment)") else {
+              let url = URL(string: "https://\(corpus.rawValue)/api/rest_v1/page/summary/\(segment)") else {
             throw TripCoverProviderError.badRequest
         }
         // A 404 means "no such page", which is a legitimate `none` rather than a
@@ -289,9 +361,12 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     }
 
     /// Every image on the page, as `File:` titles, in page order.
-    private func mediaListFileTitles(page: String) async throws -> [String] {
+    ///
+    /// A 404 is ordinary here, not an error: plenty of places have a Wikipedia
+    /// article and no Wikivoyage one, and vice versa.
+    private func mediaListFileTitles(corpus: Corpus, page: String) async throws -> [String] {
         guard let segment = Self.encodedPathSegment(page),
-              let url = URL(string: "https://en.wikipedia.org/api/rest_v1/page/media-list/\(segment)") else {
+              let url = URL(string: "https://\(corpus.rawValue)/api/rest_v1/page/media-list/\(segment)") else {
             throw TripCoverProviderError.badRequest
         }
         guard let data = try await get(url, notFoundIsEmpty: true) else { return [] }
@@ -336,7 +411,8 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
         for page in decoded.query?.pages?.values ?? [:].values {
             guard let title = page.title,
                   let info = page.imageinfo?.first,
-                  let source = info.url, let imageURL = URL(string: source),
+                  let source = info.url,
+                  let imageURL = Self.strippingTrackingParameters(source),
                   let width = info.width, let height = info.height else { continue }
 
             let meta = info.extmetadata
@@ -355,6 +431,30 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
             )
         }
         return out
+    }
+
+    // MARK: - URL hygiene
+
+    /// Parse an image URL, dropping analytics query parameters.
+    ///
+    /// Wikivoyage's REST responses append
+    /// `?utm_source=en.wikivoyage.org&utm_campaign=parser&utm_content=thumbnail`
+    /// to the URLs they hand back. Those must not reach `coverImageSourceURL`,
+    /// which is the PORTABLE IDENTITY of a cover: it is what the self-heal
+    /// re-fetch reads on a device that has the row but not the file, and what any
+    /// future dedup would key on. Two rows pointing at the same photograph with
+    /// different `utm_content` values would read as two different covers.
+    ///
+    /// Applied even though the current code path reads titles rather than
+    /// `srcset` URLs, because the field it protects is the one that travels
+    /// between devices, and a defensive strip there costs nothing.
+    static func strippingTrackingParameters(_ raw: String) -> URL? {
+        guard var components = URLComponents(string: raw) else { return URL(string: raw) }
+        if let items = components.queryItems {
+            let kept = items.filter { !$0.name.lowercased().hasPrefix("utm_") }
+            components.queryItems = kept.isEmpty ? nil : kept
+        }
+        return components.url ?? URL(string: raw)
     }
 
     // MARK: - Name helpers
@@ -405,8 +505,7 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     private func get(_ url: URL, notFoundIsEmpty: Bool) async throws -> Data? {
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
-        // Wikimedia asks for a descriptive UA on API traffic.
-        request.setValue("Dexter/1.0 (personal use; SwiftUI)", forHTTPHeaderField: "User-Agent")
+        request.setValue(TripCoverUserAgent.value, forHTTPHeaderField: "User-Agent")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
@@ -425,6 +524,21 @@ struct WikimediaTripCoverProvider: TripCoverProvider {
     }
 }
 
+// MARK: - User-Agent
+
+/// The `User-Agent` sent on every Wikimedia request, metadata and bytes alike.
+///
+/// Not cosmetic and not optional. Wikimedia's API etiquette asks for a
+/// descriptive agent with a way to make contact, and it enforces that: a bare
+/// default agent gets HTTP errors from the Commons API, which in this feature
+/// would surface as a `failed` cover state and a silent retry loop rather than as
+/// anything legible. One constant so the metadata calls and the byte download
+/// cannot drift apart, which is exactly the kind of divergence that leaves one of
+/// two paths mysteriously failing.
+enum TripCoverUserAgent {
+    static let value = "Dexter/1.0 (personal productivity app; https://github.com/akshaydotsharma/Dexter)"
+}
+
 // MARK: - Byte download
 
 /// Fetching the candidate's bytes is deliberately NOT on `TripCoverProvider`,
@@ -437,7 +551,7 @@ enum TripCoverDownload {
     static func imageData(at url: URL, timeout: TimeInterval = 10) async throws -> Data {
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
-        request.setValue("Dexter/1.0 (personal use; SwiftUI)", forHTTPHeaderField: "User-Agent")
+        request.setValue(TripCoverUserAgent.value, forHTTPHeaderField: "User-Agent")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse,
