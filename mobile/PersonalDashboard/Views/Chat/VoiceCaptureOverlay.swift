@@ -45,30 +45,6 @@ struct VoiceCaptureOverlay: View {
     /// it is. 0 disables the aurora entirely.
     private static let auroraIntensity: Double = 1.0
 
-    /// TEMPORARY (issue #429). Prints the live mic numbers over the waveform so
-    /// a single screenshot while speaking settles whether a problem is in the
-    /// audio path or the rendering, instead of being inferred from behaviour.
-    /// Remove once the waveform is confirmed tracking on device.
-    private static let showsLevelReadout = true
-
-    /// Raw level, gain-scaled level, and the adaptive gain's reference peak,
-    /// sampled on the same timeline that drives the bars.
-    private var levelReadout: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: false)) { _ in
-            let t = vm.levelTrace
-            VStack(spacing: 2) {
-                Text(String(format: "raw %.3f   gain×%.1f", vm.audioLevel, t.gain))
-                Text(String(format: "scaled %.3f   floor %.3f", t.normalizedCurrent, VoiceLevelTrace.speechFloor))
-                Text(vm.transcriber.isSpeechDetected ? "VAD: speech" : "VAD: silent")
-            }
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
-            .foregroundStyle(Tokens.muted)
-            .padding(.top, 4)
-            .frame(maxHeight: .infinity, alignment: .bottom)
-        }
-        .allowsHitTesting(false)
-    }
-
     var body: some View {
         GeometryReader { geo in
             let animationFraction: CGFloat = dynamicTypeSize > .xxLarge ? 0.30 : 0.38
@@ -102,9 +78,6 @@ struct VoiceCaptureOverlay: View {
                             trace: { vm.levelTrace },
                             silenceProgress: { vm.silenceProgress(now: $0) }
                         )
-                        if Self.showsLevelReadout {
-                            levelReadout
-                        }
                     }
                     .frame(height: geo.size.height * animationFraction)
                     .frame(maxWidth: .infinity)

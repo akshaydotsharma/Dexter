@@ -65,12 +65,15 @@ struct VoiceWaveform: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
-    // Sized to fill the overlay's animation zone, which is 38% of the screen.
-    // The first cut used a 116pt track and read as a row of dots stranded in a
-    // 320pt space, even while reacting correctly.
-    private let barWidth: CGFloat = 9
-    private let barSpacing: CGFloat = 13
-    private let trackHeight: CGFloat = 184
+    // The approved proportions from the design prototype.
+    //
+    // These were briefly grown to 9/13/184 on the theory that the bars read as
+    // dots lost in the animation zone. They only read that way because the mic
+    // meter was dead and they never left their rest height; once amplitude
+    // actually drove them, the larger track was overbearing. Restored.
+    private let barWidth: CGFloat = 7
+    private let barSpacing: CGFloat = 11
+    private let trackHeight: CGFloat = 116
 
     var body: some View {
         if reduceMotion {
@@ -189,9 +192,22 @@ struct VoiceWaveform: View {
 
     /// Where this bar sits on the Ember ramp. Only `.listening` earns colour:
     /// in every other mode amplitude means nothing, so hue would be decorative.
+    ///
+    /// Note the exponent. Height is driven by the GAIN-NORMALISED level, which
+    /// by design reaches full scale on ordinary speech, so feeding height
+    /// straight into the ramp parked the bars in amber and red the whole time
+    /// and lost the ink-dominant look the design was approved on. Curving it
+    /// keeps conversational volume near ink, brings amber in as you get louder,
+    /// and reserves red for genuine peaks, which is what "hue is loudness" was
+    /// supposed to mean.
     private func colorFraction(_ heightFraction: Double) -> Double {
-        mode == .listening ? heightFraction : 0
+        guard mode == .listening else { return 0 }
+        return pow(max(0, heightFraction), Self.colorCurve)
     }
+
+    /// Higher keeps more of the range at ink. The one dial for how hot the
+    /// waveform reads.
+    private static let colorCurve: Double = 1.9
 
     private func opacity(for fraction: Double) -> Double {
         switch mode {
