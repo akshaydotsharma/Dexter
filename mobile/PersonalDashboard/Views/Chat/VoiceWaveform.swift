@@ -44,9 +44,23 @@ struct VoiceWaveform: View {
     }
 
     var mode: Mode
-    var trace: VoiceLevelTrace
-    /// 0...1 through the VAD silence window, or nil when nothing is pending.
-    var silenceProgress: Double?
+
+    /// Reads the CURRENT amplitude history. A closure, not a value, and that is
+    /// load-bearing (issue #429).
+    ///
+    /// The first cut took a `VoiceLevelTrace` by value. A `TimelineView` closure
+    /// re-runs on its own schedule, so anything derived from `context.date` (the
+    /// at-rest shimmer) animated correctly, but the trace stayed frozen at
+    /// whatever the PARENT captured on its last body evaluation. Nothing forces
+    /// a parent re-render while the user is mid-sentence, so on device the bars
+    /// sat at rest through the whole utterance and then lurched the instant the
+    /// transcript landed and re-rendered the parent. Calling into live state per
+    /// tick removes the dependency on parent redraws entirely.
+    var trace: () -> VoiceLevelTrace
+
+    /// Progress through the VAD silence window for a given instant, or nil when
+    /// nothing is pending. Also a closure, for the same reason.
+    var silenceProgress: (Date) -> Double?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -87,16 +101,21 @@ struct VoiceWaveform: View {
 
     private var animatedBars: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: isStatic)) { context in
-            let time = context.date.timeIntervalSinceReferenceDate
+            // Both read live, per tick. See the note on `trace`.
+            let now = context.date
+            let time = now.timeIntervalSinceReferenceDate
+            let current = trace()
+            let progress = silenceProgress(now)
+
             VStack(spacing: 10) {
                 HStack(alignment: .center, spacing: barSpacing) {
                     ForEach(0..<VoiceLevelTrace.barCount, id: \.self) { index in
-                        bar(index: index, time: time)
+                        bar(index: index, time: time, trace: current)
                     }
                 }
                 .frame(height: trackHeight)
 
-                baseline
+                baseline(progress: progress)
             }
             .animation(.easeOut(duration: 0.25), value: mode)
         }
@@ -104,8 +123,8 @@ struct VoiceWaveform: View {
     }
 
     @ViewBuilder
-    private func bar(index: Int, time: Double) -> some View {
-        let fraction = heightFraction(index: index, time: time)
+    private func bar(index: Int, time: Double, trace: VoiceLevelTrace) -> some View {
+        let fraction = heightFraction(index: index, time: time, trace: trace)
         Capsule(style: .continuous)
             .fill(EmberRamp.color(fraction: colorFraction(fraction), opacity: opacity(for: fraction)))
             .frame(width: barWidth, height: max(barWidth, trackHeight * fraction))
@@ -117,7 +136,7 @@ struct VoiceWaveform: View {
     /// The depleting rule under the bars. Full width while speech is live,
     /// shrinking toward the centre and warming as the VAD window runs out.
     @ViewBuilder
-    private var baseline: some View {
+    private func baseline(progress silenceProgress: Double?) -> some View {
         let progress = silenceProgress ?? 0
         let remaining = 1 - progress
         Capsule(style: .continuous)
@@ -149,7 +168,7 @@ struct VoiceWaveform: View {
         }
     }
 
-    private func heightFraction(index: Int, time: Double) -> Double {
+    private func heightFraction(index: Int, time: Double, trace: VoiceLevelTrace) -> Double {
         switch mode {
         case .listening:
             return VoiceLevelTrace.heightFraction(forBar: index, trace: trace, time: time)

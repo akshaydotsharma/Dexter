@@ -34,7 +34,13 @@ struct VoiceAurora: View {
     /// treatment can be dialled back after device review without touching the
     /// composition.
     var intensity: Double = 1.0
-    var trace: VoiceLevelTrace
+
+    /// Reads the CURRENT amplitude history, per frame. A closure for the same
+    /// reason as `VoiceWaveform.trace`: taken by value, it froze at the parent's
+    /// last body evaluation. The orbit is driven by `context.date` so the field
+    /// still drifted convincingly, which is exactly why this went unnoticed here
+    /// while the same bug was obvious in the waveform (issue #429).
+    var trace: () -> VoiceLevelTrace
     /// Fades the whole field out for states where the mic isn't open, so the
     /// screen calms down while the AI call runs.
     var isActive: Bool = true
@@ -104,13 +110,13 @@ struct VoiceAurora: View {
                 if reduceMotion {
                     // Still frame at a representative moment. The field is
                     // atmosphere, not information, so freezing it loses nothing.
-                    field(in: geo.size, time: 3.2, animated: false)
+                    field(in: geo.size, time: 3.2, trace: nil)
                 } else {
                     TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: intensity <= 0)) { context in
                         field(
                             in: geo.size,
                             time: context.date.timeIntervalSinceReferenceDate,
-                            animated: true
+                            trace: trace()
                         )
                     }
                 }
@@ -125,10 +131,12 @@ struct VoiceAurora: View {
         .ignoresSafeArea()
     }
 
-    private func field(in size: CGSize, time: Double, animated: Bool) -> some View {
+    /// `trace: nil` renders the reduce-motion still frame at a representative
+    /// energy rather than reading live audio.
+    private func field(in size: CGSize, time: Double, trace: VoiceLevelTrace?) -> some View {
         ZStack {
             ForEach(Array(blobs.enumerated()), id: \.offset) { _, blob in
-                let energy = animated ? CGFloat(trace.level(delayedBy: blob.traceTap)) : 0.45
+                let energy = trace.map { CGFloat($0.level(delayedBy: blob.traceTap)) } ?? 0.45
                 let angle = (time / blob.period) * 2 * .pi + blob.phase
                 let dx = (cos(angle) * blob.drift + cos(angle * 1.7) * energy * 0.10) * size.width
                 let dy = (sin(angle * 0.8) * blob.drift * 0.7 + sin(angle * 1.3) * energy * 0.07) * size.height

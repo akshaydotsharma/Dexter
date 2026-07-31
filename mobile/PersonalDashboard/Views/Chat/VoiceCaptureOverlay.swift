@@ -57,7 +57,7 @@ struct VoiceCaptureOverlay: View {
                 // live text stays readable.
                 VoiceAurora(
                     intensity: Self.auroraIntensity,
-                    trace: vm.levelTrace,
+                    trace: { vm.levelTrace },
                     isActive: vm.state == .listening || vm.state == .connecting
                 )
 
@@ -67,14 +67,17 @@ struct VoiceCaptureOverlay: View {
                         .padding(.horizontal, Space.xl)
 
                     // Animation zone — the waveform, centered.
+                    //
+                    // No TimelineView here: `VoiceWaveform` owns its own, and
+                    // wrapping it in a second one was what fed it a stale
+                    // amplitude snapshot. It now pulls live state per tick
+                    // through these closures (issue #429).
                     ZStack {
-                        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: vm.state != .listening)) { context in
-                            VoiceWaveform(
-                                mode: waveformMode,
-                                trace: vm.levelTrace,
-                                silenceProgress: vm.silenceProgress(now: context.date)
-                            )
-                        }
+                        VoiceWaveform(
+                            mode: waveformMode,
+                            trace: { vm.levelTrace },
+                            silenceProgress: { vm.silenceProgress(now: $0) }
+                        )
                     }
                     .frame(height: geo.size.height * animationFraction)
                     .frame(maxWidth: .infinity)
