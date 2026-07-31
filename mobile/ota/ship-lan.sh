@@ -26,8 +26,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOBILE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT="${MOBILE_DIR}/PersonalDashboard.xcodeproj"
 SCHEME="PersonalDashboard"
-OTA_DIR="/tmp/ota"
-PORT=8081
+# Output dir and HTTP port. Overridable via the environment because BOTH are
+# shared machine-wide, and line ~96 does `rm -rf "${OTA_DIR}"`: two worktrees
+# shipping at once don't merely race, the second one deletes the first's build
+# and leaves its own `app.ipa` at the same path. The loser then installs the
+# winner's app while every log line says success.
+#
+# That is not hypothetical. It happened twice on 2026-07-31 while #428 and #429
+# were in flight together, and both times the phone silently ended up with the
+# other branch's binary.
+#
+#   OTA_DIR=/tmp/ota-myfeature PORT=8082 bash mobile/ota/ship-lan.sh
+#
+# Defaults are unchanged, so a single-worktree ship behaves exactly as before.
+OTA_DIR="${OTA_DIR:-/tmp/ota}"
+PORT="${PORT:-8081}"
 
 # ---- Pre-flight ----
 command -v xcodegen     >/dev/null || { echo "xcodegen not found (brew install xcodegen)"; exit 1; }
