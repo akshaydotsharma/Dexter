@@ -43,7 +43,12 @@ final class VoiceCaptureViewModel {
     /// the session: it does NOT return to `.listening`; instead the overlay
     /// auto-dismisses after the flash. `.empty` / `.error` stay open for retry.
     enum State: Equatable {
-        case listening          // recording, InkOrb reactive, socket alive
+        /// Mic is up but the transcription socket hasn't confirmed yet (#429).
+        /// Previously the overlay showed "Listening" here, which on a weak link
+        /// was a real second of claiming to hear the user while nothing was
+        /// connected. Resolves to `.listening` on `transcriber.isConnected`.
+        case connecting
+        case listening          // recording, waveform reactive, socket alive
         case executing          // the one utterance's AI call is in flight
         case flashSuccess       // its result rows, ~1.2s, then auto-dismiss
         case empty              // silence / nothing captured yet (informational)
@@ -89,8 +94,46 @@ final class VoiceCaptureViewModel {
     /// overlay binds to this while listening to show the running text.
     var transcript: String { transcriber.transcript }
 
-    /// Normalized mic amplitude (0–1) for the InkOrb.
+    /// Normalized mic amplitude (0–1) for the waveform.
     var audioLevel: Float { transcriber.audioLevel }
+
+    /// Rolling amplitude history shared by the waveform and the aurora, so both
+    /// move on the same rhythm (issue #429).
+    ///
+    /// Read through to the transcriber, which records it on the audio thread's
+    /// metering cadence. An earlier cut kept the buffer here and fed it from a
+    /// SwiftUI `onChange(of: audioLevel)`; that samples only when the view body
+    /// re-evaluates, which starved the history and left the bars pinned at rest
+    /// on device while still passing every unit test.
+    var levelTrace: VoiceLevelTrace { transcriber.levelTrace }
+
+    /// Unsettled text for the utterance being transcribed. Rendered muted by the
+    /// overlay and superseded by `transcript` when the normalized final lands.
+    /// Never mixed into `transcriber.transcript` — see the note on
+    /// `SpeechTranscriber.provisionalText`.
+    var provisionalText: String { transcriber.provisionalText }
+
+    /// Progress through the server-VAD silence window (0...1), or nil when
+    /// nothing is pending. Drives the depleting baseline under the waveform.
+    /// Only meaningful while listening: in every other state the mic is closed
+    /// and a countdown would be describing a deadline that no longer exists.
+    func silenceProgress(now: Date) -> Double? {
+        guard state == .listening else { return nil }
+        return VoiceLevelTrace.silenceProgress(
+            since: transcriber.silenceStartedAt,
+            now: now,
+            window: SpeechTranscriber.vadSilenceWindow
+        )
+    }
+
+    /// The socket came up. Promote `.connecting` to `.listening` and nothing
+    /// else: a later state (an error, or an utterance that already executed)
+    /// must not be dragged backwards by a late connect (issue #429).
+    func handleConnected() {
+        guard state == .connecting else { return }
+        Self.log.info("socket connected → connecting resolves to listening")
+        state = .listening
+    }
 
     /// The text of the utterance currently executing / just flashed. Shown muted
     /// under the working / success rows so the user sees which command it maps to.
@@ -101,7 +144,7 @@ final class VoiceCaptureViewModel {
     /// success anyway). Permission / hard-error states allow it as an escape hatch.
     var allowsInteractiveDismiss: Bool {
         switch state {
-        case .listening, .executing, .flashSuccess, .empty: return false
+        case .connecting, .listening, .executing, .flashSuccess, .empty: return false
         case .permissionDenied, .error: return true
         }
     }
@@ -150,9 +193,13 @@ final class VoiceCaptureViewModel {
         // signal so the previous open's flags never leak into this one (issue #156).
         hasConsumedUtterance = false
         shouldDismiss = false
-        // Reset to .listening SYNCHRONOUSLY so the first render on (re)open never
-        // shows a stale terminal state from a prior session (issue #151).
-        state = .listening
+        // The amplitude history is cleared by the transcriber's own start/stop
+        // (issue #429), so there is nothing to reset here.
+        // Reset SYNCHRONOUSLY so the first render on (re)open never shows a
+        // stale terminal state from a prior session (issue #151). Opens on
+        // `.connecting` rather than `.listening`: the socket isn't up yet, and
+        // saying otherwise was the lie this state exists to fix (issue #429).
+        state = .connecting
         startProcessingLoop()
         Task { await startListening() }
     }
@@ -215,7 +262,10 @@ final class VoiceCaptureViewModel {
         successLabels = []
         errorMessageText = nil
         currentUtterance = ""
-        state = .listening
+        // `.connecting` until the transcriber confirms its socket. For the
+        // on-device engine that confirmation is synchronous, so this is a single
+        // frame there rather than a visible state (issue #429).
+        state = .connecting
 
         // Permission gate up front so denial routes to the permission state.
         if Self.permissionDenied {
@@ -240,7 +290,10 @@ final class VoiceCaptureViewModel {
     /// utterances, which is an acceptable degrade; the user can Try Again).
     func handleTranscriberError(_ message: String) {
         switch state {
-        case .listening, .empty:
+        case .connecting, .listening, .empty:
+            // `.connecting` matters here: a socket that never comes up surfaces
+            // as an error while still in this state, and it must route to the
+            // message rather than hang on "Connecting" forever (issue #429).
             Self.log.info("transcriber error while idle-listening → error state")
             errorMessageText = Self.stripTechnicalPrefix(message)
             state = .error(errorMessageText ?? "Something went wrong.")
@@ -398,6 +451,39 @@ final class VoiceCaptureViewModel {
         processingLoop = nil
         transcriber.stop()
     }
+
+    #if DEBUG
+    /// Drive the overlay's listening visuals from a synthetic speech envelope.
+    /// Visual-QA only (#429), entered via the `-uiTestVoiceDemoLevels` launch
+    /// argument. Lets the waveform and aurora be reviewed at real screen size in
+    /// the Simulator, which cannot run the recognizer or capture audio.
+    func debugRunSyntheticLevels() {
+        state = .listening
+        Task { @MainActor in
+            let start = Date()
+            while !Task.isCancelled {
+                let t = Date().timeIntervalSince(start)
+                // Phrases of ~5 Hz syllable bursts separated by gaps, i.e. the
+                // shape real speech makes rather than a smooth sine.
+                // Long phrases with short gaps. Weighted toward speaking because
+                // the point of this harness is reviewing the ACTIVE state, and
+                // a screenshot that lands in a gap shows nothing useful.
+                let cycle = t.truncatingRemainder(dividingBy: 8.0)
+                let inPhrase = cycle < 7.0
+                let level: Float
+                if inPhrase {
+                    let syllable = abs(sin(t * .pi * 2.4))
+                    let shape = 0.55 + 0.45 * sin(t * 1.3)
+                    level = Float(min(1, 0.10 + 0.42 * syllable * shape))
+                } else {
+                    level = 0.012
+                }
+                transcriber.debugInjectLevel(level)
+                try? await Task.sleep(nanoseconds: 21_000_000)  // ~47 Hz, the tap's rate
+            }
+        }
+    }
+    #endif
 
     /// Open the system Settings app (permission-denied state).
     func openSettings() {

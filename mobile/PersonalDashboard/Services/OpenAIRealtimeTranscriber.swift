@@ -171,6 +171,16 @@ actor OpenAIRealtimeTranscriber {
     private var onDelta: (@Sendable (String) -> Void)?
     private var onCompleted: (@Sendable (String) -> Void)?
     private var onError: (@Sendable (String) -> Void)?
+    /// Fired once, when the socket is confirmed up (issue #429). Lets the UI
+    /// hold a "Connecting" state instead of claiming to listen while the
+    /// WebSocket is still coming up on a weak link.
+    private var onConnected: (@Sendable () -> Void)?
+    /// Server VAD turn markers (issue #429). These are the ONLY signals that
+    /// arrive *during* speech — the transcription model itself doesn't stream
+    /// mid-utterance — so they're what an "I can hear you" affordance has to be
+    /// built on, rather than amplitude alone (which can't tell voice from a
+    /// slammed door). `true` on speech_started, `false` on speech_stopped.
+    private var onSpeechActivity: (@Sendable (Bool) -> Void)?
 
     /// Open the socket, send the transcription session config, and start the
     /// receive loop. Throws only on a bad URL — the actual socket open is
@@ -179,11 +189,15 @@ actor OpenAIRealtimeTranscriber {
         apiKey: String,
         onDelta: @escaping @Sendable (String) -> Void,
         onCompleted: @escaping @Sendable (String) -> Void,
-        onError: @escaping @Sendable (String) -> Void
+        onError: @escaping @Sendable (String) -> Void,
+        onConnected: (@Sendable () -> Void)? = nil,
+        onSpeechActivity: (@Sendable (Bool) -> Void)? = nil
     ) throws {
         self.onDelta = onDelta
         self.onCompleted = onCompleted
         self.onError = onError
+        self.onConnected = onConnected
+        self.onSpeechActivity = onSpeechActivity
 
         guard let url = URL(string: "wss://api.openai.com/v1/realtime?intent=transcription") else {
             Self.log.error("connect failed: bad URL")
@@ -262,6 +276,7 @@ actor OpenAIRealtimeTranscriber {
         watchdogTask = nil
         Self.log.info("socket connected (\(reason, privacy: .public))")
         NSLog("[voice] ws opened (%@)", reason)
+        onConnected?()
     }
 
     /// Delegate callback (off-actor): the WebSocket handshake completed.
@@ -523,12 +538,14 @@ actor OpenAIRealtimeTranscriber {
         case "input_audio_buffer.speech_started":
             Self.log.info("speech_started")
             NSLog("[voice] speech_started")
+            onSpeechActivity?(true)
         case "input_audio_buffer.speech_stopped":
             // server_vad has auto-committed this segment — the buffer is now
             // empty, so a subsequent manual commit would be redundant.
             hasUncommittedAudio = false
             Self.log.info("speech_stopped (segment auto-committed by server_vad)")
             NSLog("[voice] speech_stopped")
+            onSpeechActivity?(false)
         case "conversation.item.input_audio_transcription.delta",
              "transcription.delta":
             if let delta = root["delta"] as? String, !delta.isEmpty {

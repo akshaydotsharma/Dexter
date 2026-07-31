@@ -133,7 +133,7 @@ struct EdSendButtonStyle: ButtonStyle {
 
 // MARK: - Glass capsule button (voice-capture overlay — issue #150)
 
-/// Frosted-glass capsule control for the full-screen voice overlay. The InkOrb
+/// Frosted-glass capsule control for the full-screen voice overlay. The waveform
 /// is the visual hero, so these controls sit back: `.ultraThinMaterial` blur,
 /// a 50% surface tint for legibility over an animated ground, a hairline white
 /// stroke, and a barely-there ink shadow. Ink-colored label, press scale 0.96

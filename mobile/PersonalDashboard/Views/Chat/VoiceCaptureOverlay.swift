@@ -13,8 +13,23 @@ import UIKit
 /// cover's `onDismiss` → `vm.teardown()` cleans up. Empty / error stay open for
 /// Try Again; Done / Cancel bail through the same `onDismiss`.
 ///
-/// Layout: top bar (status + Done), animation zone (InkOrb, upper portion),
-/// divider, transcript zone, bottom control zone.
+/// Layout: top bar (status + Done), animation zone (`VoiceWaveform`, upper
+/// portion), divider, transcript zone, bottom control zone, with `VoiceAurora`
+/// as a full-bleed background behind all of it.
+///
+/// ### Issue #429
+///
+/// `InkOrb` was replaced here by `VoiceWaveform`, and `InkOrb` deleted with it
+/// (this was its only consumer). Three signals the pipeline already produced but
+/// the UI discarded are now surfaced: the socket's connected event backs a
+/// `.connecting` state so the status stops claiming to listen before it does;
+/// server VAD's turn markers drive the depleting countdown under the waveform;
+/// and transcription deltas render as provisional text instead of being dropped.
+///
+/// One thing deltas still do NOT buy: mid-speech text. `gpt-4o-transcribe`
+/// transcribes a segment only after server VAD closes it, so the whole delta
+/// stream arrives AFTER the user pauses. What the user sees while actually
+/// talking is the waveform, not words.
 struct VoiceCaptureOverlay: View {
     @Bindable var vm: VoiceCaptureViewModel
     /// Bound to `router.showVoiceOverlay`; set false to dismiss the cover.
@@ -24,6 +39,12 @@ struct VoiceCaptureOverlay: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("hasSeenVoiceHint") private var hasSeenVoiceHint: Bool = false
 
+    /// Strength of the background field, 0...1 (issue #429). Kept as a single
+    /// named constant because it is the one dial likely to move after living
+    /// with this on a real phone: the composition is unaffected, only how loud
+    /// it is. 0 disables the aurora entirely.
+    private static let auroraIntensity: Double = 1.0
+
     var body: some View {
         GeometryReader { geo in
             let animationFraction: CGFloat = dynamicTypeSize > .xxLarge ? 0.30 : 0.38
@@ -31,23 +52,44 @@ struct VoiceCaptureOverlay: View {
             ZStack {
                 Tokens.surface.ignoresSafeArea()
 
+                // Voice-reactive background field (issue #429). Behind
+                // everything, masked so the wash sits under the waveform and
+                // stays off the transcript.
+                VoiceAurora(
+                    intensity: Self.auroraIntensity,
+                    trace: { vm.levelTrace },
+                    isActive: vm.state == .listening || vm.state == .connecting
+                )
+
                 VStack(spacing: 0) {
                     topBar
                         .frame(height: 52)
                         .padding(.horizontal, Space.xl)
 
-                    // Animation zone — InkOrb centered.
-                    ZStack {
-                        InkOrb(mode: orbMode, level: vm.audioLevel)
-                    }
-                    .frame(height: geo.size.height * animationFraction)
-                    .frame(maxWidth: .infinity)
+                    // Transcript above, waveform below. What the user is
+                    // reading gets the top of the screen and the stable
+                    // reading position; the waveform is glanced at, not read,
+                    // so it sits down by the control it relates to.
+                    bodyZone
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Divider().overlay(Tokens.border)
 
-                    // Transcript / body zone.
-                    bodyZone
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Animation zone — the waveform, centered.
+                    //
+                    // No TimelineView here: `VoiceWaveform` owns its own, and
+                    // wrapping it in a second one was what fed it a stale
+                    // amplitude snapshot. It now pulls live state per tick
+                    // through these closures (issue #429).
+                    ZStack {
+                        VoiceWaveform(
+                            mode: waveformMode,
+                            trace: { vm.levelTrace },
+                            silenceProgress: { vm.silenceProgress(now: $0) }
+                        )
+                    }
+                    .frame(height: geo.size.height * animationFraction)
+                    .frame(maxWidth: .infinity)
 
                     // Bottom control zone.
                     bottomZone
@@ -60,8 +102,21 @@ struct VoiceCaptureOverlay: View {
         .preferredColorScheme(nil)
         .interactiveDismissDisabled(!vm.allowsInteractiveDismiss)
         .onAppear {
+            #if DEBUG
+            // Visual-QA path (#429): skip the real capture session, which the
+            // Simulator cannot start, and drive the listening visuals from a
+            // synthetic envelope instead.
+            if ProcessInfo.processInfo.arguments.contains("-uiTestVoiceDemoLevels") {
+                vm.debugRunSyntheticLevels()
+                return
+            }
+            #endif
             vm.begin()
-            UIAccessibility.post(notification: .announcement, argument: "Listening. Speak one command.")
+            // Matches the visible state: the socket isn't up yet, so promising
+            // "Listening" here would mislead VoiceOver exactly the way the old
+            // status label misled everyone else (issue #429). The transition to
+            // listening is announced by `announce(for:)`.
+            UIAccessibility.post(notification: .announcement, argument: "Connecting to voice.")
         }
         .onChange(of: vm.transcriber.errorMessage) { _, message in
             // A connection failure (or other transcriber error) arriving async
@@ -70,6 +125,12 @@ struct VoiceCaptureOverlay: View {
             if let message, !message.isEmpty {
                 vm.handleTranscriberError(message)
             }
+        }
+        // Resolve `.connecting` the moment the socket is confirmed.
+        // `initial: true` covers the on-device engine, which reports connected
+        // synchronously inside `begin()` and would otherwise never fire a change.
+        .onChange(of: vm.transcriber.isConnected, initial: true) { _, connected in
+            if connected { vm.handleConnected() }
         }
         .onChange(of: vm.state) { _, newState in
             announce(for: newState)
@@ -109,6 +170,7 @@ struct VoiceCaptureOverlay: View {
 
     private var statusLabel: String {
         switch vm.state {
+        case .connecting:       return "Connecting"
         case .listening:        return "Listening"
         case .executing:        return "Working…"
         case .flashSuccess:     return "Done"
@@ -126,7 +188,7 @@ struct VoiceCaptureOverlay: View {
     /// auto-dismisses, so this is an escape hatch, not the only way out (#156).
     private var topRightControl: (title: String, a11y: String, run: () -> Void)? {
         switch vm.state {
-        case .listening:
+        case .connecting, .listening:
             return ("Cancel", "Cancel, close voice capture without running anything", { isPresented = false })
         case .executing, .flashSuccess, .empty:
             return ("Done", "Done, close voice capture", { isPresented = false })
@@ -142,6 +204,8 @@ struct VoiceCaptureOverlay: View {
     @ViewBuilder
     private var bodyZone: some View {
         switch vm.state {
+        case .connecting:
+            centeredMessage("Opening the microphone…")
         case .listening:
             transcriptScroll(static: false)
         case .executing:
@@ -162,7 +226,7 @@ struct VoiceCaptureOverlay: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    if vm.transcript.isEmpty && !isStatic {
+                    if vm.transcript.isEmpty && vm.provisionalText.isEmpty && !isStatic {
                         if !hasSeenVoiceHint {
                             Text("Start speaking — Dexter is listening.")
                                 .font(.edCaption)
@@ -172,10 +236,22 @@ struct VoiceCaptureOverlay: View {
                         }
                     } else {
                         HStack(alignment: .lastTextBaseline, spacing: 2) {
-                            Text(vm.transcript)
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.ink)
-                                .fixedSize(horizontal: false, vertical: true)
+                            // Settled text in ink, unsettled deltas in muted, as
+                            // one wrapping paragraph (issue #429). The weight
+                            // difference is the whole mechanism: it tells the
+                            // user the tail is still resolving, which is what
+                            // makes the Urdu→Devanagari correction read as the
+                            // text settling rather than as a glitch.
+                            (
+                                Text(vm.transcript)
+                                    .foregroundStyle(Tokens.ink)
+                                + Text(transcriptJoiner)
+                                + Text(vm.provisionalText)
+                                    .foregroundStyle(Tokens.muted)
+                            )
+                            .font(.edBody)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .animation(.easeOut(duration: 0.32), value: vm.transcript)
                             if !isStatic {
                                 BlinkingCursor(reduceMotion: reduceMotion)
                             }
@@ -188,6 +264,13 @@ struct VoiceCaptureOverlay: View {
                 .padding(.top, Space.lg)
             }
             .onChange(of: vm.transcript) { _, _ in
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+            // Deltas grow the paragraph too, so the tail has to stay in view as
+            // provisional text streams in, not only when it settles.
+            .onChange(of: vm.provisionalText) { _, _ in
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
@@ -252,6 +335,12 @@ struct VoiceCaptureOverlay: View {
     @ViewBuilder
     private var bottomZone: some View {
         switch vm.state {
+        case .connecting:
+            // No primary action until the socket is up: "Stop Recording" would
+            // be offering to run an utterance that cannot exist yet. Cancel is
+            // still available top-right.
+            Color.clear.frame(height: 1)
+
         case .listening:
             // Primary "Stop Recording" — ends capture NOW and runs the command
             // spoken so far, instead of waiting for the automatic pause/VAD
@@ -306,14 +395,21 @@ struct VoiceCaptureOverlay: View {
         }
     }
 
-    // MARK: - InkOrb mode mapping
+    /// Space between settled and unsettled text, but only when both exist, so a
+    /// paragraph never opens or closes with a stray leading space.
+    private var transcriptJoiner: String {
+        (vm.transcript.isEmpty || vm.provisionalText.isEmpty) ? "" : " "
+    }
 
-    private var orbMode: InkOrb.Mode {
+    // MARK: - Waveform mode mapping
+
+    private var waveformMode: VoiceWaveform.Mode {
         switch vm.state {
+        case .connecting:       return .connecting
         case .listening:        return .listening
         case .executing:        return .thinking
-        case .flashSuccess:     return .rest
-        case .empty:            return .idle
+        case .flashSuccess:     return .dim
+        case .empty:            return .dim
         case .permissionDenied: return .dim
         case .error:            return .dim
         }
@@ -337,7 +433,10 @@ struct VoiceCaptureOverlay: View {
             }
         case .listening:
             UIAccessibility.post(notification: .announcement, argument: "Listening.")
-        default:
+        case .connecting, .empty, .permissionDenied, .error:
+            // `.empty` / `.permissionDenied` / `.error` render their message in
+            // the body, which VoiceOver reads on focus. `.connecting` is
+            // announced from `onAppear` and is usually a single frame.
             break
         }
     }

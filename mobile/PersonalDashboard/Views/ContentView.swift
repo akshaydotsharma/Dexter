@@ -98,6 +98,19 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $router.showVoiceOverlay, onDismiss: { voiceVM.teardown() }) {
             VoiceCaptureOverlay(vm: voiceVM, isPresented: $router.showVoiceOverlay)
         }
+        #if DEBUG
+        // Debug-only entry point for visual QA of the voice overlay (#429).
+        // XCUITest's synthetic `press(forDuration:)` lands as a TAP on the nav
+        // button's `.onTapGesture` rather than firing the 0.6s long press, so
+        // the overlay is otherwise unreachable from an automated run and its
+        // proportions can only be eyeballed by hand on a device. Mirrors the
+        // macOS target's existing LAUNCH_SECTION affordance.
+        .task {
+            if ProcessInfo.processInfo.arguments.contains("-uiTestShowVoiceOverlay") {
+                router.showVoiceOverlay = true
+            }
+        }
+        #endif
         .activeSection(router.currentSection)
         .coordinateSpace(name: edgeCoordinateSpace)
         // Edge-swipe-to-open is scoped to a 20pt-wide leading strip overlay,
