@@ -417,6 +417,70 @@ struct TripDetailView: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // Positions every day eyebrow relative to the scroll VIEWPORT, which is
+        // what `frozenDayHeader` reads. Must stay paired with the
+        // `frame(in: .named(TimelineLayout.scrollSpace))` in the cluster probe.
+        .coordinateSpace(.named(TimelineLayout.scrollSpace))
+        // The frozen day header. A `LazyVStack(pinnedViews: [.sectionHeaders])`
+        // would be the obvious way to do this, but it is already known to break
+        // on exactly this shape of content: sections with varying row counts
+        // left reserved blank space until a gesture forced a layout pass
+        // (issue #63, see the note in `ActivityView`). So the scroll content is
+        // left completely alone — plain `VStack`, continuous rail intact — and
+        // the header is a fixed overlay driven by the clusters' own geometry.
+        .overlayPreferenceValue(DayHeaderFrameKey.self) { frames in
+            frozenDayHeader(from: frames)
+                // Overlays are not clipped, so without this the outgoing header
+                // would slide up over the trip tab bar as it is pushed out.
+                .clipped()
+                // Never dead-zone the drag: a swipe that starts on the frozen
+                // header still scrolls the timeline.
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// The day header frozen at the top of the timeline, so a long day still
+    /// says which day it is once its own eyebrow has scrolled away (#426).
+    ///
+    /// The pinned day is the LAST one whose eyebrow has reached the top inset;
+    /// while nothing has reached it (the timeline is scrolled to the top) there
+    /// is no frozen header at all, because the real one is already on screen.
+    /// As the next day's eyebrow arrives it pushes the frozen copy up and out,
+    /// and takes over at the exact offset the outgoing one left, which is what
+    /// makes the handover read as one element rather than a swap.
+    @ViewBuilder
+    private func frozenDayHeader(from frames: [DayHeaderFrame]) -> some View {
+        let inset = TimelineLayout.frozenHeaderTopInset
+        // Ordered by position rather than by day: a preference's reduce order
+        // is not guaranteed to be document order.
+        let ordered = frames.sorted { $0.minY < $1.minY }
+
+        if let index = ordered.lastIndex(where: { $0.minY <= inset }) {
+            let current = ordered[index]
+            let barHeight = inset + current.height + Space.md
+            let next = index + 1 < ordered.count ? ordered[index + 1] : nil
+            // Ride up with the next eyebrow once it touches the bar's bottom
+            // edge. Bounded by construction: `next.minY` is always > `inset`,
+            // so the shift never exceeds the bar's own height.
+            let shift = next.map { min(0, $0.minY - barHeight) } ?? 0
+
+            VStack(spacing: 0) {
+                TripDayEyebrow(trip: trip, day: current.day, isRailNode: false)
+                    .padding(.top, inset)
+                    .padding(.bottom, Space.md)
+                    // Matches the scroll content's own horizontal padding, so
+                    // the frozen dot lands on the rail's x-position.
+                    .padding(.horizontal, Space.lg)
+                    .background(Tokens.paper)
+                // Hairline under the bar: the cue that content is passing
+                // beneath it rather than being cut off.
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+            }
+            .offset(y: shift)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
     }
 
     /// Resolve the published rail anchors into a single top-to-bottom span in
@@ -906,6 +970,17 @@ enum TimelineLayout {
     /// 12pt card vertical padding (`Space.md`) plus the title's first-line
     /// half-height for `.edBodyMedium` (≈10pt).
     static let markerCenterFromRowTop: CGFloat = 22
+    /// Coordinate space the timeline scroll view registers, so each day
+    /// eyebrow can report its position relative to the scroll viewport (not
+    /// the screen) for the frozen header. A `frame(in: .named(_:))` against a
+    /// name nobody registered silently returns GLOBAL coordinates instead of
+    /// failing, so this constant and the `.coordinateSpace` modifier in
+    /// `timelineScroll` must stay together.
+    static let scrollSpace = "tripTimelineScroll"
+    /// Gap above the day header's text once it is frozen at the top of the
+    /// timeline. The in-flow eyebrow hands over to the frozen copy at exactly
+    /// this offset, which is what makes the swap invisible.
+    static let frozenHeaderTopInset: CGFloat = Space.sm
 }
 
 // MARK: - Rail anchor preference
@@ -917,6 +992,28 @@ enum TimelineLayout {
 private struct RailAnchorKey: PreferenceKey {
     static var defaultValue: [Anchor<CGPoint>] { [] }
     static func reduce(value: inout [Anchor<CGPoint>], nextValue: () -> [Anchor<CGPoint>]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+// MARK: - Day header frame preference
+
+/// Where one day's eyebrow currently sits inside the timeline's scroll
+/// viewport. Published by every day cluster so the timeline can freeze the
+/// header of whichever day is filling the screen (#426).
+///
+/// `minY` / `height` describe the eyebrow's TEXT ROW only, excluding the
+/// cluster's own top and bottom padding, so the frozen copy can be laid out at
+/// the same y the in-flow row had when it crossed the top edge.
+private struct DayHeaderFrame: Equatable {
+    let day: Date
+    let minY: CGFloat
+    let height: CGFloat
+}
+
+private struct DayHeaderFrameKey: PreferenceKey {
+    static var defaultValue: [DayHeaderFrame] { [] }
+    static func reduce(value: inout [DayHeaderFrame], nextValue: () -> [DayHeaderFrame]) {
         value.append(contentsOf: nextValue())
     }
 }
@@ -1056,7 +1153,12 @@ private struct TripDayCluster: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            dayEyebrow
+            TripDayEyebrow(trip: trip, day: day, isRailNode: true)
+                // Report the text row's position so the timeline can freeze
+                // this header once it reaches the top edge (#426). Measured
+                // INSIDE the paddings so the frozen copy can reproduce the
+                // exact y at handover.
+                .background(headerFrameProbe)
                 .padding(.top, topPadding)
                 .padding(.bottom, Space.md)
 
@@ -1064,46 +1166,14 @@ private struct TripDayCluster: View {
         }
     }
 
-    // MARK: Eyebrow
-
-    private var dayEyebrow: some View {
-        let cal = Calendar.current
-        let tripStart = cal.startOfDay(for: trip.startDate)
-        let tripEnd = cal.startOfDay(for: trip.endDate)
-        let withinTrip = day >= tripStart && day <= tripEnd
-        let dayNumber = cal.dateComponents([.day], from: tripStart, to: day).day.map { $0 + 1 } ?? 0
-        // The date is now the section header, so it drops the uppercase/tracked
-        // eyebrow treatment for a readable title case (e.g. "Wed, 14 May").
-        let weekdayDate = day
-            .formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-
-        return HStack(alignment: .center, spacing: Space.sm) {
-            Circle()
-                .fill(withinTrip ? Tokens.accent(for: .itineraries) : Tokens.muted)
-                .frame(width: TimelineLayout.dayDotDiameter, height: TimelineLayout.dayDotDiameter)
-                .railNode()
-            // Single-line prominent date header, one consistent size, no line
-            // break. The "Day n" prefix is highlighted in the accent colour to
-            // set it apart from the ink date (e.g. "Day 1: Wed, 14 May").
-            Group {
-                if withinTrip {
-                    Text("Day \(dayNumber)")
-                        .foregroundStyle(Tokens.accent(for: .itineraries))
-                    + Text(": \(weekdayDate)")
-                        .foregroundStyle(Tokens.ink)
-                } else {
-                    Text(weekdayDate)
-                        .foregroundStyle(Tokens.ink)
-                }
-            }
-            .font(.edHeading)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            Spacer(minLength: 0)
+    private var headerFrameProbe: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .named(TimelineLayout.scrollSpace))
+            Color.clear.preference(
+                key: DayHeaderFrameKey.self,
+                value: [DayHeaderFrame(day: day, minY: frame.minY, height: frame.height)]
+            )
         }
-        // Indent so the dot's centerline sits at `railLeading`, lined up
-        // with every item marker below it.
-        .padding(.leading, TimelineLayout.railLeading - TimelineLayout.dayDotDiameter / 2)
     }
 
     // MARK: Items + rail
@@ -1136,6 +1206,76 @@ private struct TripDayCluster: View {
                         }
                     }
             }
+        }
+    }
+}
+
+// MARK: - Day eyebrow
+
+/// One day's header row: the rail dot plus "Day 3: Wed, 14 May".
+///
+/// Rendered twice — in flow at the head of its cluster, and again as the copy
+/// the timeline freezes at the top while you scroll through that day (#426).
+/// The frozen copy passes `isRailNode: false`: only the in-flow dot may thread
+/// the continuous rail, or a header parked at the viewport top would drag the
+/// rail's span with it.
+private struct TripDayEyebrow: View {
+    let trip: LocalTrip
+    let day: Date
+    let isRailNode: Bool
+
+    var body: some View {
+        let cal = Calendar.current
+        let tripStart = cal.startOfDay(for: trip.startDate)
+        let tripEnd = cal.startOfDay(for: trip.endDate)
+        let withinTrip = day >= tripStart && day <= tripEnd
+        let dayNumber = cal.dateComponents([.day], from: tripStart, to: day).day.map { $0 + 1 } ?? 0
+        // The date is now the section header, so it drops the uppercase/tracked
+        // eyebrow treatment for a readable title case (e.g. "Wed, 14 May").
+        let weekdayDate = day
+            .formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+
+        return HStack(alignment: .center, spacing: Space.sm) {
+            Circle()
+                .fill(withinTrip ? Tokens.accent(for: .itineraries) : Tokens.muted)
+                .frame(width: TimelineLayout.dayDotDiameter, height: TimelineLayout.dayDotDiameter)
+                .modifier(OptionalRailNode(isEnabled: isRailNode))
+            // Single-line prominent date header, one consistent size, no line
+            // break. The "Day n" prefix is highlighted in the accent colour to
+            // set it apart from the ink date (e.g. "Day 1: Wed, 14 May").
+            Group {
+                if withinTrip {
+                    Text("Day \(dayNumber)")
+                        .foregroundStyle(Tokens.accent(for: .itineraries))
+                    + Text(": \(weekdayDate)")
+                        .foregroundStyle(Tokens.ink)
+                } else {
+                    Text(weekdayDate)
+                        .foregroundStyle(Tokens.ink)
+                }
+            }
+            .font(.edHeading)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            Spacer(minLength: 0)
+        }
+        // Indent so the dot's centerline sits at `railLeading`, lined up
+        // with every item marker below it.
+        .padding(.leading, TimelineLayout.railLeading - TimelineLayout.dayDotDiameter / 2)
+    }
+}
+
+/// Applies `railNode()` only for the in-flow eyebrow, so the frozen copy of a
+/// header never contributes an anchor to the continuous rail. Kept as a
+/// modifier to leave the dot's declaration in the `HStack` unbranched.
+private struct OptionalRailNode: ViewModifier {
+    let isEnabled: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.railNode()
+        } else {
+            content
         }
     }
 }
