@@ -75,6 +75,56 @@ indirect enum JSONValue: Codable, Equatable {
     func encodedData() throws -> Data {
         try DataArchive.makeEncoder().encode(self)
     }
+
+    /// Overlay this payload onto `local`, keeping any local key this payload does not
+    /// mention at all.
+    ///
+    /// ## Why this exists: a peer cannot have an opinion about a field it has never
+    /// heard of
+    ///
+    /// Ops carry a whole-row snapshot, and the applier rewrites the row from it. So a
+    /// peer running an OLDER build — whose DTO simply has no such property — sends a
+    /// payload with the key missing, and the rewrite nulls a column the peer has never
+    /// known about. Measured on the user's phone: five `LocalTrip` rows had
+    /// `coverImagePath`, `coverImageState` and `coverArtPromptVersion` all NULL while
+    /// fifteen cover JPEGs sat on disk, because the Mac was on a build predating those
+    /// fields and its upserts kept erasing them. `updatedAt` moved with each erasure,
+    /// which is what made it look like a local write had failed.
+    ///
+    /// This is not specific to covers. EVERY additively-added field is exposed to it,
+    /// and the same family has bitten this project twice before: a peer with a narrower
+    /// schema dropping a model's table, and an insert-only merge that could not heal
+    /// missing fields. So the rule is general and lives here rather than in any one
+    /// entity's mapping.
+    ///
+    /// ## Absent versus explicitly null
+    ///
+    /// Absence is the signal. A key present with a `null` value IS an opinion and
+    /// overwrites, because `merged[key] == nil` tests for a MISSING key —
+    /// `JSONValue.null` is `.some(.null)` and passes through untouched.
+    ///
+    /// ## The honest limitation
+    ///
+    /// Swift's synthesized `Codable` encodes optionals with `encodeIfPresent`, so a
+    /// field a same-version peer deliberately CLEARED is also absent from the wire, and
+    /// is therefore preserved rather than cleared. Clearing an optional does not
+    /// propagate any more. That affects real actions — un-archiving (`archivedAt` back
+    /// to nil) and un-deleting (`deletedAt` back to nil) — and it is a deliberate
+    /// trade: a stale value the owning device can overwrite with a new one is strictly
+    /// recoverable, whereas the erasure this replaces destroyed data on the receiving
+    /// device with nothing left to recover from. Making clears propagate again needs
+    /// the DTOs to encode explicit nulls, which changes every content hash and forces a
+    /// one-time full re-publish, so it belongs in its own change rather than riding
+    /// along with a data-loss fix.
+    func preservingFieldsAbsentHere(from local: JSONValue) -> JSONValue {
+        guard case .object(let incoming) = self,
+              case .object(let localFields) = local else { return self }
+        var merged = incoming
+        for (key, value) in localFields where merged[key] == nil {
+            merged[key] = value
+        }
+        return .object(merged)
+    }
 }
 
 // MARK: - Ops

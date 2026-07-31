@@ -14,6 +14,9 @@ import SwiftData
 /// milestone, after all features are ported — issue #281).
 @main
 struct DexterMacApp: App {
+    /// Drives the in-session cover recovery below (#428).
+    @Environment(\.scenePhase) private var scenePhase
+
     /// Forces the SwiftData store to bootstrap at process start, in DEBUG only.
     ///
     /// `SwiftDataStore.shared` is a `static let`, so it is lazy, and both the
@@ -61,6 +64,18 @@ struct DexterMacApp: App {
                 .textFieldStyle(.plain)
                 .modelContainer(SwiftDataStore.shared.container)
                 .frame(minWidth: 900, minHeight: 600)
+                // Trip cover repair sweep (#428). `.task` fires per WINDOW on
+                // macOS, not per process, and the OS restores several windows on
+                // relaunch — the latch that makes that safe lives in
+                // `TripCoverService`, not here.
+                .task { await AppMaintenance.runTripCoverSweep() }
+                // Same in-session recovery as iOS (#428). macOS `.active` fires on window
+                // focus, which the service's throttle is there to absorb.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        Task { await AppMaintenance.runTripCoverForegroundSweep() }
+                    }
+                }
         }
         .windowResizability(.contentMinSize)
         // Menu bar commands (issue #295). They act on whichever window is

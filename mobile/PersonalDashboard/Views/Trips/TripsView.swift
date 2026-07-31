@@ -202,18 +202,21 @@ struct TripsView: View {
             tripSection(
                 title: "Active",
                 trips: groups.active,
+                phase: .active,
                 accent: Tokens.success,
                 soft: Tokens.successSoft
             )
             tripSection(
                 title: "Upcoming",
                 trips: groups.upcoming,
+                phase: .upcoming,
                 accent: Tokens.accent(for: .itineraries),
                 soft: Tokens.paper2
             )
             tripSection(
                 title: "Past",
                 trips: groups.past,
+                phase: .past,
                 accent: Tokens.muted,
                 soft: Tokens.paper2
             )
@@ -233,11 +236,17 @@ struct TripsView: View {
     /// One travel-state group. Empty groups render nothing at all rather than a
     /// bare header, so a user with only future trips sees just "Upcoming".
     @ViewBuilder
-    private func tripSection(title: String, trips: [LocalTrip], accent: Color, soft: Color) -> some View {
+    private func tripSection(
+        title: String,
+        trips: [LocalTrip],
+        phase: TripPhase,
+        accent: Color,
+        soft: Color
+    ) -> some View {
         if !trips.isEmpty {
             Section {
                 ForEach(trips) { trip in
-                    TripRow(trip: trip, itemCount: itemCount(for: trip)) {
+                    TripRow(trip: trip, itemCount: itemCount(for: trip), phase: phase) {
                         withAnimation(.easeOut(duration: 0.2)) {
                             selectedTripUUID = trip.clientUUID
                         }
@@ -320,6 +329,11 @@ struct TripsView: View {
         if let items = try? modelContext.fetch(descriptor) {
             for item in items { modelContext.delete(item) }
         }
+        // The cover file is deliberately LEFT on disk (#428). Art is keyed on the
+        // destination now, so another trip to the same place may be using this exact
+        // file, and deleting it here would blank that trip's tile. It also means
+        // deleting and recreating a trip reuses the art it already paid for.
+        // `TripCoverService.reapOrphanedCovers()` collects what nothing references.
         modelContext.delete(trip)
         try? modelContext.save()
     }
@@ -355,45 +369,182 @@ enum TripEditorTarget: Identifiable {
 
 // MARK: - Row
 
+/// A trip tile: a full-bleed destination photo band across the top, and all of
+/// the text below it on paper (#428).
+///
+/// ## Why this does NOT use `flatContentRow()`
+///
+/// This is the one section that stays a CARD on macOS rather than converging on
+/// the flat full-bleed row of #303 (the Reminders / Mail shape), and the opt-out
+/// is deliberate.
+///
+/// Full-bleed rows on macOS put the row's leading edge directly on the sidebar
+/// seam. The project has already had to add two insets for exactly that reason —
+/// `RowMetrics.accentRailInset` for the task priority bar and
+/// `RowMetrics.priorityWashInset` for the priority wash — because colour landing
+/// on the seam reads as a second pane. A 220pt photograph on that seam is the
+/// same problem at very much higher volume: it would read as a split view, not as
+/// a list row. So the card, its `Radius.card` clip and
+/// `TripCoverMetrics.cardHorizontalInset` stay.
+///
+/// The count capsule and the chevron are gone. `TicketCardView`'s documented
+/// grammar is no icons and no rules, and the photograph now does the visual work
+/// they were standing in for. Losing the chevron is what makes
+/// `.accessibilityAddTraits(.isButton)` mandatory below: this row navigates via
+/// `.onTapGesture`, which VoiceOver does not announce as actionable on its own.
 private struct TripRow: View {
     let trip: LocalTrip
     let itemCount: Int
+    let phase: TripPhase
     let onTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(trip.name)
-                    .font(.edBodyMedium)
-                    .foregroundStyle(Tokens.ink)
-                    .lineLimit(1)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Tokens.mutedSoft)
-            }
-
-            HStack(spacing: Space.sm) {
-                Text(Self.formatRange(start: trip.startDate, end: trip.endDate))
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                Spacer()
-                HStack(spacing: 4) {
-                    Image(systemName: "list.bullet")
-                        .font(.system(size: 10, weight: .regular))
-                    Text("\(itemCount)")
-                }
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .padding(.horizontal, Space.sm)
-                .padding(.vertical, 2)
-                .background(Tokens.paper2, in: Capsule())
-            }
+        VStack(spacing: 0) {
+            TripCoverBand(trip: trip, phase: phase)
+            textBlock
         }
-        .flatContentRow()
+        .background(Tokens.surface)
+        // The clip comes first and the border second. Reversing them lets the clip
+        // eat the stroke at the four corners, which reads as a card with chipped
+        // edges and is very easy to miss on a screenshot.
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .paperBorder(borderColor, radius: Radius.card)
+        .padding(.horizontal, TripCoverMetrics.cardHorizontalInset)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-        .accessibilityLabel("\(trip.name), \(Self.formatRange(start: trip.startDate, end: trip.endDate)). Tap to open.")
+        // One element carrying everything the tile says, in reading order. The
+        // band is hidden inside `TripCoverBand`, so `children: .ignore` is not
+        // discarding information — the count in particular MUST be here now that
+        // the capsule is gone.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    // MARK: - Text block
+
+    /// `Space.lg` horizontal and `Space.md` vertical, a deliberate departure from
+    /// `RowMetrics.horizontalPadding` (12pt on iOS). The band sets the tile's
+    /// optical width now, and 12pt reads tight against a 328pt-wide photograph.
+    private var textBlock: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(trip.name)
+                .font(nameFont)
+                .foregroundStyle(nameColor)
+                // Not optional: at `.accessibility3`, `lineLimit(1)` truncates
+                // "Vietnam" to roughly four characters.
+                .lineLimit(2)
+            metaLine
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, TripCoverMetrics.textHorizontalPadding)
+        .padding(.vertical, TripCoverMetrics.textVerticalPadding)
+    }
+
+    /// One line: relative status, date range, item count, " · " separated.
+    ///
+    /// Entirely in `Tokens.muted`. Never `Tokens.mutedSoft`, which measures about
+    /// 2.6:1 on `Tokens.surface` in light mode and fails AA as body text.
+    private var metaLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: TripCoverMetrics.statusDotGap) {
+            if phase == .active {
+                Circle()
+                    .fill(Tokens.success)
+                    .frame(
+                        width: TripCoverMetrics.statusDotSize,
+                        height: TripCoverMetrics.statusDotSize
+                    )
+                    // A `Circle` has no baseline of its own, so one is supplied
+                    // from its own height. Without this the dot centres on a
+                    // two-line meta string and drifts away from "Day 3 of 8".
+                    .alignmentGuide(.firstTextBaseline) { $0.height - 1 }
+            }
+            Text(metaText)
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.muted)
+                .lineLimit(2)
+        }
+    }
+
+    private var metaText: String {
+        var parts: [String] = []
+        if let relativeStatus { parts.append(relativeStatus) }
+        parts.append(Self.formatRange(start: trip.startDate, end: trip.endDate))
+        parts.append(itemCountText)
+        return parts.joined(separator: " · ")
+    }
+
+    private var itemCountText: String {
+        itemCount == 1 ? "1 item" : "\(itemCount) items"
+    }
+
+    /// "Day 3 of 8" while you are on the trip, "In 12 days" before it. Nothing for
+    /// a Past trip, whose date range already says everything there is to say.
+    private var relativeStatus: String? {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        let start = cal.startOfDay(for: trip.startDate)
+        let end = cal.startOfDay(for: trip.endDate)
+
+        switch phase {
+        case .active:
+            let total = (cal.dateComponents([.day], from: start, to: end).day ?? 0) + 1
+            guard total > 0 else { return nil }
+            let day = (cal.dateComponents([.day], from: start, to: today).day ?? 0) + 1
+            return "Day \(min(max(day, 1), total)) of \(total)"
+        case .upcoming:
+            let days = cal.dateComponents([.day], from: today, to: start).day ?? 0
+            guard days > 0 else { return nil }
+            return days == 1 ? "In 1 day" : "In \(days) days"
+        case .past:
+            return nil
+        }
+    }
+
+    // MARK: - Phase differentiation
+
+    /// `.edTitle` is what `TripDetailHeader` already uses for the trip name, so
+    /// the name is typographically identical in tile and detail and the trip reads
+    /// as one object across the navigation. Past steps down to `.edHeading` /
+    /// `inkSoft`, which is part of how a lush old photograph is stopped from
+    /// out-shouting a trip you are currently on — the other part is on the band.
+    private var nameFont: Font {
+        phase == .past ? .edHeading : .edTitle
+    }
+
+    private var nameColor: Color {
+        phase == .past ? Tokens.inkSoft : Tokens.ink
+    }
+
+    private var borderColor: Color {
+        phase == .active ? Tokens.borderStrong : Tokens.border
+    }
+
+    // MARK: - Accessibility
+
+    /// "Vietnam. 12 to 20 September 2026. Day 3 of 8. 14 items. Opens the trip."
+    private var accessibilityLabel: String {
+        var parts: [String] = [trip.name, spokenRange]
+        if let relativeStatus { parts.append(relativeStatus) }
+        parts.append(itemCountText)
+        parts.append("Opens the trip")
+        return parts.joined(separator: ". ") + "."
+    }
+
+    /// The date range spelled out for speech. `formatRange` is right on screen but
+    /// its en dash and abbreviated months read poorly aloud.
+    private var spokenRange: String {
+        let cal = Calendar.current
+        let full = Date.FormatStyle.dateTime.day().month(.wide).year()
+        if cal.isDate(trip.startDate, inSameDayAs: trip.endDate) {
+            return trip.startDate.formatted(full)
+        }
+        let sameYear = cal.component(.year, from: trip.startDate)
+            == cal.component(.year, from: trip.endDate)
+        let startPart = sameYear
+            ? trip.startDate.formatted(.dateTime.day().month(.wide))
+            : trip.startDate.formatted(full)
+        return "\(startPart) to \(trip.endDate.formatted(full))"
     }
 
     /// "1 May – 10 May 2026" / "28 Dec 2026 – 3 Jan 2027" / single-day
@@ -794,6 +945,11 @@ private struct TripEditorSheet: View {
         let normalisedStart = cal.startOfDay(for: startDate)
         let normalisedEnd = cal.startOfDay(for: endDate)
 
+        // Set when this save creates a trip or changes an existing trip's name.
+        // Only those two cases want a cover fetch: moving the dates or editing
+        // the notes does not change the destination (#428).
+        var needsCoverFetch: UUID?
+
         switch target {
         case .new:
             let trip = LocalTrip(
@@ -804,17 +960,30 @@ private struct TripEditorSheet: View {
             )
             trip.participantPersonUUIDs = participantUUIDs
             modelContext.insert(trip)
+            needsCoverFetch = trip.clientUUID
         case .existing(let uuid):
             let descriptor = FetchDescriptor<LocalTrip>(
                 predicate: #Predicate { $0.clientUUID == uuid }
             )
             if let existing = try? modelContext.fetch(descriptor).first {
+                let renamed = existing.name != cleanName
                 existing.name = cleanName
                 existing.startDate = normalisedStart
                 existing.endDate = normalisedEnd
                 existing.notes = cleanNotes
                 existing.participantPersonUUIDs = participantUUIDs
                 existing.updatedAt = Date()
+                if renamed {
+                    // The destination changed, so the cached illustration is now of the
+                    // wrong city. Clearing the state (rather than leaving it
+                    // `resolved`) is what puts the trip back into the never-attempted
+                    // state the service generates for. The old file stays: it is keyed on
+                    // the PREVIOUS destination and another trip may still be going there.
+                    existing.coverImagePath = nil
+                    existing.coverArtPromptVersion = nil
+                    existing.coverImageState = nil
+                    needsCoverFetch = uuid
+                }
             } else {
                 let trip = LocalTrip(
                     name: cleanName,
@@ -824,8 +993,17 @@ private struct TripEditorSheet: View {
                 )
                 trip.participantPersonUUIDs = participantUUIDs
                 modelContext.insert(trip)
+                needsCoverFetch = trip.clientUUID
             }
         }
         try? modelContext.save()
+
+        // Fetch on WRITE, never on render. Detached so dismissing the sheet is not
+        // waiting on up to three HTTP requests, and so the row that appears behind
+        // the sheet renders immediately with generated art and swaps to the
+        // photograph when it lands (#428).
+        if let needsCoverFetch {
+            Task { await TripCoverService.shared.resolveOnWrite(tripUUID: needsCoverFetch) }
+        }
     }
 }

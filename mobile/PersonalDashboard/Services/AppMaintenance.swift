@@ -83,6 +83,43 @@ enum AppMaintenance {
         await runPasses(isLaunch: false)
     }
 
+    /// Trip cover repair sweep (#428): resolve destination photography for trips
+    /// whose `coverImageState` is nil or `failed`, and for trips whose cached file
+    /// has gone missing (the sync case — the path was minted on the other device).
+    ///
+    /// A THIRD entry point rather than a pass inside `runPasses` above, and the
+    /// reason matters: nothing calls `runLaunchPass` / `runForegroundPass` yet.
+    /// #309 built them for the macOS scene and the wiring was never landed, so
+    /// folding the sweep into `runPasses` would have made it dead code, and wiring
+    /// `runPasses` to make it live would silently switch on automatic backup and
+    /// recurring-expense materialisation on the Mac — a behaviour change with
+    /// nothing to do with trip covers.
+    ///
+    /// Safe and cheap to call on every launch from both scenes. The once-per-
+    /// process latch, the budget and the politeness gap all live in
+    /// `TripCoverService`, which is also where the per-trip single-flight guard
+    /// is, so the `.task`-fires-per-window trap that `didRunLaunchPass` documents
+    /// is covered here too.
+    static func runTripCoverSweep() async {
+        await TripCoverService.shared.runRepairSweep()
+    }
+
+    /// Foreground counterpart of `runTripCoverSweep` (#428).
+    ///
+    /// Deliberately NOT `runForegroundPass` above, and that is the honest answer to
+    /// "wire the existing one": `runForegroundPass` calls `runPasses`, which also
+    /// materialises recurring expenses and runs the backup. Both of those have been dead
+    /// on every platform since #309 built them, so wiring it to fix a cover bug would
+    /// silently switch on two unrelated features — a behaviour change disguised as a fix.
+    /// This calls only the cover sweep, and #309's wiring stays a decision for whoever
+    /// picks it up.
+    ///
+    /// The throttle and the store read live in `TripCoverService`, so this is safe on
+    /// every activation.
+    static func runTripCoverForegroundSweep() async {
+        await TripCoverService.shared.runForegroundSweep()
+    }
+
     // MARK: - Work
 
     private static func runPasses(isLaunch: Bool) async {

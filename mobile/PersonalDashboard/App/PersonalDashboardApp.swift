@@ -41,6 +41,12 @@ struct PersonalDashboardApp: App {
                     // peer would change here.
                     await SyncCoordinator.shared.runForegroundPass(reason: "launch")
                     SyncCoordinator.shared.startPeriodic()
+                    // Trip cover repair sweep (#428). Last, because it is the only
+                    // pass here that is purely cosmetic, and because a sync pass
+                    // may have just delivered trips whose cover file this device
+                    // does not have. Once per process, budgeted, and a no-op when
+                    // every trip already has a cover or has settled on `none`.
+                    await AppMaintenance.runTripCoverSweep()
                 }
         }
         .modelContainer(SwiftDataStore.shared.container)
@@ -48,6 +54,9 @@ struct PersonalDashboardApp: App {
             // Re-fetch email when the app returns to the foreground (#143).
             if newPhase == .active {
                 Task { await EmailIngestCoordinator.shared.runForegroundFetch() }
+                // Recover a trip whose cover generation died with a suspension, without
+                // making the user relaunch (#428). Throttled inside the service.
+                Task { await AppMaintenance.runTripCoverForegroundSweep() }
                 // Materialise due / missed recurring expenses on foreground (#236).
                 Task { await RecurringExpenseCoordinator.shared.runForegroundMaterialize() }
             }

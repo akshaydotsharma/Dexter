@@ -202,6 +202,116 @@ enum RowMetrics {
     }
 }
 
+// MARK: - Trip cover band (issue #428)
+
+/// Metrics for the destination-photo band on a trip tile.
+///
+/// These live here, next to `RowMetrics`, rather than as literals inside the row
+/// for the reason `RowMetrics` already spells out: Past's band is a
+/// *relationship* to the normal band (shorter, wider ratio, lower ceiling), and
+/// this codebase has twice had a numeric relationship silently invert because it
+/// was asserted in a comment instead of expressed in code. Side by side the two
+/// sets can be read as one table.
+///
+/// Nothing here is `.infinity`. A band that could grow without bound inside a
+/// `List` row is the layout-feedback hazard this ticket set out to avoid.
+enum TripCoverMetrics {
+    // MARK: Band proportion — the same for every trip
+
+    /// Width-to-height ratio of the band. Height derives from the card's width,
+    /// with no `GeometryReader` — a `GeometryReader` that determines its own
+    /// row's height inside a `List` feeds the layout back into itself.
+    ///
+    /// 4:1 for EVERY trip since the move to generated illustration. This was the
+    /// shallower proportion previously reserved for Past, and it is now standard:
+    /// the art is a wide shallow skyline strip on empty sky, so a 2.4:1 band would
+    /// be mostly sky. It is also the proportion `TripCoverCrop` targets, so these
+    /// two numbers are the same decision expressed twice — see
+    /// `TripCoverCrop.bandRatio`.
+    ///
+    /// Past no longer differs in SIZE at all. It recedes by treatment: reduced
+    /// saturation, a theme-aware veil, and a demoted name. Fixed on the band and the
+    /// type, never with card-wide opacity, which would dim the text with it and drop
+    /// `Tokens.muted` below 4.5:1.
+    static let ratio: CGFloat = 4.0
+    static let minHeight: CGFloat = 84
+    static let maxHeight: CGFloat = 132
+
+    /// Ceiling once the user is at an accessibility text size. The text block
+    /// grows several lines taller there, so the band has to give way or a single
+    /// tile fills the screen.
+    ///
+    /// Equal to `maxHeight` now that every band is 4:1, so it is a no-op rather than
+    /// a second competing ceiling. Kept as a named value because it is a different
+    /// DECISION that happens to share a number, and collapsing the two would hide a
+    /// constraint that has to be rechecked if `maxHeight` ever moves.
+    static let accessibilityMaxHeight: CGFloat = 132
+
+    // MARK: Band edge treatment
+
+    /// Height of the clear-to-`Tokens.coverSeamVeil` gradient at the band's
+    /// bottom edge.
+    static let veilHeight: CGFloat = 24
+    /// The seam rule under the band. `Tokens.border`, not `Tokens.divider`,
+    /// which vanishes on lighter surfaces in light mode.
+    static let seamHeight: CGFloat = 0.5
+    /// Partial desaturation for a Past cover. `.grayscale(1.0)` reads as disabled,
+    /// which would be a lie — Past trips are still tappable and still carry their
+    /// expenses. 0.5 on flat illustration, slightly stronger than the 0.55 that
+    /// suited photography, because the art's palette is already muted so it needs a
+    /// little more to read as receded.
+    static let pastSaturation: Double = 0.5
+    /// Adaptive veil over the whole Past band. `Tokens.paper` because it IS an
+    /// adaptive pair, so it lifts in light mode and darkens in dark mode, which
+    /// is the correct direction in both. Now that Past keeps the full band height,
+    /// this and the saturation do the whole job, so it is a touch stronger.
+    static let pastVeilOpacity: Double = 0.12
+
+    // MARK: Generated cover art
+
+    /// Oversized watermark glyph on the glyph fallback art, which is what a trip
+    /// whose name is not a place keeps permanently and what every trip shows while
+    /// its illustration is being generated.
+    ///
+    /// 110pt, not the wallet `heroPanel`'s 150pt: every band is 4:1 now, so the band
+    /// is as short as the old Past one was and 150pt overflowed it. One value, since
+    /// Past no longer differs in size.
+    static let watermark: CGFloat = 110
+
+    // MARK: Text block
+
+    /// Horizontal padding of the text block under the band.
+    ///
+    /// A deliberate departure from `RowMetrics.horizontalPadding` (12pt on iOS),
+    /// which reads tight against a 328pt-wide photograph. The band sets the
+    /// tile's optical width now, so the text has to be inset to match it.
+    static let textHorizontalPadding: CGFloat = Space.lg
+    /// Vertical padding of the text block.
+    static let textVerticalPadding: CGFloat = Space.md
+
+    /// The Active status dot on the meta line.
+    static let statusDotSize: CGFloat = 6
+    /// Gap between that dot and the meta text.
+    static let statusDotGap: CGFloat = 6
+
+    /// Horizontal inset of the whole card.
+    ///
+    /// Trips opts out of `flatContentRow()` (see `TripRow`), so it is the one
+    /// section that stays a card on macOS. `contentRowInsets` zeroes the
+    /// horizontal row inset there, which is right for a flat row and wrong for a
+    /// 220pt photograph: it would put the photo directly on the sidebar seam.
+    /// The project has already added `accentRailInset` and `priorityWashInset`
+    /// for exactly this, at far lower volume. iOS needs nothing — its row inset
+    /// already supplies the gutter its cards float in.
+    static var cardHorizontalInset: CGFloat {
+        #if os(macOS)
+        Space.lg
+        #else
+        0
+        #endif
+    }
+}
+
 extension View {
     /// The one construction for a row that lists a record.
     ///

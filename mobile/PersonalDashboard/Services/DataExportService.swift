@@ -31,19 +31,23 @@ final class DataExportService {
     /// #399: task ticket attachments, same deal. A separate instance because it
     /// reads from `Documents/task-tickets/` rather than `Documents/tickets/`.
     private let taskTicketStorage: TicketStorage
+    /// #428: fetched trip cover photographs, from `Documents/trip-covers/`.
+    private let tripCoverStorage: ReceiptStorage
 
     init(
         modelContext: ModelContext,
         receiptStorage: ReceiptStorage = .shared,
         ticketStorage: TicketStorage = .shared,
         noteImageStorage: ReceiptStorage = .noteImages,
-        taskTicketStorage: TicketStorage = .taskTickets
+        taskTicketStorage: TicketStorage = .taskTickets,
+        tripCoverStorage: ReceiptStorage = .tripCovers
     ) {
         self.modelContext = modelContext
         self.receiptStorage = receiptStorage
         self.ticketStorage = ticketStorage
         self.noteImageStorage = noteImageStorage
         self.taskTicketStorage = taskTicketStorage
+        self.tripCoverStorage = tripCoverStorage
     }
 
     /// One archive entry whose bytes have not been read yet: the name it will
@@ -120,6 +124,10 @@ final class DataExportService {
         // transfer, so leaving them out of the archive would mean a ticket could
         // never leave the phone it was photographed on.
         attachments.append(contentsOf: resolveTaskTicketSources(for: payload.taskTickets ?? []))
+        // #428: trip cover photographs. Their own `trip-covers/` directory, so
+        // their own pass. Cheaper to carry than to re-fetch on the restoring
+        // device, and the only cover bytes that ever leave this device.
+        attachments.append(contentsOf: resolveTripCoverSources(for: payload.itineraries))
 
         let url = Self.outputURL()
 
@@ -380,6 +388,28 @@ final class DataExportService {
         return sources
     }
 
+    /// #428 counterpart for trip cover photographs. Same contract as the four
+    /// above: a missing file is skipped rather than failing the export, and the
+    /// importer only sets `coverImagePath` when it actually restored a file.
+    ///
+    /// Unlike a receipt or a ticket, a skipped cover is not even a small loss: the
+    /// row still carries `coverImageSourceURL`, so the importing device re-fetches
+    /// it on the next launch sweep. The bytes travel purely to save that round trip.
+    private func resolveTripCoverSources(
+        for trips: [DataArchive.ItineraryDTO]
+    ) -> [AttachmentSource] {
+        var sources: [AttachmentSource] = []
+        var seenPaths = Set<String>()
+        for trip in trips {
+            guard let relativePath = trip.coverImagePath,
+                  !relativePath.isEmpty,
+                  seenPaths.insert(relativePath).inserted else { continue }
+            guard let url = tripCoverStorage.load(relativePath: relativePath) else { continue }
+            sources.append(AttachmentSource(name: relativePath, url: url))
+        }
+        return sources
+    }
+
     // MARK: - DTO mapping
 
     private static func dto(_ image: LocalNoteImage) -> DataArchive.NoteImageDTO {
@@ -489,7 +519,16 @@ final class DataExportService {
             notes: trip.notes,
             createdAt: trip.createdAt,
             updatedAt: trip.updatedAt,
-            participantsData: trip.participantsData
+            participantsData: trip.participantsData,
+            // #428. Every cover field is carried, including the device-local path:
+            // the bytes go into the zip under that exact name, so a restore can put
+            // the file back where the path already points.
+            coverImagePath: trip.coverImagePath,
+            coverImageSourceURL: trip.coverImageSourceURL,
+            coverImageAttribution: trip.coverImageAttribution,
+            coverImageAttributionURL: trip.coverImageAttributionURL,
+            coverImageState: trip.coverImageState,
+            coverArtPromptVersion: trip.coverArtPromptVersion
         )
     }
 
