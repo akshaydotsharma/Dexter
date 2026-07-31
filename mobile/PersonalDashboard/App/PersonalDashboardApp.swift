@@ -54,6 +54,9 @@ struct PersonalDashboardApp: App {
             // Re-fetch email when the app returns to the foreground (#143).
             if newPhase == .active {
                 Task { await EmailIngestCoordinator.shared.runForegroundFetch() }
+                // Recover a trip whose cover generation died with a suspension, without
+                // making the user relaunch (#428). Throttled inside the service.
+                Task { await AppMaintenance.runTripCoverForegroundSweep() }
                 // Materialise due / missed recurring expenses on foreground (#236).
                 Task { await RecurringExpenseCoordinator.shared.runForegroundMaterialize() }
             }

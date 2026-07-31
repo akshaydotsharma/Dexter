@@ -329,11 +329,11 @@ struct TripsView: View {
         if let items = try? modelContext.fetch(descriptor) {
             for item in items { modelContext.delete(item) }
         }
-        // The cached cover is a derived file with no owner once the trip is gone
-        // (#428). Same treatment Finance gives a deleted expense's receipt.
-        if let coverPath = trip.coverImagePath {
-            try? ReceiptStorage.tripCovers.delete(relativePath: coverPath)
-        }
+        // The cover file is deliberately LEFT on disk (#428). Art is keyed on the
+        // destination now, so another trip to the same place may be using this exact
+        // file, and deleting it here would blank that trip's tile. It also means
+        // deleting and recreating a trip reuses the art it already paid for.
+        // `TripCoverService.reapOrphanedCovers()` collects what nothing references.
         modelContext.delete(trip)
         try? modelContext.save()
     }
@@ -977,11 +977,8 @@ private struct TripEditorSheet: View {
                     // The destination changed, so the cached illustration is now of the
                     // wrong city. Clearing the state (rather than leaving it
                     // `resolved`) is what puts the trip back into the never-attempted
-                    // state the service generates for. The old file is dropped here
-                    // because nothing references it any more.
-                    if let stale = existing.coverImagePath {
-                        try? ReceiptStorage.tripCovers.delete(relativePath: stale)
-                    }
+                    // state the service generates for. The old file stays: it is keyed on
+                    // the PREVIOUS destination and another trip may still be going there.
                     existing.coverImagePath = nil
                     existing.coverArtPromptVersion = nil
                     existing.coverImageState = nil

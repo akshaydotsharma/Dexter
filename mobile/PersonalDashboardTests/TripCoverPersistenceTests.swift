@@ -199,6 +199,161 @@ final class TripCoverPersistenceTests: XCTestCase {
         XCTAssertEqual(restored.coverImageState, TripCoverState.none.rawValue)
     }
 
+    // MARK: - Destination-keyed cache
+
+    /// A second trip to the same place must cost ZERO generations.
+    ///
+    /// Two Hong Kongs used to generate twice and bill twice. Art is keyed on
+    /// (normalised destination, prompt version) now, so the second resolves off disk.
+    func testSecondTripToTheSameDestinationCostsNoGeneration() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let first = UUID(), second = UUID()
+        context.insert(LocalTrip(clientUUID: first, name: "Hong Kong", startDate: .now, endDate: .now))
+        context.insert(LocalTrip(clientUUID: second, name: "hong kong 2027", startDate: .now, endDate: .now))
+        try context.save()
+
+        let provider = StubArtProvider()
+        let service = TripCoverService(provider: provider, storage: .tripCovers, context: context)
+
+        await service.resolveOnWrite(tripUUID: first)
+        XCTAssertEqual(provider.callCount, 1, "the first trip pays for the art")
+        let path = try XCTUnwrap(fetch(first, in: context)?.coverImagePath)
+        writtenPaths.append(path)
+
+        await service.resolveOnWrite(tripUUID: second)
+        XCTAssertEqual(provider.callCount, 1, "the second trip must reuse it, not re-bill")
+
+        // Same file, and both rows say resolved.
+        XCTAssertEqual(try fetch(second, in: context)?.coverImagePath, path)
+        XCTAssertEqual(try fetch(second, in: context)?.coverImageState, TripCoverState.resolved.rawValue)
+    }
+
+    /// Delete-then-recreate reuses the art the first one paid for.
+    func testRecreatingADeletedTripReusesItsArt() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let original = UUID()
+        context.insert(LocalTrip(clientUUID: original, name: "New York", startDate: .now, endDate: .now))
+        try context.save()
+
+        let provider = StubArtProvider()
+        let service = TripCoverService(provider: provider, storage: .tripCovers, context: context)
+        await service.resolveOnWrite(tripUUID: original)
+        let path = try XCTUnwrap(fetch(original, in: context)?.coverImagePath)
+        writtenPaths.append(path)
+
+        // Delete the trip the way the UI does: the row goes, the FILE stays.
+        context.delete(try XCTUnwrap(fetch(original, in: context)))
+        try context.save()
+        XCTAssertNotNil(
+            ReceiptStorage.tripCovers.load(relativePath: path),
+            "deleting a trip must not delete art another trip may share"
+        )
+
+        let recreated = UUID()
+        context.insert(LocalTrip(clientUUID: recreated, name: "New York", startDate: .now, endDate: .now))
+        try context.save()
+        await service.resolveOnWrite(tripUUID: recreated)
+        XCTAssertEqual(provider.callCount, 1, "recreating must not pay again")
+        XCTAssertEqual(try fetch(recreated, in: context)?.coverImagePath, path)
+    }
+
+    /// Identity rules: casing, surrounding space and a year must not split the cache.
+    func testDestinationIdentityCollapsesTheObviousVariants() throws {
+        let key = try XCTUnwrap(TripCoverDestination.relativePath(for: "Hong Kong"))
+        for variant in ["hong kong", "  Hong Kong  ", "Hong Kong 2026", "HONG KONG 2027"] {
+            XCTAssertEqual(
+                TripCoverDestination.relativePath(for: variant), key,
+                "\(variant) should share art with Hong Kong"
+            )
+        }
+        XCTAssertNotEqual(TripCoverDestination.relativePath(for: "Pune"), key)
+        XCTAssertNil(TripCoverDestination.relativePath(for: "   "), "an empty name has no key")
+    }
+
+    /// The prompt version is part of the key, so bumping it files new art elsewhere rather
+    /// than overwriting art the old build is still showing.
+    func testPromptVersionIsPartOfTheKey() throws {
+        XCTAssertNotEqual(
+            TripCoverDestination.relativePath(for: "Hong Kong", promptVersion: "1"),
+            TripCoverDestination.relativePath(for: "Hong Kong", promptVersion: "2")
+        )
+    }
+
+    /// The reaper keeps what is referenced and collects what is not. This is the rule that
+    /// replaces deleting-with-the-row, so it has to be exactly right in both directions.
+    func testReaperCollectsOnlyUnreferencedArt() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let tripID = UUID()
+        context.insert(LocalTrip(clientUUID: tripID, name: "Italy", startDate: .now, endDate: .now))
+        try context.save()
+
+        let service = TripCoverService(
+            provider: StubArtProvider(), storage: .tripCovers, context: context
+        )
+        await service.resolveOnWrite(tripUUID: tripID)
+        let kept = try XCTUnwrap(fetch(tripID, in: context)?.coverImagePath)
+        writtenPaths.append(kept)
+
+        // An orphan of exactly the kind already on his device: a file with no row.
+        let orphan = "trip-covers/orphan-\(UUID().uuidString).jpg"
+        _ = try ReceiptStorage.tripCovers.write(data: Self.tinyJPEG(), relativePath: orphan)
+
+        service.reapOrphanedCovers()
+
+        XCTAssertNil(
+            ReceiptStorage.tripCovers.load(relativePath: orphan), "an unreferenced file is reaped"
+        )
+        XCTAssertNotNil(
+            ReceiptStorage.tripCovers.load(relativePath: kept), "referenced art must survive"
+        )
+    }
+
+    /// A permanent refusal must not be retried. His spend cap was exhausted partly by three
+    /// generations a launch aimed at a wall that had already refused.
+    func testBillingRefusalIsClassifiedPermanentAndStopsTheSweep() async throws {
+        XCTAssertTrue(OpenAITripCoverArtProvider.isPermanentRefusal(
+            status: 400, detail: "Billing hard limit reached"
+        ))
+        XCTAssertTrue(OpenAITripCoverArtProvider.isPermanentRefusal(
+            status: 400, detail: "billing_hard_limit_reached"
+        ))
+        XCTAssertTrue(OpenAITripCoverArtProvider.isPermanentRefusal(status: 401, detail: nil))
+        // Rate limiting IS transient and must keep retrying.
+        XCTAssertFalse(OpenAITripCoverArtProvider.isPermanentRefusal(status: 429, detail: "slow down"))
+        XCTAssertFalse(OpenAITripCoverArtProvider.isPermanentRefusal(status: 500, detail: "oops"))
+
+        // And once refused, the session stops asking.
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let ids = (0..<3).map { _ in UUID() }
+        for (i, id) in ids.enumerated() {
+            context.insert(LocalTrip(clientUUID: id, name: "City \(i)", startDate: .now, endDate: .now))
+        }
+        try context.save()
+
+        let provider = RefusingArtProvider()
+        let service = TripCoverService(provider: provider, storage: .tripCovers, context: context)
+        await service.runRepairSweep()
+
+        XCTAssertEqual(
+            provider.callCount, 1,
+            "a hard billing refusal must stop the sweep, not repeat for every trip"
+        )
+        // Exactly one trip records `failed`, so a launch after the cap is raised heals by
+        // itself. The other two are left untouched (state nil) and are simply retried then;
+        // which trip got the single call is not deterministic, so the assertion is on the
+        // shape rather than on a particular row.
+        let states = try ids.map { try fetch($0, in: context)?.coverImageState }
+        XCTAssertEqual(
+            states.filter { $0 == TripCoverState.failed.rawValue }.count, 1,
+            "the one attempt records failed; the rest stay retryable"
+        )
+        XCTAssertEqual(states.filter { $0 == nil }.count, 2)
+    }
+
     // MARK: - The render-path cache
 
     /// A miss must NEVER be cached.
@@ -259,6 +414,8 @@ final class TripCoverPersistenceTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    static func tinyJPEG() -> Data { TripCoverPersistenceTests().smallJPEG() ?? Data() }
 
     /// A tiny valid JPEG, via the same encoder the app uses.
     private func smallJPEG() -> Data? {
@@ -332,6 +489,15 @@ private final class StubArtProvider: TripCoverArtProvider, @unchecked Sendable {
         CGImageDestinationAddImage(dest, image, nil)
         CGImageDestinationFinalize(dest)
         return out as Data
+    }
+}
+
+/// Refuses the way an exhausted spend cap does: a 400 whose body names the limit.
+private final class RefusingArtProvider: TripCoverArtProvider, @unchecked Sendable {
+    private(set) var callCount = 0
+    func illustration(forDestination destination: String) async throws -> Data {
+        callCount += 1
+        throw TripCoverArtProviderError.permanentlyRefused("billing_hard_limit_reached")
     }
 }
 

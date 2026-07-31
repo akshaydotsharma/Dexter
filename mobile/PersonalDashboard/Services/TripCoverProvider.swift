@@ -20,6 +20,10 @@ enum TripCoverArtProviderError: LocalizedError {
     case badStatus(Int, String?)
     case undecodable(Error)
     case emptyResponse
+    /// The account will refuse every request until a human changes something: the
+    /// spend cap is reached, or the key is revoked. NOT transient, and retrying it on
+    /// every launch is how a hard limit gets hammered instead of respected.
+    case permanentlyRefused(String)
 
     var errorDescription: String? {
         switch self {
@@ -35,6 +39,8 @@ enum TripCoverArtProviderError: LocalizedError {
             return "Couldn't read the cover art response: \(e.localizedDescription)"
         case .emptyResponse:
             return "Cover art generation returned no image."
+        case .permanentlyRefused(let detail):
+            return "Cover art generation is blocked: \(detail)"
         }
     }
 }
@@ -80,6 +86,68 @@ enum TripCoverPrompt {
         on warm off-white. Absolutely no text, no lettering, no numbers, no people, no logos.
         Understated, restrained, print-inspired. Minimal.
         """
+    }
+}
+
+// MARK: - Destination identity
+
+/// Turns a trip name into the identity its cover art is cached under (#428).
+///
+/// Art is content-addressed on (normalised destination, prompt version) rather than on
+/// the trip's UUID. Two trips to Hong Kong used to generate twice and bill twice, and
+/// deleting a trip destroyed art that recreating it paid for again. Keyed this way, a
+/// second trip to a place already on disk resolves with no API call at all, and
+/// delete-then-recreate reuses what is already there.
+///
+/// ONE normaliser, used for both the cache key and the prompt substitution. Two
+/// normalisers that disagree would mean art filed under a key the prompt never described.
+enum TripCoverDestination {
+
+    /// The canonical spelling of a destination: years and possessives removed, whitespace
+    /// collapsed, trimmed. Casing is PRESERVED, because this string also goes into the
+    /// prompt and "hong kong" is a worse prompt than "Hong Kong".
+    ///
+    /// Years come off for the same reason they did when covers were searched rather than
+    /// generated: "Japan 2026" is how a trip is labelled, not what the place is called, and
+    /// the illustration of Japan is the same either way. That is also what lets two trips a
+    /// year apart share one image.
+    static func canonical(_ name: String) -> String {
+        var s = name
+        s = s.replacingOccurrences(of: "’s", with: "")
+        s = s.replacingOccurrences(of: "'s", with: "")
+        // Four-digit years, 1900–2099. Scoped rather than "any four digits" so a place
+        // whose name contains a number is not mangled.
+        if let regex = try? NSRegularExpression(pattern: "\\b(19|20)\\d{2}\\b") {
+            s = regex.stringByReplacingMatches(
+                in: s, range: NSRange(s.startIndex..., in: s), withTemplate: ""
+            )
+        }
+        return s.split(whereSeparator: { $0.isWhitespace || $0 == "," })
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The identity two destinations must share to share art. Case-insensitive, so
+    /// "Hong Kong", "hong kong" and "Hong Kong 2026" are one place.
+    static func identity(_ name: String) -> String {
+        canonical(name).lowercased()
+    }
+
+    /// Deterministic relative path for a destination's art under the current prompt.
+    ///
+    /// The prompt version is IN the key, so bumping it changes every path: new art is
+    /// written alongside the old rather than over it, and the old files become orphans the
+    /// reaper collects. That is what makes a prompt change a clean sweep instead of a
+    /// device showing a mix of both.
+    ///
+    /// Hashed rather than using the name directly: a destination can contain slashes,
+    /// emoji, or 64 characters of anything, and none of that belongs in a filename.
+    /// `SyncHash.hex` is reused rather than reinvented.
+    static func relativePath(for name: String, promptVersion: String = TripCoverPrompt.version) -> String? {
+        let key = identity(name)
+        guard !key.isEmpty else { return nil }
+        let digest = SyncHash.hex(Data("\(key)|v\(promptVersion)".utf8))
+        return "trip-covers/\(digest.prefix(32)).jpg"
     }
 }
 
@@ -155,7 +223,10 @@ struct OpenAITripCoverArtProvider: TripCoverArtProvider {
 
         let body: [String: Any] = [
             "model": TripCoverPrompt.model,
-            "prompt": TripCoverPrompt.text(for: destination),
+            // The CANONICAL name, so the art matches the identity it is cached under.
+            // Passing the raw name would file "Japan 2026" under Japan's key while having
+            // asked the model for "Japan 2026".
+            "prompt": TripCoverPrompt.text(for: TripCoverDestination.canonical(destination)),
             "size": TripCoverPrompt.size,
             "n": 1
         ]
@@ -185,6 +256,9 @@ struct OpenAITripCoverArtProvider: TripCoverArtProvider {
             // content policy and a bad model name all arrive as 4xx — and this is the
             // string that lands in the log when a cover stays `failed`.
             let detail = Self.errorMessage(from: data)
+            if Self.isPermanentRefusal(status: http.statusCode, detail: detail) {
+                throw TripCoverArtProviderError.permanentlyRefused(detail ?? "status \(http.statusCode)")
+            }
             throw TripCoverArtProviderError.badStatus(http.statusCode, detail)
         }
 
@@ -206,6 +280,23 @@ struct OpenAITripCoverArtProvider: TripCoverArtProvider {
             return try await download(remote)
         }
         throw TripCoverArtProviderError.emptyResponse
+    }
+
+    /// A refusal no amount of waiting fixes.
+    ///
+    /// `billing_hard_limit_reached` arrives as a 400, which is otherwise indistinguishable
+    /// from a malformed request, so it was being recorded as transient and retried on every
+    /// launch — three generations a launch aimed at a wall that had already said no. 401 and
+    /// 403 are the same shape of problem: a revoked or wrong key will not start working.
+    ///
+    /// 429 is deliberately NOT here. Rate limiting IS transient and should retry.
+    static func isPermanentRefusal(status: Int, detail: String?) -> Bool {
+        if status == 401 || status == 403 { return true }
+        guard status == 400, let detail = detail?.lowercased() else { return false }
+        return detail.contains("billing_hard_limit_reached")
+            || detail.contains("billing hard limit")
+            || detail.contains("exceeded your current quota")
+            || detail.contains("insufficient_quota")
     }
 
     static func errorMessage(from data: Data) -> String? {

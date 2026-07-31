@@ -55,15 +55,34 @@ final class TripCoverService {
     private let provider: TripCoverArtProvider
     private let storage: ReceiptStorage
 
-    /// Trips currently being generated. Both entry points can fire for the same
-    /// trip (save a rename, then a sweep on the next launch mid-flight), and two
-    /// concurrent generations would write two files, leak one, and bill twice.
-    private var inFlight: Set<UUID> = []
+    /// DESTINATION PATHS currently being generated, not trip UUIDs.
+    ///
+    /// Keyed on the artwork rather than the trip because the artwork is the shared
+    /// resource. Keyed on the trip, two trips to Hong Kong in the same sweep both passed
+    /// the guard and both paid — measured, and exactly the waste destination-keying exists
+    /// to remove. The second now skips and picks the finished file up on the next pass,
+    /// free.
+    ///
+    /// This still covers the original case: the same trip twice concurrently maps to the
+    /// same path.
+    private var inFlight: Set<String> = []
 
     /// Latch for the repair sweep. `.task` fires per WINDOW on macOS, not per
     /// process, and macOS restores multiple windows on relaunch — the same trap
     /// `AppMaintenance.didRunLaunchPass` documents.
     private var didRunRepairSweep = false
+
+    /// Set once the account refuses everything. See `TripCoverArtProviderError`
+    /// `.permanentlyRefused`: a spend cap or a revoked key will not start working because
+    /// we asked again, so the rest of this process stops asking. The trips stay `failed`,
+    /// so a later launch tries ONCE and recovers by itself when he tops up.
+    private var generationBlocked = false
+
+    /// Last time any sweep ran, so the foreground pass cannot fire on every activation.
+    private var lastSweepAt: Date?
+    /// Minimum gap between foreground sweeps. macOS `.active` fires on window focus, so
+    /// without this a click back into the window would start a sweep.
+    private let foregroundSweepInterval: TimeInterval = 2 * 60
 
     /// Ceiling on how many trips one sweep will generate.
     ///
@@ -126,6 +145,18 @@ final class TripCoverService {
         await resolveIfNeeded(tripUUID: tripUUID)
     }
 
+    /// Recovery pass when the app comes back to the foreground.
+    ///
+    /// The launch sweep alone left a trip stranded: a `failed` trip waited for the user to
+    /// relaunch, because nothing retried in-session. Throttled and idempotent, so the cost
+    /// of calling it on every activation is a fetch and a filter.
+    func runForegroundSweep() async {
+        if let lastSweepAt, Date().timeIntervalSince(lastSweepAt) < foregroundSweepInterval {
+            return
+        }
+        await sweep(reason: "foreground")
+    }
+
     /// Once-per-launch pass over trips that have no usable cover.
     ///
     /// Four populations qualify:
@@ -142,6 +173,18 @@ final class TripCoverService {
     func runRepairSweep() async {
         guard !didRunRepairSweep else { return }
         didRunRepairSweep = true
+        // Collect art no trip references any more before generating anything, so a file
+        // written moments from now cannot be mistaken for an orphan.
+        reapOrphanedCovers()
+        await sweep(reason: "launch")
+    }
+
+    private func sweep(reason: String) async {
+        guard !generationBlocked else {
+            NSLog("TripCoverService: %@ sweep skipped, generation is blocked", reason)
+            return
+        }
+        lastSweepAt = Date()
 
         let trips: [LocalTrip]
         do {
@@ -161,8 +204,8 @@ final class TripCoverService {
             .map(\.clientUUID)
 
         guard !pending.isEmpty else { return }
-        NSLog("TripCoverService: sweep generating %d cover(s), %d at a time",
-              pending.count, maxConcurrentGenerations)
+        NSLog("TripCoverService: %@ sweep generating %d cover(s), %d at a time",
+              reason, pending.count, maxConcurrentGenerations)
 
         // Bounded concurrency: seed up to `maxConcurrentGenerations`, then start one
         // more each time one finishes. A plain `for` loop over `addTask` would launch
@@ -217,6 +260,13 @@ final class TripCoverService {
             // version is nil, so those get replaced by illustrations.
             if trip.coverArtPromptVersion != TripCoverPrompt.version { return true }
             guard let path = trip.coverImagePath, !path.isEmpty else { return true }
+            // Art is keyed on the destination now, so a path that is not this
+            // destination's key belongs to a place this trip is no longer going to —
+            // a rename, or a row from before content-addressing.
+            if let expected = TripCoverDestination.relativePath(for: trip.name),
+               path != expected {
+                return true
+            }
             return storage.load(relativePath: path) == nil
         }
         // `failed`, or an unrecognised string written by a newer build.
@@ -226,7 +276,6 @@ final class TripCoverService {
     /// Generate, crop, cache and stamp a cover onto one trip. Idempotent and
     /// single-flight.
     private func resolveIfNeeded(tripUUID: UUID) async {
-        guard !inFlight.contains(tripUUID) else { return }
         guard let trip = fetchTrip(tripUUID), needsFetch(trip) else { return }
         let destination = trip.name
 
@@ -243,8 +292,30 @@ final class TripCoverService {
             return
         }
 
-        inFlight.insert(tripUUID)
-        defer { inFlight.remove(tripUUID) }
+        guard let relativePath = TripCoverDestination.relativePath(for: destination) else {
+            stamp(tripUUID) { $0.coverImageState = TripCoverState.none.rawValue }
+            return
+        }
+
+        // Already generated, for THIS destination, by another trip or by a version of this
+        // trip that has since been deleted. No API call, no wait, no spend: the second
+        // trip to Hong Kong is instant.
+        if storage.load(relativePath: relativePath) != nil {
+            NSLog("TripCoverService: reused cached art for %@", destination)
+            stampResolved(tripUUID, path: relativePath, expecting: destination)
+            return
+        }
+
+        guard !generationBlocked else { return }
+        // Another trip to this same place is already generating it. Skip rather than pay
+        // twice; the next sweep finds the file on disk and resolves for nothing.
+        guard !inFlight.contains(relativePath) else {
+            NSLog("TripCoverService: %@ already generating, will reuse it", destination)
+            return
+        }
+
+        inFlight.insert(relativePath)
+        defer { inFlight.remove(relativePath) }
 
         do {
             let generated = try await provider.illustration(forDestination: destination)
@@ -263,7 +334,7 @@ final class TripCoverService {
                 return (compressed, cropped.summary)
             }.value
 
-            let relativePath = try storage.saveCompressedJpeg(prepared.0)
+            _ = try storage.write(data: prepared.0, relativePath: relativePath)
             NSLog("TripCoverService: generated cover for %@ — crop %@",
                   destination, prepared.1)
 
@@ -315,11 +386,20 @@ final class TripCoverService {
                 return
             }
 
-            // The old file, if any, is now unreferenced. Deleting it AFTER the save,
-            // never before, so a failed save leaves the tile showing the cover it
-            // already had rather than nothing at all.
-            if let previousPath, previousPath != relativePath {
-                try? storage.delete(relativePath: previousPath)
+            // The previous file is deliberately NOT deleted. Art is shared by destination
+            // now, so another trip may be using it, and this code cannot tell. The reaper
+            // decides what is genuinely unreferenced by asking the store.
+            _ = previousPath
+        } catch let refusal as TripCoverArtProviderError where isPermanent(refusal) {
+            // The account is refusing everything. Stop asking for the rest of this
+            // process rather than sending two more generations at a wall that has already
+            // said no — that is how a hard spend limit gets hammered instead of respected.
+            // Still `failed`, so a launch after he raises the cap retries once and heals.
+            generationBlocked = true
+            NSLog("TripCoverService: generation BLOCKED for this session: %@",
+                  refusal.localizedDescription)
+            stamp(tripUUID) { trip in
+                trip.coverImageState = TripCoverState.failed.rawValue
             }
         } catch {
             // `failed`, never `none`. Generation is slow and can time out, hit a rate
@@ -331,6 +411,91 @@ final class TripCoverService {
             stamp(tripUUID) { trip in
                 trip.coverImageState = TripCoverState.failed.rawValue
             }
+        }
+    }
+
+    /// Whether a provider error means "do not ask again this session".
+    private func isPermanent(_ error: TripCoverArtProviderError) -> Bool {
+        switch error {
+        case .permanentlyRefused, .notConfigured: return true
+        default: return false
+        }
+    }
+
+    /// Point a trip at art that is already on disk.
+    ///
+    /// Re-reads the trip and re-checks its name for the same reason the generation path
+    /// does: this can be called after an await, and a trip renamed meanwhile must not be
+    /// captioned with the previous city's art.
+    private func stampResolved(_ uuid: UUID, path: String, expecting destination: String) {
+        guard let trip = fetchTrip(uuid), trip.name == destination else { return }
+        trip.coverImagePath = path
+        trip.coverArtPromptVersion = TripCoverPrompt.version
+        trip.coverImageSourceURL = nil
+        trip.coverImageState = TripCoverState.resolved.rawValue
+        trip.updatedAt = Date()
+        do {
+            try context.save()
+        } catch {
+            NSLog("TripCoverService: SAVE FAILED reusing cached art for %@: %@",
+                  destination, String(describing: error))
+            context.rollback()
+            stamp(uuid) { $0.coverImageState = TripCoverState.failed.rawValue }
+        }
+    }
+
+    // MARK: - Reaping
+
+    /// Delete cover files no trip references.
+    ///
+    /// ## Why reaping rather than reference counting
+    ///
+    /// Once art is keyed on the destination, a file can be shared, so the old rule —
+    /// delete the cover when its trip is deleted — became actively wrong: removing one
+    /// Hong Kong would blank the other. Reference counting was the alternative and was
+    /// rejected. A count is a second source of truth that has to be kept in step with the
+    /// store across deletes, renames, archive restores AND sync applies, with no
+    /// transaction spanning the file system and SwiftData; when it drifts it either leaks
+    /// files forever or deletes one still in use. Reaping derives the answer from the
+    /// store every time, so it cannot drift, and the cost of being wrong in the safe
+    /// direction is a few hundred kilobytes until the next launch.
+    ///
+    /// Cover art also earns this treatment specifically: it is small and always
+    /// re-derivable from the trip's name. A receipt photograph is neither, which is why
+    /// its delete-with-the-row rule stays as it is.
+    ///
+    /// Called at launch BEFORE any generation, so a file about to be written cannot look
+    /// unreferenced. The in-flight guard is belt and braces for any later caller.
+    func reapOrphanedCovers() {
+        guard inFlight.isEmpty else { return }
+        let onDisk = storage.existingRelativePaths()
+        guard !onDisk.isEmpty else { return }
+
+        let referenced: Set<String>
+        do {
+            referenced = Set(
+                try context.fetch(FetchDescriptor<LocalTrip>()).compactMap(\.coverImagePath)
+            )
+        } catch {
+            // Without the store's answer every file looks unreferenced, and reaping on a
+            // failed read would delete the entire cache.
+            NSLog("TripCoverService: reap skipped, could not read trips: %@",
+                  String(describing: error))
+            return
+        }
+
+        var reaped = 0
+        for path in onDisk where !referenced.contains(path) {
+            do {
+                try storage.delete(relativePath: path)
+                reaped += 1
+            } catch {
+                NSLog("TripCoverService: could not reap %@: %@", path, String(describing: error))
+            }
+        }
+        if reaped > 0 {
+            NSLog("TripCoverService: reaped %d orphaned cover file(s), %d still referenced",
+                  reaped, referenced.count)
         }
     }
 

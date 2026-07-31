@@ -104,6 +104,22 @@ enum AppMaintenance {
         await TripCoverService.shared.runRepairSweep()
     }
 
+    /// Foreground counterpart of `runTripCoverSweep` (#428).
+    ///
+    /// Deliberately NOT `runForegroundPass` above, and that is the honest answer to
+    /// "wire the existing one": `runForegroundPass` calls `runPasses`, which also
+    /// materialises recurring expenses and runs the backup. Both of those have been dead
+    /// on every platform since #309 built them, so wiring it to fix a cover bug would
+    /// silently switch on two unrelated features — a behaviour change disguised as a fix.
+    /// This calls only the cover sweep, and #309's wiring stays a decision for whoever
+    /// picks it up.
+    ///
+    /// The throttle and the store read live in `TripCoverService`, so this is safe on
+    /// every activation.
+    static func runTripCoverForegroundSweep() async {
+        await TripCoverService.shared.runForegroundSweep()
+    }
+
     // MARK: - Work
 
     private static func runPasses(isLaunch: Bool) async {

@@ -216,6 +216,24 @@ final class ReceiptStorage {
         return url
     }
 
+    /// Every relative path currently in this store's directory.
+    ///
+    /// Added for the trip-cover reaper (#428): once art is content-addressed on the
+    /// destination rather than the trip, a file can be shared by several trips and
+    /// deleting it when one of them goes is wrong. The reaper needs to compare what is on
+    /// disk against what the store still references, which needs a listing.
+    ///
+    /// Non-recursive and shallow, matching how everything here is written.
+    func existingRelativePaths() -> [String] {
+        guard let dir = try? ensureDirectory(),
+              let names = try? fileManager.contentsOfDirectory(atPath: dir.path) else {
+            return []
+        }
+        return names
+            .filter { !$0.hasPrefix(".") }
+            .map { "\(directoryName)/\($0)" }
+    }
+
     /// Delete the file at `relativePath`. Silent no-op if the file is
     /// already gone — callers don't need to special-case missing receipts.
     func delete(relativePath: String) throws {
