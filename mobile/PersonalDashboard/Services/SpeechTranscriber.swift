@@ -844,6 +844,17 @@ final class SpeechTranscriber {
     /// Quietest level the meter resolves. See `normalizedRMS`.
     nonisolated static let meterFloorDB: Float = -60
 
+    #if DEBUG
+    /// Push a synthetic amplitude through the same path a real buffer takes.
+    /// Visual-QA only (#429): the iOS Simulator cannot start the on-device
+    /// recognizer and has no usable mic, so the listening state is otherwise
+    /// impossible to see without a physical device. Several rounds of size and
+    /// colour tuning were done blind for exactly this reason.
+    func debugInjectLevel(_ level: Float) {
+        publishLevel(level)
+    }
+    #endif
+
     /// Append a new reading to the rolling window and publish the average.
     private func publishLevel(_ level: Float) {
         levelWindow.append(level)

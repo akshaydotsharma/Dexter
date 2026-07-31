@@ -197,17 +197,69 @@ final class VoiceWaveformTests: XCTestCase {
     }
 
     /// A loud burst must not permanently flatten a following quiet passage; the
-    /// reference has to decay back down.
+    /// reference has to decay back down. Deliberately measured over ~10s rather
+    /// than ~4s: see `testGainPreservesDynamicsWithinASentence` for why the
+    /// decay must stay slow.
     func testPeakDecaysSoQuietSpeechRecoversAfterALoudBurst() {
         var trace = VoiceLevelTrace()
         for _ in 0..<10 { trace.record(1.0) }
         let immediatelyAfter = trace.gain
-        // ~4 seconds at the tap's ~47 Hz.
-        for _ in 0..<190 { trace.record(0.12) }
+        for _ in 0..<470 { trace.record(0.12) }  // ~10s at ~47 Hz
         XCTAssertGreaterThan(trace.gain, immediatelyAfter,
                              "the gain reference should decay back toward the quieter signal")
         XCTAssertGreaterThan(trace.normalizedCurrent, 0.5,
-                             "quiet speech after a shout should still register")
+                             "quiet speech well after a shout should register again")
+    }
+
+    /// The regression that a screenshot caught and the suite did not.
+    ///
+    /// With a fast-decaying peak the gain reference chases the speech envelope
+    /// rather than sitting above it, so `level / peak` is ~1 on every frame:
+    /// every bar pegs at full height and the colour ramp pins at red. On device
+    /// that rendered as a solid orange block instead of a waveform. The property
+    /// that matters is not "loud speech reaches full scale", it is "a varying
+    /// input produces a VARYING display".
+    func testGainPreservesDynamicsWithinASentence() {
+        var trace = VoiceLevelTrace()
+        var heights: [Double] = []
+
+        // Two seconds of syllable-modulated speech, the shape a real voice makes.
+        for frame in 0..<94 {
+            let t = Double(frame) / 47
+            let syllable = abs(sin(t * .pi * 2.4))
+            trace.record(Float(0.10 + 0.42 * syllable))
+            heights.append(
+                VoiceLevelTrace.heightFraction(
+                    forBar: VoiceLevelTrace.barCount / 2, trace: trace, time: t
+                )
+            )
+        }
+
+        // Sample only the settled tail, so the initial gain ramp-up isn't what
+        // creates the spread.
+        let settled = Array(heights.suffix(60))
+        let low = settled.min() ?? 0
+        let high = settled.max() ?? 0
+        XCTAssertGreaterThan(high - low, 0.35,
+                             "syllables must produce visibly different bar heights, not a solid block")
+        XCTAssertLessThan(low, 0.7, "quiet moments between syllables must drop well off full scale")
+    }
+
+    /// The colour consequence of the same defect: if height is pinned near full,
+    /// the ramp is pinned at its hot end and every bar reads red.
+    func testColourStaysOffThePeakForOrdinarySpeech() {
+        var trace = VoiceLevelTrace()
+        for frame in 0..<94 {
+            let t = Double(frame) / 47
+            trace.record(Float(0.10 + 0.42 * abs(sin(t * .pi * 2.4))))
+        }
+        let mid = VoiceLevelTrace.heightFraction(
+            forBar: VoiceLevelTrace.barCount / 2, trace: trace, time: 2.0
+        )
+        // Mirrors VoiceWaveform.colorCurve.
+        let rampPosition = pow(max(0, mid), 2.8)
+        XCTAssertLessThan(rampPosition, 0.85,
+                          "ordinary speech should not sit at the red end of the Ember ramp")
     }
 
     func testResetClearsTheGainReference() {

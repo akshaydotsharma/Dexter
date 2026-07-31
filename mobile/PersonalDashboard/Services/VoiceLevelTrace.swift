@@ -31,15 +31,19 @@ struct VoiceLevelTrace: Equatable {
     private var peak: Float = Self.minimumPeak
 
     /// Per-frame decay applied to `peak`. At the tap's ~47 Hz this halves the
-    /// reference roughly every second.
+    /// reference roughly every four seconds.
     ///
-    /// Tuned by `testPeakDecaysSoQuietSpeechRecoversAfterALoudBurst`: at 0.993
-    /// (a two-second half-life) one loud burst left the following quiet speech
-    /// reading under half scale four seconds later, so a single raised voice
-    /// flattened the waveform for the rest of the sentence. A syllable gap is
-    /// only ~5 frames, which this barely moves, so faster recovery costs no
-    /// visible pumping inside a word.
-    static let peakDecay: Float = 0.985
+    /// This has to be SLOW, and getting it wrong is very visible. At a one
+    /// second half-life the reference chased the speech envelope instead of
+    /// sitting above it, so `level / peak` was ~1 on every frame: all 23 bars
+    /// pegged at full height and the colour ramp pinned at red. The waveform
+    /// read as a solid orange block rather than a wave.
+    ///
+    /// A stable reference is what makes syllable-to-syllable dynamics visible,
+    /// which is the entire point of the display. The cost is that recovery after
+    /// a genuinely loud burst takes several seconds, which is how real automatic
+    /// gain behaves and is far less objectionable than having no dynamics at all.
+    static let peakDecay: Float = 0.9963
 
     /// Floor on the gain reference. Without it a silent room would be amplified
     /// until room tone filled the bars.
@@ -105,15 +109,28 @@ struct VoiceLevelTrace: Equatable {
 
     /// Bars in the overlay's waveform. Odd so there is a true centre bar for
     /// energy to ripple outward from.
-    static let barCount = 7
+    ///
+    /// Was 7, carried over from a browser prototype drawn in a 320px-wide phone
+    /// frame. On a real 393pt screen seven bars spanned ~115pt while standing
+    /// 116pt tall, so it read as a narrow column rather than a waveform. A
+    /// denser, wider, shallower row is the shape this is supposed to be.
+    static let barCount = 23
 
     /// How many frames of delay bar `index` reads at. The centre bar is live;
     /// each step outward lags by `framesPerStep`, so a syllable lands in the
     /// middle and travels out to the edges.
+    ///
+    /// `framesPerStep` has to fall as the bar count rises or the ripple stops
+    /// reading as one movement. At 3 frames per step across 23 bars the outer
+    /// bars would lag the centre by ~0.7s, which looks like a row of unrelated
+    /// meters rather than a wave. One frame per step puts the full sweep at
+    /// ~0.23s, slow enough to see travelling and fast enough to stay coherent.
+    static let framesPerStep: Double = 1
+
     static func delayFrames(forBar index: Int, barCount: Int = barCount) -> Int {
         let centre = Double(barCount - 1) / 2
         let distance = abs(Double(index) - centre)
-        return Int((distance * 3).rounded())
+        return Int((distance * framesPerStep).rounded())
     }
 
     /// Height of bar `index` as a fraction of the track, 0...1.

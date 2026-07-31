@@ -65,15 +65,15 @@ struct VoiceWaveform: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
-    // The approved proportions from the design prototype.
+    // Wide and shallow, which is the shape a waveform actually is.
     //
-    // These were briefly grown to 9/13/184 on the theory that the bars read as
-    // dots lost in the animation zone. They only read that way because the mic
-    // meter was dead and they never left their rest height; once amplitude
-    // actually drove them, the larger track was overbearing. Restored.
-    private let barWidth: CGFloat = 7
-    private let barSpacing: CGFloat = 11
-    private let trackHeight: CGFloat = 116
+    // 23 bars at 4/7 span ~246pt across a 393pt screen; the earlier 7 bars at
+    // 7/11 spanned only ~115pt while standing 116pt tall, so it read as a
+    // narrow column. Height comes down to match: the bars should be a band you
+    // scan across, not a tower.
+    private let barWidth: CGFloat = 4
+    private let barSpacing: CGFloat = 7
+    private let trackHeight: CGFloat = 84
 
     var body: some View {
         if reduceMotion {
@@ -146,7 +146,9 @@ struct VoiceWaveform: View {
         Capsule(style: .continuous)
             .fill(
                 silenceProgress == nil
-                    ? Tokens.border
+                    // A flat `Tokens.border` read as a hard dark rule against
+                    // the aurora. It is a resting baseline, not a divider.
+                    ? Tokens.inkSoft.opacity(0.22)
                     : EmberRamp.color(fraction: 0.5 * progress, opacity: 0.75, dark: colorScheme == .dark)
             )
             .frame(
@@ -207,7 +209,7 @@ struct VoiceWaveform: View {
 
     /// Higher keeps more of the range at ink. The one dial for how hot the
     /// waveform reads.
-    private static let colorCurve: Double = 1.9
+    private static let colorCurve: Double = 3.2
 
     private func opacity(for fraction: Double) -> Double {
         switch mode {

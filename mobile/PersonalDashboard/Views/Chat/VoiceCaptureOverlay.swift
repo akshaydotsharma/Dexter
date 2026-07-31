@@ -99,6 +99,15 @@ struct VoiceCaptureOverlay: View {
         .preferredColorScheme(nil)
         .interactiveDismissDisabled(!vm.allowsInteractiveDismiss)
         .onAppear {
+            #if DEBUG
+            // Visual-QA path (#429): skip the real capture session, which the
+            // Simulator cannot start, and drive the listening visuals from a
+            // synthetic envelope instead.
+            if ProcessInfo.processInfo.arguments.contains("-uiTestVoiceDemoLevels") {
+                vm.debugRunSyntheticLevels()
+                return
+            }
+            #endif
             vm.begin()
             // Matches the visible state: the socket isn't up yet, so promising
             // "Listening" here would mislead VoiceOver exactly the way the old

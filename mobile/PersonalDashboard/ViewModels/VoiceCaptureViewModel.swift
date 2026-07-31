@@ -452,6 +452,36 @@ final class VoiceCaptureViewModel {
         transcriber.stop()
     }
 
+    #if DEBUG
+    /// Drive the overlay's listening visuals from a synthetic speech envelope.
+    /// Visual-QA only (#429), entered via the `-uiTestVoiceDemoLevels` launch
+    /// argument. Lets the waveform and aurora be reviewed at real screen size in
+    /// the Simulator, which cannot run the recognizer or capture audio.
+    func debugRunSyntheticLevels() {
+        state = .listening
+        Task { @MainActor in
+            let start = Date()
+            while !Task.isCancelled {
+                let t = Date().timeIntervalSince(start)
+                // Phrases of ~5 Hz syllable bursts separated by gaps, i.e. the
+                // shape real speech makes rather than a smooth sine.
+                let cycle = t.truncatingRemainder(dividingBy: 6.4)
+                let inPhrase = cycle < 2.3 || (cycle > 3.3 && cycle < 5.2)
+                let level: Float
+                if inPhrase {
+                    let syllable = abs(sin(t * .pi * 2.4))
+                    let shape = 0.55 + 0.45 * sin(t * 1.3)
+                    level = Float(min(1, 0.10 + 0.42 * syllable * shape))
+                } else {
+                    level = 0.012
+                }
+                transcriber.debugInjectLevel(level)
+                try? await Task.sleep(nanoseconds: 21_000_000)  // ~47 Hz, the tap's rate
+            }
+        }
+    }
+    #endif
+
     /// Open the system Settings app (permission-denied state).
     func openSettings() {
         if let url = URL(string: UIApplication.openSettingsURLString) {
