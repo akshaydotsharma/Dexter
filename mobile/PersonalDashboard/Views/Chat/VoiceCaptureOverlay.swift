@@ -53,8 +53,8 @@ struct VoiceCaptureOverlay: View {
                 Tokens.surface.ignoresSafeArea()
 
                 // Voice-reactive background field (issue #429). Behind
-                // everything, masked to fade out before the transcript so the
-                // live text stays readable.
+                // everything, masked so the wash sits under the waveform and
+                // stays off the transcript.
                 VoiceAurora(
                     intensity: Self.auroraIntensity,
                     trace: { vm.levelTrace },
@@ -65,6 +65,15 @@ struct VoiceCaptureOverlay: View {
                     topBar
                         .frame(height: 52)
                         .padding(.horizontal, Space.xl)
+
+                    // Transcript above, waveform below. What the user is
+                    // reading gets the top of the screen and the stable
+                    // reading position; the waveform is glanced at, not read,
+                    // so it sits down by the control it relates to.
+                    bodyZone
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Divider().overlay(Tokens.border)
 
                     // Animation zone — the waveform, centered.
                     //
@@ -81,12 +90,6 @@ struct VoiceCaptureOverlay: View {
                     }
                     .frame(height: geo.size.height * animationFraction)
                     .frame(maxWidth: .infinity)
-
-                    Divider().overlay(Tokens.border)
-
-                    // Transcript / body zone.
-                    bodyZone
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // Bottom control zone.
                     bottomZone

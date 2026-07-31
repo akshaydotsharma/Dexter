@@ -184,18 +184,21 @@ struct VoiceAurora: View {
         .opacity(baseOpacity)
     }
 
-    /// Full strength through the top of the screen where the waveform lives,
-    /// falling to a trace behind the transcript. Without this the live text
-    /// stops being readable at full intensity, which would defeat the point of
-    /// showing it.
+    /// Quiet behind the transcript, full strength behind the waveform.
+    ///
+    /// This runs top-light / bottom-heavy because the transcript sits ABOVE the
+    /// waveform. It was the other way round when the waveform was on top; if
+    /// those two ever swap back, this has to swap with them, or the live text
+    /// ends up sitting on the brightest part of the field and stops being
+    /// readable at full intensity.
     private var verticalFalloff: some View {
         LinearGradient(
             gradient: Gradient(stops: [
-                .init(color: .black, location: 0.00),
-                .init(color: .black, location: 0.52),
-                .init(color: .black.opacity(0.62), location: 0.70),
-                .init(color: .black.opacity(0.34), location: 0.86),
-                .init(color: .black.opacity(0.24), location: 1.00)
+                .init(color: .black.opacity(0.30), location: 0.00),
+                .init(color: .black.opacity(0.26), location: 0.30),
+                .init(color: .black.opacity(0.55), location: 0.52),
+                .init(color: .black, location: 0.74),
+                .init(color: .black.opacity(0.80), location: 1.00)
             ]),
             startPoint: .top,
             endPoint: .bottom

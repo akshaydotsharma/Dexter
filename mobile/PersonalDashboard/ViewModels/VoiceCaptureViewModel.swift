@@ -465,8 +465,11 @@ final class VoiceCaptureViewModel {
                 let t = Date().timeIntervalSince(start)
                 // Phrases of ~5 Hz syllable bursts separated by gaps, i.e. the
                 // shape real speech makes rather than a smooth sine.
-                let cycle = t.truncatingRemainder(dividingBy: 6.4)
-                let inPhrase = cycle < 2.3 || (cycle > 3.3 && cycle < 5.2)
+                // Long phrases with short gaps. Weighted toward speaking because
+                // the point of this harness is reviewing the ACTIVE state, and
+                // a screenshot that lands in a gap shows nothing useful.
+                let cycle = t.truncatingRemainder(dividingBy: 8.0)
+                let inPhrase = cycle < 7.0
                 let level: Float
                 if inPhrase {
                     let syllable = abs(sin(t * .pi * 2.4))

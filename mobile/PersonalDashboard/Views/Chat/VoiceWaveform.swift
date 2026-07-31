@@ -71,8 +71,10 @@ struct VoiceWaveform: View {
     // 7/11 spanned only ~115pt while standing 116pt tall, so it read as a
     // narrow column. Height comes down to match: the bars should be a band you
     // scan across, not a tower.
-    private let barWidth: CGFloat = 4
-    private let barSpacing: CGFloat = 7
+    // Bars widen and spread as the count comes down, so the band keeps roughly
+    // its 240pt span and only the density changes.
+    private let barWidth: CGFloat = 5
+    private let barSpacing: CGFloat = 9
     private let trackHeight: CGFloat = 84
 
     var body: some View {

@@ -114,7 +114,7 @@ struct VoiceLevelTrace: Equatable {
     /// frame. On a real 393pt screen seven bars spanned ~115pt while standing
     /// 116pt tall, so it read as a narrow column rather than a waveform. A
     /// denser, wider, shallower row is the shape this is supposed to be.
-    static let barCount = 23
+    static let barCount = 17
 
     /// How many frames of delay bar `index` reads at. The centre bar is live;
     /// each step outward lags by `framesPerStep`, so a syllable lands in the
