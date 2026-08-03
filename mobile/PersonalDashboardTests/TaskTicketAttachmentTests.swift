@@ -247,8 +247,8 @@ final class TaskTicketAttachmentTests: XCTestCase {
     }
 
     /// The list chip says TICKET off the back of this, so a plain document must not
-    /// report a barcode it does not have (#402).
-    func testCountsReportWhetherAnythingIsScannable() throws {
+    /// report a pass it does not carry (#402).
+    func testCountsReportWhetherAnythingIsAPass() throws {
         let scannable = insertTodo(title: "Concert")
         let paperwork = insertTodo(title: "Visa forms")
         try attachTicket(to: scannable, payload: "SCAN-ME")
@@ -257,14 +257,14 @@ final class TaskTicketAttachmentTests: XCTestCase {
         let counts = try TaskTicketService(store: store)
             .counts(todoIds: [scannable.clientUUID, paperwork.clientUUID])
 
-        XCTAssertEqual(counts[scannable.clientUUID], .init(count: 1, hasBarcode: true))
+        XCTAssertEqual(counts[scannable.clientUUID], .init(count: 1, holdsAPass: true))
         XCTAssertEqual(
-            counts[paperwork.clientUUID], .init(count: 1, hasBarcode: false),
+            counts[paperwork.clientUUID], .init(count: 1, holdsAPass: false),
             "a document with no barcode must not read as a ticket"
         )
     }
 
-    /// One scannable attachment among several is enough to call the task a ticket.
+    /// One pass among several attachments is enough to call the task a ticket.
     func testOneBarcodeAmongSeveralAttachmentsCountsAsScannable() throws {
         let todo = insertTodo(title: "Trip paperwork")
         try attachTicket(to: todo, payload: "")
@@ -272,7 +272,56 @@ final class TaskTicketAttachmentTests: XCTestCase {
 
         let counts = try TaskTicketService(store: store).counts(todoIds: [todo.clientUUID])
 
-        XCTAssertEqual(counts[todo.clientUUID], .init(count: 2, hasBarcode: true))
+        XCTAssertEqual(counts[todo.clientUUID], .init(count: 2, holdsAPass: true))
+    }
+
+    /// The bug #437 closed: the summary counted decoded payloads, so the rental
+    /// voucher flew a TICKET pill on its Tasks row and a ticket glyph in Today while
+    /// the Wallet had already stopped calling it a pass. Three surfaces, one rule.
+    func testManageBookingLinkIsNotATicketOnTheRowEither() throws {
+        let rental = insertTodo(title: "Pickup Car")
+        let concert = insertTodo(title: "Concert")
+        try attachTicket(
+            to: rental,
+            payload: "sixt.com/account/#/manage-my-booking-info?metadata=eyJhIjoiYiJ9",
+            presentedAtEntry: true
+        )
+        try attachTicket(to: concert, payload: "SCAN-ME")
+
+        let counts = try TaskTicketService(store: store)
+            .counts(todoIds: [rental.clientUUID, concert.clientUUID])
+
+        XCTAssertEqual(
+            counts[rental.clientUUID], .init(count: 1, holdsAPass: false),
+            "a QR that opens a booking page is not a ticket on any surface"
+        )
+        XCTAssertEqual(counts[concert.clientUUID], .init(count: 1, holdsAPass: true))
+    }
+
+    /// The summary and the Wallet must answer the same question, since disagreeing
+    /// about it is the whole history of this feature (#402, #405, #414, #435, #437).
+    func testTheSummaryAgreesWithTheWallet() throws {
+        let cases: [(String, String, Bool?)] = [
+            ("opaque token", "S3FA7901F97B3", nil),
+            ("check-in link", "https://luma.com/check-in/evt-abc?pk=g-1", nil),
+            ("manage link", "sixt.com/account/#/manage-my-booking-info?m=1", true),
+            ("no barcode, judged a pass", "", true),
+            ("no barcode, unjudged", "", nil)
+        ]
+
+        for (label, payload, judged) in cases {
+            let todo = insertTodo(title: label)
+            try attachTicket(to: todo, payload: payload, presentedAtEntry: judged)
+
+            let summary = try TaskTicketService(store: store)
+                .counts(todoIds: [todo.clientUUID])[todo.clientUUID]
+            let inWallet = !(try walletEntries(for: todo).isEmpty)
+
+            XCTAssertEqual(
+                summary?.holdsAPass, inWallet,
+                "\(label): the row pill and the Wallet disagree"
+            )
+        }
     }
 
     // MARK: - What earns a place in the Wallet (#405)

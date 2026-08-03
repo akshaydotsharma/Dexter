@@ -1144,10 +1144,13 @@ private struct TaskRow: View {
     // something the row can't otherwise reach; the tag yields, since it's still
     // on the detail popover and drives filtering elsewhere.
 
-    /// A scannable attachment earns a pill; a plain file does not (#403). Saying
-    /// FILE spent a row slot on something you can't act on from the list, and the
-    /// file is one tap away in the detail sheet.
-    private var showsTicketPill: Bool { attachments?.hasBarcode == true }
+    /// A pass earns a pill; a plain file does not (#403). Saying FILE spent a row
+    /// slot on something you can't act on from the list, and the file is one tap
+    /// away in the detail sheet.
+    ///
+    /// "Is a pass" is the Wallet's judgement, not "has a barcode" (#437): a rental
+    /// voucher whose QR only opens a booking page is scannable and is not a ticket.
+    private var showsTicketPill: Bool { attachments?.holdsAPass == true }
 
     private var showsMapPill: Bool { todo.mapsURL != nil }
 

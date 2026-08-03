@@ -37,14 +37,19 @@ struct TaskTicketService {
     }
 
     /// What a task's attachments amount to, for the list chip: how many, and whether
-    /// any of them is actually scannable (#402).
+    /// any of them is actually a pass (#402, corrected #437).
     ///
-    /// The chip has to know about the barcode because "TICKET" on a plain PDF is a
-    /// claim the attachment does not support, and the same picker now takes any
-    /// document.
+    /// The chip has to know, because "TICKET" on a plain PDF is a claim the
+    /// attachment does not support and the same picker now takes any document.
+    ///
+    /// This was `hasBarcode` and counted decoded payloads, which is the substitution
+    /// #435 broke: a car rental voucher carries a QR that opens the rental company's
+    /// manage-my-booking page, so the row called it a ticket while the Wallet had
+    /// already stopped. It now reports the Wallet's own verdict, so the pill, the
+    /// Today glyph and the shelf cannot disagree about what a pass is.
     struct Summary: Equatable {
         var count: Int
-        var hasBarcode: Bool
+        var holdsAPass: Bool
     }
 
     /// Summary per owner for a set of records, so the Tasks, Today and trip
@@ -59,10 +64,13 @@ struct TaskTicketService {
         )
         var out: [UUID: Summary] = [:]
         for row in try store.context.fetch(descriptor) where todoIds.contains(row.todoClientUUID) {
-            var summary = out[row.todoClientUUID] ?? Summary(count: 0, hasBarcode: false)
+            var summary = out[row.todoClientUUID] ?? Summary(count: 0, holdsAPass: false)
             summary.count += 1
-            if !row.barcodePayload.trimmingCharacters(in: .whitespaces).isEmpty {
-                summary.hasBarcode = true
+            // The shared rule, not a copy of part of it. `belongsInWallet` decodes a
+            // small JSON blob per row, which is the same cost the Wallet already pays
+            // on every build and is nothing at personal scale.
+            if row.belongsInWallet {
+                summary.holdsAPass = true
             }
             out[row.todoClientUUID] = summary
         }
