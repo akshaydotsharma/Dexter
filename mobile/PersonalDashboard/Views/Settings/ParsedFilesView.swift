@@ -555,9 +555,13 @@ private struct StatementDetailView: View {
                 .foregroundStyle(Tokens.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            VStack(spacing: Space.sm) {
-                ForEach(expenses, id: \.clientUUID) { expense in
-                    ExpenseRow(expense: expense, onTap: {})
+            // One people / trips fetch for this list rather than two per row
+            // (#442); without the scope the rows lose their person colours.
+            ExpenseRowLookupScope {
+                VStack(spacing: Space.sm) {
+                    ForEach(expenses, id: \.clientUUID) { expense in
+                        ExpenseRow(expense: expense, onTap: {})
+                    }
                 }
             }
         }
