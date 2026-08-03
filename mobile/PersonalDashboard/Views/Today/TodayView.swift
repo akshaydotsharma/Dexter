@@ -64,10 +64,12 @@ struct TodayView: View {
     /// rather than a number. A failure leaves the previous set alone: a stale
     /// glyph beats an empty card.
     ///
-    /// Membership means SCANNABLE, not merely attached (#405). The picker takes
-    /// any document now (#400), so a brunch booking would otherwise fly a ticket
-    /// glyph on a glance surface with no way to look closer and find out it isn't
-    /// one — the same claim the Tasks chip stopped making in #403.
+    /// Membership means IS A PASS, not merely attached (#405), and not merely
+    /// scannable (#437). The picker takes any document now (#400), so a brunch
+    /// booking would otherwise fly a ticket glyph on a glance surface with no way to
+    /// look closer and find out it isn't one — the same claim the Tasks chip stopped
+    /// making in #403. Scannable was the next version of the same mistake: a rental
+    /// voucher's QR opens a booking page, so it flew the glyph too.
     private func reloadTicketedTasks() {
         let ids = Set(todosVM.todos.map(\.id))
         guard !ids.isEmpty else {
@@ -75,7 +77,7 @@ struct TodayView: View {
             return
         }
         if let counts = try? TaskTicketService().counts(todoIds: ids) {
-            ticketedTaskIDs = Set(counts.filter { $0.value.hasBarcode }.keys)
+            ticketedTaskIDs = Set(counts.filter { $0.value.holdsAPass }.keys)
         }
     }
 
