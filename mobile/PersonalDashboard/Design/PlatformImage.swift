@@ -41,6 +41,24 @@ extension PlatformImage {
         #endif
     }
 
+    /// Wrap a `CGImage` back into a platform bitmap, cross-platform. The inverse of
+    /// `cgImageCompat`, for code that crops or composites with CoreGraphics and then
+    /// has to hand the result to SwiftUI.
+    ///
+    /// The macOS side takes the size from the `CGImage`'s own pixel dimensions, so a
+    /// round trip through this preserves the bitmap 1:1 rather than inheriting the
+    /// point size of whatever it was cropped from.
+    static func fromCGImage(_ cgImage: CGImage) -> PlatformImage {
+        #if canImport(UIKit)
+        return UIImage(cgImage: cgImage)
+        #else
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
+        #endif
+    }
+
     /// JPEG-encode at `quality` (0…1), cross-platform. `UIImage.jpegData` on
     /// iOS; an `NSBitmapImageRep` round-trip on macOS.
     func jpegDataCompat(quality: CGFloat) -> Data? {
