@@ -30,21 +30,31 @@ struct WalletEntry: Identifiable {
         /// reason a trip's is: the task owns it, so that is where it is edited.
         case task(ticketID: UUID, todoID: UUID, taskTitle: String)
 
+        /// A document attached to a stop on a trip's timeline (#432). Distinct
+        /// from `.trip`, which is the stop's own inline ticket: a stop can hold
+        /// several documents and each is its own card, so the ticket's id is what
+        /// identifies this one. Chipped with the trip's name like `.trip`, because
+        /// what you want to read above a boarding pass is where you are going, not
+        /// which row of an itinerary it hangs off.
+        case tripDocument(ticketID: UUID, itemID: UUID, tripID: UUID, tripName: String)
+
         /// Chip text shown above the card.
         var label: String {
             switch self {
-            case .wallet:                      return "Wallet"
-            case .trip(_, _, let tripName):    return tripName
-            case .task(_, _, let taskTitle):   return taskTitle
+            case .wallet:                              return "Wallet"
+            case .trip(_, _, let tripName):            return tripName
+            case .task(_, _, let taskTitle):           return taskTitle
+            case .tripDocument(_, _, _, let tripName): return tripName
             }
         }
 
         /// SF Symbol for the chip.
         var icon: String {
             switch self {
-            case .wallet: return "wallet.pass"
-            case .trip:   return "airplane"
-            case .task:   return "checklist"
+            case .wallet:       return "wallet.pass"
+            case .trip:         return "airplane"
+            case .task:         return "checklist"
+            case .tripDocument: return "airplane"
             }
         }
 
@@ -53,8 +63,8 @@ struct WalletEntry: Identifiable {
         /// there is exactly one place each record is edited.
         var isEditableInWallet: Bool {
             switch self {
-            case .wallet:      return true
-            case .trip, .task: return false
+            case .wallet:                          return true
+            case .trip, .task, .tripDocument:      return false
             }
         }
     }
@@ -91,9 +101,10 @@ struct WalletEntry: Identifiable {
 
     var id: String {
         switch source {
-        case .wallet(let cardID):        return "wallet:\(cardID.uuidString)"
-        case .trip(let itemID, _, _):    return "trip:\(itemID.uuidString)"
-        case .task(let ticketID, _, _):  return "task:\(ticketID.uuidString)"
+        case .wallet(let cardID):                  return "wallet:\(cardID.uuidString)"
+        case .trip(let itemID, _, _):              return "trip:\(itemID.uuidString)"
+        case .task(let ticketID, _, _):            return "task:\(ticketID.uuidString)"
+        case .tripDocument(let ticketID, _, _, _): return "trip-doc:\(ticketID.uuidString)"
         }
     }
 
@@ -113,6 +124,22 @@ private struct TaskCardContext {
     let title: String
     let address: String
     let mapsLink: String
+}
+
+/// What a trip stop lends to the documents hanging off it (#432): its name, where
+/// it is, the day it sits on, and which trip it belongs to.
+///
+/// Same shape and same reasoning as `TaskCardContext`. The day matters here in a
+/// way it does not for a task: a document that printed no date of its own still
+/// belongs on the day of the stop it was attached to, which is the difference
+/// between a boarding pass sorting next to its flight and sorting under whenever
+/// the file happened to be uploaded.
+private struct StopCardContext {
+    let tripUUID: UUID
+    let title: String
+    let address: String
+    let mapsLink: String
+    let day: Date
 }
 
 // MARK: - Grouping
@@ -145,11 +172,12 @@ extension WalletEntry {
     ///   - trips: used only to resolve a trip's name for the source chip. An
     ///     item whose trip has vanished is still shown, labelled "Trip", rather
     ///     than dropped: the ticket is the user's, the trip is just context.
-    ///   - taskTickets: every live `LocalTaskTicket` (#399). Only those that are
-    ///     actually a pass are taken — see `LocalTaskTicket.belongsInWallet`. The
-    ///     model held nothing but tickets when it was written, but the picker
-    ///     behind it now accepts any document (#400), so the rest are ordinary
-    ///     attachments and have no card to show.
+    ///   - taskTickets: every live `LocalTaskTicket` (#399), whether it hangs off a
+    ///     task or off a trip stop (#432). Only those that are actually a pass are
+    ///     taken — see `LocalTaskTicket.belongsInWallet`. The model held nothing but
+    ///     tickets when it was written, but the picker behind it now accepts any
+    ///     document (#400), so the rest are ordinary attachments and have no card to
+    ///     show.
     ///   - todos: used only to resolve the owning task's title, which is both the
     ///     source chip and the card's fallback name.
     static func build(
@@ -177,6 +205,19 @@ extension WalletEntry {
                 mapsLink: todo.googleMapsLink
             )
         }
+        // The same, for the stops that documents hang off (#432). A stop is
+        // hard-deleted rather than tombstoned, so its absence from this map is what
+        // makes an orphaned document skip the Wallet.
+        var stopContext: [UUID: StopCardContext] = [:]
+        for item in itineraryItems {
+            stopContext[item.clientUUID] = StopCardContext(
+                tripUUID: item.tripUUID,
+                title: item.title,
+                address: item.address,
+                mapsLink: item.googleMapsLink,
+                day: item.dayDate
+            )
+        }
 
         var out: [WalletEntry] = []
         out.reserveCapacity(cards.count + itineraryItems.count + taskTickets.count)
@@ -196,11 +237,17 @@ extension WalletEntry {
         }
 
         for item in itineraryItems {
-            // `hasTicket` covers flights and events (an attachment and/or a
-            // barcode). `hasStayBooking` additionally covers the common
-            // email-imported hotel case, which has a confirmation code and
-            // nothing scannable but is still a card you show at a desk.
-            guard item.hasTicket || item.hasStayBooking else { continue }
+            // `belongsInWallet` is the shared rule (#405, #414): the person's own
+            // override, else something scannable, else a document judged to be
+            // presented at a door that also prints a credential. `hasBookingConfirmation`
+            // is the arm that keeps every email-imported booking — a hotel or a flight
+            // whose PNR is the thing you read out at the counter.
+            //
+            // Narrowed here in #432 from "has any attachment at all". That was true
+            // enough while the only file that could reach a stop came off the ticket
+            // scanner; now that any document can be attached by hand, it would put
+            // every rental receipt on the shelf next to the boarding passes.
+            guard item.belongsInWallet || item.hasBookingConfirmation else { continue }
             let data = TicketCardData(item)
             out.append(
                 WalletEntry(
@@ -219,19 +266,57 @@ extension WalletEntry {
         }
 
         for ticket in taskTickets {
-            // Not every task attachment is a pass (#405). The picker takes any
+            // Not every attachment is a pass (#405). The picker takes any
             // document, so a restaurant reservation or an appointment card gets
-            // stored here too — worth keeping on the task, but nothing you present
-            // at a door, and a Wallet full of those is a Wallet you stop trusting
-            // to hold the thing you are about to scan.
+            // stored here too — worth keeping on the record it belongs to, but
+            // nothing you present at a door, and a Wallet full of those is a Wallet
+            // you stop trusting to hold the thing you are about to scan.
             guard ticket.belongsInWallet else { continue }
+
+            // A document on a trip stop (#432) borrows the stop's name, address and
+            // day, exactly as a task's borrows the task's.
+            if case .tripStop(let itemID) = ticket.owner {
+                guard let stop = stopContext[itemID] else { continue }
+                let data = TicketCardData(
+                    ticket,
+                    ownerTitle: stop.title,
+                    ownerAddress: stop.address,
+                    ownerMapsLink: stop.mapsLink
+                )
+                out.append(
+                    WalletEntry(
+                        source: .tripDocument(
+                            ticketID: ticket.clientUUID,
+                            itemID: itemID,
+                            tripID: stop.tripUUID,
+                            tripName: tripNames[stop.tripUUID] ?? "Trip"
+                        ),
+                        card: data,
+                        // Always an event, for the reason a task's document is: this
+                        // model carries no travel grammar to colour it by, even when
+                        // the stop it hangs off is a flight.
+                        kind: .event,
+                        // The document's own printed day when it read one, and the
+                        // stop's day when it did not. A boarding pass uploaded in
+                        // March for a flight in June belongs in June.
+                        day: ticket.eventDate ?? stop.day,
+                        // Never ages out on a date it did not print — same reasoning
+                        // as a task's document, and here the stop's day is a real
+                        // enough anchor to fall back to.
+                        validThrough: ticket.eventDate ?? stop.day,
+                        timeText: printedTime(ticket.startTimeText)
+                    )
+                )
+                continue
+            }
+
             guard let task = taskContext[ticket.todoClientUUID] else { continue }
             let taskTitle = task.title
             let data = TicketCardData(
                 ticket,
-                taskTitle: taskTitle,
-                taskAddress: task.address,
-                taskMapsLink: task.mapsLink
+                ownerTitle: taskTitle,
+                ownerAddress: task.address,
+                ownerMapsLink: task.mapsLink
             )
             out.append(
                 WalletEntry(

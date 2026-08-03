@@ -17,9 +17,9 @@ import SwiftUI
 struct TaskTicketCardView: View {
     let ticket: TaskTicket
     /// Shown as the headline when the extractor could not read an event name off
-    /// the ticket. The owning task's title is always a better fallback than an
+    /// the document. The owning record's title is always a better fallback than an
     /// empty card.
-    let taskTitle: String
+    let ownerTitle: String
 
     /// Whether the file backing this ticket is present on this device. When it is
     /// not, the card says so instead of implying the attachment is gone for good.
@@ -27,7 +27,11 @@ struct TaskTicketCardView: View {
 
     private var meta: TicketMeta? { ticket.ticketMeta }
 
-    private var accent: Color { Tokens.accent(for: .tasks) }
+    /// Taken from what the document hangs off (#432): the Tasks indigo for a task's,
+    /// the itinerary purple for a trip stop's, so a card reads as belonging to the
+    /// section it was added from. Read off the ticket rather than passed in, so no
+    /// call site can hand a stop's document the wrong section's colour.
+    private var accent: Color { Tokens.accent(for: ticket.owner.section) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,7 +97,7 @@ struct TaskTicketCardView: View {
             }
 
             // Primary: the one thing you are looking for.
-            Text(ticket.displayTitle(fallback: taskTitle))
+            Text(ticket.displayTitle(fallback: ownerTitle))
                 .font(.edTitle)
                 .foregroundStyle(Tokens.ink)
                 .multilineTextAlignment(.leading)

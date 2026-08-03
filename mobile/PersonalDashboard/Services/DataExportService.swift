@@ -433,6 +433,7 @@ final class DataExportService {
         DataArchive.TaskTicketDTO(
             clientUUID: ticket.clientUUID,
             todoClientUUID: ticket.todoClientUUID,
+            itineraryItemUUID: ticket.itineraryItemUUID,
             attachmentPath: ticket.attachmentPath,
             barcodePayload: ticket.barcodePayload,
             barcodeSymbology: ticket.barcodeSymbology,

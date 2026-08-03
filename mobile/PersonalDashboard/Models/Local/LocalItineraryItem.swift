@@ -377,4 +377,34 @@ final class LocalItineraryItem {
         guard kindEnum == .stay else { return false }
         return !sourceConfirmation.trimmingCharacters(in: .whitespaces).isEmpty || hasTicket
     }
+
+    /// `true` when the booking behind this stop printed a confirmation code
+    /// (#432). That code IS the credential — it is what you read out at a hotel
+    /// desk or a rental counter — so a booking carrying one earns a Wallet card
+    /// whether or not anything on it scans.
+    ///
+    /// Deliberately not limited to stays, unlike `hasStayBooking`: an
+    /// email-imported flight or train has a PNR and nothing scannable, and it is
+    /// exactly the card you want in front of you at a counter.
+    var hasBookingConfirmation: Bool {
+        !sourceConfirmation.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+}
+
+// MARK: - Wallet eligibility (#432)
+
+/// A stop is judged by the same rule a task's document is (#405, #414).
+///
+/// Until #432 the Wallet took a stop on `hasTicket` alone — anything with a file
+/// on it. That was safe while the only way to get a file onto a stop was the
+/// ticket scanner, which is fed boarding passes. Now that any document can be
+/// attached to a stop by hand, "has a file" stops meaning "is a pass" for exactly
+/// the reason it stopped meaning it for tasks when #400 widened their picker: the
+/// rental receipt and the parking confirmation arrive through the same door as the
+/// boarding pass, and a Wallet holding all three is a Wallet you stop trusting.
+///
+/// `reference` maps to the confirmation code, which is this model's equivalent of
+/// a printed booking reference.
+extension LocalItineraryItem: WalletEligible {
+    var reference: String { sourceConfirmation }
 }

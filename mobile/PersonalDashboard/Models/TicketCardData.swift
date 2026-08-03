@@ -175,25 +175,26 @@ extension TicketCardData {
         self.meta = meta
     }
 
-    /// Project a ticket attached to a task (#399, surfaced in the wallet by
-    /// #398). Always the event layout: the model was built for event tickets and
-    /// deliberately carries no route, airline or BCBP grammar.
+    /// Project a document attached to a task (#399, surfaced in the wallet by
+    /// #398) or to a trip stop (#432). Always the event layout: the model was
+    /// built for event tickets and deliberately carries no route, airline or BCBP
+    /// grammar.
     ///
     /// - Parameters:
-    ///   - taskTitle: the owning task's title, used when the extractor could not
-    ///     read an event name off the ticket — "Spider-Man" as you typed it beats
-    ///     a blank card.
-    ///   - taskAddress: the owning task's address. See the note on `address` below.
-    ///   - taskMapsLink: the owning task's stored map link, same reason.
+    ///   - ownerTitle: the owning record's title, used when the extractor could
+    ///     not read an event name off the document — "Spider-Man" as you typed it
+    ///     beats a blank card.
+    ///   - ownerAddress: the owning record's address. See the note on `address` below.
+    ///   - ownerMapsLink: the owning record's stored map link, same reason.
     init(
         _ ticket: LocalTaskTicket,
-        taskTitle: String,
-        taskAddress: String = "",
-        taskMapsLink: String = ""
+        ownerTitle: String,
+        ownerAddress: String = "",
+        ownerMapsLink: String = ""
     ) {
         let meta = ticket.ticketMeta
         let event = ticket.eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedTitle = event.isEmpty ? taskTitle : event
+        let resolvedTitle = event.isEmpty ? ownerTitle : event
 
         self.layout = .event
         self.eyebrow = Self.eyebrow(for: .event, eventType: meta?.eventType)
@@ -223,9 +224,9 @@ extension TicketCardData {
         // the street address on its back, and failing that the task is what a person
         // wrote down about where they are going.
         self.address = meta?.address?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? taskAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ownerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         self.mapsURL = Self.mapsURL(
-            explicit: meta?.directionsURL ?? taskMapsLink,
+            explicit: meta?.directionsURL ?? ownerMapsLink,
             name: resolvedTitle,
             address: self.address
         )

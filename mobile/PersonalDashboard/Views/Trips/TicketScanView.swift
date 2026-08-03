@@ -138,9 +138,9 @@ extension ScannablePass {
 // MARK: - Task pass (#399)
 
 extension ScannablePass {
-    /// Build a pass from a task ticket. `taskTitle` backs the headline when the
+    /// Build a pass from a task ticket. `ownerTitle` backs the headline when the
     /// extractor could not read an event name off the ticket.
-    init(ticket: TaskTicket, taskTitle: String) {
+    init(ticket: TaskTicket, ownerTitle: String) {
         let meta = ticket.ticketMeta
 
         var parts: [String] = []
@@ -170,7 +170,7 @@ extension ScannablePass {
         }
 
         self.init(
-            title: ticket.displayTitle(fallback: taskTitle),
+            title: ticket.displayTitle(fallback: ownerTitle),
             subtitle: parts.joined(separator: "  ·  "),
             payload: ticket.barcodePayload,
             symbology: ticket.barcodeSymbology,

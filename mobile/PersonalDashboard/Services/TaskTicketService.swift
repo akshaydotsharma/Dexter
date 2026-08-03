@@ -20,8 +20,17 @@ struct TaskTicketService {
 
     /// Tickets attached to `todoId`, in display order.
     func list(todoId: UUID) throws -> [TaskTicket] {
+        try list(owner: .task(todoId))
+    }
+
+    /// Documents attached to any owner, in display order (#432).
+    ///
+    /// Filters on the owner id alone: a task's id and a trip stop's id are both
+    /// freshly minted UUIDs, so one can never return the other's rows.
+    func list(owner: TicketOwner) throws -> [TaskTicket] {
+        let ownerID = owner.id
         let descriptor = FetchDescriptor<LocalTaskTicket>(
-            predicate: #Predicate { $0.todoClientUUID == todoId && $0.deletedAt == nil },
+            predicate: #Predicate { $0.todoClientUUID == ownerID && $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.position, order: .forward)]
         )
         return try store.context.fetch(descriptor).map { $0.toDTO() }
@@ -38,8 +47,11 @@ struct TaskTicketService {
         var hasBarcode: Bool
     }
 
-    /// Summary per task for a set of tasks, so the Tasks and Today lists can show a
-    /// chip without loading any bytes.
+    /// Summary per owner for a set of records, so the Tasks, Today and trip
+    /// timeline lists can show a chip without loading any bytes.
+    ///
+    /// Keyed on the owner id, which is what the caller already has, whether those
+    /// ids are tasks' or trip stops' (#432).
     func counts(todoIds: Set<UUID>) throws -> [UUID: Summary] {
         guard !todoIds.isEmpty else { return [:] }
         let descriptor = FetchDescriptor<LocalTaskTicket>(
@@ -141,9 +153,19 @@ struct TaskTicketService {
         todoId: UUID,
         extraction: TaskTicketExtraction? = nil
     ) throws -> UUID {
+        try attach(ticket, owner: .task(todoId), extraction: extraction)
+    }
+
+    /// Attach a document to any owner, returning the id of the stored row (#432).
+    @discardableResult
+    func attach(
+        _ ticket: TaskTicket,
+        owner: TicketOwner,
+        extraction: TaskTicketExtraction? = nil
+    ) throws -> UUID {
         let extraction = extraction ?? TaskTicketExtraction()
-        let id = try extraction.attach(ticket, toTodo: todoId, context: store.context)
-        touchTodo(todoId)
+        let id = try extraction.attach(ticket, to: owner, context: store.context)
+        announce(owner)
         return id
     }
 
@@ -154,12 +176,19 @@ struct TaskTicketService {
     /// and the task has already been created by this point either way.
     @discardableResult
     func attachAll(_ tickets: [TaskTicket], todoId: UUID) -> [UUID] {
+        attachAll(tickets, owner: .task(todoId))
+    }
+
+    /// Same, for any owner: an editor composing a brand-new trip stop holds its
+    /// documents until the stop is committed, exactly as the task editor does.
+    @discardableResult
+    func attachAll(_ tickets: [TaskTicket], owner: TicketOwner) -> [UUID] {
         var stored: [UUID] = []
         for ticket in tickets {
             do {
-                stored.append(try attach(ticket, todoId: todoId))
+                stored.append(try attach(ticket, owner: owner))
             } catch {
-                NSLog("TaskTicketService: could not attach a pending ticket: %@",
+                NSLog("TaskTicketService: could not attach a pending document: %@",
                       error.localizedDescription)
             }
         }
@@ -190,8 +219,20 @@ struct TaskTicketService {
         isPDF: Bool,
         extraction: TaskTicketExtraction? = nil
     ) async throws -> UUID {
+        try await add(owner: .task(todoId), context: context, data: data, isPDF: isPDF, extraction: extraction)
+    }
+
+    /// Convenience for callers that already have an owner: read then attach.
+    @discardableResult
+    func add(
+        owner: TicketOwner,
+        context: TaskTicketContext,
+        data: Data,
+        isPDF: Bool,
+        extraction: TaskTicketExtraction? = nil
+    ) async throws -> UUID {
         let read = try await read(data: data, isPDF: isPDF, context: context, extraction: extraction)
-        return try attach(read.ticket(todoId: todoId), todoId: todoId, extraction: extraction)
+        return try attach(read.ticket(owner: owner), owner: owner, extraction: extraction)
     }
 
     /// Overwrite the user-editable fields on a ticket. Every extracted value is
@@ -230,7 +271,7 @@ struct TaskTicketService {
 
         row.updatedAt = Date()
         try store.context.save()
-        touchTodo(row.todoClientUUID)
+        announce(row.owner)
         return row.toDTO()
     }
 
@@ -258,7 +299,7 @@ struct TaskTicketService {
     func enrich(_ existing: TaskTicket, from read: TaskTicketRead) throws -> Bool {
         let candidate = read.ticket(
             id: existing.id,
-            todoId: existing.todoId,
+            owner: existing.owner,
             position: existing.position
         )
 
@@ -346,20 +387,29 @@ struct TaskTicketService {
         )
         guard let row = try store.context.fetch(descriptor).first else { return }
         let path = row.attachmentPath
+        let owner = row.owner
         row.deletedAt = Date()
         row.updatedAt = Date()
         try store.context.save()
         // A file that is already gone is not an error worth surfacing: the row is
         // detached either way, which is what the user asked for.
         try? storage.delete(relativePath: path)
-        touchTodo(ticket.todoId)
+        announce(owner)
     }
 
     /// Detach every ticket on a task. Called when the task itself is deleted so
     /// its tickets don't outlive it as orphaned rows and files.
     func deleteAll(todoId: UUID) throws {
+        try deleteAll(owner: .task(todoId))
+    }
+
+    /// Same for any owner. A trip stop is deleted outright rather than tombstoned,
+    /// so without this its documents would survive it as rows pointing at nothing,
+    /// with their files still on disk (#432).
+    func deleteAll(owner: TicketOwner) throws {
+        let ownerID = owner.id
         let descriptor = FetchDescriptor<LocalTaskTicket>(
-            predicate: #Predicate { $0.todoClientUUID == todoId && $0.deletedAt == nil }
+            predicate: #Predicate { $0.todoClientUUID == ownerID && $0.deletedAt == nil }
         )
         let rows = try store.context.fetch(descriptor)
         guard !rows.isEmpty else { return }
@@ -378,21 +428,33 @@ struct TaskTicketService {
 
     // MARK: - Internals
 
-    /// Bump the task's `updatedAt` so attaching, editing or removing a ticket
-    /// counts as editing the task, then tell the rest of the app the store moved.
+    /// Bump the owner's `updatedAt` so attaching, editing or removing a document
+    /// counts as editing the record it hangs off, then tell the rest of the app the
+    /// store moved.
     ///
-    /// Without the `updatedAt` bump, sync would not see the task as changed and
+    /// Without the `updatedAt` bump, sync would not see the owner as changed and
     /// any surface sorted on `updatedAt` would not move it. Without the
-    /// notification, the pass chip on the Tasks and Today rows would keep its old
-    /// count until those views happened to reload — they refresh off
+    /// notification, the chip on the Tasks, Today and trip timeline rows would keep
+    /// its old count until those views happened to reload — they refresh off
     /// `localStoreDidChange` and nothing else here would post it.
-    private func touchTodo(_ todoId: UUID) {
-        let descriptor = FetchDescriptor<LocalTodo>(
-            predicate: #Predicate { $0.clientUUID == todoId }
-        )
-        if let todo = try? store.context.fetch(descriptor).first {
-            todo.updatedAt = Date()
-            try? store.context.save()
+    private func announce(_ owner: TicketOwner) {
+        switch owner {
+        case .task(let id):
+            let descriptor = FetchDescriptor<LocalTodo>(
+                predicate: #Predicate { $0.clientUUID == id }
+            )
+            if let todo = try? store.context.fetch(descriptor).first {
+                todo.updatedAt = Date()
+                try? store.context.save()
+            }
+        case .tripStop(let id):
+            let descriptor = FetchDescriptor<LocalItineraryItem>(
+                predicate: #Predicate { $0.clientUUID == id }
+            )
+            if let item = try? store.context.fetch(descriptor).first {
+                item.updatedAt = Date()
+                try? store.context.save()
+            }
         }
         NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
     }

@@ -75,7 +75,11 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
 /// only ever encoded into the backup archive and the sync oplog.
 struct TaskTicket: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
+    /// The owning record's id, whichever kind it is. See
+    /// `LocalTaskTicket.todoClientUUID` for why the name outlived its meaning.
     let todoId: UUID
+    /// Set when the owner is a trip stop rather than a task (#432).
+    var itineraryItemUUID: UUID? = nil
     var attachmentPath: String
     var barcodePayload: String
     var barcodeSymbology: String
@@ -91,6 +95,14 @@ struct TaskTicket: Codable, Identifiable, Hashable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
+
+    /// What this document hangs off (#432). Mirrors `LocalTaskTicket.owner`, so the
+    /// unsaved copy an editor is holding answers the question the same way the
+    /// stored row does.
+    var owner: TicketOwner {
+        if let itineraryItemUUID { return .tripStop(itineraryItemUUID) }
+        return .task(todoId)
+    }
 
     var hasBarcode: Bool {
         !barcodePayload.trimmingCharacters(in: .whitespaces).isEmpty
