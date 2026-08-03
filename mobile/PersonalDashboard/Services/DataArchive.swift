@@ -115,6 +115,13 @@ enum DataArchive {
     struct TaskTicketDTO: Codable {
         let clientUUID: UUID
         let todoClientUUID: UUID
+        // MARK: Added in #432 — which kind of record owns this document.
+        // Optional with a nil default, the same shape `NoteDTO`'s later additions
+        // use, so archives written before this field existed still decode and
+        // restore their rows as tasks' — which is what all of them are. Dropping
+        // it would silently reattach every trip stop's document to a task id that
+        // is really a stop's, and the Wallet would then skip it as an orphan.
+        var itineraryItemUUID: UUID? = nil
         let attachmentPath: String
         let barcodePayload: String
         let barcodeSymbology: String

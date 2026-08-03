@@ -492,7 +492,7 @@ struct WalletView: View {
         switch entry.source {
         case .wallet:
             break
-        case .trip(_, let tripID, _):
+        case .trip(_, let tripID, _), .tripDocument(_, _, let tripID, _):
             router.focus = ActivityFocus(section: .itineraries, id: tripID)
             router.go(to: .itineraries)
         case .task(_, let todoID, _):
@@ -505,8 +505,8 @@ struct WalletView: View {
     /// card that has no wallet row of its own.
     private func walletCardID(of entry: WalletEntry) -> UUID? {
         switch entry.source {
-        case .wallet(let cardID): return cardID
-        case .trip, .task:        return nil
+        case .wallet(let cardID):            return cardID
+        case .trip, .task, .tripDocument:    return nil
         }
     }
 

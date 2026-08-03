@@ -6,13 +6,17 @@ import UIKit
 import AppKit
 #endif
 
-/// Thrown when the owning task disappeared while extraction was in flight.
+/// Thrown when the record the document was being attached to disappeared while
+/// extraction was in flight.
 enum TaskTicketExtractionError: LocalizedError {
-    case taskGone
+    case ownerGone(TicketOwner)
 
     var errorDescription: String? {
         switch self {
-        case .taskGone: return "That task was deleted while the ticket was being read."
+        case .ownerGone(.task):
+            return "That task was deleted while the ticket was being read."
+        case .ownerGone(.tripStop):
+            return "That stop was deleted while the document was being read."
         }
     }
 }
@@ -60,6 +64,45 @@ struct TaskTicketContext: Equatable, Sendable {
     /// Title only, for a task being composed that has nothing else filled in yet.
     init(taskTitle: String) {
         self.init(title: taskTitle)
+    }
+
+    /// Build from a trip stop (#432).
+    ///
+    /// A stop knows more about the booking than most files print: the day it is on,
+    /// the time it starts, its address and whatever was typed into its notes. The
+    /// same reasoning as the task case — a document uploaded against a stop should
+    /// not then have to be described by hand.
+    ///
+    /// The date handed over is the stop's own day carrying its start time when it
+    /// has one, since `dueDate` here means "the moment this is for". A stop's times
+    /// are stored as UTC wall-clock (see `LocalItineraryItem.startTime`), so the
+    /// printed hour is read back off the UTC calendar rather than the device's,
+    /// which would shift it by the current offset.
+    init(itineraryItem: LocalItineraryItem) {
+        self.init(
+            title: itineraryItem.title,
+            notes: itineraryItem.notes,
+            dueDate: Self.moment(of: itineraryItem),
+            address: itineraryItem.address
+        )
+    }
+
+    /// The stop's day, at its start time when it has one and at local midnight
+    /// otherwise.
+    private static func moment(of item: LocalItineraryItem) -> Date? {
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = .current
+        let day = local.startOfDay(for: item.dayDate)
+        guard let start = item.startTime else { return day }
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let printed = utc.dateComponents([.hour, .minute], from: start)
+        return local.date(
+            bySettingHour: printed.hour ?? 0,
+            minute: printed.minute ?? 0,
+            second: 0,
+            of: day
+        ) ?? day
     }
 
     /// Whether there is anything here worth telling the model about at all.
@@ -214,6 +257,13 @@ struct TaskTicketRead {
     /// the DTO here rather than inside the insert is what lets the unsaved case
     /// render a real card and be edited before anything is written.
     func ticket(id: UUID = UUID(), todoId: UUID, position: Int = 0, now: Date = Date()) -> TaskTicket {
+        ticket(id: id, owner: .task(todoId), position: position, now: now)
+    }
+
+    /// The same derivation for a document on any owner (#432). The task-shaped
+    /// overload above delegates here, so the fields a card is built from cannot
+    /// drift between a task's document and a trip stop's.
+    func ticket(id: UUID = UUID(), owner: TicketOwner, position: Int = 0, now: Date = Date()) -> TaskTicket {
         // Extras go in the JSON blob so a new ticket shape never forces another
         // @Model migration. `TicketMeta` already carries these three fields.
         var meta = TicketMeta()
@@ -270,7 +320,8 @@ struct TaskTicketRead {
 
         return TaskTicket(
             id: id,
-            todoId: todoId,
+            todoId: owner.id,
+            itineraryItemUUID: owner.itineraryItemUUID,
             attachmentPath: attachmentPath,
             barcodePayload: barcodePayload,
             barcodeSymbology: barcodeSymbology,
@@ -463,13 +514,30 @@ struct TaskTicketExtraction {
         toTodo todoUUID: UUID,
         context: ModelContext
     ) throws -> UUID {
-        guard let todo = Self.fetchTodo(uuid: todoUUID, context: context) else {
+        try attach(ticket, to: .task(todoUUID), context: context)
+    }
+
+    /// Attach a document to any owner (#432).
+    ///
+    /// The owner is re-fetched here rather than trusted, for the reason the type
+    /// doc gives: the record can be deleted from another window during the
+    /// multi-second read, and a row pointing at a stop that no longer exists is an
+    /// orphan with a file behind it. Whichever kind it is, a vanished owner takes
+    /// the stored bytes back out on the way past.
+    @discardableResult
+    func attach(
+        _ ticket: TaskTicket,
+        to owner: TicketOwner,
+        context: ModelContext
+    ) throws -> UUID {
+        guard Self.ownerExists(owner, context: context) else {
             try? TicketStorage.taskTickets.delete(relativePath: ticket.attachmentPath)
-            throw TaskTicketExtractionError.taskGone
+            throw TaskTicketExtractionError.ownerGone(owner)
         }
 
         let row = LocalTaskTicket(
-            todoClientUUID: todo.clientUUID,
+            todoClientUUID: owner.id,
+            itineraryItemUUID: owner.itineraryItemUUID,
             attachmentPath: ticket.attachmentPath,
             barcodePayload: ticket.barcodePayload,
             barcodeSymbology: ticket.barcodeSymbology,
@@ -481,10 +549,10 @@ struct TaskTicketExtraction {
             gate: ticket.gate,
             reference: ticket.reference,
             ticketMetaJSON: ticket.ticketMetaJSON,
-            position: Self.nextPosition(todoUUID: todo.clientUUID, context: context)
+            position: Self.nextPosition(ownerUUID: owner.id, context: context)
         )
         context.insert(row)
-        todo.updatedAt = Date()
+        Self.touchOwner(owner, context: context)
         try? context.save()
 
         return row.clientUUID
@@ -500,11 +568,41 @@ struct TaskTicketExtraction {
         return (try? context.fetch(descriptor))?.first
     }
 
-    /// Append to the end of the task's existing tickets.
-    private static func nextPosition(todoUUID: UUID, context: ModelContext) -> Int {
+    /// Fetch a trip stop by UUID. Itinerary items are hard-deleted rather than
+    /// tombstoned, so absence is the whole check.
+    private static func fetchItem(uuid: UUID, context: ModelContext) -> LocalItineraryItem? {
+        var descriptor = FetchDescriptor<LocalItineraryItem>(
+            predicate: #Predicate { $0.clientUUID == uuid }
+        )
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor))?.first
+    }
+
+    /// Whether the record a document is about to hang off is still there.
+    private static func ownerExists(_ owner: TicketOwner, context: ModelContext) -> Bool {
+        switch owner {
+        case .task(let id):     return fetchTodo(uuid: id, context: context) != nil
+        case .tripStop(let id): return fetchItem(uuid: id, context: context) != nil
+        }
+    }
+
+    /// Attaching a document counts as editing the record it lands on, so its
+    /// `updatedAt` moves. Without it sync would not see the owner as changed and
+    /// any surface sorted on that column would leave it where it was.
+    private static func touchOwner(_ owner: TicketOwner, context: ModelContext) {
+        switch owner {
+        case .task(let id):
+            fetchTodo(uuid: id, context: context)?.updatedAt = Date()
+        case .tripStop(let id):
+            fetchItem(uuid: id, context: context)?.updatedAt = Date()
+        }
+    }
+
+    /// Append to the end of the owner's existing documents.
+    private static func nextPosition(ownerUUID: UUID, context: ModelContext) -> Int {
         let existing = (try? context.fetch(
             FetchDescriptor<LocalTaskTicket>(
-                predicate: #Predicate { $0.todoClientUUID == todoUUID && $0.deletedAt == nil }
+                predicate: #Predicate { $0.todoClientUUID == ownerUUID && $0.deletedAt == nil }
             )
         )) ?? []
         return (existing.map(\.position).max() ?? -1) + 1

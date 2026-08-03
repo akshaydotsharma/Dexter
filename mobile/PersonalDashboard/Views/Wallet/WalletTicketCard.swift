@@ -214,7 +214,7 @@ struct WalletTicketCard: View {
         switch entry.source {
         case .wallet:
             return kind
-        case .trip, .task:
+        case .trip, .task, .tripDocument:
             let provenance = entry.source.label.uppercased()
             // A task usually IS the thing — "Spider-Man: Brand New Day" the task
             // holding the "Spider-Man: Brand New Day" ticket — and printing the

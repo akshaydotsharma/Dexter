@@ -82,8 +82,9 @@ struct TaskReadingNotice: Equatable {
     let isPDF: Bool
 }
 
-/// File attachments for a task, shown as a stack of wallet cards inside the task
-/// editor with an add control (#399, generalised in #402).
+/// File attachments for a task or a trip stop, shown as a stack of wallet cards
+/// inside that record's editor with an add control (#399, generalised in #402,
+/// opened to trip stops in #432).
 ///
 /// Owns its own reads and writes through `TaskTicketService` rather than routing
 /// them through `TasksViewModel`, for the reason `NoteImageStrip` does the same
@@ -102,22 +103,29 @@ struct TaskReadingNotice: Equatable {
 /// "PDF" entry — one file picker accepts either, because the distinction is not a
 /// choice worth surfacing. See `TicketFilePicker`.
 ///
-/// ## Attaching to a task that does not exist yet
+/// ## Attaching to a record that does not exist yet
 ///
-/// An attachment added while composing a NEW task is held in `pending` and written
-/// only when the editor is committed. An earlier version created the task the moment
-/// a file arrived, which meant Cancel left a task behind — the editor deciding on the
-/// person's behalf that they had finished. The file still reads immediately, so the
-/// parsed title, date and venue fill the form straight away; it is only the write
+/// An attachment added while composing a NEW task or stop is held in `pending` and
+/// written only when the editor is committed. An earlier version created the task the
+/// moment a file arrived, which meant Cancel left a task behind — the editor deciding
+/// on the person's behalf that they had finished. The file still reads immediately, so
+/// the parsed title, date and venue fill the form straight away; it is only the write
 /// that waits. This is also what makes "create a task from a document" work: the
 /// draft is a real card and real fields with nothing yet committed.
+///
+/// ## What changes between a task's and a stop's
+///
+/// The copy and the accent, and nothing else. Both read the same file the same way,
+/// hold it in the same model, and earn a Wallet card by the same rule — see
+/// `TicketOwner` for why the owner became a value rather than the pipeline being
+/// copied.
 struct TaskTicketSection: View {
-    /// The owning task, or `nil` when the editor is for a task that has not been
-    /// saved yet.
-    let todoId: UUID?
+    /// What these documents hang off, and whether it exists yet. `nil` inside means
+    /// the record is still being composed, so everything read is held in `pending`.
+    let owner: TicketOwnerRef
     /// Everything the app already knows about the event, which the extractor uses to
     /// fill what the file does not show (#408). Carries the title the cards fall
-    /// back to, so it replaces the plain `taskTitle` this took before.
+    /// back to, so it replaces the plain `ownerTitle` this took before.
     let context: TaskTicketContext
     /// Tickets read but not yet written, owned by the editor because it owns the
     /// Cancel / Add lifecycle that decides their fate. Always empty once `todoId`
@@ -181,10 +189,13 @@ struct TaskTicketSection: View {
 
     private let service = TaskTicketService()
 
-    private var accent: Color { Tokens.accent(for: .tasks) }
+    private var accent: Color { Tokens.accent(for: owner.section) }
 
-    /// The task's title, which the cards fall back to for their headline.
-    private var taskTitle: String { context.title }
+    /// The owning record's title, which the cards fall back to for their headline.
+    private var ownerTitle: String { context.title }
+
+    /// What the owning record is called in copy: "task" or "stop".
+    private var ownerNoun: String { owner.noun }
 
     /// Whether an operation is in progress that the editor must stay open for.
     private var isBusyNow: Bool { isIngesting || awaitingPick }
@@ -262,7 +273,7 @@ struct TaskTicketSection: View {
             }
             Button("Keep it", role: .cancel) { pendingRemoval = nil }
         } message: {
-            Text("The file will be deleted from this device. The task itself stays.")
+            Text("The file will be deleted from this device. The \(ownerNoun) itself stays.")
         }
         .onAppear {
             reload()
@@ -288,7 +299,7 @@ struct TaskTicketSection: View {
             if isPending(ticket) {
                 TaskTicketDetailSheet(
                     ticket: ticket,
-                    taskTitle: taskTitle,
+                    ownerTitle: ownerTitle,
                     onChange: {},
                     onSave: { edited in
                         if let i = pending.firstIndex(where: { $0.id == edited.id }) {
@@ -305,7 +316,7 @@ struct TaskTicketSection: View {
             } else {
                 TaskTicketDetailSheet(
                     ticket: ticket,
-                    taskTitle: taskTitle,
+                    ownerTitle: ownerTitle,
                     onChange: reload
                 )
             }
@@ -372,7 +383,7 @@ struct TaskTicketSection: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(isIngesting)
-        .accessibilityLabel("Add an attachment to this task")
+        .accessibilityLabel("Add an attachment to this \(ownerNoun)")
         #else
         Button {
             // Set BEFORE the panel is asked for, so the editor is already pinned by
@@ -437,12 +448,12 @@ struct TaskTicketSection: View {
         } label: {
             TaskTicketCardView(
                 ticket: ticket,
-                taskTitle: taskTitle,
+                ownerTitle: ownerTitle,
                 fileIsPresent: service.fileURL(for: ticket) != nil
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open attachment \(ticket.displayTitle(fallback: taskTitle))")
+        .accessibilityLabel("Open attachment \(ticket.displayTitle(fallback: ownerTitle))")
         // Long-press on iPhone, right-click on the Mac: View and Remove on the card
         // itself (#408). Removing WAS only reachable by opening the card, going to its
         // actions and confirming, which is a long way round for the thing you most
@@ -467,12 +478,12 @@ struct TaskTicketSection: View {
     // MARK: - Actions
 
     private func reload() {
-        guard let id = todoId else {
+        guard let resolved = owner.owner else {
             stored = []
             return
         }
         do {
-            stored = try service.list(todoId: id)
+            stored = try service.list(owner: resolved)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -507,13 +518,13 @@ struct TaskTicketSection: View {
     ) {
         guard let data, !data.isEmpty else { return }
 
-        // Refuse a file this task already has, BEFORE storing or reading it (#408).
+        // Refuse a file this record already has, BEFORE storing or reading it (#408).
         // Cheap, and it is the case that actually happened: the first attach looked
         // like it had done nothing, so it was done again and the task ended up with
         // two identical cards.
         if let existing = service.duplicate(of: data, among: tickets) {
             statusMessage = nil
-            errorMessage = Self.duplicateMessage(existing, fallback: taskTitle)
+            errorMessage = Self.duplicateMessage(existing, fallback: ownerTitle, noun: ownerNoun)
             return
         }
 
@@ -572,11 +583,11 @@ struct TaskTicketSection: View {
                     if TicketStorage.isPass(read.attachmentPath),
                        try service.enrich(existing, from: read) {
                         reload()
-                        statusMessage = Self.enrichedMessage(existing, fallback: taskTitle)
+                        statusMessage = Self.enrichedMessage(existing, fallback: ownerTitle)
                         return
                     }
                     service.discardStoredFile(at: read.attachmentPath)
-                    errorMessage = Self.duplicateMessage(existing, fallback: taskTitle)
+                    errorMessage = Self.duplicateMessage(existing, fallback: ownerTitle, noun: ownerNoun)
                     return
                 }
 
@@ -588,14 +599,18 @@ struct TaskTicketSection: View {
                 // 3. Write it if the task exists; otherwise hold it until the
                 //    editor is committed, so Cancel really cancels.
                 let addedId: UUID
-                if let id = todoId {
-                    let ticket = read.ticket(todoId: id, position: stored.count)
-                    addedId = try service.attach(ticket, todoId: id)
+                if let resolved = owner.owner {
+                    let ticket = read.ticket(owner: resolved, position: stored.count)
+                    addedId = try service.attach(ticket, owner: resolved)
                     reload()
                 } else {
-                    // A placeholder owner id: the real one is not known yet and is
-                    // substituted when the pending ticket is flushed.
-                    let ticket = read.ticket(todoId: UUID(), position: pending.count)
+                    // A placeholder owner: the id is not known yet and is substituted
+                    // when the pending document is flushed, but the KIND is known, and
+                    // the card on screen takes its accent from it.
+                    let ticket = read.ticket(
+                        owner: owner.unsavedPlaceholder,
+                        position: pending.count
+                    )
                     pending.append(ticket)
                     addedId = ticket.id
                 }
@@ -638,15 +653,15 @@ struct TaskTicketSection: View {
         }
     }
 
-    /// What to say when the file is already on this task. Names the card it matched
+    /// What to say when the file is already on this record. Names the card it matched
     /// so the claim is checkable rather than something the person has to take on
     /// trust while looking at a list of similar cards.
-    private static func duplicateMessage(_ existing: TaskTicket, fallback: String) -> String {
+    private static func duplicateMessage(_ existing: TaskTicket, fallback: String, noun: String) -> String {
         let name = existing.displayTitle(fallback: fallback)
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty
-            ? "That file is already attached to this task."
-            : "That file is already attached to this task, as \"\(trimmed)\"."
+            ? "That file is already attached to this \(noun)."
+            : "That file is already attached to this \(noun), as \"\(trimmed)\"."
     }
 
     /// Said when a pass completed an attachment already here rather than adding a
@@ -662,24 +677,26 @@ struct TaskTicketSection: View {
 }
 
 /// Standalone sheet wrapping the section, presented from the pass chip on a task
-/// row (#399).
+/// row (#399) and from a stop on a trip's timeline (#432).
 ///
 /// The chip exists so the card is reachable from the list rather than only from
 /// inside the editor: at a gate the sequence should be chip, card, scanner, not a
 /// detour through a form. Reusing the section here rather than writing a
-/// read-only variant also means a ticket can be added from this sheet, which is
-/// where someone will look for it once they know a task already has one.
+/// read-only variant also means a document can be added from this sheet, which is
+/// where someone will look for it once they know a record already has one.
 struct TaskTicketsSheet: View {
-    let todoId: UUID
-    /// The whole task, not just its title: a file added from here is read against
-    /// everything the task knows, exactly as one added from the editor is (#408).
+    /// The record these documents hang off. Always saved by the time this sheet
+    /// can be reached, so it is a resolved owner and never a `TicketOwnerRef`.
+    let owner: TicketOwner
+    /// The whole record, not just its title: a file added from here is read against
+    /// everything it knows, exactly as one added from the editor is (#408).
     let context: TaskTicketContext
 
     @Environment(\.dismiss) private var dismiss
 
     @State private var reading: TaskReadingNotice?
 
-    private var taskTitle: String { context.title }
+    private var ownerTitle: String { context.title }
 
     var body: some View {
         NavigationStack {
@@ -687,9 +704,9 @@ struct TaskTicketsSheet: View {
                 Tokens.paper.ignoresSafeArea()
 
                 ScrollView {
-                    // The task already exists here, so nothing is ever pending.
+                    // The record already exists here, so nothing is ever pending.
                     TaskTicketSection(
-                        todoId: todoId,
+                        owner: owner.ref,
                         context: context,
                         pending: .constant([]),
                         reading: $reading
@@ -703,7 +720,7 @@ struct TaskTicketsSheet: View {
                 }
             }
             .animation(.easeOut(duration: 0.2), value: reading)
-            .navigationTitle(taskTitle)
+            .navigationTitle(ownerTitle)
             .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

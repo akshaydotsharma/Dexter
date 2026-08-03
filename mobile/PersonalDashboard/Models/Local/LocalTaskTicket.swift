@@ -36,11 +36,29 @@ import SwiftData
 final class LocalTaskTicket {
     @Attribute(.unique) var clientUUID: UUID
 
-    /// Owning task, by UUID rather than a SwiftData relationship. The schema has
+    /// Owning record, by UUID rather than a SwiftData relationship. The schema has
     /// zero `@Relationship` edges by design: the archive and the sync oplog both
     /// move flat records keyed on UUID, so a real relationship would have to be
     /// flattened on the way out and rebuilt on the way in.
+    ///
+    /// Named for the task because that is all it held when it was written. Since
+    /// #432 it carries whichever record owns the document — a `LocalTodo` or a
+    /// `LocalItineraryItem` — and `itineraryItemUUID` below says which. The name
+    /// stays put: a stored property's name is part of the schema, and renaming it
+    /// to `ownerClientUUID` would be a migration bought with nothing but tidiness.
     var todoClientUUID: UUID
+
+    /// Set to the trip stop's `clientUUID` when this document belongs to an
+    /// itinerary stop rather than a task (#432). `nil` for a task's.
+    ///
+    /// Additive with a `nil` default, so every row written before this existed
+    /// decodes as a task's — which is what they all are. NEVER remove or rename it.
+    ///
+    /// Deliberately a discriminator and not the only owner column: `todoClientUUID`
+    /// carries the id either way, so every predicate that already filtered on it
+    /// keeps working untouched. A task's id and a stop's id are both freshly minted
+    /// UUIDs, so a task query can never match a stop's row by accident.
+    var itineraryItemUUID: UUID? = nil
 
     /// Relative to Documents, e.g. `task-tickets/9f2c….jpg` or `….pdf`. Empty
     /// when the row carries only a barcode. Resolved via
@@ -102,6 +120,7 @@ final class LocalTaskTicket {
     init(
         clientUUID: UUID = UUID(),
         todoClientUUID: UUID,
+        itineraryItemUUID: UUID? = nil,
         attachmentPath: String = "",
         barcodePayload: String = "",
         barcodeSymbology: String = "",
@@ -121,6 +140,7 @@ final class LocalTaskTicket {
     ) {
         self.clientUUID = clientUUID
         self.todoClientUUID = todoClientUUID
+        self.itineraryItemUUID = itineraryItemUUID
         self.attachmentPath = attachmentPath
         self.barcodePayload = barcodePayload
         self.barcodeSymbology = barcodeSymbology
@@ -140,6 +160,14 @@ final class LocalTaskTicket {
     }
 
     // MARK: - Accessors
+
+    /// What this document hangs off (#432), reconstructed from the two stored
+    /// columns. One place decides it, so no caller has to remember that a `nil`
+    /// discriminator means "task".
+    var owner: TicketOwner {
+        if let itineraryItemUUID { return .tripStop(itineraryItemUUID) }
+        return .task(todoClientUUID)
+    }
 
     /// `true` when there is a payload we can either re-render or fall back to a
     /// crop of. Drives whether the card grows its perforation and stub.
@@ -171,6 +199,7 @@ final class LocalTaskTicket {
         TaskTicket(
             id: clientUUID,
             todoId: todoClientUUID,
+            itineraryItemUUID: itineraryItemUUID,
             attachmentPath: attachmentPath,
             barcodePayload: barcodePayload,
             barcodeSymbology: barcodeSymbology,

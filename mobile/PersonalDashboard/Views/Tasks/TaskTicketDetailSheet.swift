@@ -12,7 +12,7 @@ import SwiftUI
 /// acceptable: the model fills what it can read and the person fixes the rest.
 struct TaskTicketDetailSheet: View {
     let ticket: TaskTicket
-    let taskTitle: String
+    let ownerTitle: String
     /// Invoked after a save or a delete so the parent can reload its strip.
     let onChange: () -> Void
     /// Applies the edit instead of writing it through the service. Set for a ticket
@@ -62,7 +62,7 @@ struct TaskTicketDetailSheet: View {
 
     private let service = TaskTicketService()
 
-    private var accent: Color { Tokens.accent(for: .tasks) }
+    private var accent: Color { Tokens.accent(for: ticket.owner.section) }
 
     /// Whether the bytes are on this device. Drives both the card's missing-file
     /// state and whether "View original" is offered at all.
@@ -133,7 +133,7 @@ struct TaskTicketDetailSheet: View {
         // macOS regardless (issue #281).
         #if os(iOS)
         .fullScreenCover(isPresented: $showingScan) {
-            TicketScanView(pass: ScannablePass(ticket: ticket, taskTitle: taskTitle))
+            TicketScanView(pass: ScannablePass(ticket: ticket, ownerTitle: ownerTitle))
         }
         .sheet(isPresented: $showingApplePass) {
             if let passData = storedPassData {
@@ -169,7 +169,7 @@ struct TaskTicketDetailSheet: View {
     private var card: some View {
         let cardView = TaskTicketCardView(
             ticket: ticket,
-            taskTitle: taskTitle,
+            ownerTitle: ownerTitle,
             fileIsPresent: fileIsPresent
         )
 

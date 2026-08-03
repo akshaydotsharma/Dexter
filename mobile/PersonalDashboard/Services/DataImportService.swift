@@ -500,6 +500,7 @@ final class DataImportService {
                 modelContext.insert(LocalTaskTicket(
                     clientUUID: dto.clientUUID,
                     todoClientUUID: dto.todoClientUUID,
+                    itineraryItemUUID: dto.itineraryItemUUID,
                     attachmentPath: restored ?? "",
                     barcodePayload: dto.barcodePayload,
                     barcodeSymbology: dto.barcodeSymbology,

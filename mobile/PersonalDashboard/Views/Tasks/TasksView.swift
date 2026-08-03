@@ -1132,7 +1132,7 @@ private struct TaskRow: View {
         .onTapGesture { beginBodyTap() }
         #endif
         .sheet(isPresented: $showingTickets) {
-            TaskTicketsSheet(todoId: todo.id, context: TaskTicketContext(todo: todo))
+            TaskTicketsSheet(owner: .task(todo.id), context: TaskTicketContext(todo: todo))
         }
     }
 
@@ -1522,7 +1522,7 @@ private struct TaskEditorSheet: View {
     @ViewBuilder
     private var ticketsBlock: some View {
         TaskTicketSection(
-            todoId: todo?.id,
+            owner: .task(todo?.id),
             context: ticketContext,
             pending: $pendingTickets,
             onExtracted: applyExtractedTicket,

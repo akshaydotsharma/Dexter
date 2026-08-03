@@ -26,6 +26,15 @@ struct TripDetailView: View {
     /// for the expense split context (#258).
     @Query private var allPeople: [LocalPerson]
 
+    /// Every live document row (#432), keyed on its owner in `documentCounts`.
+    ///
+    /// Not narrowed to this trip: a document row carries the id of the stop it
+    /// hangs off and nothing else, and there is no join from here that would reach
+    /// that stop's trip. Lookups are by stop id, so a map covering every trip still
+    /// answers exactly for this one.
+    @Query(filter: #Predicate<LocalTaskTicket> { $0.deletedAt == nil })
+    private var allDocuments: [LocalTaskTicket]
+
     /// Which tab of the trip detail is showing. Defaults to the itinerary so
     /// existing behaviour is unchanged on open (#258).
     @State private var tab: TripDetailTab = .itinerary
@@ -48,6 +57,8 @@ struct TripDetailView: View {
     /// Present the stay booking detail sheet (the card + its actions) for a
     /// booked stay.
     @State private var stayDetailTarget: StayDetailTarget?
+    /// Present a stop's documents: its boarding passes, vouchers and receipts (#432).
+    @State private var documentsTarget: StopDocumentsTarget?
     /// Hard-failure banner (only when the upload couldn't be saved at all — the
     /// happy and degraded paths always produce a card instead).
     @State private var ticketError: String?
@@ -97,6 +108,22 @@ struct TripDetailView: View {
             ]
         )
         _allPeople = Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    }
+
+    /// How many documents each stop is carrying (#432), so the timeline can say so
+    /// without loading a byte of any of them.
+    ///
+    /// Counted off a live `@Query` rather than a service call, because the rows are
+    /// written by a surface (the documents sheet) that is not this view: a cached
+    /// count would go stale exactly when a document is added, which is the one
+    /// moment the number is being looked at.
+    private var documentCounts: [UUID: Int] {
+        var out: [UUID: Int] = [:]
+        for row in allDocuments {
+            guard let itemUUID = row.itineraryItemUUID else { continue }
+            out[itemUUID, default: 0] += 1
+        }
+        return out
     }
 
     /// Trip context handed to `AddExpenseSheet` so it stamps `tripUUID` and
@@ -229,6 +256,17 @@ struct TripDetailView: View {
             stayBookingDetail(for: target)
         }
         #endif
+        // A stop's documents (#432). A sheet on both platforms: unlike the scan
+        // surface this is a place you read and edit in, not something you hold up
+        // at a gate, so it has no reason to take the whole screen.
+        .sheet(item: $documentsTarget) { target in
+            if let item = items.first(where: { $0.clientUUID == target.id }) {
+                TaskTicketsSheet(
+                    owner: .tripStop(item.clientUUID),
+                    context: TaskTicketContext(itineraryItem: item)
+                )
+            }
+        }
         .alert(
             "Couldn't save the ticket",
             isPresented: Binding(
@@ -346,6 +384,7 @@ struct TripDetailView: View {
                         day: cluster.day,
                         entries: cluster.entries,
                         topPadding: idx == 0 ? Space.xl : Space.xl,
+                        documentCounts: documentCounts,
                         onTap: { item in
                             // A booked stay opens its card in a detail sheet
                             // (the hub for scan / view-original / edit). A
@@ -382,6 +421,10 @@ struct TripDetailView: View {
                         },
                         onEdit: { item in
                             editingItem = .existing(item.clientUUID)
+                        },
+                        onDocuments: { item in
+                            Haptics.light()
+                            documentsTarget = StopDocumentsTarget(id: item.clientUUID)
                         },
                         onDelete: { item in
                             Haptics.destructive()
@@ -930,8 +973,46 @@ struct TripDetailView: View {
     // MARK: - Persistence
 
     private func delete(_ item: LocalItineraryItem) {
+        ItineraryDocumentCleanup.removeEverything(attachedTo: item)
         modelContext.delete(item)
         try? modelContext.save()
+    }
+}
+
+// MARK: - Deleting a stop takes its files with it (#432)
+
+/// Removes everything a stop owns on disk before the stop itself goes.
+///
+/// A `LocalItineraryItem` is hard-deleted, not tombstoned, so nothing downstream
+/// ever gets a chance to notice its documents again: the rows would sit there
+/// pointing at a stop that does not exist, their JPEGs and PDFs still occupying
+/// the container, and the Wallet would skip them silently as orphans. That is the
+/// shape a leak hides in — no error, no visible symptom, just disk that never
+/// comes back.
+///
+/// Also clears the stop's own inline ticket file, which has leaked on every stop
+/// deletion since #222 for want of these three lines.
+enum ItineraryDocumentCleanup {
+    /// - Parameter service: the store to clear the documents from. Defaults to the
+    ///   shared one, which is the same `mainContext` the views' `@Environment`
+    ///   hands out — injectable so a test can assert the cascade against its own
+    ///   in-memory store rather than the app's real one.
+    ///
+    /// `service` is `nil`-defaulted rather than defaulted to a value because a
+    /// default argument is evaluated in a nonisolated context and
+    /// `TaskTicketService` is `@MainActor` — the same reason
+    /// `TaskTicketService.read` takes its extractor that way.
+    @MainActor
+    static func removeEverything(
+        attachedTo item: LocalItineraryItem,
+        using service: TaskTicketService? = nil
+    ) {
+        let service = service ?? TaskTicketService()
+        let inline = item.attachmentPath.trimmingCharacters(in: .whitespaces)
+        if !inline.isEmpty {
+            try? TicketStorage.shared.delete(relativePath: inline)
+        }
+        try? service.deleteAll(owner: .tripStop(item.clientUUID))
     }
 }
 
@@ -1132,6 +1213,14 @@ struct StayDetailTarget: Identifiable {
     let id: UUID
 }
 
+/// Identifiable wrapper for the `.sheet(item:)` that drives a stop's documents
+/// (#432). Carries the stop's UUID and resolves the live row, for the same reason
+/// `StayDetailTarget` does: a document added in the sheet changes the stop's
+/// `updatedAt`, and holding the model here would pin a stale copy.
+struct StopDocumentsTarget: Identifiable {
+    let id: UUID
+}
+
 // MARK: - Day cluster
 
 /// One day's eyebrow + items. The connecting rail is NOT drawn here: it's a
@@ -1145,10 +1234,15 @@ private struct TripDayCluster: View {
     let day: Date
     let entries: [TimelineEntry]
     let topPadding: CGFloat
+    /// Documents attached per stop, keyed on the stop's `clientUUID` (#432).
+    let documentCounts: [UUID: Int]
     let onTap: (LocalItineraryItem) -> Void
     /// Opens the editor. Wired to the context-menu "Edit details" action on
     /// ticket rows (whose tap goes to the scan surface instead of the editor).
     let onEdit: (LocalItineraryItem) -> Void
+    /// Opens the stop's documents: the tray under a stop that has some, and the
+    /// context menu on every stop, which is where you go to add the first one.
+    let onDocuments: (LocalItineraryItem) -> Void
     let onDelete: (LocalItineraryItem) -> Void
 
     var body: some View {
@@ -1184,7 +1278,11 @@ private struct TripDayCluster: View {
         // `timelineScroll`), anchored to each marker via `railNode()`.
         VStack(alignment: .leading, spacing: Space.md) {
             ForEach(entries) { entry in
-                TripTimelineRow(entry: entry)
+                TripTimelineRow(
+                    entry: entry,
+                    documentCount: documentCounts[entry.item.clientUUID] ?? 0,
+                    onDocuments: { onDocuments(entry.item) }
+                )
                     .contentShape(Rectangle())
                     .onTapGesture { onTap(entry.item) }
                     .contextMenu {
@@ -1198,6 +1296,15 @@ private struct TripDayCluster: View {
                             } label: {
                                 Label("Edit details", systemImage: "pencil")
                             }
+                        }
+                        // On every stop, not only ones that already have documents:
+                        // this is the way in for the first one, and a boarding pass
+                        // turning up the day before a flight is the case the whole
+                        // feature exists for (#432).
+                        Button {
+                            onDocuments(entry.item)
+                        } label: {
+                            Label("Documents", systemImage: "paperclip")
                         }
                         Button(role: .destructive) {
                             onDelete(entry.item)
@@ -1288,21 +1395,61 @@ private struct OptionalRailNode: ViewModifier {
 /// jagged list.
 private struct TripTimelineRow: View {
     let entry: TimelineEntry
+    /// How many documents are attached to this stop (#432). Zero hides the tray.
+    var documentCount: Int = 0
+    /// Opens this stop's documents.
+    var onDocuments: () -> Void = {}
     @Environment(\.openURL) private var openURL
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             markerColumn
-            // A ticket item renders the wallet-style card; everything else
-            // keeps the original plain card (zero visual change for non-ticket
-            // items). We don't swap the check-OUT half of a stay to a ticket
-            // card — the ticket lives on the check-in entry.
-            if showsTicketCard {
-                TicketCardView(item: TicketCardData(entry.item), timeText: entry.dateTimeLine)
-            } else {
-                card
+            VStack(alignment: .leading, spacing: Space.xs) {
+                // A ticket item renders the wallet-style card; everything else
+                // keeps the original plain card (zero visual change for non-ticket
+                // items). We don't swap the check-OUT half of a stay to a ticket
+                // card — the ticket lives on the check-in entry.
+                if showsTicketCard {
+                    TicketCardView(item: TicketCardData(entry.item), timeText: entry.dateTimeLine)
+                } else {
+                    card
+                }
+                // Under the card rather than inside it, so it reads the same way
+                // whichever card is above it — and so a flight that already renders
+                // as a boarding pass can still say it is carrying two more documents.
+                if documentCount > 0 {
+                    documentsTray
+                }
             }
         }
+    }
+
+    /// "2 documents", tappable, under the card. Its own tap target, so the row's
+    /// own tap (which goes to the scan surface or the editor) does not swallow it.
+    private var documentsTray: some View {
+        Button {
+            onDocuments()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 10, weight: .regular))
+                Text(documentCount == 1 ? "1 DOCUMENT" : "\(documentCount) DOCUMENTS")
+                    .font(.edEyebrow)
+                    .textCase(.uppercase)
+                    .tracking(1.4)
+            }
+            .foregroundStyle(Tokens.accent(for: .itineraries))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Tokens.accent(for: .itineraries).opacity(0.12), in: Capsule(style: .continuous))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            documentCount == 1
+                ? "1 document attached to \(entry.item.title)"
+                : "\(documentCount) documents attached to \(entry.item.title)"
+        )
     }
 
     /// True when this entry should render the inline wallet-style ticket card.
@@ -1510,6 +1657,21 @@ struct ItineraryItemEditorSheet: View {
     @State private var showingTicketOriginal: Bool = false
     @State private var showingRemoveTicketConfirmation: Bool = false
 
+    // MARK: Documents (#432)
+    //
+    // The boarding pass, voucher or receipt attached to this stop, which is a
+    // separate thing from the ticket block above: that one is the stop's own
+    // scanned ticket, minted by the trip FAB at the moment the stop was created,
+    // and there is exactly one of it. These arrive afterwards and there can be
+    // several — two boarding passes on one flight, a rental voucher and its
+    // receipt.
+    /// Documents read while composing a stop that does not exist yet, written once
+    /// Add is pressed. Cancel discards them, files included.
+    @State private var pendingDocuments: [TaskTicket] = []
+    /// A document read in flight, which blurs the form and says what it is doing —
+    /// the same treatment the task editor gives it (#416).
+    @State private var documentsReading: TaskReadingNotice?
+
     private let titleMaxLength = 96
     private let notesMaxLength = 1000
     private let addressMaxLength = 200
@@ -1542,6 +1704,7 @@ struct ItineraryItemEditorSheet: View {
                         if hasTicketData {
                             ticketSection
                         }
+                        documentsSection
                         if isEditing {
                             deleteButton
                                 .padding(.top, Space.sm)
@@ -1549,13 +1712,31 @@ struct ItineraryItemEditorSheet: View {
                     }
                     .padding(Space.lg)
                 }
+                .blur(radius: documentsReading == nil ? 0 : 4)
+
+                // Blocks the form while a document is being read, for the reason
+                // the task editor does: the read is seconds long and takes you
+                // away to Finder or Photos in the middle of it, so coming back to
+                // a form with a small spinner somewhere below the fold reads as
+                // nothing having happened.
+                if let documentsReading {
+                    TaskDocumentReadingOverlay(isPDF: documentsReading.isPDF)
+                }
             }
+            .animation(.easeOut(duration: 0.2), value: documentsReading)
+            // A swipe down mid-read cancels it and takes the file back out with it,
+            // which is correct but is not what a stray gesture meant. Cancel stays
+            // reachable in the toolbar throughout.
+            .interactiveDismissDisabled(documentsReading != nil)
             .navigationTitle(isEditing ? "Edit item" : "New item")
             .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(Tokens.muted)
+                    Button("Cancel") {
+                        discardPendingDocuments()
+                        dismiss()
+                    }
+                    .foregroundStyle(Tokens.muted)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isEditing ? "Save" : "Add") {
@@ -1591,6 +1772,10 @@ struct ItineraryItemEditorSheet: View {
             }
         }
         .onAppear { loadIfNeeded() }
+        // The safety net for every way out that is not Cancel: a swipe down, or the
+        // sheet being torn off by something else. Save clears the array first, so
+        // this only ever fires on an abandoned compose.
+        .onDisappear { discardPendingDocuments() }
         .onChange(of: kind) { _, newKind in
             // Switching to stay: make sure check-out is at least the day after
             // check-in. Switching away from stay: reset the end-time flag so
@@ -2011,6 +2196,86 @@ struct ItineraryItemEditorSheet: View {
         isEditing && (!ticketAttachmentPath.isEmpty || ticketHasBarcode)
     }
 
+    // MARK: - Documents (#432)
+
+    /// Boarding passes, vouchers and receipts hanging off this stop.
+    ///
+    /// The same section the task editor uses, pointed at a stop — see `TicketOwner`
+    /// for why there is one of these rather than two. It is shown for a stop being
+    /// created as well as one being edited: the whole point is that documents turn
+    /// up after the booking, but a person who already has the pass in hand when
+    /// they add the flight should not be told to save and come back.
+    private var documentsSection: some View {
+        TaskTicketSection(
+            owner: documentOwner,
+            context: documentContext,
+            pending: $pendingDocuments,
+            onExtracted: applyExtractedDocument,
+            reading: $documentsReading
+        )
+    }
+
+    /// The stop these documents hang off, which has no id yet while it is being
+    /// composed.
+    private var documentOwner: TicketOwnerRef {
+        switch target {
+        case .existing(let uuid): return .tripStop(uuid)
+        case .new:                return .tripStop(nil)
+        }
+    }
+
+    /// What the extractor is told about the stop, read off the LIVE editor rather
+    /// than the stored row: a document attached while composing should be read
+    /// against the title and day just typed, not against a stop that does not exist.
+    ///
+    /// `dayDate` already carries the picked time when `hasTime` is on (the editor
+    /// seeds it that way), so it is handed over as the moment; otherwise the day
+    /// alone, which is still enough to date a pass that printed no year.
+    private var documentContext: TaskTicketContext {
+        TaskTicketContext(
+            title: trimmedTitle,
+            notes: trimmedNotes,
+            dueDate: hasTime ? dayDate : Calendar.current.startOfDay(for: dayDate),
+            address: address.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    /// Fill what the stop has not got from what the document said.
+    ///
+    /// Deliberately narrower than the task editor's version, which also moves the
+    /// due date: a stop's day is the row you are attaching to, so a document is
+    /// never allowed to move it. Only empty fields are filled, so nothing typed is
+    /// overwritten by a read.
+    private func applyExtractedDocument(_ read: TaskTicketRead) {
+        if trimmedTitle.isEmpty, let suggested = read.suggestedTitle {
+            title = String(suggested.prefix(titleMaxLength))
+        }
+        if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let suggested = read.suggestedAddress {
+            address = String(suggested.prefix(addressMaxLength))
+        }
+    }
+
+    /// Write the documents held while composing, now that the stop they belong to
+    /// exists.
+    private func flushPendingDocuments(to itemUUID: UUID) {
+        guard !pendingDocuments.isEmpty else { return }
+        _ = TaskTicketService().attachAll(pendingDocuments, owner: .tripStop(itemUUID))
+        pendingDocuments = []
+    }
+
+    /// Throw away documents read for a stop that was never created, files included.
+    /// The bytes land on disk during the read, before there is a stop to hang them
+    /// on, so abandoning the editor has to clean up or they leak.
+    private func discardPendingDocuments() {
+        guard !pendingDocuments.isEmpty else { return }
+        let service = TaskTicketService()
+        for document in pendingDocuments {
+            service.discardUnattached(document)
+        }
+        pendingDocuments = []
+    }
+
     /// The current editor's maps link as a URL, coercing a bare host to https.
     /// `nil` when the field is empty (so the Open button is hidden).
     private var editorMapsURL: URL? {
@@ -2196,6 +2461,9 @@ struct ItineraryItemEditorSheet: View {
                 googleMapsLink: cleanMapsLink
             )
             modelContext.insert(item)
+            try? modelContext.save()
+            // Only now does the stop have an id to attach to (#432).
+            flushPendingDocuments(to: item.clientUUID)
         case .existing(let uuid):
             let descriptor = FetchDescriptor<LocalItineraryItem>(
                 predicate: #Predicate { $0.clientUUID == uuid }
@@ -2260,6 +2528,7 @@ struct ItineraryItemEditorSheet: View {
             predicate: #Predicate { $0.clientUUID == uuid }
         )
         if let existing = try? modelContext.fetch(descriptor).first {
+            ItineraryDocumentCleanup.removeEverything(attachedTo: existing)
             modelContext.delete(existing)
             try? modelContext.save()
         }
