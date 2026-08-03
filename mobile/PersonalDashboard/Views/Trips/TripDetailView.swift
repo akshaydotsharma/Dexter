@@ -1724,6 +1724,10 @@ struct ItineraryItemEditorSheet: View {
                 }
             }
             .animation(.easeOut(duration: 0.2), value: documentsReading)
+            // A swipe down mid-read cancels it and takes the file back out with it,
+            // which is correct but is not what a stray gesture meant. Cancel stays
+            // reachable in the toolbar throughout.
+            .interactiveDismissDisabled(documentsReading != nil)
             .navigationTitle(isEditing ? "Edit item" : "New item")
             .inlineNavigationTitle()
             .toolbar {
