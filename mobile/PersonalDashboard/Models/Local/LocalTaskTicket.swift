@@ -230,10 +230,94 @@ final class LocalTaskTicket {
 /// it moves things on and off.
 protocol WalletEligible {
     var hasBarcode: Bool { get }
+    var barcodePayload: String { get }
     var ticketMeta: TicketMeta? { get }
     var reference: String { get }
     var seat: String { get }
     var gate: String { get }
+}
+
+/// What the scannable thing on a document is FOR (#435).
+///
+/// `hasBarcode` answers "is there something to draw", which is the right question
+/// for rendering and the wrong one for the Wallet. A car rental voucher carries a
+/// QR that opens Sixt's manage-my-booking page: real, scannable, and it admits
+/// nobody. Holding that up at a counter achieves nothing, so the document is a
+/// booking record with a link on it, not a pass.
+///
+/// The distinction is legible because vendors name their own endpoints after what
+/// they do: `luma.com/check-in/...` against `sixt.com/account/#/manage-my-booking-info`.
+enum BarcodePurpose: Equatable {
+    /// Nothing decoded.
+    case none
+
+    /// Not a web address, so it is a machine credential by construction: an
+    /// opaque token, an IATA boarding pass string, a membership number. The only
+    /// thing that reads it is a reader at a door.
+    case credential
+
+    /// A web address that says it admits you.
+    case entryLink
+
+    /// A web address that says it manages, views or pays for the booking.
+    case selfServiceLink
+
+    /// A web address that says neither, so it decides nothing on its own.
+    case unknownLink
+}
+
+extension BarcodePurpose {
+
+    /// Path fragments that mean "this link is how you get in". Checked first, so a
+    /// check-in link hosted under an account path still counts: wrongly keeping a
+    /// card costs a glance, wrongly dropping one costs you the gate.
+    private static let entryMarkers = [
+        "check-in", "checkin", "check_in", "boarding", "boardingpass",
+        "ticket", "pass", "admit", "entry", "entrance", "scan",
+        "validate", "verify", "gate"
+    ]
+
+    /// Path fragments that mean "this link is how you change or review the
+    /// booking". Everything here is something you do sitting down, at leisure,
+    /// which is the opposite of presenting a pass.
+    private static let selfServiceMarkers = [
+        "manage", "my-booking", "mybooking", "booking-info", "bookinginfo",
+        "reservation-details", "account", "profile", "modify", "amend",
+        "change", "cancel", "reschedule", "receipt", "invoice", "billing",
+        "feedback", "survey", "review", "unsubscribe", "download",
+        "help", "support", "faq", "terms"
+    ]
+
+    /// Classify a decoded payload.
+    static func classify(_ payload: String) -> BarcodePurpose {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .none }
+        guard let tail = webAddressTail(of: trimmed) else { return .credential }
+        if entryMarkers.contains(where: tail.contains) { return .entryLink }
+        if selfServiceMarkers.contains(where: tail.contains) { return .selfServiceLink }
+        return .unknownLink
+    }
+
+    /// Everything after the host when `payload` is a web address, lowercased, or
+    /// `nil` when it is not one.
+    ///
+    /// The scheme is optional on purpose: the payload that prompted this is
+    /// `sixt.com/account/...` with no `https://` on the front. A host is taken to
+    /// be a dotted label before the first slash, which is what keeps an IATA
+    /// boarding pass out — `M1SHARMA/AKSHAY ...` splits on a slash too, but
+    /// `M1SHARMA` carries no dot.
+    private static func webAddressTail(of payload: String) -> String? {
+        var body = payload.lowercased()
+        for scheme in ["https://", "http://"] where body.hasPrefix(scheme) {
+            body.removeFirst(scheme.count)
+        }
+        guard let slash = body.firstIndex(of: "/") else { return nil }
+        let host = body[body.startIndex..<slash]
+        guard host.contains("."), !host.contains(" ") else { return nil }
+        guard let tld = host.split(separator: ".").last, tld.count >= 2,
+              tld.allSatisfy(\.isLetter) else { return nil }
+        return String(body[slash...])
+    }
 }
 
 extension WalletEligible {
@@ -257,11 +341,31 @@ extension WalletEligible {
     /// An unjudged row falls back to the barcode alone. Every row written before
     /// the field existed is in that state, and reading its silence as "yes" would
     /// keep exactly the cards this is meant to remove.
+    ///
+    /// #435 split the barcode arm by what the code is FOR. "Something scannable"
+    /// was standing in for "a credential", and a car rental voucher broke the
+    /// substitution: its QR opens the rental company's manage-my-booking page.
+    /// That is a real barcode that admits nobody, so it now argues AGAINST a card
+    /// rather than for one. Anything that is not a web address stays a credential
+    /// by construction, which is what keeps every opaque cinema token and every
+    /// IATA boarding pass exactly where it was.
     var belongsInWallet: Bool {
         if let override = ticketMeta?.showInWallet { return override }
-        if hasBarcode { return true }
-        guard ticketMeta?.presentedAtEntry == true else { return false }
-        return hasPresentableCredential
+        switch BarcodePurpose.classify(barcodePayload) {
+        case .credential, .entryLink:
+            return true
+        case .selfServiceLink:
+            // Deliberately absolute, and it outranks `presentedAtEntry`: the
+            // extractor reads the presence of a QR as proof of access and said
+            // yes to the rental voucher for that reason. When the only scannable
+            // thing on a document is a link for changing the booking, there is
+            // nothing on it to show anyone, whatever else it prints. The person's
+            // own override is checked above and still wins.
+            return false
+        case .none, .unknownLink:
+            guard ticketMeta?.presentedAtEntry == true else { return false }
+            return hasPresentableCredential
+        }
     }
 
     /// `true` when the document prints something the holder can show at the door:

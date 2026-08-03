@@ -316,6 +316,92 @@ final class TaskTicketAttachmentTests: XCTestCase {
         )
     }
 
+    /// The bug #435 opened, reported off the real store: a Sixt rental voucher
+    /// carries a QR that opens the company's manage-my-booking page. It is a real
+    /// decoded barcode, so "something scannable" admitted it, and the extractor had
+    /// judged it presented-at-entry as well — both arms said yes to a document that
+    /// admits nobody.
+    func testManageBookingLinkIsNotAPass() throws {
+        let todo = insertTodo(title: "Pickup Car")
+        try attachTicket(
+            to: todo,
+            payload: "sixt.com/account/#/manage-my-booking-info?metadata=eyJlbWFpbCI6IngifQ",
+            presentedAtEntry: true
+        )
+
+        XCTAssertTrue(
+            try walletEntries(for: todo).isEmpty,
+            "a QR that opens a booking-management page is a link, not a credential"
+        )
+    }
+
+    /// The card the blunt version of that fix would have thrown away. Luma prints a
+    /// check-in URL as its entry QR, so a rule of "reject web addresses" would drop
+    /// a pass that is genuinely scanned at the door — and this row has no seat, no
+    /// gate and no reference to fall back on.
+    func testCheckInLinkIsAPass() throws {
+        let todo = insertTodo(title: "Vibe Coders SG")
+        try attachTicket(
+            to: todo,
+            payload: "https://luma.com/check-in/evt-oQFgiXtb73y8yCh?pk=g-TZIx7lJbtxy4uaO",
+            seat: "",
+            gate: "",
+            reference: "",
+            section: nil,
+            row: nil
+        )
+
+        XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
+    /// An IATA boarding pass splits on a slash the way a URL does, and the host test
+    /// is the only thing standing between it and being read as a self-service link.
+    func testBoardingPassStringIsACredential() {
+        XCTAssertEqual(
+            BarcodePurpose.classify("M1SHARMA/AKSHAY        H9UQJJ IXCPNQ6E 0681 183Y005C0014 152>5181"),
+            .credential
+        )
+        XCTAssertEqual(BarcodePurpose.classify("S3FA7901F97B3"), .credential)
+        XCTAssertEqual(BarcodePurpose.classify("   "), BarcodePurpose.none)
+        XCTAssertEqual(
+            BarcodePurpose.classify("https://vendor.example.com/r/9f2a"),
+            .unknownLink,
+            "a link that claims nothing decides nothing on its own"
+        )
+    }
+
+    /// A link that says neither thing falls back to the judgement, so it behaves
+    /// exactly as an unscannable document does rather than being admitted or
+    /// dropped on the strength of being a URL.
+    func testAmbiguousLinkFallsBackToTheJudgement() throws {
+        let unjudged = insertTodo(title: "Unjudged")
+        try attachTicket(to: unjudged, payload: "https://vendor.example.com/r/9f2a")
+        XCTAssertTrue(try walletEntries(for: unjudged).isEmpty)
+
+        let judged = insertTodo(title: "Judged a pass")
+        try attachTicket(
+            to: judged,
+            payload: "https://vendor.example.com/r/9f2a",
+            presentedAtEntry: true
+        )
+        XCTAssertEqual(try walletEntries(for: judged).count, 1)
+    }
+
+    /// The escape hatch has to survive the new arm, because the arm is absolute:
+    /// #435 drops a self-service link whatever else the row prints, so the person's
+    /// own answer is the only way back in.
+    func testOverrideStillBeatsASelfServiceLink() throws {
+        let todo = insertTodo(title: "Rental I want on the shelf")
+        try attachTicket(
+            to: todo,
+            payload: "sixt.com/account/#/manage-my-booking-info?metadata=x",
+            presentedAtEntry: true,
+            showInWallet: true
+        )
+
+        XCTAssertEqual(try walletEntries(for: todo).count, 1)
+    }
+
     /// The case a barcode-only rule would get wrong: a real event ticket that
     /// prints nothing scannable at all. It still prints a seat and a reference,
     /// which is what it hands over at the door.
