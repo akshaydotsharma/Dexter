@@ -378,17 +378,6 @@ final class LocalItineraryItem {
         return !sourceConfirmation.trimmingCharacters(in: .whitespaces).isEmpty || hasTicket
     }
 
-    /// `true` when the booking behind this stop printed a confirmation code
-    /// (#432). That code IS the credential — it is what you read out at a hotel
-    /// desk or a rental counter — so a booking carrying one earns a Wallet card
-    /// whether or not anything on it scans.
-    ///
-    /// Deliberately not limited to stays, unlike `hasStayBooking`: an
-    /// email-imported flight or train has a PNR and nothing scannable, and it is
-    /// exactly the card you want in front of you at a counter.
-    var hasBookingConfirmation: Bool {
-        !sourceConfirmation.trimmingCharacters(in: .whitespaces).isEmpty
-    }
 }
 
 // MARK: - Wallet eligibility (#432)

@@ -239,15 +239,21 @@ extension WalletEntry {
         for item in itineraryItems {
             // `belongsInWallet` is the shared rule (#405, #414): the person's own
             // override, else something scannable, else a document judged to be
-            // presented at a door that also prints a credential. `hasBookingConfirmation`
-            // is the arm that keeps every email-imported booking — a hotel or a flight
-            // whose PNR is the thing you read out at the counter.
+            // presented at a door that also prints a credential.
             //
-            // Narrowed here in #432 from "has any attachment at all". That was true
+            // Narrowed in #432 from "has any attachment at all". That was true
             // enough while the only file that could reach a stop came off the ticket
             // scanner; now that any document can be attached by hand, it would put
             // every rental receipt on the shelf next to the boarding passes.
-            guard item.belongsInWallet || item.hasBookingConfirmation else { continue }
+            //
+            // #432 paired that with a second arm on the confirmation code, reasoning
+            // that a PNR is what you read out at a counter. It admitted 11 of 12
+            // booked stops on the store it shipped to — every email-imported flight
+            // and every hotel — and buried the one card with a barcode among them
+            // (#434). A confirmation code is a booking record, not a pass: every
+            // booking has one, so gating on it is not a gate. It keeps its place on
+            // the timeline row and in the stay card, which is where you read it.
+            guard item.belongsInWallet else { continue }
             let data = TicketCardData(item)
             out.append(
                 WalletEntry(
