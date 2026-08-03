@@ -604,9 +604,13 @@ struct TaskTicketSection: View {
                     addedId = try service.attach(ticket, owner: resolved)
                     reload()
                 } else {
-                    // A placeholder owner id: the real one is not known yet and is
-                    // substituted when the pending ticket is flushed.
-                    let ticket = read.ticket(todoId: UUID(), position: pending.count)
+                    // A placeholder owner: the id is not known yet and is substituted
+                    // when the pending document is flushed, but the KIND is known, and
+                    // the card on screen takes its accent from it.
+                    let ticket = read.ticket(
+                        owner: owner.unsavedPlaceholder,
+                        position: pending.count
+                    )
                     pending.append(ticket)
                     addedId = ticket.id
                 }

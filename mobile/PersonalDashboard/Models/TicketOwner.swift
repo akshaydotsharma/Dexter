@@ -108,6 +108,21 @@ struct TicketOwnerRef: Hashable, Sendable {
         }
     }
 
+    /// A stand-in owner for a document read against a record that does not exist
+    /// yet, carrying the right KIND and a throwaway id.
+    ///
+    /// The kind is what matters: a held document is rendered as a real card before
+    /// anything is written, and the card takes its accent from what it hangs off.
+    /// Without this a boarding pass added while composing a stop would draw in the
+    /// Tasks indigo until the moment it was saved. The id is replaced when the
+    /// document is flushed, which is why a random one is safe here.
+    var unsavedPlaceholder: TicketOwner {
+        switch kind {
+        case .task:     return .task(UUID())
+        case .tripStop: return .tripStop(UUID())
+        }
+    }
+
     /// Copy and colour are needed before there is an id, so both read off the kind.
     var noun: String {
         switch kind {
