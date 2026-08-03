@@ -331,6 +331,13 @@ targets:
         # fills it from server/.env (#343), so a plain Xcode build is
         # configured without anyone exporting anything.
         ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+        # OpenAI key, filled by the same post-build script (#439). The Mac needs
+        # it for trip cover illustrations: art is generated per device because
+        # sync carries `coverImagePath` but never the JPEG, so a peer holding the
+        # row and not the file regenerates from the destination name. Without a
+        # key that call throws `.notConfigured`, which `TripCoverService` treats
+        # as permanent, and every tile falls back to the glyph.
+        OPENAI_API_KEY: $(OPENAI_API_KEY)
         # Custom fonts ship as a Fonts/ folder reference; register them for
         # AppKit/SwiftUI. `.custom()` falls back to system font if this fails.
         ATSApplicationFontsPath: Fonts
@@ -347,9 +354,9 @@ targets:
         # for the later iCloud-backup-restore milestone; revisit before any
         # signed distribution.
         ENABLE_APP_SANDBOX: NO
-    # Fill the Anthropic key from server/.env at build time (#343).
+    # Fill the API keys from server/.env at build time (#343, extended by #439).
     #
-    # iOS gets its key from that same file via ship-lan.sh at archive time.
+    # iOS gets its keys from that same file via ship-lan.sh at archive time.
     # macOS has no ship script — it runs straight out of Xcode — so before this
     # the only build-time path was the scheme's env var, which xcodegen expands
     # FROM THE SHELL at generate time. Regenerating without the export wrote a
@@ -365,7 +372,7 @@ targets:
     # in project.yml, never in the .xcodeproj. Extractable with `strings`, same
     # accepted trade-off as the iOS IPA (see .claude/CLAUDE.md gotchas).
     postBuildScripts:
-      - name: Inject Anthropic API key from server/.env
+      - name: Inject API keys from server/.env
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
@@ -373,38 +380,49 @@ targets:
           PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
           ENV_FILE="${SRCROOT}/../server/.env"
 
-          plist_get() {
-            /usr/libexec/PlistBuddy -c "Print :ANTHROPIC_API_KEY" "$PLIST" 2>/dev/null || true
+          # What each key powers, so a warning below names the feature that will
+          # be dead rather than just the variable that is missing.
+          feature_for() {
+            case "$1" in
+              ANTHROPIC_API_KEY) echo "Chat will report 'API key not configured'" ;;
+              OPENAI_API_KEY)    echo "trip tiles will draw the glyph instead of an illustration" ;;
+              *)                 echo "the feature that reads it will be unconfigured" ;;
+            esac
           }
 
-          # An explicit `xcodebuild ANTHROPIC_API_KEY=…` already filled this in.
-          # Don't clobber it. `$(…)` means the build setting was undefined.
-          existing="$(plist_get)"
-          case "$existing" in
-            ""|'$('*|'${'*) ;;
-            *) echo "note: ANTHROPIC_API_KEY supplied by build setting; leaving as is"; exit 0 ;;
-          esac
+          # Each key is independent: a missing OpenAI key must not stop the
+          # Anthropic one being written, so this loop `continue`s per key rather
+          # than exiting the script the way the single-key version did.
+          for name in ANTHROPIC_API_KEY OPENAI_API_KEY; do
+            # An explicit `xcodebuild <NAME>=…` already filled this in. Don't
+            # clobber it. `$(…)` means the build setting was undefined.
+            existing="$(/usr/libexec/PlistBuddy -c "Print :$name" "$PLIST" 2>/dev/null || true)"
+            case "$existing" in
+              ""|'$('*|'${'*) ;;
+              *) echo "note: $name supplied by build setting; leaving as is"; continue ;;
+            esac
 
-          if [ ! -f "$ENV_FILE" ]; then
-            echo "warning: $ENV_FILE not found — Chat will report 'API key not configured'"
-            exit 0
-          fi
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "warning: $ENV_FILE not found — $(feature_for "$name")"
+              continue
+            fi
 
-          # Tolerates `KEY=v`, `KEY="v"`, `KEY='v'` and trailing whitespace.
-          key="$(sed -n 's/^ANTHROPIC_API_KEY=//p' "$ENV_FILE" | head -n1 \
-                 | tr -d '\r' | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//' \
-                 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            # Tolerates `KEY=v`, `KEY="v"`, `KEY='v'` and trailing whitespace.
+            key="$(sed -n "s/^$name=//p" "$ENV_FILE" | head -n1 \
+                   | tr -d '\r' | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//' \
+                   | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
-          if [ -z "$key" ]; then
-            echo "warning: ANTHROPIC_API_KEY empty in $ENV_FILE — Chat will report 'API key not configured'"
-            exit 0
-          fi
+            if [ -z "$key" ]; then
+              echo "warning: $name empty in $ENV_FILE — $(feature_for "$name")"
+              continue
+            fi
 
-          # Never echo $key. Set-then-Add covers both "placeholder present" and
-          # "property absent"; PlistBuddy has no upsert.
-          /usr/libexec/PlistBuddy -c "Set :ANTHROPIC_API_KEY $key" "$PLIST" 2>/dev/null \
-            || /usr/libexec/PlistBuddy -c "Add :ANTHROPIC_API_KEY string $key" "$PLIST"
-          echo "note: injected ANTHROPIC_API_KEY from server/.env"
+            # Never echo $key. Set-then-Add covers both "placeholder present" and
+            # "property absent"; PlistBuddy has no upsert.
+            /usr/libexec/PlistBuddy -c "Set :$name $key" "$PLIST" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :$name string $key" "$PLIST"
+            echo "note: injected $name from server/.env"
+          done
 
   PersonalDashboardUITests:
     type: bundle.ui-testing
