@@ -574,6 +574,20 @@ enum TripCoverImageCache {
     /// Non-optional values on purpose: it must be impossible to store a miss here.
     private static var entries: [String: PlatformImage] = [:]
 
+    /// One-pixel columns lifted from the artwork's left and right edges (#441).
+    ///
+    /// A band wider than the file's 4:1 — every macOS window past ~528 pt of card
+    /// width — has empty space either side of the artwork once the artwork is no longer
+    /// scaled to the width. Stretching these two columns across that space continues
+    /// whatever the illustration has at its edge: flat sky above, and the groundline
+    /// or water below, which a single sampled colour would have flattened into sky and
+    /// left a visible step at the bottom corners.
+    ///
+    /// Cached because they are derived per FILE, not per render, and a `cropping(to:)`
+    /// on every frame of a live window resize is exactly the kind of work the decode
+    /// cache exists to keep off the render path.
+    private static var edgeEntries: [String: TripCoverEdges] = [:]
+
     /// The decoded cover for a relative path, or nil when there is no usable file.
     /// Never touches the network.
     static func image(forRelativePath path: String?) -> PlatformImage? {
@@ -590,9 +604,56 @@ enum TripCoverImageCache {
         return image
     }
 
+    /// The decoded cover plus its two edge columns, or nil when there is no usable
+    /// file. One lookup, so the band cannot end up drawing one trip's artwork with
+    /// another's edges after a path change mid-render.
+    static func artwork(forRelativePath path: String?) -> TripCoverArtwork? {
+        guard let path, let image = image(forRelativePath: path) else { return nil }
+        if let cached = edgeEntries[path] {
+            return TripCoverArtwork(image: image, edges: cached)
+        }
+        // Edges are an OPTIMISATION, not a requirement: a file whose CGImage cannot be
+        // cropped still draws its artwork, just against a bare band either side. So a
+        // failure here returns artwork with no edges rather than no artwork.
+        guard let edges = TripCoverEdges(image: image) else {
+            return TripCoverArtwork(image: image, edges: nil)
+        }
+        edgeEntries[path] = edges
+        return TripCoverArtwork(image: image, edges: edges)
+    }
+
     /// Drop everything. Test hook only; the cache needs no invalidation in the app
     /// because every regeneration mints a new key.
     static func reset() {
         entries.removeAll()
+        edgeEntries.removeAll()
+    }
+}
+
+/// A cover ready to draw: the artwork, and the columns that continue it sideways.
+struct TripCoverArtwork {
+    let image: PlatformImage
+    let edges: TripCoverEdges?
+}
+
+/// The leftmost and rightmost pixel column of a cover, each as a full-height
+/// one-pixel-wide bitmap (#441).
+struct TripCoverEdges {
+    let leading: PlatformImage
+    let trailing: PlatformImage
+
+    /// Nil when the bitmap has no `CGImage` backing or is degenerate. Cropping a
+    /// 1 × height rect off each end is cheap and allocation-light: `cropping(to:)`
+    /// shares the source's pixel storage rather than copying the image.
+    init?(image: PlatformImage) {
+        guard let cg = image.cgImageCompat, cg.width > 1, cg.height > 0 else { return nil }
+        let column = CGSize(width: 1, height: CGFloat(cg.height))
+        guard let left = cg.cropping(to: CGRect(origin: .zero, size: column)),
+              let right = cg.cropping(
+                  to: CGRect(origin: CGPoint(x: cg.width - 1, y: 0), size: column)
+              )
+        else { return nil }
+        self.leading = PlatformImage.fromCGImage(left)
+        self.trailing = PlatformImage.fromCGImage(right)
     }
 }

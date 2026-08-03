@@ -113,19 +113,9 @@ struct TripCoverBand: View {
 
     @ViewBuilder
     private var artwork: some View {
-        if let image = TripCoverImageCache.image(forRelativePath: trip.coverImagePath) {
-            Image(platformImage: image)
-                .resizable()
-                // `.fill` with the default CENTRE focal point. The cached file is
-                // ALREADY cropped to the band's 4:1 at cache time, so in practice
-                // there is nothing left to crop here and this only absorbs the few
-                // points of rounding between the file's ratio and the resolved band.
-                // Doing the real cropping here instead would put it on the render
-                // path, where a bad result would be intermittent rather than
-                // inspectable.
-                .aspectRatio(contentMode: .fill)
+        if let artwork = TripCoverImageCache.artwork(forRelativePath: trip.coverImagePath) {
+            TripCoverArtworkCanvas(artwork: artwork)
                 .saturation(saturation)
-                .clipped()
                 .transition(.opacity)
         } else {
             // Not a placeholder. Same band height, same seam rule, same text block
@@ -160,6 +150,81 @@ struct TripCoverBand: View {
         phase == .past ? TripCoverMetrics.pastSaturation : 1.0
     }
 
+}
+
+// MARK: - Artwork canvas
+
+/// Draws a cover into a band of any proportion without ever scaling the artwork by
+/// the band's width (#441).
+///
+/// ## The rule, and it is one rule rather than two cases
+///
+/// The artwork always fills the band's HEIGHT at its own 4:1, and whatever is left
+/// over horizontally is covered by stretching its edge columns. Both directions fall
+/// out of that:
+///
+///   - Band wider than 4:1 (every macOS window past ~528 pt of card width): the
+///     artwork sits centred at its natural size and the edges continue it outwards.
+///   - Band narrower than 4:1 (only the 320 pt phone, where the `minHeight` clamp
+///     lifts the band above `width / 4`): the artwork overhangs and is cropped evenly
+///     left and right, which is exactly what `.aspectRatio(contentMode: .fill)` did
+///     before and the reason it was chosen.
+///
+/// ## Why not `.fill`
+///
+/// `.fill` scales by whichever axis needs more, so on a wide band it scaled by WIDTH
+/// and centre-cropped the height. At 1650 pt of card width against a 132 pt ceiling
+/// that discarded 140 pt from the top and 140 pt from the bottom of a 412 pt image —
+/// and the bottom is where the buildings' base is, because `TripCoverCrop` anchors
+/// the silhouette there. So the fullscreen Mac window showed a blown-up skyline with
+/// its base sliced off, while the same build looked correct on the phone. Cropping
+/// the top instead (bottom-anchoring the fill) only moves the damage to the towers.
+/// The artwork cannot be scaled by width at all; that is the fix, not the alignment.
+///
+/// ## Why a `Canvas`
+///
+/// The rule needs the band's resolved size, and a `GeometryReader` that determines
+/// its own row's height inside a `List` feeds the layout back into itself — the
+/// hazard the whole band is built to avoid. A `Canvas` accepts the size it is
+/// proposed and never proposes one back, so it reads the geometry without
+/// participating in it.
+struct TripCoverArtworkCanvas: View {
+    let artwork: TripCoverArtwork
+
+    var body: some View {
+        Canvas(opaque: false) { context, size in
+            let artWidth = size.height * TripCoverMetrics.ratio
+            let x = (size.width - artWidth) / 2
+
+            // Only when the band is wider than the artwork. The one-point overlaps
+            // stop a hairline of bare band showing through at the joins after the
+            // rects round to device pixels.
+            if x > 0, let edges = artwork.edges {
+                context.draw(
+                    context.resolve(Image(platformImage: edges.leading)),
+                    in: CGRect(x: 0, y: 0, width: x + 1, height: size.height)
+                )
+                context.draw(
+                    context.resolve(Image(platformImage: edges.trailing)),
+                    in: CGRect(
+                        x: x + artWidth - 1,
+                        y: 0,
+                        width: size.width - x - artWidth + 1,
+                        height: size.height
+                    )
+                )
+            }
+
+            context.draw(
+                context.resolve(Image(platformImage: artwork.image)),
+                in: CGRect(x: x, y: 0, width: artWidth, height: size.height)
+            )
+        }
+        // The band clips, but say it here too: a `Canvas` draws outside its bounds
+        // quite happily, and the narrow-band case deliberately draws wider than it is.
+        .clipped()
+        .accessibilityHidden(true)
+    }
 }
 
 // MARK: - Generated cover art

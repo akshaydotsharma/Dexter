@@ -235,16 +235,32 @@ enum TripCoverMetrics {
     /// `Tokens.muted` below 4.5:1.
     static let ratio: CGFloat = 4.0
     static let minHeight: CGFloat = 84
-    static let maxHeight: CGFloat = 132
+
+    /// Ceiling on the band's height. 192, raised from 132 in #441.
+    ///
+    /// Not a taste number. The cached file is 1536 × 384 px, which is 768 × 192 pt at
+    /// 2×, so 192 is exactly the height at which the band displays the artwork at its
+    /// native resolution. Every point above it would upscale a bitmap; every point
+    /// below it throws away detail that was paid for. On a phone the width clamp bites
+    /// first and the band never gets near this, so the ceiling is a macOS number in
+    /// practice.
+    ///
+    /// The old 132 was inherited from the photography era and predates the file being
+    /// a fixed 4:1 strip. It is what made a wide Mac window crop the skyline: above
+    /// 528 pt of card width the band stopped being 4:1, and the artwork was scaled to
+    /// the width and centre-cropped, which eats the buildings' base. `TripCoverBand`
+    /// no longer scales by width at all — see the artwork rule there — so this is now
+    /// only about how much of the file's own resolution the band gets to show.
+    static let maxHeight: CGFloat = 192
 
     /// Ceiling once the user is at an accessibility text size. The text block
     /// grows several lines taller there, so the band has to give way or a single
     /// tile fills the screen.
     ///
-    /// Equal to `maxHeight` now that every band is 4:1, so it is a no-op rather than
-    /// a second competing ceiling. Kept as a named value because it is a different
-    /// DECISION that happens to share a number, and collapsing the two would hide a
-    /// constraint that has to be rechecked if `maxHeight` ever moves.
+    /// A genuinely lower ceiling again since `maxHeight` moved to 192. It stays at the
+    /// old 132: a band that grows while the text block is already several lines taller
+    /// is the exact combination this clamp exists to prevent, and nothing about the
+    /// artwork's native size argues for spending that height on a picture there.
     static let accessibilityMaxHeight: CGFloat = 132
 
     // MARK: Band edge treatment
