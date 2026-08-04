@@ -525,14 +525,17 @@ struct TripExpensesView: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text(filterParties == [.me] ? "Expenses" : "Expenses · \(selectionShortLabel)").eyebrow()
             // Same flat-row construction as the Finance list, since both render
-            // `ExpenseRow` (issue #303).
-            VStack(spacing: RowMetrics.interRowSpacing) {
-                ForEach(visibleExpenses) { expense in
-                    ExpenseRow(expense: expense, showsOriginalFirst: true) {
-                        onEditExpense(expense.clientUUID)
-                    }
-                    .swipeToDeleteTrash {
-                        pendingDelete = expense
+            // `ExpenseRow` (issue #303). The scope gives the rows their people /
+            // trips lookup in one fetch rather than two per row (#442).
+            ExpenseRowLookupScope {
+                VStack(spacing: RowMetrics.interRowSpacing) {
+                    ForEach(visibleExpenses) { expense in
+                        ExpenseRow(expense: expense, showsOriginalFirst: true) {
+                            onEditExpense(expense.clientUUID)
+                        }
+                        .swipeToDeleteTrash {
+                            pendingDelete = expense
+                        }
                     }
                 }
             }

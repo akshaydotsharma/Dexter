@@ -75,7 +75,10 @@ enum FinanceDateRangePreset: String, CaseIterable, Identifiable, Hashable {
 
 /// Aggregated filter state owned by `FinanceView`. Bound into the filter
 /// bar and read by `ExpenseService.expenses(filter:)`.
-struct FinanceFilterState: Equatable {
+///
+/// `Hashable` so `FinanceView` can fold it into the signature that decides
+/// whether the dashboard needs recomputing (#442).
+struct FinanceFilterState: Equatable, Hashable {
     var datePreset: FinanceDateRangePreset = .thisMonth
     var customStart: Date = Date()
     var customEnd: Date = Date()

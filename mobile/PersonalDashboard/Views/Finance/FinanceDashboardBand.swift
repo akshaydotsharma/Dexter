@@ -17,6 +17,13 @@ struct FinanceDashboardStats {
         guard previousMonthTotal > 0 else { return nil }
         return (monthTotal - previousMonthTotal) / previousMonthTotal
     }
+
+    /// Placeholder for a summary that hasn't been computed yet (#442).
+    static let zero = FinanceDashboardStats(
+        monthTotal: 0,
+        previousMonthTotal: 0,
+        averagePerMonth: 0
+    )
 }
 
 /// Dashboard band: period total, delta vs the prior period, top-3 category
@@ -46,6 +53,13 @@ struct FinanceDashboardBand: View {
     /// Owned by `FinanceView` so the expanded state survives the band being
     /// rebuilt on every filter / search keystroke.
     @Binding var isExpanded: Bool
+
+    /// True while the figures on screen are the previous window's and a fresh
+    /// aggregation is still running (#442). Only ever set once the recompute has
+    /// been going for ~200ms, so this is off for every ordinary filter change.
+    /// The band keeps showing the last known numbers rather than blanking, which
+    /// reads better than a full-card spinner and keeps the layout still.
+    var isRecomputing: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
@@ -88,6 +102,15 @@ struct FinanceDashboardBand: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
             Text(headerLabel).eyebrow()
+            if isRecomputing {
+                ProgressView()
+                    #if os(macOS)
+                    .controlSize(.small)
+                    #else
+                    .scaleEffect(0.6)
+                    #endif
+                    .accessibilityLabel("Updating totals")
+            }
             Spacer(minLength: Space.sm)
             deltaChip
             expandButton
@@ -191,14 +214,10 @@ struct FinanceDashboardBand: View {
         }
 
         let displayValue = sgdValue / factor
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = code
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
         // Prefix "<CODE> " for a consistent, locale-independent read that
-        // matches the SGD styling (e.g. "USD 927.31", "EUR 812.40").
-        formatter.currencySymbol = "\(code) "
+        // matches the SGD styling (e.g. "USD 927.31", "EUR 812.40"). Formatter
+        // is cached per (code, digits) — see `FinanceFormatters` (#442).
+        let formatter = FinanceFormatters.currency(code: code, fractionDigits: 2)
         return formatter.string(from: NSNumber(value: displayValue)) ?? "\(code) 0.00"
     }
 
@@ -214,35 +233,58 @@ struct FinanceDashboardBand: View {
         }
 
         let displayValue = sgdValue / factor
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = code
-        formatter.maximumFractionDigits = 0
-        formatter.minimumFractionDigits = 0
-        formatter.currencySymbol = "\(code) "
+        let formatter = FinanceFormatters.currency(code: code, fractionDigits: 0)
         return formatter.string(from: NSNumber(value: displayValue)) ?? "\(code) 0"
     }
 
     /// SGD-only, 0-fraction-digit variant of `formatSGD`.
     private static func formatSGDRounded(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "SGD"
-        formatter.maximumFractionDigits = 0
-        formatter.minimumFractionDigits = 0
-        formatter.currencySymbol = "SGD "
+        let formatter = FinanceFormatters.currency(code: "SGD", fractionDigits: 0)
         return formatter.string(from: NSNumber(value: value)) ?? "SGD 0"
     }
 
     /// SGD-only formatter (the base-currency fast path used by `formatMoney`).
+    /// "SGD 1,247.50" reads cleaner than "$1,247.50 SGD".
     private static func formatSGD(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "SGD"
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
-        // "SGD 1,247.50" reads cleaner than "$1,247.50 SGD".
-        formatter.currencySymbol = "SGD "
+        let formatter = FinanceFormatters.currency(code: "SGD", fractionDigits: 2)
         return formatter.string(from: NSNumber(value: value)) ?? "SGD 0.00"
+    }
+}
+
+/// The band's shape, shown for the single frame between Finance appearing and
+/// its first summary landing (#442).
+///
+/// Without it the band would render real zeroes on that frame, which reads as
+/// "you spent nothing" rather than "still working". Matches the real band's
+/// card, padding, and vertical rhythm so nothing shifts when the figures arrive.
+struct FinanceDashboardBandPlaceholder: View {
+    let headerLabel: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                Text(headerLabel).eyebrow()
+                ProgressView()
+                    #if os(macOS)
+                    .controlSize(.small)
+                    #else
+                    .scaleEffect(0.6)
+                    #endif
+                Spacer(minLength: Space.sm)
+            }
+            bar(width: 180, height: 34)
+            bar(width: 110, height: 12)
+        }
+        .padding(Space.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.lg)
+        .accessibilityLabel("Loading \(headerLabel) totals")
+    }
+
+    private func bar(width: CGFloat, height: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+            .fill(Tokens.paper2)
+            .frame(width: width, height: height)
     }
 }

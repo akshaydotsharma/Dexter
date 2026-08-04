@@ -13,6 +13,21 @@ enum FinanceCaptureSource {
     case pdf
 }
 
+/// The dashboard-band figures and every breakdown cut, cached together (#442).
+///
+/// Held as ONE value so the headline and the panel can never be left computed
+/// from different inputs, and so the cache is a plain value type: it holds no
+/// `LocalExpense` references, which means a cached summary can safely outlive a
+/// row being deleted from the store.
+private struct FinanceSummary {
+    /// Hash of the inputs this was built from. `nil` means "not computed yet".
+    var signature: Int?
+    var stats: FinanceDashboardStats
+    var insights: FinanceInsights
+
+    static let empty = FinanceSummary(signature: nil, stats: .zero, insights: .empty)
+}
+
 /// Finance v1 surface (#114). Phase B adds receipt capture on top of the
 /// Phase A list / dashboard:
 ///
@@ -37,6 +52,31 @@ struct FinanceView: View {
 
     @State private var filterState = FinanceFilterState()
     @State private var searchText: String = ""
+
+    /// Search text after debouncing (#442). The list, the dashboard, and the
+    /// filter chips all read THIS rather than `searchText`, so a burst of
+    /// keystrokes re-filters the store once instead of once per character.
+    @State private var debouncedSearch: String = ""
+
+    /// Rows the list is currently allowed to show (#442). Reset to one page
+    /// whenever the filter or search changes, grown as the user reaches the end.
+    @State private var visibleRowTarget: Int = FinanceView.pageSize
+
+    /// Dashboard figures + breakdown cuts, cached and recomputed off the render
+    /// path when their inputs actually change (#442). These used to be computed
+    /// inline in `body`, which meant three full passes over every expense plus
+    /// the insights aggregation on EVERY body evaluation: each search keystroke,
+    /// each tap on the dashboard expander, each processing row appearing.
+    @State private var summary: FinanceSummary = .empty
+
+    /// True once a pending recompute has run long enough to be worth
+    /// announcing. Delay-gated so a fast filter change never flashes it.
+    @State private var showsRecomputeIndicator: Bool = false
+
+    /// Rows added per page. Whole day groups are appended until this many rows
+    /// are on screen, so a day header's total always describes every row under
+    /// it rather than the part of the day that fitted.
+    private static let pageSize = 50
 
     /// Whether the dashboard card is showing its full breakdown (#389). Lives
     /// here rather than inside `FinanceDashboardBand` so it survives the band
@@ -120,6 +160,27 @@ struct FinanceView: View {
             // category totals render in it on first paint (#220). SGD is a
             // no-op passthrough; a failed fetch leaves the last cached factor.
             await FXService.default().refreshDisplayRate()
+        }
+        // Debounce the search field (#442). Re-filtering the whole store on
+        // every keystroke was the other half of why Finance felt stuck on a wide
+        // date range. Clearing is NOT delayed, so the full list comes straight
+        // back when the user empties the field.
+        .task(id: searchText) {
+            let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed != debouncedSearch else { return }
+            if !trimmed.isEmpty {
+                try? await Task.sleep(nanoseconds: 220_000_000)
+                guard !Task.isCancelled else { return }
+            }
+            debouncedSearch = trimmed
+        }
+        // Recompute the dashboard + insights only when their inputs change.
+        .task(id: summarySignature) {
+            await refreshSummary(signature: summarySignature)
+        }
+        .onChange(of: filterSignature) {
+            // A new filter means a new list, so go back to the first page.
+            visibleRowTarget = Self.pageSize
         }
         .sheet(item: $editingTarget) { target in
             AddExpenseSheet(target: target)
@@ -550,27 +611,30 @@ struct FinanceView: View {
 
     private var populatedContent: some View {
         let filtered = filteredExpenses
-        // One filtered pass over the dashboard window feeds both the headline
-        // figures and every breakdown cut (#389), so the two cannot disagree.
-        let range = dashboardRange
-        let rangeRows = rowsInDashboardWindow(range: range)
-        let stats = computeStats(
-            rangeRows: rangeRows,
-            range: range,
-            preset: filterState.datePreset,
-            filter: resolvedFilter
-        )
-        let insights = FinanceInsights.build(rows: rangeRows, range: range)
+        // Only the first page's worth of day groups is built, and only the rows
+        // near the viewport are rendered (#442). The dashboard figures come from
+        // the cached `summary`, which `refreshSummary` recomputes off the render
+        // path — computing them here was what blocked the first frame.
+        let paged = pagedDayGroups(from: filtered, limit: visibleRowTarget)
         return ScrollView {
             VStack(spacing: Space.lg) {
-                FinanceDashboardBand(
-                    stats: stats,
-                    insights: insights,
-                    headerLabel: dashboardHeaderLabel,
-                    deltaComparisonLabel: filterState.datePreset.deltaComparisonLabel,
-                    isExpanded: $dashboardExpanded
-                )
-                .padding(.horizontal, Space.lg)
+                if summary.signature == nil {
+                    // First paint only: the cached summary lands on the next
+                    // runloop turn, so show the band's shape rather than a
+                    // momentary row of zeroes.
+                    FinanceDashboardBandPlaceholder(headerLabel: dashboardHeaderLabel)
+                        .padding(.horizontal, Space.lg)
+                } else {
+                    FinanceDashboardBand(
+                        stats: summary.stats,
+                        insights: summary.insights,
+                        headerLabel: dashboardHeaderLabel,
+                        deltaComparisonLabel: filterState.datePreset.deltaComparisonLabel,
+                        isExpanded: $dashboardExpanded,
+                        isRecomputing: showsRecomputeIndicator
+                    )
+                    .padding(.horizontal, Space.lg)
+                }
 
                 FinanceFilterBar(state: $filterState, dateConstrains: dateConstrains)
 
@@ -610,10 +674,14 @@ struct FinanceView: View {
                     noResultsState
                         .padding(.top, Space.xl)
                 } else {
-                    // Zero on macOS: the rows are full-bleed there and their own
-                    // padding carries the margin (#339). `Space.lg` on iOS.
-                    expenseList(filtered: filtered)
-                        .padding(.horizontal, RowMetrics.rowBlockPadding)
+                    // One people / trips fetch for the whole list instead of two
+                    // per row (#442) — see `ExpenseRowLookupScope`.
+                    ExpenseRowLookupScope {
+                        // Zero on macOS: the rows are full-bleed there and their
+                        // own padding carries the margin (#339). `Space.lg` on iOS.
+                        expenseList(paged: paged, totalRows: filtered.count)
+                            .padding(.horizontal, RowMetrics.rowBlockPadding)
+                    }
                 }
 
                 Color.clear.frame(height: 96)
@@ -658,10 +726,20 @@ struct FinanceView: View {
 
     // MARK: - Expense list grouped by day
 
-    private func expenseList(filtered: [LocalExpense]) -> some View {
-        let groups = groupedByDay(filtered)
-        return VStack(spacing: Space.lg) {
-            ForEach(groups, id: \.day) { group in
+    /// The day-grouped expense list.
+    ///
+    /// `LazyVStack`, so only the rows near the viewport are ever constructed
+    /// (#442). This was a plain `VStack`, which builds every child up front: a
+    /// full-year window meant ~1,520 rows had to exist before the first frame
+    /// could paint, each one carrying two SwiftData queries and a
+    /// `UIViewRepresentable` for its swipe gesture.
+    ///
+    /// Deliberately no `pinnedViews: [.sectionHeaders]`: a `LazyVStack` with
+    /// pinned headers hit a SwiftUI layout bug in this app before (issue #63),
+    /// and the day headers are meant to scroll away with their group anyway.
+    private func expenseList(paged: PagedDayGroups, totalRows: Int) -> some View {
+        LazyVStack(spacing: Space.lg) {
+            ForEach(paged.groups, id: \.day) { group in
                 VStack(alignment: .leading, spacing: Space.sm) {
                     HStack {
                         Text(dayHeader(for: group.day))
@@ -690,7 +768,55 @@ struct FinanceView: View {
                     }
                 }
             }
+
+            if paged.remainingRows > 0 {
+                loadMoreFooter(
+                    shown: paged.shownRows,
+                    total: totalRows,
+                    remaining: paged.remainingRows
+                )
+            }
         }
+    }
+
+    /// End-of-list footer that extends the page as soon as it scrolls into view,
+    /// so older expenses arrive as the user keeps scrolling (#442).
+    ///
+    /// It is also a real button. `onAppear` inside a lazy container is reliable in
+    /// practice, but a visible control means there is always a way forward if it
+    /// doesn't fire, and it gives VoiceOver something to activate.
+    private func loadMoreFooter(shown: Int, total: Int, remaining: Int) -> some View {
+        Button {
+            extendPage(remaining: remaining)
+        } label: {
+            HStack(spacing: Space.sm) {
+                ProgressView()
+                    #if os(macOS)
+                    .controlSize(.small)
+                    #endif
+                Text("Loading older expenses")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                Spacer()
+                Text("\(shown) of \(total)")
+                    .font(.edCaption)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+            .padding(.horizontal, RowMetrics.rowBlockHeaderPadding)
+            .padding(.vertical, Space.sm)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onAppear { extendPage(remaining: remaining) }
+        .accessibilityLabel("Load older expenses. Showing \(shown) of \(total).")
+    }
+
+    /// Grow the page. Guarded on there being something left so a repeated
+    /// `onAppear` for the same footer can't run the target away from the data.
+    private func extendPage(remaining: Int) {
+        guard remaining > 0 else { return }
+        visibleRowTarget += Self.pageSize
     }
 
     private struct DailyGroup {
@@ -699,17 +825,62 @@ struct FinanceView: View {
         let rows: [LocalExpense]
     }
 
-    private func groupedByDay(_ rows: [LocalExpense]) -> [DailyGroup] {
+    /// One page of day groups, plus the counts the footer needs.
+    private struct PagedDayGroups {
+        let groups: [DailyGroup]
+        /// Rows across `groups`.
+        let shownRows: Int
+        /// Rows that match the filter but aren't on screen yet.
+        let remainingRows: Int
+    }
+
+    /// Group the filtered rows by day, stopping once `limit` rows are on screen.
+    ///
+    /// `rows` arrives date-descending (the `@Query`'s sort order, which the
+    /// filter preserves), so a single linear walk produces the day groups already
+    /// in display order and can stop early. That early stop is what makes paging
+    /// worth having on top of the `LazyVStack`: the previous
+    /// `Dictionary(grouping:)` plus key sort had to bucket and order all ~1,520
+    /// rows of a full year on every pass just to draw the dozen that fit.
+    ///
+    /// Only WHOLE days are added. A day is never split across the page boundary,
+    /// so a day header's total always describes every row beneath it.
+    private func pagedDayGroups(from rows: [LocalExpense], limit: Int) -> PagedDayGroups {
         let cal = Calendar.current
-        let dict = Dictionary(grouping: rows) { cal.startOfDay(for: $0.date) }
-        return dict.keys.sorted(by: >).map { day in
-            let dayRows = dict[day] ?? []
+        var groups: [DailyGroup] = []
+        var currentDay: Date?
+        var currentRows: [LocalExpense] = []
+        var shown = 0
+
+        func closeCurrentDay() {
+            guard let day = currentDay, !currentRows.isEmpty else { return }
             // Net refunds into the day-group header total (#206), and count only
             // the user's share of any split trip expense (#258) so the per-day
             // header matches the my-share dashboard total.
-            let total = dayRows.reduce(0) { $0 + $1.myShareSGD }
-            return DailyGroup(day: day, total: total, rows: dayRows)
+            let total = currentRows.reduce(0) { $0 + $1.myShareSGD }
+            groups.append(DailyGroup(day: day, total: total, rows: currentRows))
+            shown += currentRows.count
+            currentDay = nil
+            currentRows = []
         }
+
+        for row in rows {
+            let day = cal.startOfDay(for: row.date)
+            if day != currentDay {
+                closeCurrentDay()
+                // A full page ends at a day boundary, never mid-day.
+                if shown >= limit { break }
+                currentDay = day
+            }
+            currentRows.append(row)
+        }
+        closeCurrentDay()
+
+        return PagedDayGroups(
+            groups: groups,
+            shownRows: shown,
+            remainingRows: max(0, rows.count - shown)
+        )
     }
 
     private func dayHeader(for day: Date) -> String {
@@ -717,9 +888,11 @@ struct FinanceView: View {
         if cal.isDateInToday(day) { return "Today" }
         if cal.isDateInYesterday(day) { return "Yesterday" }
 
-        let formatter = DateFormatter()
+        // Cached per pattern (#442): this allocated a DateFormatter per day
+        // header, which on a full-year window is one per visible group, every
+        // paint.
         let sameYear = cal.component(.year, from: day) == cal.component(.year, from: Date())
-        formatter.dateFormat = sameYear ? "EEE d MMM" : "EEE d MMM yyyy"
+        let formatter = FinanceFormatters.date(format: sameYear ? "EEE d MMM" : "EEE d MMM yyyy")
         return formatter.string(from: day)
     }
 
@@ -768,6 +941,9 @@ struct FinanceView: View {
                 // explicit-date flag so the date goes back to being a soft view.
                 filterState.dateExplicitlySet = false
                 searchText = ""
+                // Clear the debounced copy too, so the reset takes effect on this
+                // runloop turn instead of waiting for the debounce to catch up.
+                debouncedSearch = ""
             }
             .font(.edFootnote)
             .foregroundStyle(Tokens.accentFinance)
@@ -776,14 +952,117 @@ struct FinanceView: View {
         .padding(.horizontal, Space.xl)
     }
 
+    // MARK: - Recompute caching (#442)
+
+    /// Identity of everything the list and the summary are filtered BY. A change
+    /// here means a different result set, so pagination goes back to page one.
+    private var filterSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(filterState)
+        hasher.combine(debouncedSearch)
+        return hasher.finalize()
+    }
+
+    /// Identity of the expense DATA, hashing exactly the fields the filter and
+    /// the aggregations read.
+    ///
+    /// Hashing the consumed set (rather than something cheap like the row count)
+    /// is what makes the cache correct rather than merely fast: if none of these
+    /// changed, no filter decision and no total can have changed either, so
+    /// skipping the recompute is safe. Editing a row's category, amount, or date
+    /// does change it, so the dashboard still refreshes on an edit.
+    ///
+    /// Deliberately NOT keyed on pagination or `dashboardExpanded` — those were
+    /// exactly the body evaluations that used to trigger a full recompute for no
+    /// reason.
+    private var dataSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(allExpenses.count)
+        for expense in allExpenses {
+            hasher.combine(expense.clientUUID)
+            hasher.combine(expense.date)
+            hasher.combine(expense.category)
+            hasher.combine(expense.source)
+            hasher.combine(expense.sgdAmount)
+            hasher.combine(expense.originalAmount)
+            hasher.combine(expense.originalCurrency)
+            hasher.combine(expense.isRefund)
+            hasher.combine(expense.numberOfShares)
+            hasher.combine(expense.splitsData)
+            hasher.combine(expense.hiddenFromFinance)
+            hasher.combine(expense.merchant)
+            hasher.combine(expense.expenseDescription)
+            hasher.combine(expense.personUUID)
+            hasher.combine(expense.eventUUID)
+            hasher.combine(expense.tripUUID)
+            hasher.combine(expense.statementLabel)
+        }
+        return hasher.finalize()
+    }
+
+    private var summarySignature: Int {
+        var hasher = Hasher()
+        hasher.combine(filterSignature)
+        hasher.combine(dataSignature)
+        return hasher.finalize()
+    }
+
+    /// Recompute the dashboard figures and every breakdown cut for the current
+    /// filter, off the render path.
+    ///
+    /// Yields between phases so a very large window can't lock the main thread:
+    /// the list stays scrollable, and the "updating" indicator gets a frame to
+    /// appear in. On a normal store each phase finishes inside a single slice and
+    /// the indicator never shows, which is the intent. It exists to explain a
+    /// real wait, not to decorate a fast one.
+    @MainActor
+    private func refreshSummary(signature: Int) async {
+        guard summary.signature != signature else { return }
+
+        let indicator = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.15)) { showsRecomputeIndicator = true }
+        }
+        defer {
+            indicator.cancel()
+            if showsRecomputeIndicator {
+                withAnimation(.easeOut(duration: 0.15)) { showsRecomputeIndicator = false }
+            }
+        }
+
+        // One filtered pass over the dashboard window feeds both the headline
+        // figures and every breakdown cut (#389), so the two cannot disagree.
+        let range = dashboardRange
+        let rangeRows = rowsInDashboardWindow(range: range)
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+
+        let stats = computeStats(
+            rangeRows: rangeRows,
+            range: range,
+            preset: filterState.datePreset,
+            filter: resolvedFilter
+        )
+        await Task.yield()
+        guard !Task.isCancelled else { return }
+
+        let insights = FinanceInsights.build(rows: rangeRows, range: range)
+        guard !Task.isCancelled else { return }
+
+        summary = FinanceSummary(signature: signature, stats: stats, insights: insights)
+    }
+
     // MARK: - Filtering + stats
 
     /// The active filter (date preset + non-date dimensions + search), shared
     /// by both the list (`filteredExpenses`) and the dashboard band
     /// (`computeStats`) so the two stay in lockstep (#211).
+    /// Reads `debouncedSearch`, not `searchText` (#442), so the list and the
+    /// dashboard re-derive once a burst of typing settles rather than on every
+    /// character. The text field itself stays fully live either way.
     private var resolvedFilter: ExpenseFilter {
-        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return filterState.resolvedFilter(searchText: trimmed.isEmpty ? nil : trimmed)
+        filterState.resolvedFilter(searchText: debouncedSearch.isEmpty ? nil : debouncedSearch)
     }
 
     /// Whether the date range is actually constraining the list right now (#245),
@@ -791,8 +1070,7 @@ struct FinanceView: View {
     /// Passed to `FinanceFilterBar` so the chip row de-highlights when the date
     /// has been soft-dropped in favour of another filter.
     private var dateConstrains: Bool {
-        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return filterState.dateConstrains(searchText: trimmed.isEmpty ? nil : trimmed)
+        filterState.dateConstrains(searchText: debouncedSearch.isEmpty ? nil : debouncedSearch)
     }
 
     private var filteredExpenses: [LocalExpense] {

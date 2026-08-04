@@ -12,15 +12,14 @@ struct ExpenseRow: View {
     var showsOriginalFirst: Bool = false
     let onTap: () -> Void
 
-    /// People, so a tagged expense's chip renders in that person's colour.
-    /// Cheap (people are few) and keeps the row's chip accurate without
-    /// denormalising the colour onto every expense.
-    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
-    private var people: [LocalPerson]
-
-    /// Trips, so a trip-tagged row in the FINANCE list can name the trip it
-    /// belongs to (#264). Trips are few; same cheap-query rationale as people.
-    @Query private var trips: [LocalTrip]
+    /// People (for the tagged person's chip colour) and trips (so a trip-tagged
+    /// row in the FINANCE list can name its trip, #264), resolved once for the
+    /// whole list by `ExpenseRowLookupScope` (#442).
+    ///
+    /// These used to be two `@Query`s declared right here. Per row that is a
+    /// tiny fetch; across a full-year Finance list it was ~3,040 fetches for
+    /// eight records, all of which had to be set up before the first frame.
+    @Environment(\.expenseRowLookup) private var lookup: ExpenseRowLookup
 
     var body: some View {
         HStack(spacing: Space.md) {
@@ -131,15 +130,10 @@ struct ExpenseRow: View {
     /// (matched by FK, falling back to name). Defaults to the finance accent
     /// if the person was deleted but its denormalised name survives on the row.
     private var personTint: Color {
-        if let uuid = expense.personUUID,
-           let person = people.first(where: { $0.clientUUID == uuid }) {
-            return Color(personHex: person.colorHex)
+        guard let hex = lookup.personColorHex(uuid: expense.personUUID, name: personLabel) else {
+            return Tokens.accentFinance
         }
-        if let name = personLabel,
-           let person = people.first(where: { $0.name.compare(name, options: .caseInsensitive) == .orderedSame }) {
-            return Color(personHex: person.colorHex)
-        }
-        return Tokens.accentFinance
+        return Color(personHex: hex)
     }
 
     private var badgeRow: some View {
@@ -180,10 +174,9 @@ struct ExpenseRow: View {
     }
 
     private var tripName: String {
-        guard let uuid = expense.tripUUID,
-              let trip = trips.first(where: { $0.clientUUID == uuid }) else { return "Trip" }
-        let name = trip.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "Trip" : name
+        guard let name = lookup.tripName(uuid: expense.tripUUID) else { return "Trip" }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Trip" : trimmed
     }
 
     private var tripBadgeLabel: String {
@@ -270,10 +263,9 @@ struct ExpenseRow: View {
         // list leads with the user's share, the original-currency sub-label
         // shows the share too, so the two figures describe the same money.
         let value = leadsWithShare ? abs(expense.myShareOriginal) : expense.originalAmount
-        let formatter = NumberFormatter()
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 2
-        formatter.numberStyle = .decimal
+        // Shared cached formatter (#442): this used to build a NumberFormatter
+        // per row, per paint.
+        let formatter = FinanceFormatters.decimal(fractionDigits: 2)
         let amount = formatter.string(from: NSNumber(value: value)) ?? "\(value)"
         let base = "\(expense.originalCurrency.uppercased()) \(amount)"
         return expense.isRefund ? "+\(base)" : base

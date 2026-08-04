@@ -233,6 +233,10 @@ targets:
       - path: PersonalDashboard/Sync/SyncRefresh.swift
       - path: PersonalDashboard/Views/Settings/SyncStatusView.swift
       - path: PersonalDashboard/Views/Finance/ExpenseRow.swift
+      # People / trips lookup hoisted out of ExpenseRow, and the shared cached
+      # number/date formatters every Finance surface now uses (issue #442).
+      - path: PersonalDashboard/Views/Finance/ExpenseRowLookup.swift
+      - path: PersonalDashboard/Views/Finance/FinanceFormatters.swift
       - path: PersonalDashboard/Views/Finance/PersonEventBadge.swift
       # Finance surface (issue #281). The camera capture path
       # (CameraPicker.swift, UIImagePickerController) is iOS-only and stays OUT
