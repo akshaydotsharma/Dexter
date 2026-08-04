@@ -155,6 +155,11 @@ enum TaskReminderScheduler {
 
         // Prune: armed with the OS but no longer deserved (completed, deleted,
         // toggled off, due date cleared, now in the past, or pushed past the cap).
+        //
+        // PENDING only. A reminder that has already been delivered is left alone on
+        // the lock screen and in Notification Center until the person swipes it —
+        // completing the task afterwards must not make the banner they have not read
+        // yet disappear from under them.
         let stale = ours.filter { desiredByID[$0.identifier] == nil }.map(\.identifier)
         if !stale.isEmpty {
             center.removePendingNotificationRequests(withIdentifiers: stale)
@@ -185,13 +190,29 @@ enum TaskReminderScheduler {
         SyncLog.line("TaskReminders: reconcile ok, desired=\(desired.count) added=\(added) pruned=\(stale.count) authorization=\(describe(status))")
     }
 
-    /// Cancel everything this type owns. Used by the reset-data path.
+    /// Cancel everything this type owns, delivered banners included. Used by the
+    /// reset-data path.
+    ///
+    /// This is the ONE place that touches delivered notifications. Reconcile never
+    /// does, deliberately: a reminder that has already arrived belongs to the person,
+    /// stays on the lock screen and in Notification Center, and goes away when they
+    /// swipe it and not before. Wiping the tasks is the exception, because a banner
+    /// for a task that no longer exists is nothing but noise.
     static func cancelAll() async {
         let center = UNUserNotificationCenter.current()
-        let ours = await center.pendingNotificationRequests()
+
+        let pending = await center.pendingNotificationRequests()
             .filter { $0.identifier.hasPrefix(identifierPrefix) }
-        guard !ours.isEmpty else { return }
-        center.removePendingNotificationRequests(withIdentifiers: ours.map(\.identifier))
+        if !pending.isEmpty {
+            center.removePendingNotificationRequests(withIdentifiers: pending.map(\.identifier))
+        }
+
+        let delivered = await center.deliveredNotifications()
+            .map(\.request.identifier)
+            .filter { $0.hasPrefix(identifierPrefix) }
+        if !delivered.isEmpty {
+            center.removeDeliveredNotifications(withIdentifiers: delivered)
+        }
     }
 
     // MARK: - What should be armed

@@ -96,6 +96,18 @@ targets:
           - Inter-Medium.ttf
           - Inter-SemiBold.ttf
           - JetBrainsMono-Regular.ttf
+    # NO entitlements file here on purpose. Time-Sensitive Notifications was tried
+    # for #444 (it is the only way to break a reminder through a Focus mode or a
+    # Scheduled Summary) and free personal-team signing REJECTS it, exactly like
+    # App Groups and CloudKit:
+    #
+    #   error: Provisioning profile "iOS Team Provisioning Profile:
+    #   com.akshaysharma.personaldashboard" doesn't include the Time Sensitive
+    #   Notifications capability.
+    #
+    # Don't re-add it without the paid Apple Developer Program. Setting
+    # `interruptionLevel = .timeSensitive` in code without the entitlement is inert,
+    # so that is deliberately not done either.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard

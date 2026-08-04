@@ -26,12 +26,16 @@ final class MacNotificationPresenter: NSObject, UNUserNotificationCenterDelegate
         UNUserNotificationCenter.current().delegate = self
     }
 
+    /// `.list` matters as much as `.banner`: it is what puts the notification in
+    /// Notification Center so it survives the banner timing out. Without it one that
+    /// arrives while Dexter is frontmost is gone the moment the banner fades, with
+    /// nothing left to go back to.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler([.banner, .list, .sound])
     }
 }
 #endif
