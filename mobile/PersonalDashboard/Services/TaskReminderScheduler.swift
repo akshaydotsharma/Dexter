@@ -326,6 +326,21 @@ enum TaskReminderScheduler {
             content.sound = .default
             content.userInfo = [TaskReminderScheduler.todoUUIDKey: todoUUID.uuidString]
 
+            // The only ranking knob available to this app (#444).
+            //
+            // Be clear about what it does NOT do: it has no effect on ordering
+            // against OTHER apps' notifications. A Calendar invite still sits above
+            // a reminder in Notification Center because Apple's own apps mark theirs
+            // Time Sensitive, and that capability is unsignable on free personal-team
+            // signing. There is no "always on top" API for anybody.
+            //
+            // What it does do is rank Dexter's own notifications against each other:
+            // a reminder becomes the one that represents the group in a collapsed
+            // stack or a Scheduled Summary, rather than an email-ingest or
+            // recurring-expense notice winning on recency alone. A reminder is the
+            // most consequential thing this app posts, so it takes the top score.
+            content.relevanceScore = 1.0
+
             // Wall-clock components, not a time interval: the OS then fires at the
             // moment shown on the task even if the device sleeps, reboots, or the
             // app never runs again between now and then.
