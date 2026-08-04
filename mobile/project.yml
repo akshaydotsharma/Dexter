@@ -128,6 +128,12 @@ targets:
       - path: PersonalDashboard/App/MacCommands.swift
       - path: PersonalDashboard/ViewModels/TodosViewModel.swift
       - path: PersonalDashboard/Services/TodoService.swift
+      # Task reminders (#444). The scheduler is shared with iOS; the presenter is
+      # macOS-only and exists because iOS's notification delegate
+      # (EmailIngestCoordinator) is built on UIKit/BackgroundTasks and stays out
+      # of this target, which left the Mac with no delegate at all.
+      - path: PersonalDashboard/Services/TaskReminderScheduler.swift
+      - path: PersonalDashboard/Services/MacNotificationPresenter.swift
       - path: PersonalDashboard/Services/MapsLinkResolver.swift
       # .pkpass ingest (#420): a zip reader and the pass.json mapper. Shared
       # with iOS; the Apple Wallet hand-off around them is iOS-only and stays

@@ -33,9 +33,20 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     /// `CodingKeys` so the server sync contract is untouched.
     var priority: Int = 0
 
+    /// Whether a local notification is armed for `dueDate` (#444). Local-only,
+    /// same handling as `priority`: defaulted and omitted from `CodingKeys`.
+    var remindMe: Bool = false
+
     /// Typed view of `priority` for the UI. Unknown raw values fall back to
     /// `.none` so a bad stored value never renders a blank/missing bar.
     var taskPriority: TaskPriority { TaskPriority(rawValue: priority) ?? .none }
+
+    /// Whether this task should show a reminder affordance on its row.
+    ///
+    /// Requires a due date, not just the flag: the due moment IS the reminder
+    /// moment, so a flag with nothing to fire against is not an armed reminder
+    /// and must not be advertised as one.
+    var hasArmedReminder: Bool { remindMe && dueDate != nil }
 
     /// Server JSON has both `id` (int) and `client_uuid`; we map our `id`
     /// to `client_uuid` and ignore the server's int. The decoder's
@@ -182,6 +193,8 @@ struct TodoCreateRequest: Encodable {
     var address: String = ""
     var googleMapsLink: String = ""
     var priority: Int = 0
+    /// Arm a reminder for `dueDate` (#444). Ignored when `dueDate` is nil.
+    var remindMe: Bool = false
 }
 
 struct TodoUpdateRequest: Encodable {
@@ -195,4 +208,18 @@ struct TodoUpdateRequest: Encodable {
     var googleMapsLink: String? = nil
     /// `nil` leaves the stored priority untouched; a value overwrites it.
     var priority: Int? = nil
+    /// `nil` leaves the stored flag untouched; a value overwrites it (#444).
+    var remindMe: Bool? = nil
+
+    /// Clear the stored due date.
+    ///
+    /// A separate flag because `dueDate: nil` already means "leave it alone" to
+    /// every existing caller — the inline rename path passes the task's own
+    /// (possibly nil) due date through and relies on that. Overloading nil to
+    /// mean "clear" would silently wipe the due date on every rename, so the
+    /// editor says what it means instead. Without this there is no way to clear a
+    /// due date at all, which #444 exposed: turning the Due date toggle off left
+    /// the date stored, so reopening the task brought it back along with the
+    /// Remind me row.
+    var clearsDueDate: Bool = false
 }

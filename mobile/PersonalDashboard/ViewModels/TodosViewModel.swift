@@ -49,9 +49,9 @@ final class TodosViewModel {
     /// `clientUUID` to hang the ticket off. Discardable so every existing call
     /// site is unchanged.
     @discardableResult
-    func create(title: String, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String = "", googleMapsLink: String = "", priority: Int = 0) async -> Todo? {
+    func create(title: String, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String = "", googleMapsLink: String = "", priority: Int = 0, remindMe: Bool = false) async -> Todo? {
         do {
-            let request = TodoCreateRequest(title: title, description: description, dueDate: dueDate, tag: tag, address: address, googleMapsLink: googleMapsLink, priority: priority)
+            let request = TodoCreateRequest(title: title, description: description, dueDate: dueDate, tag: tag, address: address, googleMapsLink: googleMapsLink, priority: priority, remindMe: remindMe)
             let new = try await service.create(request)
             // Append so a newly created task appears below the last one (#267).
             todos.append(new)
@@ -76,7 +76,7 @@ final class TodosViewModel {
         }
     }
 
-    func update(_ todo: Todo, title: String? = nil, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String? = nil, googleMapsLink: String? = nil, priority: Int? = nil) async {
+    func update(_ todo: Todo, title: String? = nil, description: String? = nil, dueDate: Date? = nil, tag: String? = nil, address: String? = nil, googleMapsLink: String? = nil, priority: Int? = nil, remindMe: Bool? = nil, clearsDueDate: Bool = false) async {
         do {
             let request = TodoUpdateRequest(
                 title: title,
@@ -86,7 +86,9 @@ final class TodosViewModel {
                 tag: tag,
                 address: address,
                 googleMapsLink: googleMapsLink,
-                priority: priority
+                priority: priority,
+                remindMe: remindMe,
+                clearsDueDate: clearsDueDate
             )
             let updated = try await service.update(todo, request)
             if let index = todos.firstIndex(where: { $0.id == todo.id }) {

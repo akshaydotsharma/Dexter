@@ -1028,6 +1028,14 @@ private struct TaskRow: View {
                                 Image(systemName: "calendar")
                                     .font(.system(size: 10))
                                 Text(due, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                // #444. An armed reminder is otherwise invisible
+                                // outside the editor, so the one place the due
+                                // moment is already shown is where it belongs.
+                                if todo.hasArmedReminder {
+                                    Image(systemName: "bell.fill")
+                                        .font(.system(size: 9))
+                                        .accessibilityLabel("Reminder set")
+                                }
                             }
                             .font(.edCaption)
                             .foregroundStyle(dueColor(for: due))
@@ -1313,6 +1321,12 @@ private struct TaskEditorSheet: View {
     @State private var descriptionText: String = ""
     @State private var hasDueDate: Bool = false
     @State private var dueDate: Date = Date().addingTimeInterval(3600)
+    /// Whether to notify at `dueDate` (#444). Only reachable while `hasDueDate`
+    /// is on, and cleared when it goes off.
+    @State private var remindMe: Bool = false
+    /// Set when the person arms a reminder but notifications are switched off for
+    /// Dexter, so the row can say so instead of silently doing nothing.
+    @State private var remindersBlocked: Bool = false
     @State private var tag: String = ""
     @State private var priority: TaskPriority = .none
     @State private var address: String = ""
@@ -1350,11 +1364,91 @@ private struct TaskEditorSheet: View {
     }
 
     var body: some View {
+        platformBody
+            // #444. Both editors share these, so they hang off the outer body
+            // rather than being repeated per platform.
+            .onChange(of: hasDueDate) { _, hasDate in
+                // No date, nothing to remind against. Clearing here is what stops a
+                // hidden `true` from being saved by a person who armed a reminder
+                // and then decided against the due date.
+                if !hasDate {
+                    remindMe = false
+                    remindersBlocked = false
+                }
+            }
+            .onChange(of: remindMe) { _, armed in
+                guard armed else {
+                    remindersBlocked = false
+                    return
+                }
+                // Ask the first time a reminder is armed, not at launch, so someone
+                // who never uses reminders is never prompted.
+                Task {
+                    let allowed = await TaskReminderScheduler.requestAuthorizationIfNeeded()
+                    remindersBlocked = !allowed
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var platformBody: some View {
         #if os(macOS)
         macBody
         #else
         iosBody
         #endif
+    }
+
+    // MARK: - Remind me (#444)
+
+    /// The reminder toggle, shared by both editors.
+    ///
+    /// Reachable only while a due date is set, because the due moment IS the
+    /// reminder moment: there is no separate reminder time to configure, so
+    /// without a date there is nothing this could mean.
+    @ViewBuilder
+    private var remindMeRow: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack(spacing: Space.md) {
+                Image(systemName: "bell")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Tokens.accentTasks)
+                Text("Remind me")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.inkSoft)
+                Spacer()
+                Toggle("", isOn: $remindMe.animation())
+                    .labelsHidden()
+                    .tint(Tokens.accentTasks)
+            }
+            if let note = reminderNote {
+                Text(note)
+                    .font(.edCaption)
+                    .foregroundStyle(remindersBlocked ? Tokens.danger : Tokens.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(Space.md)
+    }
+
+    /// Why an armed reminder will not arrive, when that is the case.
+    ///
+    /// Both cases are silent failures otherwise: a denied permission and a moment
+    /// that has already passed both leave the toggle looking armed with nothing
+    /// scheduled behind it.
+    private var reminderNote: String? {
+        guard remindMe else { return nil }
+        if remindersBlocked {
+            #if os(macOS)
+            return "Notifications are turned off for Dexter. Turn them on in System Settings to get this reminder."
+            #else
+            return "Notifications are turned off for Dexter. Turn them on in Settings to get this reminder."
+            #endif
+        }
+        if dueDate <= Date() {
+            return "That time has already passed, so this one will not fire."
+        }
+        return nil
     }
 
     // MARK: - iOS editor (full sheet, unchanged)
@@ -1409,6 +1503,13 @@ private struct TaskEditorSheet: View {
                                         Spacer(minLength: 0)
                                     }
                                     .padding(Space.md)
+
+                                    // #444. Inside the same card as the date, because
+                                    // the reminder has no time of its own — it fires at
+                                    // the date above, so it belongs to it rather than
+                                    // standing as its own section.
+                                    Divider().background(Tokens.divider)
+                                    remindMeRow
                                 }
                             }
                             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
@@ -1694,6 +1795,10 @@ private struct TaskEditorSheet: View {
                             }
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.sm)
+
+                            // #444. Same card as the date it fires at.
+                            macRowDivider
+                            remindMeRow
                         }
                     }
 
@@ -1864,6 +1969,9 @@ private struct TaskEditorSheet: View {
         title = todo.title
         descriptionText = todo.description ?? ""
         if let due = todo.dueDate { hasDueDate = true; dueDate = due }
+        // Only meaningful with a date, and `hasDueDate`'s own onChange would clear
+        // it anyway, so read it through the same gate the editor enforces (#444).
+        remindMe = todo.hasArmedReminder
         tag = todo.tag ?? ""
         priority = todo.taskPriority
         address = todo.address
@@ -1902,12 +2010,14 @@ private struct TaskEditorSheet: View {
         let finalDue = hasDueDate ? dueDate : nil
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Can only be armed against a date (#444).
+        let finalRemindMe = hasDueDate && remindMe
 
         if let existing = todo {
-            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue, remindMe: finalRemindMe, clearsDueDate: !hasDueDate)
             flushPendingTickets(to: existing.id)
         } else {
-            let created = await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue)
+            let created = await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue, remindMe: finalRemindMe)
             if let created { flushPendingTickets(to: created.id) }
         }
         closeEditor()

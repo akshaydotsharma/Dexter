@@ -31,6 +31,17 @@ final class LocalTodo {
     /// migration (no data loss). Drives the colored left-edge bar on task rows.
     var priority: Int = 0
 
+    /// Whether to raise a local notification at `dueDate` (#444). Stored with a
+    /// default so adding it to an existing install is a safe lightweight
+    /// migration.
+    ///
+    /// Only ever meaningful alongside a `dueDate` — there is no separate reminder
+    /// time, the due moment IS the reminder moment. The editor keeps the two in
+    /// step by clearing this when the due date is cleared, and
+    /// `TaskReminderScheduler` treats a nil `dueDate` as disarmed regardless, so
+    /// a stale `true` from an older write can never schedule anything.
+    var remindMe: Bool = false
+
     var version: Int64
 
     var createdAt: Date
@@ -50,6 +61,7 @@ final class LocalTodo {
         address: String = "",
         googleMapsLink: String = "",
         priority: Int = 0,
+        remindMe: Bool = false,
         version: Int64 = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -66,6 +78,7 @@ final class LocalTodo {
         self.address = address
         self.googleMapsLink = googleMapsLink
         self.priority = priority
+        self.remindMe = remindMe
         self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -91,7 +104,8 @@ final class LocalTodo {
             deletedAt: deletedAt,
             address: address,
             googleMapsLink: googleMapsLink,
-            priority: priority
+            priority: priority,
+            remindMe: remindMe
         )
     }
 }

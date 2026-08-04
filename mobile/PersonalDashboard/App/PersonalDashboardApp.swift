@@ -47,6 +47,13 @@ struct PersonalDashboardApp: App {
                     // does not have. Once per process, budgeted, and a no-op when
                     // every trip already has a cover or has settled on `none`.
                     await AppMaintenance.runTripCoverSweep()
+                    // Task reminders (#444). Runs after the sync pass on purpose:
+                    // a peer may have just armed or completed something, and this
+                    // reconcile is what turns that into a pending banner. The
+                    // observer then catches every later write that does not go
+                    // through TodoService (the AI tools, a sync pass, a restore).
+                    TaskReminderScheduler.startObservingStoreChanges()
+                    await TaskReminderScheduler.reconcile()
                 }
         }
         .modelContainer(SwiftDataStore.shared.container)
@@ -59,6 +66,10 @@ struct PersonalDashboardApp: App {
                 Task { await AppMaintenance.runTripCoverForegroundSweep() }
                 // Materialise due / missed recurring expenses on foreground (#236).
                 Task { await RecurringExpenseCoordinator.shared.runForegroundMaterialize() }
+                // Top the armed reminders back up (#444): earlier ones have fired
+                // and freed room under the pending cap, and permission may have
+                // just been granted in Settings while the app was away.
+                Task { await TaskReminderScheduler.reconcile() }
             }
             // Opt-in automatic backup (#141). Fires on becoming active (covers
             // cold launch and foregrounding) and on entering background (catches
