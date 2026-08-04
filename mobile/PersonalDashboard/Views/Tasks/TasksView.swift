@@ -1445,7 +1445,9 @@ private struct TaskEditorSheet: View {
             return "Notifications are turned off for Dexter. Turn them on in Settings to get this reminder."
             #endif
         }
-        if dueDate <= Date() {
+        // The same instant the scheduler will use, so the caption and the behaviour
+        // cannot disagree about a minute that has only just passed.
+        if TaskReminderScheduler.fireDate(for: dueDate) <= Date() {
             return "That time has already passed, so this one will not fire."
         }
         return nil

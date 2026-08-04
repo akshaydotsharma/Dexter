@@ -69,6 +69,53 @@ final class TaskReminderTests: XCTestCase {
         ))
     }
 
+    // MARK: - The fire instant (#444 follow-up)
+
+    /// The reported bug. The picker only shows hours and minutes, but the `Date`
+    /// behind it keeps the seconds it was seeded with, so a reminder set for 4:28 PM
+    /// was scheduled for 4:28:44 and read as arriving late for no visible reason.
+    ///
+    /// Real numbers from the store: the task was due `2026-08-04 16:28:44`.
+    func testFireInstantDropsTheSecondsThePickerNeverShowed() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Singapore")!
+        let due = cal.date(from: DateComponents(
+            year: 2026, month: 8, day: 4, hour: 16, minute: 28, second: 44
+        ))!
+
+        let fire = TaskReminderScheduler.fireDate(for: due)
+        let parts = Calendar.current.dateComponents([.hour, .minute, .second], from: fire)
+
+        XCTAssertEqual(parts.second, 0, "4:28 PM means the moment 4:28 begins")
+        XCTAssertEqual(parts.minute, 28)
+        XCTAssertEqual(fire, due.addingTimeInterval(-44))
+    }
+
+    /// Truncating must not move a reminder into a different minute.
+    func testFireInstantLeavesAnAlreadyExactTimeAlone() {
+        let exact = Calendar.current.date(
+            from: DateComponents(year: 2026, month: 8, day: 4, hour: 9, minute: 5, second: 0)
+        )!
+        XCTAssertEqual(TaskReminderScheduler.fireDate(for: exact), exact)
+    }
+
+    /// The trap the truncation opens if the eligibility check is left behind:
+    /// a due date whose seconds are still ahead of now, but whose minute has
+    /// already begun. Arming that would schedule a moment in the past, which the
+    /// OS accepts and then never delivers — a reminder that is armed and silent.
+    func testDoesNotArmWhenOnlyTheStraySecondsAreStillInTheFuture() {
+        let cal = Calendar.current
+        let minuteStart = cal.date(from: cal.dateComponents([.year, .month, .day, .hour, .minute], from: now))!
+        let dueLaterThisMinute = minuteStart.addingTimeInterval(50)
+        let nowEarlierThisMinute = minuteStart.addingTimeInterval(20)
+
+        XCTAssertGreaterThan(dueLaterThisMinute, nowEarlierThisMinute, "precondition: raw due date is still ahead")
+        XCTAssertFalse(TaskReminderScheduler.shouldArm(
+            remindMe: true, completed: false, deletedAt: nil,
+            dueDate: dueLaterThisMinute, now: nowEarlierThisMinute
+        ), "the minute it would fire in has already started, so there is nothing to schedule")
+    }
+
     // MARK: - The row affordance
 
     /// The bell is keyed on the same pairing the scheduler requires, so a flag with

@@ -69,16 +69,41 @@ enum TaskReminderScheduler {
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings().authorizationStatus
         if status == .notDetermined {
-            let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-            return granted
+            do {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+                SyncLog.line("TaskReminders: authorization requested -> granted=\(granted)")
+                // The grant is the thing that unblocks scheduling, and it arrives
+                // AFTER the save that armed the reminder has already reconciled
+                // against a `notDetermined` permission and scheduled nothing. So
+                // reconcile again here, or the first reminder a person ever sets is
+                // silently never armed.
+                if granted { await reconcile() }
+                return granted
+            } catch {
+                SyncLog.line("TaskReminders: authorization request FAILED: \(error)")
+                return false
+            }
         }
+        SyncLog.line("TaskReminders: authorization already decided -> \(describe(status))")
         return status == .authorized || status == .provisional
     }
 
-    /// Whether a reminder armed right now would actually be delivered.
-    static func canDeliver() async -> Bool {
-        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
-        return status == .authorized || status == .provisional
+    /// Seconds-precision stamp for the log, because the seconds are the point.
+    private static let logStamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
+    private static func describe(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .denied: return "denied"
+        case .authorized: return "authorized"
+        case .provisional: return "provisional"
+        case .ephemeral: return "ephemeral"
+        @unknown default: return "unknown(\(status.rawValue))"
+        }
     }
 
     // MARK: - Store observation
@@ -116,7 +141,9 @@ enum TaskReminderScheduler {
         // No permission means nothing we schedule would ever arrive, so drop what
         // we are holding rather than leave stale requests parked in the OS against
         // a permission that may be granted much later.
-        guard await canDeliver() else {
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else {
+            SyncLog.line("TaskReminders: reconcile skipped, authorization=\(describe(status)) (dropped \(ours.count) pending)")
             if !ours.isEmpty {
                 center.removePendingNotificationRequests(withIdentifiers: ours.map(\.identifier))
             }
@@ -137,12 +164,25 @@ enum TaskReminderScheduler {
         // same moment is left alone, so a reconcile on an unchanged store does no
         // work at all and never re-triggers anything.
         let existingByID = Dictionary(uniqueKeysWithValues: ours.map { ($0.identifier, $0) })
+        var added = 0
         for reminder in desired {
             if let existing = existingByID[reminder.identifier], reminder.matches(existing) {
                 continue
             }
-            try? await center.add(reminder.request())
+            do {
+                try await center.add(reminder.request())
+                added += 1
+                // The exact instant, seconds included. The whole class of bug here
+                // is "fired, but not when I asked", which a count cannot show.
+                SyncLog.line("TaskReminders: armed \(reminder.title) for \(Self.logStamp.string(from: reminder.fireDate))")
+            } catch {
+                // Swallowing this is how a reminder goes missing with nothing to
+                // show for it, which is the one failure mode this feature cannot
+                // afford to be quiet about.
+                SyncLog.line("TaskReminders: add FAILED for \(reminder.identifier) at \(reminder.fireDate): \(error)")
+            }
         }
+        SyncLog.line("TaskReminders: reconcile ok, desired=\(desired.count) added=\(added) pruned=\(stale.count) authorization=\(describe(status))")
     }
 
     /// Cancel everything this type owns. Used by the reset-data path.
@@ -162,6 +202,23 @@ enum TaskReminderScheduler {
     /// is small enough that one fetch plus a filter is trivial, and expressing
     /// "due in the future" against an optional `Date` in a predicate buys nothing
     /// but a way to get it subtly wrong.
+    /// The instant a reminder for `dueDate` actually fires: the START of the minute
+    /// the person chose.
+    ///
+    /// The date picker only exposes hours and minutes, but the `Date` behind it
+    /// keeps whatever seconds it was seeded with — `Date().addingTimeInterval(3600)`
+    /// for a new task, or the stored value for an existing one. So a reminder set
+    /// for 4:28 PM was firing at 4:28:44, which reads as the reminder being up to a
+    /// minute late for no visible reason.
+    ///
+    /// Truncating (rather than rounding) is what matches the picker: 4:28 means the
+    /// moment 4:28 begins.
+    static func fireDate(for dueDate: Date) -> Date {
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: dueDate)
+        return calendar.date(from: parts) ?? dueDate
+    }
+
     /// Whether one task earns a pending reminder.
     ///
     /// Split out and `internal` so the rule is unit-testable without a store: it is
@@ -178,9 +235,10 @@ enum TaskReminderScheduler {
         guard !completed else { return false }
         guard deletedAt == nil else { return false }
         guard let dueDate else { return false }
-        // A moment that has already passed cannot be scheduled. The editor says so
-        // when you arm one; here it is simply not armed.
-        return dueDate > now
+        // Compared against the moment it would actually fire, not the raw due date.
+        // Gating on the raw value would let a task whose truncated minute has just
+        // passed count as armed, and then nothing would ever be delivered for it.
+        return fireDate(for: dueDate) > now
     }
 
     private static func desired(store: SwiftDataStore) -> [Reminder] {
@@ -201,7 +259,7 @@ enum TaskReminderScheduler {
                 ), let due = row.dueDate else { return nil }
                 return Reminder(
                     todoUUID: row.clientUUID,
-                    fireDate: due,
+                    fireDate: fireDate(for: due),
                     title: row.title,
                     notes: row.todoDescription
                 )
