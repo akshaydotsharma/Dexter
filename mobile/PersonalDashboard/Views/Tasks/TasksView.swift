@@ -1320,7 +1320,10 @@ private struct TaskEditorSheet: View {
     @State private var title: String = ""
     @State private var descriptionText: String = ""
     @State private var hasDueDate: Bool = false
-    @State private var dueDate: Date = Date().addingTimeInterval(3600)
+    // An hour out, at minute precision. `Date()` carries seconds and a fraction of
+    // one that the picker never shows, and they would otherwise ride into storage
+    // (#444).
+    @State private var dueDate: Date = WallClock.minutePrecision(Date().addingTimeInterval(3600))
     /// Whether to notify at `dueDate` (#444). Only reachable while `hasDueDate`
     /// is on, and cleared when it goes off.
     @State private var remindMe: Bool = false
@@ -2009,7 +2012,11 @@ private struct TaskEditorSheet: View {
         let trimmed = typed.isEmpty ? Self.untitledTicketTaskName : typed
         let finalDescription = descriptionText.isEmpty ? nil : descriptionText
         let finalTag = tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag
-        let finalDue = hasDueDate ? dueDate : nil
+        // Minute precision, because that is all the picker ever showed (#444). Done
+        // here rather than only on the seed so re-saving a task whose stored date
+        // predates this normalises it too, instead of writing the stray seconds
+        // straight back.
+        let finalDue = hasDueDate ? WallClock.minutePrecision(dueDate) : nil
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
         // Can only be armed against a date (#444).

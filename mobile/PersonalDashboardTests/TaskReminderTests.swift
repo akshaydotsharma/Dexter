@@ -91,6 +91,27 @@ final class TaskReminderTests: XCTestCase {
         XCTAssertEqual(fire, due.addingTimeInterval(-44))
     }
 
+    /// The root cause, at the boundary where it is now fixed rather than
+    /// compensated for. Real sub-second value from the reported task's store row.
+    func testMinutePrecisionStripsSecondsAndFraction() {
+        let dirty = Date(timeIntervalSinceReferenceDate: 807524924.910929)
+        let clean = WallClock.minutePrecision(dirty)
+
+        let parts = Calendar.current.dateComponents([.second, .nanosecond], from: clean)
+        XCTAssertEqual(parts.second, 0)
+        XCTAssertEqual(parts.nanosecond ?? 0, 0, accuracy: 1_000_000)
+        XCTAssertEqual(clean.timeIntervalSinceReferenceDate, 807524880, accuracy: 0.001,
+                       "truncates to the start of the minute, never rounds up into the next one")
+    }
+
+    /// Normalising is idempotent, so re-saving a task cannot walk its due time
+    /// backwards a minute at a time.
+    func testMinutePrecisionIsIdempotent() {
+        let dirty = Date(timeIntervalSinceReferenceDate: 807524924.910929)
+        let once = WallClock.minutePrecision(dirty)
+        XCTAssertEqual(WallClock.minutePrecision(once), once)
+    }
+
     /// Truncating must not move a reminder into a different minute.
     func testFireInstantLeavesAnAlreadyExactTimeAlone() {
         let exact = Calendar.current.date(

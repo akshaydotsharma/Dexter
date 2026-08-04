@@ -211,12 +211,13 @@ enum TaskReminderScheduler {
     /// for 4:28 PM was firing at 4:28:44, which reads as the reminder being up to a
     /// minute late for no visible reason.
     ///
-    /// Truncating (rather than rounding) is what matches the picker: 4:28 means the
-    /// moment 4:28 begins.
+    /// The editor now stores minute-precision due dates, so for anything written
+    /// since #444 this is the identity. It stays because it is the safety net for
+    /// the rows that already carry stray seconds and for dates the AI supplies from
+    /// an ISO string with its own seconds in it — neither of which the editor's
+    /// normalisation reaches.
     static func fireDate(for dueDate: Date) -> Date {
-        let calendar = Calendar.current
-        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: dueDate)
-        return calendar.date(from: parts) ?? dueDate
+        WallClock.minutePrecision(dueDate)
     }
 
     /// Whether one task earns a pending reminder.
