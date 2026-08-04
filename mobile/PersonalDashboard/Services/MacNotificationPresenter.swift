@@ -37,5 +37,21 @@ final class MacNotificationPresenter: NSObject, UNUserNotificationCenterDelegate
     ) {
         completionHandler([.banner, .list, .sound])
     }
+
+    /// Record that a reminder was dealt with here (#444), so the phone does not
+    /// deliver the same one late once sync carries the task back.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        defer { completionHandler() }
+        // Read off the response synchronously, then hop with just the UUID — the
+        // notification object itself is not Sendable.
+        let reminder = TaskReminderScheduler.inspect(response: response)
+        if let uuid = reminder.clearedTask {
+            Task { @MainActor in TaskReminderScheduler.markCleared(todoUUID: uuid) }
+        }
+    }
 }
 #endif

@@ -117,6 +117,12 @@ enum DataArchive {
         // So both apps have to be on this build before reminders can be trusted to
         // survive a round trip.
         var remindMe: Bool? = nil
+
+        /// When the reminder notification was dealt with, on whichever device did it.
+        /// Carried here precisely SO it syncs: notification dismissal is device-local,
+        /// and this is the only way a peer that learns about an overdue reminder can
+        /// tell "not seen yet" from "already swiped away on the phone".
+        var reminderClearedAt: Date? = nil
     }
 
     /// A task's wallet-style ticket attachment (#399).

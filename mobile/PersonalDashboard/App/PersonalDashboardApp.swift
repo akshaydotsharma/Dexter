@@ -52,6 +52,7 @@ struct PersonalDashboardApp: App {
                     // reconcile is what turns that into a pending banner. The
                     // observer then catches every later write that does not go
                     // through TodoService (the AI tools, a sync pass, a restore).
+                    await TaskReminderScheduler.registerCategory()
                     TaskReminderScheduler.startObservingStoreChanges()
                     await TaskReminderScheduler.reconcile()
                 }

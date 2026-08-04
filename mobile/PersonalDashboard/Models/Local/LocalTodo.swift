@@ -42,6 +42,22 @@ final class LocalTodo {
     /// a stale `true` from an older write can never schedule anything.
     var remindMe: Bool = false
 
+    /// When the person dealt with this task's reminder notification, on whichever
+    /// device they did it (#444).
+    ///
+    /// Exists because notification dismissal is DEVICE-LOCAL and does not sync,
+    /// while the task does. Without it, a second device that receives an armed
+    /// reminder after its moment has passed cannot tell the difference between "you
+    /// have not seen this yet" and "you already swiped it away on your phone", so it
+    /// either always re-notifies or never does. Set when the notification is
+    /// dismissed or tapped, and it syncs, which is what lets the other device skip a
+    /// late delivery for something already handled.
+    ///
+    /// Completing, deleting, or disarming the task are separate signals and are
+    /// already checked on their own — this covers only "the banner was dealt with
+    /// but the task itself was left alone".
+    var reminderClearedAt: Date? = nil
+
     var version: Int64
 
     var createdAt: Date
@@ -62,6 +78,7 @@ final class LocalTodo {
         googleMapsLink: String = "",
         priority: Int = 0,
         remindMe: Bool = false,
+        reminderClearedAt: Date? = nil,
         version: Int64 = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -79,6 +96,7 @@ final class LocalTodo {
         self.googleMapsLink = googleMapsLink
         self.priority = priority
         self.remindMe = remindMe
+        self.reminderClearedAt = reminderClearedAt
         self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -105,7 +123,8 @@ final class LocalTodo {
             address: address,
             googleMapsLink: googleMapsLink,
             priority: priority,
-            remindMe: remindMe
+            remindMe: remindMe,
+            reminderClearedAt: reminderClearedAt
         )
     }
 }

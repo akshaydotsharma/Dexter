@@ -75,6 +75,7 @@ struct DexterMacApp: App {
                 // them safe in a per-WINDOW `.task`.
                 .task {
                     MacNotificationPresenter.shared.install()
+                    await TaskReminderScheduler.registerCategory()
                     TaskReminderScheduler.startObservingStoreChanges()
                     await TaskReminderScheduler.reconcile()
                 }

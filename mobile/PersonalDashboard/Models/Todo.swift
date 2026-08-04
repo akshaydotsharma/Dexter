@@ -37,6 +37,10 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     /// same handling as `priority`: defaulted and omitted from `CodingKeys`.
     var remindMe: Bool = false
 
+    /// When this task's reminder notification was dismissed or tapped, on any
+    /// device (#444). Local-only, same handling as `remindMe`.
+    var reminderClearedAt: Date? = nil
+
     /// Typed view of `priority` for the UI. Unknown raw values fall back to
     /// `.none` so a bad stored value never renders a blank/missing bar.
     var taskPriority: TaskPriority { TaskPriority(rawValue: priority) ?? .none }

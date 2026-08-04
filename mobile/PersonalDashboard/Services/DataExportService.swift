@@ -467,7 +467,8 @@ final class DataExportService {
             priority: todo.priority,
             address: todo.address,
             googleMapsLink: todo.googleMapsLink,
-            remindMe: todo.remindMe
+            remindMe: todo.remindMe,
+            reminderClearedAt: todo.reminderClearedAt
         )
     }
 

@@ -116,6 +116,19 @@ final class EmailIngestCoordinator: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         defer { completionHandler() }
+
+        // Task reminders (#444). Swiping one away or tapping it records that it has
+        // been dealt with, which syncs, so the Mac does not deliver the same reminder
+        // late once it catches up. Inspected first and returns when it was ours, so
+        // the email branch below is untouched.
+        let reminder = TaskReminderScheduler.inspect(response: response)
+        if reminder.isOurs {
+            if let uuid = reminder.clearedTask {
+                Task { @MainActor in TaskReminderScheduler.markCleared(todoUUID: uuid) }
+            }
+            return
+        }
+
         guard response.actionIdentifier == EmailIngestNotifications.undoActionId else { return }
         let userInfo = response.notification.request.content.userInfo
         guard let raw = userInfo[EmailIngestNotifications.logUUIDKey] as? String,

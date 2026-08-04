@@ -37,11 +37,30 @@ enum TaskReminderScheduler {
     /// Prefix on every identifier this type owns, so a reconcile can find and
     /// prune its own pending requests without touching the recurring-expense or
     /// email-ingest notifications sharing the same center.
-    static let identifierPrefix = "task-reminder."
+    nonisolated static let identifierPrefix = "task-reminder."
 
     /// Task `clientUUID` on the delivered notification, for a future tap handler
     /// that wants to open the task itself.
-    static let todoUUIDKey = "todoClientUUID"
+    nonisolated static let todoUUIDKey = "todoClientUUID"
+
+    /// Category for reminder notifications. Carries `.customDismissAction`, which is
+    /// what makes the OS tell us the person swiped the banner away — without it a
+    /// dismissal is invisible to the app and `reminderClearedAt` could never be set.
+    nonisolated static let categoryIdentifier = "task-reminder"
+
+    /// How late a reminder may arrive on a second device and still be delivered.
+    ///
+    /// This exists for sync latency and nothing else. The measured case (#444): a
+    /// reminder set on the phone for 17:49:00 reached the Mac at 17:49:35, because
+    /// the oplog polls on a ~33s timer and one pass in that window took 20.8s on top
+    /// of iCloud Drive's own propagation. Without a grace window the Mac correctly
+    /// but uselessly refuses to fire, and "both devices notify" is not true for any
+    /// reminder set a few minutes out.
+    ///
+    /// Ten minutes is meant to cover that lag and a lid closed for a moment, and to
+    /// stop well short of a laptop opened in the evening ambushing someone with the
+    /// morning's reminders. A device that has been away longer than this stays quiet.
+    static let lateGrace: TimeInterval = 600
 
     /// How many reminders to keep armed with the OS.
     ///
@@ -106,6 +125,105 @@ enum TaskReminderScheduler {
         }
     }
 
+    // MARK: - Category + dismissal
+
+    /// Register the reminder category, preserving whatever else is registered.
+    ///
+    /// ⚠️ `setNotificationCategories` REPLACES the whole set, it does not add to it.
+    /// iOS already registers the email-ingest categories (the Undo button lives on
+    /// one of them) from `AppDelegate.didFinishLaunching`, so a naive set here would
+    /// silently break Undo. Hence the read-modify-write. It also means this must run
+    /// AFTER the email registration, which it does: that one is in the app delegate,
+    /// this one in the SwiftUI `.task`.
+    static func registerCategory() async {
+        let center = UNUserNotificationCenter.current()
+        let category = UNNotificationCategory(
+            identifier: categoryIdentifier,
+            actions: [],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+        var merged = await center.notificationCategories()
+            .filter { $0.identifier != categoryIdentifier }
+        merged.insert(category)
+        center.setNotificationCategories(merged)
+    }
+
+    /// What a notification response means for us, decided WITHOUT touching the store.
+    ///
+    /// `nonisolated` because the delegate callbacks it serves are nonisolated, and
+    /// because it must answer "was this ours?" synchronously so the iOS delegate can
+    /// decide whether to fall through to its email branch. It also reads everything
+    /// it needs off the response here, so only a `UUID` crosses to the main actor
+    /// rather than the non-Sendable notification object.
+    ///
+    /// Swiping the banner away and tapping it both count as dealing with it, because
+    /// both mean it has been seen. That is what stops the OTHER device delivering the
+    /// same reminder late once sync carries the fact across.
+    nonisolated static func inspect(
+        response: UNNotificationResponse
+    ) -> (isOurs: Bool, clearedTask: UUID?) {
+        let request = response.notification.request
+        guard request.identifier.hasPrefix(identifierPrefix) else { return (false, nil) }
+
+        switch response.actionIdentifier {
+        case UNNotificationDismissActionIdentifier, UNNotificationDefaultActionIdentifier:
+            guard let raw = request.content.userInfo[todoUUIDKey] as? String,
+                  let uuid = UUID(uuidString: raw) else { return (true, nil) }
+            return (true, uuid)
+        default:
+            return (true, nil)
+        }
+    }
+
+    /// Record that this task's reminder has been dealt with, and let the store
+    /// change propagate so a sync pass carries it to the other device.
+    static func markCleared(todoUUID: UUID, store: SwiftDataStore = .shared) {
+        let descriptor = FetchDescriptor<LocalTodo>(
+            predicate: #Predicate { $0.clientUUID == todoUUID }
+        )
+        guard let row = try? store.context.fetch(descriptor).first else { return }
+        guard row.reminderClearedAt == nil else { return }
+        row.reminderClearedAt = Date()
+        // Bumped so the sync engine treats this as a real edit and ships it. Without
+        // it the change would sit on this device and the other one would still fire.
+        row.updatedAt = Date()
+        try? store.context.save()
+        SyncLog.line("TaskReminders: cleared \(row.title)")
+        NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
+    }
+
+    // MARK: - Per-device delivery record
+
+    /// Reminders this DEVICE has already delivered late, so it never does it twice.
+    ///
+    /// Device-local on purpose, and deliberately not the synced `reminderClearedAt`:
+    /// that field means "the person dealt with it" and must stay false until they do,
+    /// or the other device would skip a reminder nobody has seen. This is the
+    /// narrower fact "this device already put this banner up", which is nobody
+    /// else's business. Keyed on the fire instant as well as the task, so moving a
+    /// due date to a new time arms a genuinely new reminder.
+    private static let deliveredKey = "TaskReminders.deliveredLate"
+
+    private static func lateDeliveryKey(_ reminder: Reminder) -> String {
+        "\(reminder.todoUUID.uuidString)@\(Int(reminder.fireDate.timeIntervalSince1970))"
+    }
+
+    private static func alreadyDeliveredLate(_ reminder: Reminder) -> Bool {
+        let stored = UserDefaults.standard.dictionary(forKey: deliveredKey) as? [String: Double] ?? [:]
+        return stored[lateDeliveryKey(reminder)] != nil
+    }
+
+    private static func recordLateDelivery(_ reminder: Reminder) {
+        var stored = UserDefaults.standard.dictionary(forKey: deliveredKey) as? [String: Double] ?? [:]
+        stored[lateDeliveryKey(reminder)] = reminder.fireDate.timeIntervalSince1970
+        // Prune anything far enough past the grace window that it can never be a
+        // candidate again, so this cannot grow without bound.
+        let cutoff = Date().addingTimeInterval(-lateGrace * 6).timeIntervalSince1970
+        stored = stored.filter { $0.value > cutoff }
+        UserDefaults.standard.set(stored, forKey: deliveredKey)
+    }
+
     // MARK: - Store observation
 
     /// Reconcile whenever something writes to the store outside `TodoService`.
@@ -150,7 +268,7 @@ enum TaskReminderScheduler {
             return
         }
 
-        let desired = self.desired(store: store)
+        let (desired, late) = self.desired(store: store)
         let desiredByID = Dictionary(uniqueKeysWithValues: desired.map { ($0.identifier, $0) })
 
         // Prune: armed with the OS but no longer deserved (completed, deleted,
@@ -187,7 +305,24 @@ enum TaskReminderScheduler {
                 SyncLog.line("TaskReminders: add FAILED for \(reminder.identifier) at \(reminder.fireDate): \(error)")
             }
         }
-        SyncLog.line("TaskReminders: reconcile ok, desired=\(desired.count) added=\(added) pruned=\(stale.count) authorization=\(describe(status))")
+        // Reminders this device is owed: their moment passed while it did not know the
+        // task existed, which is the cross-device case (#444). Delivered straight
+        // away rather than scheduled, because there is no future instant left to
+        // schedule them for.
+        var deliveredLate = 0
+        for reminder in late where !alreadyDeliveredLate(reminder) {
+            do {
+                try await center.add(reminder.request(immediate: true))
+                recordLateDelivery(reminder)
+                deliveredLate += 1
+                let behind = Int(Date().timeIntervalSince(reminder.fireDate))
+                SyncLog.line("TaskReminders: delivered \(reminder.title) \(behind)s late (was due \(Self.logStamp.string(from: reminder.fireDate)))")
+            } catch {
+                SyncLog.line("TaskReminders: late delivery FAILED for \(reminder.identifier): \(error)")
+            }
+        }
+
+        SyncLog.line("TaskReminders: reconcile ok, desired=\(desired.count) added=\(added) pruned=\(stale.count) late=\(deliveredLate) authorization=\(describe(status))")
     }
 
     /// Cancel everything this type owns, delivered banners included. Used by the
@@ -253,42 +388,97 @@ enum TaskReminderScheduler {
         dueDate: Date?,
         now: Date
     ) -> Bool {
-        guard remindMe else { return false }
-        guard !completed else { return false }
-        guard deletedAt == nil else { return false }
-        guard let dueDate else { return false }
+        timing(remindMe: remindMe, completed: completed, deletedAt: deletedAt,
+               dueDate: dueDate, reminderClearedAt: nil, now: now) == .scheduled
+    }
+
+    /// What, if anything, this device should do about one task's reminder.
+    enum Timing: Equatable {
+        /// Hand it to the OS for its fire date, which is still ahead.
+        case scheduled
+        /// Its moment has passed, but recently, and nobody has dealt with it — so
+        /// deliver it now. This is the cross-device case: the other device fired on
+        /// time and this one only just learned the task exists.
+        case deliverNow
+        /// Nothing to do.
+        case none
+    }
+
+    static func timing(
+        remindMe: Bool,
+        completed: Bool,
+        deletedAt: Date?,
+        dueDate: Date?,
+        reminderClearedAt: Date?,
+        now: Date
+    ) -> Timing {
+        guard remindMe else { return .none }
+        guard !completed else { return .none }
+        guard deletedAt == nil else { return .none }
+        guard let dueDate else { return .none }
+
         // Compared against the moment it would actually fire, not the raw due date.
         // Gating on the raw value would let a task whose truncated minute has just
         // passed count as armed, and then nothing would ever be delivered for it.
-        return fireDate(for: dueDate) > now
+        let fire = fireDate(for: dueDate)
+        if fire > now { return .scheduled }
+
+        // Already dealt with on some device. The whole reason `reminderClearedAt`
+        // syncs: swiping the banner away on the phone is invisible here otherwise,
+        // and this device would re-notify for something already seen.
+        guard reminderClearedAt == nil else { return .none }
+
+        // Late, but only usefully so. Past the grace window this is history, not a
+        // reminder.
+        guard now.timeIntervalSince(fire) <= lateGrace else { return .none }
+        return .deliverNow
     }
 
-    private static func desired(store: SwiftDataStore) -> [Reminder] {
+    /// Everything this device should act on, split by whether it is scheduled ahead
+    /// or owed right now, soonest first.
+    ///
+    /// Filtering happens in Swift rather than in the `#Predicate`: the task table is
+    /// small enough that one fetch plus a filter is trivial, and expressing "due in
+    /// the future" against an optional `Date` in a predicate buys nothing but a way
+    /// to get it subtly wrong.
+    private static func desired(store: SwiftDataStore) -> (scheduled: [Reminder], late: [Reminder]) {
         let descriptor = FetchDescriptor<LocalTodo>(
             predicate: #Predicate { $0.deletedAt == nil }
         )
         let rows = (try? store.context.fetch(descriptor)) ?? []
         let now = Date()
 
-        return rows
-            .compactMap { row -> Reminder? in
-                guard shouldArm(
-                    remindMe: row.remindMe,
-                    completed: row.completed,
-                    deletedAt: row.deletedAt,
-                    dueDate: row.dueDate,
-                    now: now
-                ), let due = row.dueDate else { return nil }
-                return Reminder(
-                    todoUUID: row.clientUUID,
-                    fireDate: fireDate(for: due),
-                    title: row.title,
-                    notes: row.todoDescription
-                )
+        var scheduled: [Reminder] = []
+        var late: [Reminder] = []
+
+        for row in rows {
+            guard let due = row.dueDate else { continue }
+            let reminder = Reminder(
+                todoUUID: row.clientUUID,
+                fireDate: fireDate(for: due),
+                title: row.title,
+                notes: row.todoDescription
+            )
+            switch timing(
+                remindMe: row.remindMe,
+                completed: row.completed,
+                deletedAt: row.deletedAt,
+                dueDate: row.dueDate,
+                reminderClearedAt: row.reminderClearedAt,
+                now: now
+            ) {
+            case .scheduled: scheduled.append(reminder)
+            case .deliverNow: late.append(reminder)
+            case .none: continue
             }
-            .sorted { $0.fireDate < $1.fireDate }
-            .prefix(maxPending)
-            .map { $0 }
+        }
+
+        return (
+            scheduled: Array(scheduled.sorted { $0.fireDate < $1.fireDate }.prefix(maxPending)),
+            // Not capped: these are delivered immediately rather than parked with the
+            // OS, so they do not consume the pending budget the cap protects.
+            late: late.sorted { $0.fireDate < $1.fireDate }
+        )
     }
 
     // MARK: - Reminder
@@ -316,7 +506,9 @@ enum TaskReminderScheduler {
             return "Due \(fireDate.formatted(date: .omitted, time: .shortened))"
         }
 
-        func request() -> UNNotificationRequest {
+        /// `immediate` delivers now instead of at `fireDate`, for a reminder whose
+        /// moment passed before this device heard about the task.
+        func request(immediate: Bool = false) -> UNNotificationRequest {
             let content = UNMutableNotificationContent()
             // A task saved with no typed title falls back to a placeholder name,
             // so this is belt-and-braces against an empty banner headline.
@@ -340,6 +532,16 @@ enum TaskReminderScheduler {
             // recurring-expense notice winning on recency alone. A reminder is the
             // most consequential thing this app posts, so it takes the top score.
             content.relevanceScore = 1.0
+
+            // Lets the OS report a dismissal back to us, which is what records
+            // `reminderClearedAt` and stops the other device delivering it late.
+            content.categoryIdentifier = TaskReminderScheduler.categoryIdentifier
+
+            // A nil trigger delivers immediately. Used only for a reminder already
+            // past its moment — there is nothing left to schedule.
+            guard !immediate else {
+                return UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+            }
 
             // Wall-clock components, not a time interval: the OS then fires at the
             // moment shown on the task even if the device sleeps, reboots, or the

@@ -137,6 +137,62 @@ final class TaskReminderTests: XCTestCase {
         ), "the minute it would fire in has already started, so there is nothing to schedule")
     }
 
+    // MARK: - Late arrival on a second device (#444)
+
+    private func timing(
+        fireOffset: TimeInterval,
+        cleared: Date? = nil,
+        completed: Bool = false,
+        deletedAt: Date? = nil,
+        remindMe: Bool = true
+    ) -> TaskReminderScheduler.Timing {
+        TaskReminderScheduler.timing(
+            remindMe: remindMe,
+            completed: completed,
+            deletedAt: deletedAt,
+            dueDate: now.addingTimeInterval(fireOffset),
+            reminderClearedAt: cleared,
+            now: now
+        )
+    }
+
+    /// The measured case: the phone fired at 17:49:00, the Mac only received the task
+    /// at 17:49:35. Before this it refused and the Mac silently never notified.
+    func testAReminderThatArrivedSecondsLateIsDeliveredNow() {
+        XCTAssertEqual(timing(fireOffset: -35), .deliverNow)
+    }
+
+    /// The user's rule: already dealt with on the originating device means silence
+    /// here. This is the entire reason `reminderClearedAt` is a synced field.
+    func testALateReminderAlreadyClearedElsewhereStaysSilent() {
+        XCTAssertEqual(timing(fireOffset: -35, cleared: now.addingTimeInterval(-30)), TaskReminderScheduler.Timing.none)
+    }
+
+    /// Completing the task counts as dealing with it too, without needing the banner
+    /// to have been touched.
+    func testALateReminderForACompletedTaskStaysSilent() {
+        XCTAssertEqual(timing(fireOffset: -35, completed: true), TaskReminderScheduler.Timing.none)
+        XCTAssertEqual(timing(fireOffset: -35, deletedAt: now), TaskReminderScheduler.Timing.none)
+        XCTAssertEqual(timing(fireOffset: -35, remindMe: false), TaskReminderScheduler.Timing.none)
+    }
+
+    /// Bounded, so a laptop opened in the evening does not replay the morning.
+    func testALateReminderPastTheGraceWindowStaysSilent() {
+        let justInside = -(TaskReminderScheduler.lateGrace - 5)
+        let justOutside = -(TaskReminderScheduler.lateGrace + 5)
+
+        XCTAssertEqual(timing(fireOffset: justInside), .deliverNow)
+        XCTAssertEqual(timing(fireOffset: justOutside), TaskReminderScheduler.Timing.none)
+    }
+
+    /// A reminder still ahead is scheduled, not delivered, however it got here.
+    func testAFutureReminderIsStillScheduledNotDelivered() {
+        XCTAssertEqual(timing(fireOffset: 3600), .scheduled)
+        // And a cleared flag does not stop a FUTURE reminder: clearing applies to the
+        // banner that already went out, not to one that has not happened yet.
+        XCTAssertEqual(timing(fireOffset: 3600, cleared: now.addingTimeInterval(-9999)), .scheduled)
+    }
+
     // MARK: - The row affordance
 
     /// The bell is keyed on the same pairing the scheduler requires, so a flag with
