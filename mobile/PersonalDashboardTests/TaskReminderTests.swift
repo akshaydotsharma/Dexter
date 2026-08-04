@@ -176,7 +176,16 @@ final class TaskReminderTests: XCTestCase {
         XCTAssertEqual(timing(fireOffset: -35, remindMe: false), TaskReminderScheduler.Timing.none)
     }
 
-    /// Bounded, so a laptop opened in the evening does not replay the morning.
+    /// The measured real-world latency, which the original ten-minute window
+    /// rejected: iOS only pushes while the app is open or backgrounding, so a
+    /// reminder due 20:27 reached the Mac at 20:53. Anything from today that nobody
+    /// has dealt with has to land.
+    func testAReminderThatArrivedHalfAnHourLateIsStillDelivered() {
+        XCTAssertEqual(timing(fireOffset: -26 * 60), .deliverNow)
+        XCTAssertEqual(timing(fireOffset: -6 * 3600), .deliverNow)
+    }
+
+    /// Bounded only against an archive restore full of old armed rows.
     func testALateReminderPastTheGraceWindowStaysSilent() {
         let justInside = -(TaskReminderScheduler.lateGrace - 5)
         let justOutside = -(TaskReminderScheduler.lateGrace + 5)

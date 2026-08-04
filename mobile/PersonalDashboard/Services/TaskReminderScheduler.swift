@@ -50,17 +50,26 @@ enum TaskReminderScheduler {
 
     /// How late a reminder may arrive on a second device and still be delivered.
     ///
-    /// This exists for sync latency and nothing else. The measured case (#444): a
-    /// reminder set on the phone for 17:49:00 reached the Mac at 17:49:35, because
-    /// the oplog polls on a ~33s timer and one pass in that window took 20.8s on top
-    /// of iCloud Drive's own propagation. Without a grace window the Mac correctly
-    /// but uselessly refuses to fire, and "both devices notify" is not true for any
-    /// reminder set a few minutes out.
+    /// ## Why this is a day and not ten minutes
     ///
-    /// Ten minutes is meant to cover that lag and a lid closed for a moment, and to
-    /// stop well short of a laptop opened in the evening ambushing someone with the
-    /// morning's reminders. A device that has been away longer than this stays quiet.
-    static let lateGrace: TimeInterval = 600
+    /// It was ten minutes, sized off a single measurement where a reminder reached
+    /// the Mac 35 seconds late. That was the wrong model of the latency. iOS only
+    /// runs a sync pass while the app is foregrounded or on its way to the
+    /// background, so an op can sit on the phone until it is next opened — measured
+    /// at **26 minutes** for a reminder due 20:27 that the Mac only saw at 20:53.
+    /// Ten minutes did not cover the real world, and the second device stayed silent
+    /// for exactly the case this was built for.
+    ///
+    /// The rule this feature was asked for has no time bound at all: show it unless
+    /// it has already been dealt with. A day is the concession to one specific
+    /// hazard rather than to that rule — restoring an archive full of long-finished
+    /// tasks that happen to be armed and uncleared would otherwise produce a banner
+    /// per row. Repeats on the same device are prevented separately, by
+    /// `recordLateDelivery`.
+    ///
+    /// So: anything from today that nobody has dealt with still lands. A device that
+    /// has been away for longer than that stays quiet.
+    static let lateGrace: TimeInterval = 24 * 60 * 60
 
     /// How many reminders to keep armed with the OS.
     ///
