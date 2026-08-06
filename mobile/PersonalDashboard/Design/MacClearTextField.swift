@@ -115,6 +115,19 @@ struct MacClearTextField: NSViewRepresentable {
     /// `Tokens.mutedSoft` so the resting field matches the old ghost row (#287).
     var placeholderColor: Color? = nil
 
+    /// Which Inter face the field renders in. Defaults to Regular, which is
+    /// `.edBody` and therefore right for every call site that toggles with body
+    /// text.
+    ///
+    /// It has to be settable because the ramp has two steps at the SAME point
+    /// size and different weights: `.edBody` is Inter Regular 13 on macOS and
+    /// `.edHeading` is Inter SemiBold 13. A field left at the default under a
+    /// heading changes WEIGHT the instant it is clicked, which is a smaller
+    /// version of the exact bug #301 was about — a typographic relationship
+    /// asserted in a comment instead of expressed in code. The vision board's
+    /// block title is `.edHeading` and passes `"Inter-SemiBold"` (#446).
+    var fontName: String = "Inter-Regular"
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     /// Apply the placeholder as either a plain string (default styling) or an
@@ -160,7 +173,7 @@ struct MacClearTextField: NSViewRepresentable {
         // text jump. Reading the size from the ramp couples them in code rather
         // than in a comment nobody re-reads (issue #301).
         let bodySize = EdMetrics.bodyPointSize
-        field.font = NSFont(name: "Inter-Regular", size: bodySize) ?? .systemFont(ofSize: bodySize)
+        field.font = NSFont(name: fontName, size: bodySize) ?? .systemFont(ofSize: bodySize)
         field.textColor = NSColor(Tokens.ink)
         applyPlaceholder(to: field)
         field.stringValue = text

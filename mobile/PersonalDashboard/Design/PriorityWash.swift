@@ -26,6 +26,22 @@ struct PriorityWash: ViewModifier {
     /// still identifiable in the Completed section without shouting.
     var dimmed: Bool = false
 
+    /// Reduced budget for a vision-board tile (#446), which is a much smaller
+    /// object than the full-pane task row this wash was tuned against.
+    ///
+    /// Two things change and both are consequences of the size, not taste:
+    ///
+    /// 1. The gradient's `0 → 0.55` ramp compresses to roughly a third of the
+    ///    distance inside a 156pt tile, so the same alpha reads noticeably
+    ///    stronger there. 0.7× brings it back to the intended weight.
+    /// 2. The inset goes to zero. `RowMetrics.priorityWashInset` exists to keep
+    ///    colour off the macOS sidebar seam, where a full-bleed row meets the
+    ///    pane boundary. A tile sits inside a card, nowhere near a seam, so the
+    ///    inset would only be a visible gap on both ends of a short row.
+    ///
+    /// `trailAlpha` is unchanged: it is already at the floor of what registers.
+    var compact: Bool = false
+
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
@@ -60,7 +76,7 @@ struct PriorityWash: ViewModifier {
                 // macOS rows run to the pane boundary (#339), and a wash flush
                 // against the sidebar seam would read as a second pane rather
                 // than as part of the row.
-                .padding(.horizontal, RowMetrics.priorityWashInset)
+                .padding(.horizontal, compact ? 0 : RowMetrics.priorityWashInset)
         }
     }
 
@@ -73,7 +89,8 @@ struct PriorityWash: ViewModifier {
     /// highlighted row looks like. Measured on device at 0.17/dark it read as
     /// a colored slab per row; 0.10 reads as a tint.
     private var leadAlpha: Double {
-        let base = isDark ? 0.10 : 0.09
+        var base = isDark ? 0.10 : 0.09
+        if compact { base *= 0.7 }   // 0.070 dark / 0.063 light
         return dimmed ? base * 0.4 : base
     }
 
@@ -90,8 +107,9 @@ struct PriorityWash: ViewModifier {
 
 extension View {
     /// Applies the priority wash for `priority` as this view's background.
-    /// No-op for `.none`.
-    func priorityWash(_ priority: TaskPriority, dimmed: Bool = false) -> some View {
-        modifier(PriorityWash(priority: priority, dimmed: dimmed))
+    /// No-op for `.none`. Pass `compact` inside a small container such as a
+    /// vision-board tile — see the flag's own comment for why.
+    func priorityWash(_ priority: TaskPriority, dimmed: Bool = false, compact: Bool = false) -> some View {
+        modifier(PriorityWash(priority: priority, dimmed: dimmed, compact: compact))
     }
 }

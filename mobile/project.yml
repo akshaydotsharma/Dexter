@@ -164,6 +164,13 @@ targets:
       - path: PersonalDashboard/Services/ChecklistService.swift
       - path: PersonalDashboard/Services/FinanceSettings.swift
       - path: PersonalDashboard/Views/Tasks
+      # Vision board (#446). Whole folder, like Views/Tasks above: every file in
+      # it belongs to this surface and none of them is iOS-only. The @Model, the
+      # DTO and the state enum need no entry — PersonalDashboard/Models is
+      # globbed at the top of this list.
+      - path: PersonalDashboard/Views/VisionBoard
+      - path: PersonalDashboard/ViewModels/VisionBoardViewModel.swift
+      - path: PersonalDashboard/Services/VisionBoardService.swift
       - path: PersonalDashboard/Views/Lists/ListsView.swift
       - path: PersonalDashboard/Views/Today/TodayView.swift
       - path: PersonalDashboard/Views/Notes/NotesView.swift

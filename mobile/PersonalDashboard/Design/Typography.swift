@@ -107,17 +107,30 @@ enum EdMetrics {
 // MARK: - Eyebrow modifier
 
 struct Eyebrow: ViewModifier {
+    /// Ink for the eyebrow. Defaults to `Tokens.muted`, which is what every
+    /// existing call site gets.
+    ///
+    /// A parameter rather than something a caller can layer on afterwards:
+    /// `.eyebrow()` applies `foregroundStyle` INSIDE the modifier, so it sits
+    /// closer to the `Text` than anything chained after it and wins. The vision
+    /// board needs its state eyebrow in the state hue (#446), and without this
+    /// the only way to get it would be to re-implement the modifier and drift
+    /// from the tracking value, which is private to this file on purpose.
+    var color: Color = Tokens.muted
+
     func body(content: Content) -> some View {
         content
             .font(.edEyebrow)
             .textCase(.uppercase)
             .tracking(EdSize.eyebrowTracking)
-            .foregroundStyle(Tokens.muted)
+            .foregroundStyle(color)
     }
 }
 
 extension View {
     /// Renders a label as an Editorial Calm eyebrow:
     /// uppercase, tracked, semibold 11pt on iOS / 10pt on macOS, muted.
-    func eyebrow() -> some View { modifier(Eyebrow()) }
+    func eyebrow(_ color: Color = Tokens.muted) -> some View {
+        modifier(Eyebrow(color: color))
+    }
 }
