@@ -86,6 +86,48 @@ enum VisionBoardLayout {
         return nil
     }
 
+    /// The largest legal size at or below what the pointer is asking for, with
+    /// the block pinned at `anchor`'s top-left.
+    ///
+    /// Two axes that constrain each other, so it takes three passes rather than
+    /// two: width first against the shortest legal block, because a neighbour to
+    /// the RIGHT should stop the width and leave the height free; then height
+    /// against that width; then width once more in case the resolved height
+    /// reached into something the first pass could not see. Each loop is bounded
+    /// by the minimum, so none of them can run away.
+    static func largestFreeSize(
+        at anchor: Slot,
+        desiredW: Int,
+        desiredH: Int,
+        in blocks: [VisionBlock],
+        excluding: UUID?
+    ) -> (w: Int, h: Int) {
+        func free(_ w: Int, _ h: Int) -> Bool {
+            isFree(Slot(col: anchor.col, row: anchor.row, w: w, h: h), in: blocks, excluding: excluding)
+        }
+        var w = max(VisionGrid.minColumns, desiredW)
+        var h = max(VisionGrid.minRows, desiredH)
+        while w > VisionGrid.minColumns, !free(w, VisionGrid.minRows) { w -= 1 }
+        while h > VisionGrid.minRows,    !free(w, h)                  { h -= 1 }
+        while w > VisionGrid.minColumns, !free(w, h)                  { w -= 1 }
+        return (w, h)
+    }
+
+    /// The only way a block's top-left is allowed to be computed.
+    ///
+    /// Every render path on the board funnels through here — the resting
+    /// position AND the live position under a dragging pointer — so "block
+    /// rendered outside the canvas" is not a state the view can express. That
+    /// matters beyond tidiness: a stuck drag session used to leave a block at a
+    /// negative x, where it drew underneath the sidebar and looked lost rather
+    /// than misplaced (#446 follow-up).
+    static func clampedOrigin(_ point: CGPoint, size: CGSize, in canvas: CGSize) -> CGPoint {
+        CGPoint(
+            x: min(max(0, point.x), max(0, canvas.width  - size.width)),
+            y: min(max(0, point.y), max(0, canvas.height - size.height))
+        )
+    }
+
     /// The canvas size needed to hold `blocks`, plus room to keep going.
     ///
     /// The canvas grows on demand, which is why "no free slot anywhere" is

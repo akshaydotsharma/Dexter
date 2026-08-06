@@ -147,6 +147,23 @@ enum Tokens {
     /// their own hue families (see `state(for:)` and `priorityWashHue(for:)`),
     /// which is what keeps three simultaneous signals legible on one card.
     static let accentVision    = Color.paper(0x456F0D, 0xA9C46B)
+    /// The Vision Board's canvas lattice, at rest and while something is being
+    /// moved or resized (#446, revised in review 2026-08-06).
+    ///
+    /// Two tuned pairs rather than one colour at two opacities. The same alpha
+    /// over cream and over near-black does not read as the same whisper: a
+    /// light dot on `paper`'s dark side gains contrast faster than a dark dot
+    /// on its light side, and it is the dark-mode dot that turns into static
+    /// first. Holding four explicit values lets each theme be judged on its own.
+    ///
+    /// Warm, never grey. The lattice belongs to the paper it is printed on; a
+    /// neutral grey dot at this size reads as dirt on the screen.
+    /// The light value is the louder of the two on paper and still the quieter
+    /// of the two on screen: measured against `paper`, the idle dot lands about
+    /// 14 levels down in light mode and about 18 levels UP in dark, which is
+    /// what it takes for the two to read as the same whisper.
+    static let visionLattice       = Color.paper(0xE4DCC6, 0x252019)
+    static let visionLatticeActive = Color.paper(0xC9BE9E, 0x4E4639)
     static let accentSettings  = Color.paper(0x475569, 0x94A3B8)
     static let accentHelp      = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)

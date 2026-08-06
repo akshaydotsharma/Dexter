@@ -17,9 +17,16 @@ import AppKit
 struct VisionBlockCard: View {
     let viewModel: VisionBoardViewModel
     /// The block to render. During a resize the board passes a copy with the
-    /// live `w`/`h`, so everything below — the tier, the tile capacity, the
-    /// dimension readout — recomputes from one source.
+    /// QUANTISED `w`/`h`, so everything derived from cells — the tier, the tile
+    /// capacity, the dimension readout — recomputes from one source and changes
+    /// once per cell crossed.
     let block: VisionBlock
+    /// The card's rendered size in points, when that is not simply the block's
+    /// cell size. Non-nil only during a resize, where the edge has to sit under
+    /// the pointer between cells; the two diverge by up to half a cell, and
+    /// tiering off this instead of off `block` is what would make the interior
+    /// flicker on every boundary.
+    let liveSize: CGSize?
     let isSelected: Bool
     let isDragging: Bool
     let isResizing: Bool
@@ -54,6 +61,14 @@ struct VisionBlockCard: View {
     /// focus; an index once Return has been pressed to "enter" the block.
     @State private var tileCursor: Int?
 
+    /// Continuous while a resize is in hand or settling, the block's cell size
+    /// otherwise. When the session finally clears, this expression flips from
+    /// one to the other inside the settle spring, which IS the spring into the
+    /// target size — there is no separate animation to keep in step.
+    private var renderedSize: CGSize {
+        liveSize ?? VisionGrid.blockSize(columns: block.w, rows: block.h)
+    }
+
     private var style: VisionBlockStyle { VisionBlockStyle(state: block.state) }
     private var tier: VisionBlockTier { block.tier }
     private var tiles: [Todo] { viewModel.tiles(for: block) }
@@ -66,8 +81,8 @@ struct VisionBlockCard: View {
             interior
         }
         .frame(
-            width: VisionGrid.blockSize(columns: block.w, rows: block.h).width,
-            height: VisionGrid.blockSize(columns: block.w, rows: block.h).height,
+            width: renderedSize.width,
+            height: renderedSize.height,
             alignment: .top
         )
         .background(style.bodyFill)
@@ -529,8 +544,13 @@ struct VisionBlockCard: View {
             .padding(Space.sm)
             .opacity(hovering || isResizing ? 1 : 0)
             .animation(motion(.easeOut(duration: 0.12)), value: hovering)
+            // `.global`, not the default `.local`. The grip is pinned to the
+            // card's bottom-trailing corner, so as the card grows the grip's own
+            // coordinate space moves with it — in local space the pointer would
+            // appear to stop moving and the resize would fight itself. Global
+            // space is pure pointer travel.
             .gesture(
-                DragGesture(minimumDistance: 2)
+                DragGesture(minimumDistance: 2, coordinateSpace: .global)
                     .onChanged { onResizeDrag($0.translation) }
                     .onEnded { _ in onResizeEnd() }
             )

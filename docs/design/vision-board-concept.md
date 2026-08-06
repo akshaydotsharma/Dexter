@@ -63,8 +63,12 @@ A block therefore says two things at once without ambiguity: *what I am doing ab
 
 ## Layout: canvas, snapped
 
-Free position and free size, snapped to an invisible grid. Not a packed masonry, not a
-Kanban column.
+Free position and free size, snapped to a grid. Not a packed masonry, not a Kanban
+column.
+
+(The grid was originally invisible at rest. Reversed in review on 2026-08-06: it is now
+faintly visible at all times and strengthens while something is in hand. See §4 of the
+design system for the argument on both sides.)
 
 The reason is spatial memory. A board earns its keep when "the heavy one" is always
 top-left and you stop reading the titles. Auto-packing destroys that: add one block and
@@ -74,8 +78,9 @@ from you.
 Blocks may not overlap. A drop that would overlap nudges to the nearest free slot rather
 than refusing, so it never feels like a fight.
 
-Resize is a bottom-right corner handle, in grid units, with a minimum of one column by two
-rows. Size is the whole point of the exercise: a block you made large is a claim about how
+Resize is a bottom-right corner handle with a minimum of one column by two rows. The edge
+follows the pointer continuously and lands on a grid unit when you let go (revised
+2026-08-06; it used to jump a whole cell at a time under the hand). Size is the whole point of the exercise: a block you made large is a claim about how
 much of you it is taking, and the board should let that claim be wrong and visible.
 
 ## What a block shows at each size

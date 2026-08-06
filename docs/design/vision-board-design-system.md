@@ -11,8 +11,14 @@ and are not revisited here.
 
 Everything below derives from the existing Editorial Calm token system in
 `Design/Tokens.swift`, `Design/Spacing.swift`, `Design/Typography.swift`, and
-`Design/PriorityWash.swift`. Three new colour tokens and one new metrics enum are
+`Design/PriorityWash.swift`. Five new colour tokens and one new metrics enum are
 proposed. Nothing else is invented.
+
+**Revised 2026-08-06 after review of the built surface.** Two sections were
+reversed rather than refined: §4 (the canvas ground) now specifies an always-on
+lattice, and the resize handle in §7 now tracks the pointer continuously and
+snaps on release. Both carry a dated supersedes note and keep the argument they
+replaced, so the cost of each reversal stays legible.
 
 ---
 
@@ -331,14 +337,33 @@ and 5 are always shown at every size, because those are the ones you scan for.
 
 ## 4. The canvas ground
 
+> **Superseded 2026-08-06.** This section originally argued that placeability is
+> revealed by attention and never printed on the ground: no grid at idle, a full
+> lattice only during a drag or resize. Reviewed against the built surface and
+> reversed. The always-on lattice below is the specified behaviour; the
+> reveal-on-attention argument is recorded at the end of the section so the
+> reasoning that was traded away is not lost.
+
 ### The principle
 
-**Placeability is revealed by attention, not printed on the ground.**
+**The board is a place, and a place you arrange things in shows you its floor.**
 
-A permanent dot lattice or line grid turns a warm-paper surface into graph paper
-and adds visual noise to every square point of a 3000pt canvas in exchange for
-information the user needs at exactly one moment. So the idle canvas has no grid
-at all. It is `Tokens.paper`, and nothing else.
+A faint lattice is on the canvas at all times. It strengthens while a block is
+being dragged or resized, and it never disappears.
+
+Two things the reveal-on-attention version could not do:
+
+- A grid that exists only once you are already committed to a drag tells you
+  where a block will land, but it never helps you decide to move one. The moment
+  it is most useful for judging *whether* a block is aligned is the moment it is
+  absent.
+- An empty board with no grid reads as an empty document rather than as a surface
+  with slots in it. The lattice is what says "things go here", before any block
+  exists to demonstrate it.
+
+Strengthening rather than fading in also buys something a reveal cannot: the grid
+a drag snaps to is visibly the same grid that was there before the block was
+picked up.
 
 ### Grid metrics
 
@@ -362,37 +387,92 @@ enum VisionGrid {
 
 Small = 172pt wide. Medium (2 col) = 356pt. Large (3 col) = 540pt.
 
-### Three visibility levels
+### Two lattice levels, plus the ghost cell
 
-**1. Idle: no grid.** `Tokens.paper`. Blocks float on it with `shadowSm()`.
+**1. Idle: the faint lattice.** Dots at every cell corner, on `Tokens.paper`.
 
-**2. Pointer over empty canvas: one ghost cell.** A single `Radius.card` rounded
-rect at the snapped cell under the pointer, sized `minColumns × minRows`:
+- 1.4pt diameter circles, `Tokens.visionLattice`
+- Pitch = `VisionGrid.cellWidth × VisionGrid.cellHeight`. On a 3000 × 2000
+  canvas that is roughly 470 dots, one cheap `Shape` path — now a permanently
+  retained one, which is why it must stay a single path and not become a view
+  per cell
+
+**2. Dragging or resizing: the strong lattice.** Same dots, grown and warmed.
+
+- 1.8pt diameter, `Tokens.visionLatticeActive`
+- Crossfades over 120ms `.easeOut`, both ways. Under reduced motion it is
+  instant: this is a change of emphasis, not a piece of information
+
+**3. Pointer over empty canvas: one ghost cell.** Unchanged. A single
+`Radius.card` rounded rect at the snapped cell under the pointer, sized
+`minColumns × minRows`:
 
 - Fill: `Tokens.surface.opacity(0.5)`
 - Border: **dashed** `Tokens.borderStrong`, dash `[4,3]`, 0.5pt
 - Centred `plus` glyph, 14pt, `Tokens.mutedSoft`
 - Fades in over 140ms `.easeOut`, out over 90ms `.easeIn`
 - Follows the pointer by jumping between cells, never sliding
+- Suppressed entirely while a block is in hand, where the strong lattice has
+  taken over the job
 
 Double-clicking anywhere on empty canvas creates a block at that cell, so the
 ghost is a truthful preview of the result rather than decoration.
 
-**3. Dragging or resizing: the full lattice.** Dots at every cell corner:
+### Tuning the idle lattice so it is not graph paper
 
-- 1.5pt diameter circles, `Tokens.borderStrong.opacity(0.35)`
-- Pitch = `VisionGrid.cellWidth × VisionGrid.cellHeight`. On a 3000 × 2000
-  canvas that is roughly 470 dots, cheap enough for a single SwiftUI `Canvas`
-  pass with no caching
-- Fades in over 120ms `.easeOut`, out over 90ms `.easeIn`
+This is the whole risk in the reversal, and the values are pitched at the
+threshold rather than at "clearly visible".
 
-Plus, during a drag:
+Measured against `Tokens.paper`, the rendered idle dot lands about 20 levels
+darker in light mode and about 20 levels lighter in dark. Two separate token
+pairs rather than one colour at two opacities: the same alpha over cream and
+over near-black does not read as the same whisper, because a light dot on a dark
+ground gains apparent contrast faster than a dark dot on a light one, and it is
+the dark-mode dot that turns into static first.
+
+```swift
+static let visionLattice       = Color.paper(0xE4DCC6, 0x252019)
+static let visionLatticeActive = Color.paper(0xC9BE9E, 0x4E4639)
+```
+
+Warm, never grey. The lattice belongs to the paper it is printed on; a neutral
+grey dot at this size reads as dirt on the screen rather than as texture.
+
+Dot size matters more than it looks. Below about 1.2pt the antialiasing eats
+most of the delta and the dot goes from faint to absent, which then tempts a
+correction in the wrong direction: a dot that is too small has to be made too
+dark to register at all, and a too-dark dot at a small size reads as grit. 1.4pt
+at a modest delta is calmer than 1.0pt at a large one.
+
+**Acceptance check:** a board with no blocks on it must read as one calm surface
+at a normal viewing distance, in both themes. You should notice the lattice when
+you look for it, not before.
+
+### Drag slots
+
+Unchanged, and drawn over the lattice:
 
 - **Target slot**: `Tokens.accentVision.opacity(0.10)` fill, **dashed**
   `Tokens.accentVision` 0.5pt hairline (dash `[5,4]`), `Radius.card`
 - **Origin slot**: dashed `Tokens.border` 0.5pt hairline, no fill. Not
   `Tokens.divider`: divider disappears on light surfaces in light mode, which is
   the known trap this codebase has already hit
+
+### The argument this replaced
+
+Recorded rather than deleted, because it is a real cost and it is the thing to
+re-read if the board ever starts to feel busy.
+
+> Placeability is revealed by attention, not printed on the ground. A permanent
+> dot lattice or line grid turns a warm-paper surface into graph paper and adds
+> visual noise to every square point of a 3000pt canvas in exchange for
+> information the user needs at exactly one moment. So the idle canvas has no
+> grid at all. It is `Tokens.paper`, and nothing else.
+
+What was traded: some permanent visual noise, in exchange for a board that
+announces its own structure before you commit to a gesture. The trade is only
+sound while the idle values stay at the threshold above. If the lattice is ever
+strengthened for its own sake, this argument wins again.
 
 ---
 
@@ -614,7 +694,7 @@ whether you got there by pointer or by Tab.
 - `scale(1.02)`, `opacity(0.92)`, `shadowLg()`
 - Border `Tokens.accentVision.opacity(0.6)`
 - Cursor `NSCursor.closedHand`
-- Grid lattice fades in (§4, level 3)
+- Grid lattice strengthens (§4). It was already there; it does not appear
 - The block follows the pointer **1:1 and continuously**
 - The target slot **jumps** discretely between legal cells
 
@@ -652,6 +732,12 @@ so this state should be nearly unreachable.
 
 ### Resize handle
 
+> **Superseded 2026-08-06.** This section originally left the block itself
+> quantised while the grip was held: the card jumped a whole cell at a time as
+> the pointer crossed each boundary. Reviewed against the built surface and
+> reversed. The block now tracks the pointer continuously and snaps on release,
+> which is the same continuous-versus-discrete pairing the drag already uses.
+
 - Bottom-right corner, inset `Space.sm` (8) from both edges
 - Two diagonal strokes, 1.5pt wide, 10pt and 6pt long, `Tokens.mutedSoft`.
   The Mac scroller-grip idiom
@@ -662,18 +748,53 @@ so this state should be nearly unreachable.
   The visible grip glyph carries the affordance. Do not reach for the private
   `_windowResizeNorthWestSouthEastCursor`
 
+The grip's `DragGesture` must use `coordinateSpace: .global`. The grip is pinned
+to the corner the resize is moving, so in local space the pointer appears to stop
+moving as the card grows and the gesture fights itself.
+
 While resizing:
 
-- Grid lattice appears
-- The block's body **re-lays-out live**. Growing from 1 col to 2 makes tiles
-  appear under your hand as you drag. This is the point of the exercise and must
-  not be deferred to drop
+- **The edge follows the pointer continuously and unquantised.** The card renders
+  at a size in points, not in cells. This is what makes the resize feel like a
+  handle rather than a stepper
+- **A dashed target outline** shows the cell-quantised size the block will land
+  in: `Tokens.accentVision`, 1pt, dash `[5,4]`, `Radius.card`, drawn **on top of
+  the block**. On top because shrinking would otherwise hide the outline behind
+  the very block it describes, and **unfilled** for the same reason: the 10%
+  accent wash the drag target slot carries would tint the card's own content.
+  The pairing is deliberately the drag's: the thing in your hand moves
+  continuously, the preview clicks between cells
+- Grid lattice strengthens (§4)
+- The block's body **re-lays-out live**, off the **quantised** width, never the
+  continuous one. Growing from 1 col to 2 makes tiles appear under your hand as
+  you drag, which is the point of the exercise and must not be deferred to drop
+  — but tiering off the continuous width would re-tier twice per boundary as the
+  pointer wobbles across it, and the interior would flicker
 - A **dimension readout** appears centred in the block: `3 × 4`, `.edMono`
   (JetBrains Mono 11), `Tokens.muted`, on a `Tokens.surface.opacity(0.9)` capsule
   with `Tokens.border` hairline. Mono because it is a measurement, and mono keeps
-  the capsule from jittering in width as the digits change
+  the capsule from jittering in width as the digits change. It reads the
+  quantised size, so it changes once per cell
+- The **alignment haptic** fires on each cell change, never continuously. A
+  haptic on every pointer sample is a buzz, not a signal
 - Minimum enforced at `VisionGrid.minColumns × minRows` (1 × 2). Below that the
-  handle simply stops following, with no error state
+  edge simply stops following, with no error state
+- **Neighbour collision stops the edge too**, on the axis the neighbour is
+  actually on. Growth cannot displace a block the user placed deliberately, so
+  the continuous edge is capped at the last legal cell boundary. The cap is
+  applied only where a neighbour cut the size short: apply it unconditionally and
+  the edge also sticks on every ordinary rounding boundary
+
+On release:
+
+- The block **springs into the quantised size**:
+  `.spring(response: 0.28, dampingFraction: 0.86)` — the same spring the drag
+  settles with, so a drop and a resize release read as one physical event
+- The dashed outline and the readout disappear at the moment of release; the
+  spring is the block landing in the outline it was showing you
+- The commit is awaited before the live size is dropped. Drop it first and the
+  card renders for a frame at its pre-drag size, so it springs backwards and then
+  jumps forwards
 
 ### Inline title edit
 
@@ -775,7 +896,7 @@ Restrained by policy. This is a tool. The complete list of what moves:
 |---|---|---|
 | Hover: border, shadow, handle, ellipsis | 120ms | `.easeOut` |
 | Ghost cell in / out | 140 / 90ms | `.easeOut` / `.easeIn` |
-| Grid lattice in / out | 120 / 90ms | `.easeOut` / `.easeIn` |
+| Grid lattice strengthens / relaxes | 120ms | `.easeOut` |
 | Snap slot jumps to a new cell | 120ms | `.snappy(duration: 0.12)` |
 | Block settles into slot on drop | ~280ms | `.spring(response: 0.28, dampingFraction: 0.86)` |
 | Block returns to origin (no legal slot) | ~280ms | same spring |
@@ -807,7 +928,7 @@ Read `@Environment(\.accessibilityReduceMotion)`:
 
 - Every spring becomes `.easeOut(duration: 0.15)`
 - The snap-slot jump becomes instant
-- The grid lattice appears and disappears instantly
+- The grid lattice strengthens and relaxes instantly
 - The completed-tile delay drops to 0 and the sink becomes a crossfade
 - `.contentTransition(.numericText())` is dropped
 - Ghost cell and hover transitions stay (they are 120 to 140ms opacity fades, well
@@ -915,7 +1036,7 @@ Labels:
   `.accessibilityAddTraits(.isToggle)`
 - Resize handle: `.accessibilityHidden(true)`. The ⌥-arrow path is the accessible
   route, surfaced as an `accessibilityHint` on the block
-- Grid lattice, ghost cell, dimension readout, target slot:
+- Grid lattice, ghost cell, dimension readout, target and resize slots:
   `.accessibilityHidden(true)`. All are pointer feedback
 
 ### Pointer target sizes
@@ -948,6 +1069,10 @@ static let accentVision  = Color.paper(0x456F0D, 0xA9C46B)
 static let stateOngoing  = Color.paper(0x0E6F87, 0x5FC6DE)
 static let stateWaiting  = Color.paper(0x6D4BC4, 0xAB9BF0)
 
+// Added 2026-08-06 with the always-on lattice (§4).
+static let visionLattice       = Color.paper(0xE4DCC6, 0x252019)
+static let visionLatticeActive = Color.paper(0xC9BE9E, 0x4E4639)
+
 static func state(for s: BlockState) -> Color { /* §2 */ }
 
 // AppSection
@@ -965,8 +1090,7 @@ Existing tokens carrying new roles, with no change to their definitions:
 `ink` (Active state), `muted` (Idea and Done state), `inkSoft` (progress fill,
 Done text), `surface2` (tile fill, rung-3 chip), `paper2` (Done body, completed
 tile), `warningSoft` / `dangerSoft` (rung 4 / 5 chips), `border` (every hairline
-and the tile-to-add-row rule), `borderStrong` (hover border, ghost outlines, grid
-dots), `mutedSoft` (unchecked box, placeholder, resize grip).
+and the tile-to-add-row rule), `borderStrong` (hover border, ghost outlines), `mutedSoft` (unchecked box, placeholder, resize grip).
 
 ---
 
@@ -983,6 +1107,14 @@ Interaction
 - [ ] Pointer targets ≥ 24 × 24 on macOS, with the resize-handle exception documented
 - [ ] Micro-interaction timings between 120 and 300ms
 - [ ] Drag is interruptible; Escape during a drag returns the block to origin
+- [ ] **A drag cannot be left open.** Ending it must not depend on SwiftUI's
+      `onEnded` alone: a gesture torn down by a view update never delivers it.
+      Verify with the pointer-up path, not just by dragging successfully
+- [ ] No modifier on an ancestor of a block changes value while a gesture is in
+      flight (this is what tore the gesture down the first time)
+- [ ] A block cannot render outside the canvas bounds in any state
+- [ ] Resize edge tracks the pointer between cells; the dashed outline shows
+      where it lands; the interior re-tiers on the boundary and does not flicker
 
 Light and dark
 - [ ] Every state colour verified against `surface`, `surface2`, and `paper2` in both themes
