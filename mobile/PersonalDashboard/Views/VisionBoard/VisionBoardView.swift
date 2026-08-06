@@ -119,15 +119,36 @@ struct VisionBoardView: View {
             Color.clear
                 .frame(width: size.width, height: size.height)
                 .contentShape(Rectangle())
-                // Declared before the single tap so the double registers. A
-                // single click also lands here and deselects, which is the
-                // right thing to happen on a click into empty canvas anyway.
-                .onTapGesture(count: 2) { point in
-                    let cell = VisionGrid.cell(at: point)
-                    Task { await createBlock(col: cell.col, row: cell.row) }
+                // Declared before the single tap so the double registers.
+                // Double-click still creates: it is in the concept doc and it is
+                // muscle memory from every other canvas tool.
+                .onTapGesture(count: 2) { point in createFromCanvas(at: point) }
+                // And so does a single click, when there is a ghost cell under
+                // the pointer. A plus drawn under the pointer is a button; a
+                // button that needs to be hit twice is a lie, and this one was
+                // being told on every hover (#446 follow-up).
+                //
+                // Away from a ghost — over a gutter, or anywhere a new block
+                // will not fit — the click means what it always meant and drops
+                // the selection. `creationSlot` is the single arbiter of which
+                // of the two it is, and it is the same call the ghost is drawn
+                // from, so what you see is what the click does.
+                .onTapGesture { point in
+                    if creationSlot(at: point) != nil {
+                        createFromCanvas(at: point)
+                    } else {
+                        interaction.selected = nil
+                    }
                 }
-                .onTapGesture { interaction.selected = nil }
                 .onContinuousHover { phase in
+                    // Nothing to preview while something is in hand: the
+                    // strengthened lattice has taken the job over, and the ghost
+                    // is suppressed below anyway. This is a guard rather than a
+                    // render-time condition because the mutation is the cost —
+                    // it lands on an ANCESTOR of the block being dragged, once
+                    // per pointer sample, and a re-render arriving mid-gesture is
+                    // precisely what #446 blamed for the drag going missing.
+                    guard !interaction.isManipulating else { return }
                     let next: VisionInteraction.Cell?
                     switch phase {
                     case .active(let point):
@@ -147,16 +168,28 @@ struct VisionBoardView: View {
             VisionGridLattice(size: size, active: interaction.isManipulating)
                 .animation(instantIfReduced(.easeOut(duration: 0.12)), value: interaction.isManipulating)
 
-            // Only over empty canvas, and never while manipulating — the
-            // strengthened lattice has already taken over the job.
+            // Only over empty canvas, only where a new block actually fits, and
+            // never while manipulating — the strengthened lattice has already
+            // taken over the job.
+            //
+            // The "actually fits" clause is what makes the plus honest. It used
+            // to appear at any cell the pointer floored to, including cells a
+            // neighbouring block already owns, where creation would silently
+            // nudge the new block somewhere else entirely. Now the ghost is
+            // drawn from the same `creationSlot` the click consults, so the
+            // outline is the block you are about to make, at the position you
+            // are about to make it, and its absence is the only place a click
+            // deselects instead.
             //
             // Wrapped so the fade transition has an animation in scope without
             // putting one on the whole canvas. Reduced motion keeps this one:
             // at 140ms of pure opacity it is inside what reduced motion permits,
             // and removing it would remove feedback rather than movement.
             Group {
-                if let cell = interaction.hoverCell, !interaction.isManipulating {
-                    VisionGhostCell(col: cell.col, row: cell.row)
+                if let cell = interaction.hoverCell,
+                   !interaction.isManipulating,
+                   let slot = creationSlot(col: cell.col, row: cell.row) {
+                    VisionGhostCell(slot: slot)
                         .transition(.opacity)
                 }
             }
@@ -212,10 +245,23 @@ struct VisionBoardView: View {
         .offset(x: origin.x, y: origin.y)
         .zIndex(isDragging ? 10 : 0)
         // `.gesture`, deliberately not `.highPriorityGesture`. The card's own
-        // children — the tile checkboxes, the resize grip, the ellipsis menu —
-        // must win for gestures that start on them, and a low-priority drag
-        // with a 4pt threshold still recognises everywhere else on the card.
+        // children — the tile checkboxes, the resize grip, the ellipsis menu,
+        // the draggable tiles — must win for gestures that start on them, and
+        // that is exactly what low precedence buys. `.highPriorityGesture` would
+        // outrank the grip's own `DragGesture(minimumDistance: 2)` and a resize
+        // would become a move.
+        //
+        // The corollary is what made this drag dead on arrival: the SAME rule
+        // meant a card-wide `.onTapGesture` inside `VisionBlockCard` outranked
+        // it everywhere, and the block could not be moved at all. That tap is
+        // gone; nothing card-spanning may be added back here.
         .gesture(dragGesture(block, canvas: canvas))
+        // Click to select, declared AFTER the drag so it ranks BELOW it rather
+        // than repeating the mistake one level down. A stationary click never
+        // reaches the drag's 4pt threshold, so there is nothing for the two to
+        // argue about; the card's focus change is the second, gesture-free route
+        // to the same state if this one loses the argument anyway.
+        .onTapGesture { interaction.selected = block.id }
         // Moving a task between blocks. The transferable is the task's UUID
         // string; `attach` enforces one-block-per-task on the way in, so the
         // source block does not have to be told about the move.
@@ -442,6 +488,45 @@ struct VisionBoardView: View {
 
     // MARK: - Creation
 
+    /// The slot a click at this point would fill, or nil if it would fill none.
+    ///
+    /// One function, three callers — the ghost, the single click and the double
+    /// click — because the whole of defect two was those three disagreeing. The
+    /// footprint is the real one a block is created at, not the minimum block:
+    /// a preview that understates the size can sit happily in a gap the block
+    /// cannot fit in, and then creation nudges it elsewhere and the plus turns
+    /// out to have been pointing at the wrong cell.
+    ///
+    /// Deliberately no nearest-free-slot fallback. Nudging is right when the
+    /// user is steering a block with the pointer and can see where it went; it
+    /// is wrong for a plus sitting on a specific cell, which has made a promise
+    /// about that cell. Where the promise cannot be kept there is no plus.
+    private func creationSlot(at point: CGPoint) -> VisionBoardLayout.Slot? {
+        let cell = VisionGrid.cell(at: point)
+        return creationSlot(col: cell.col, row: cell.row)
+    }
+
+    private func creationSlot(col: Int, row: Int) -> VisionBoardLayout.Slot? {
+        let slot = VisionBoardLayout.Slot(
+            col: col, row: row, w: VisionGrid.newColumns, h: VisionGrid.newRows
+        )
+        return VisionBoardLayout.isFree(slot, in: viewModel.blocks, excluding: nil) ? slot : nil
+    }
+
+    /// The canvas's one way in, from either click recogniser.
+    ///
+    /// Both a single- and a double-click recogniser sit on the ground, and which
+    /// of them fires for a given interaction is not this view's to decide:
+    /// SwiftUI may hold the single back until the double-click window closes and
+    /// then cancel it, or deliver it first and the double after. Both are fine
+    /// as long as the second delivery cannot make a second block, so the guard
+    /// lives here rather than in either recogniser, where it would only ever
+    /// cover one of the two orders.
+    private func createFromCanvas(at point: CGPoint) {
+        guard let slot = creationSlot(at: point), interaction.claimCreation() else { return }
+        Task { await createBlock(col: slot.col, row: slot.row) }
+    }
+
     /// Creates at that cell, with the title already in edit: naming a block is
     /// part of making one, not a second step you have to discover.
     private func createBlock(col: Int, row: Int) async {
@@ -455,7 +540,9 @@ struct VisionBoardView: View {
     /// default-sized block fits in, so the new block lands where you would have
     /// put it rather than on top of something.
     private func createBlockAtFirstFreeSlot() async {
-        let desired = VisionBoardLayout.Slot(col: 0, row: 0, w: 2, h: 3)
+        let desired = VisionBoardLayout.Slot(
+            col: 0, row: 0, w: VisionGrid.newColumns, h: VisionGrid.newRows
+        )
         let slot = VisionBoardLayout.nearestFreeSlot(
             to: desired, in: viewModel.blocks, excluding: nil
         ) ?? desired
@@ -577,6 +664,21 @@ final class VisionInteraction {
 
     @ObservationIgnored private var escapeToken: Any?
     @ObservationIgnored private var pointerUpToken: Any?
+    @ObservationIgnored private var lastCreation = Date.distantPast
+
+    /// One interaction, at most one block.
+    ///
+    /// `NSEvent.doubleClickInterval` rather than a literal, because the thing
+    /// being collapsed IS a double click, and the user's own setting is the only
+    /// correct definition of how long that lasts. Two deliberate single clicks
+    /// inside that window are indistinguishable from a double click at the OS
+    /// level, so refusing the second is the same answer either way.
+    func claimCreation() -> Bool {
+        let now = Date()
+        guard now.timeIntervalSince(lastCreation) > NSEvent.doubleClickInterval else { return false }
+        lastCreation = now
+        return true
+    }
 
     var isManipulating: Bool { drag != nil || resize != nil }
 
@@ -595,6 +697,11 @@ final class VisionInteraction {
             target: origin
         )
         selected = block.id
+        // The ground stops tracking the pointer for the duration, so whatever it
+        // last saw is stale. Cleared here rather than left to go stale, so a
+        // ghost cannot flash at a cell the pointer left several hundred points
+        // ago the instant the block is dropped.
+        hoverCell = nil
     }
 
     /// The ONLY mutator for a dragged block's position, and it clamps. There is
@@ -613,6 +720,7 @@ final class VisionInteraction {
             live: VisionGrid.blockSize(columns: block.w, rows: block.h)
         )
         selected = block.id
+        hoverCell = nil
     }
 
     /// Where a block draws, resting or in hand. Every path goes through the

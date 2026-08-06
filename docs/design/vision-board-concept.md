@@ -96,7 +96,11 @@ This is what stops a 30-block board from being 300 lines of task text.
 
 ## Interactions
 
-- **New block**: double-click empty canvas. Creates at that point, title in edit mode.
+- **New block**: click the ghost cell under the pointer on empty canvas, or double-click
+  the canvas. Creates at that point, title in edit mode. A single click was added on
+  2026-08-07: the ghost carries a plus, so it reads as a button, and a button that needs
+  two clicks is a lie. Double-click stays because it is muscle memory from every other
+  canvas tool, and the two are collapsed so one interaction can only ever make one block.
 - **New task in a block**: an add row at the block's foot. Type, return, it exists. Return
   again keeps going. Creating here creates a real task, filed to the block.
 - **Attach an existing task**: a search field in the block's menu that finds any `LocalTodo`

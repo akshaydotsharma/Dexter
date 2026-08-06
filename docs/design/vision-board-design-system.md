@@ -403,9 +403,9 @@ Small = 172pt wide. Medium (2 col) = 356pt. Large (3 col) = 540pt.
 - Crossfades over 120ms `.easeOut`, both ways. Under reduced motion it is
   instant: this is a change of emphasis, not a piece of information
 
-**3. Pointer over empty canvas: one ghost cell.** Unchanged. A single
-`Radius.card` rounded rect at the snapped cell under the pointer, sized
-`minColumns × minRows`:
+**3. Pointer over empty canvas: one ghost cell.** A single `Radius.card` rounded
+rect at the snapped cell under the pointer, sized `newColumns × newRows`
+(2 × 3, the size a block is actually created at):
 
 - Fill: `Tokens.surface.opacity(0.5)`
 - Border: **dashed** `Tokens.borderStrong`, dash `[4,3]`, 0.5pt
@@ -414,9 +414,22 @@ Small = 172pt wide. Medium (2 col) = 356pt. Large (3 col) = 540pt.
 - Follows the pointer by jumping between cells, never sliding
 - Suppressed entirely while a block is in hand, where the strong lattice has
   taken over the job
+- Suppressed where a 2 × 3 block does not fit, which is the only place on empty
+  canvas a click deselects rather than creates
 
-Double-clicking anywhere on empty canvas creates a block at that cell, so the
-ghost is a truthful preview of the result rather than decoration.
+**Revised 2026-08-07.** Two things changed together, and they are the same
+change. The ghost is now sized at the created footprint rather than at
+`minColumns × minRows`, and a **single** click on it creates the block
+(double-click still works, and the two are collapsed so one interaction makes at
+most one block).
+
+The plus was reading as a button and was not one — clicking it did nothing,
+because creation was bound to the double-click alone. Making it a button then
+raises the bar on the preview: at the minimum size it could sit happily inside a
+gap the real 2 × 3 block does not fit in, and creation would nudge the block
+somewhere else, so the plus would have been pointing at a cell the block never
+lands in. Preview, hit test and creation all read the same `creationSlot` now,
+and where it has no answer there is no plus.
 
 ### Tuning the idle lattice so it is not graph paper
 
@@ -854,7 +867,7 @@ scrolled.
 
 ```
         Nothing on the board yet
-   Double-click anywhere to add the first
+      Click anywhere to add the first
         thing you're carrying.
 
         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐

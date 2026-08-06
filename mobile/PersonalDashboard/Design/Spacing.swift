@@ -348,6 +348,15 @@ enum VisionGrid {
     static let minColumns = 1
     static let minRows    = 2
 
+    /// The size a newly created block gets: 2 × 3 cells, the medium tier.
+    ///
+    /// Named rather than defaulted at three call sites, because the ghost cell
+    /// under the pointer is a preview of exactly this and a click on it makes
+    /// exactly this. The moment the preview and the creation disagree about the
+    /// footprint, the plus is pointing at a cell the block will not land in.
+    static let newColumns = 2
+    static let newRows    = 3
+
     /// Rendered size of a block occupying `columns × rows` cells.
     static func blockSize(columns: Int, rows: Int) -> CGSize {
         CGSize(

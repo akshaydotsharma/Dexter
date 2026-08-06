@@ -87,19 +87,29 @@ private struct DotLattice: Shape {
 
 // MARK: - The ghost cell
 
-/// A single cell-sized outline under the pointer over empty canvas.
+/// The block a click on empty canvas is about to make, outlined under the
+/// pointer before you commit to making it.
 ///
-/// Sized at the minimum block (1 × 2) and placed at the snapped cell, so it is a
-/// truthful preview of what a double-click produces rather than decoration. It
-/// JUMPS between cells rather than sliding, which is the same discrete-versus-
-/// continuous contrast that communicates snapping during a drag.
+/// It carries a plus, so it reads as a button, and since #446's follow-up it IS
+/// one: a single click makes the block. That is the whole reason it is drawn at
+/// the slot the board hands it rather than at the minimum block size it used to
+/// assume. A preview one cell wide could sit in a gap that the 2 × 3 block being
+/// created does not fit in, and the click would then quietly put the block
+/// somewhere else — a plus pointing at the wrong cell.
+///
+/// It JUMPS between cells rather than sliding, which is the same discrete-
+/// versus-continuous contrast that communicates snapping during a drag.
+///
+/// `allowsHitTesting(false)` even though it is the affordance for a click: the
+/// canvas ground underneath owns every click, and gets the same answer from the
+/// same `creationSlot` call that put this here. Making the ghost itself
+/// clickable would be a second hit region to keep in agreement with the first.
 struct VisionGhostCell: View {
-    let col: Int
-    let row: Int
+    let slot: VisionBoardLayout.Slot
 
     var body: some View {
-        let size = VisionGrid.blockSize(columns: VisionGrid.minColumns, rows: VisionGrid.minRows)
-        let origin = VisionGrid.origin(col: col, row: row)
+        let size = VisionGrid.blockSize(columns: slot.w, rows: slot.h)
+        let origin = VisionGrid.origin(col: slot.col, row: slot.row)
 
         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
             .fill(Tokens.surface.opacity(0.5))
@@ -212,7 +222,7 @@ struct VisionEmptyBoard: View {
             Text("Nothing on the board yet")
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
-            Text("Double-click anywhere to add the first thing you're carrying.")
+            Text("Click anywhere to add the first thing you're carrying.")
                 .font(.edBody)
                 .foregroundStyle(Tokens.muted)
                 .multilineTextAlignment(.center)

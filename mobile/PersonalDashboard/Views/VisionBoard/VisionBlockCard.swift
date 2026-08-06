@@ -45,11 +45,19 @@ struct VisionBlockCard: View {
     /// Live corner drag, in points, and its end.
     let onResizeDrag: (CGSize) -> Void
     let onResizeEnd: () -> Void
+    /// Called when this card takes keyboard focus. NOT called from a tap — see
+    /// the note on `contentShape` in `body` for why a card-wide tap recogniser
+    /// cannot live here.
     let onSelect: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var hovering = false
+    /// Keyboard focus on the card itself. Mirrored out to the board as
+    /// selection, because this card disables its focus ring on the grounds that
+    /// the selection treatment IS the focus ring — a claim that was not true
+    /// until something actually joined the two.
+    @FocusState private var focused: Bool
     @State private var editingTitle = false
     @State private var titleDraft = ""
     @FocusState private var titleFocused: Bool
@@ -112,10 +120,44 @@ struct VisionBlockCard: View {
             }
         }
         .focusable()
+        .focused($focused)
         .focusEffectDisabled()   // the selection treatment IS the focus ring
+        // Which is only true if something joins them. Clicking a focusable view
+        // focuses it, so this is also a selection route that involves no gesture
+        // recogniser at all and therefore cannot compete with the board's drag —
+        // the belt to the tap's braces. It is worth having on its own merits
+        // regardless: Tab-focusing a block used to show nothing whatsoever,
+        // because the ring is off and nothing else had been told.
+        //
+        // Gaining focus selects; losing it does not deselect. Clicking empty
+        // canvas is the deselect, and a block should not lose its selection just
+        // because the pointer moved into its own title field.
+        .onChange(of: focused) { _, isFocused in if isFocused { onSelect() } }
         .onKeyPress(phases: .down) { handleKey($0) }
+        // The hit shape for the board's drag, and deliberately NOT a tap.
+        //
+        // Selecting a block is a click, so a card-wide `.onTapGesture` here is
+        // the obvious place to put it — and it is the reason the block could not
+        // be moved at all (#446 follow-up). The move gesture lives on the board,
+        // one level OUT from this card, attached with `.gesture`, which Apple
+        // documents as *lower* precedence than gestures defined by the view and
+        // its subviews. A tap spanning the whole card is therefore a subview
+        // recogniser that outranks the drag over every point the drag cares
+        // about, and it claimed the sequence before the drag could reach its
+        // 4pt threshold.
+        //
+        // Selection now has two routes, neither of which can outrank the drag:
+        // the focus change above, and a tap declared AFTER the drag in
+        // `VisionBoardView.blockView` so that it ranks below it. Two, because
+        // which of a same-level tap and drag actually fires is the very thing
+        // this bug proves we cannot predict from the outside, and both routes
+        // set the same id, so a double fire is a no-op.
+        //
+        // Anything genuinely card-local — the title, the tiles, the grip, the
+        // menu — keeps its own recogniser here and still outranks the board's
+        // drag, which is the same precedence rule read the other way round, and
+        // is what keeps the resize grip's own drag safe.
         .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .onTapGesture { onSelect() }
         .onAppear {
             guard beginsInTitleEdit else { return }
             beginTitleEdit()

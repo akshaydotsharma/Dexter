@@ -85,7 +85,12 @@ final class VisionBoardViewModel {
     /// Create a block at a cell, nudged to the nearest free slot if that cell is
     /// taken. Returns its id so the caller can put the title straight into edit.
     @discardableResult
-    func createBlock(at col: Int, row: Int, w: Int = 2, h: Int = 3) async -> UUID? {
+    func createBlock(
+        at col: Int,
+        row: Int,
+        w: Int = VisionGrid.newColumns,
+        h: Int = VisionGrid.newRows
+    ) async -> UUID? {
         let desired = VisionBoardLayout.Slot(col: col, row: row, w: w, h: h)
         let slot = VisionBoardLayout.nearestFreeSlot(to: desired, in: blocks, excluding: nil) ?? desired
         do {
