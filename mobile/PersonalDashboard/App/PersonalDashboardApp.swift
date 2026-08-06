@@ -55,7 +55,6 @@ struct PersonalDashboardApp: App {
                     await TaskReminderScheduler.registerCategory()
                     TaskReminderScheduler.startObservingStoreChanges()
                     await TaskReminderScheduler.reconcile()
-                    await TaskReminderScheduler.logCapabilities()
                 }
         }
         .modelContainer(SwiftDataStore.shared.container)

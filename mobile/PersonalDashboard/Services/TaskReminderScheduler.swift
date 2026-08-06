@@ -116,34 +116,6 @@ enum TaskReminderScheduler {
         return status == .authorized || status == .provisional
     }
 
-    /// Report what the OS says this app is allowed to do, including whether
-    /// time-sensitive delivery is available to it at all.
-    ///
-    /// `timeSensitiveSetting` is the runtime half of the entitlement question. The
-    /// build error proves we cannot SIGN the Time Sensitive capability on free
-    /// personal-team signing; this proves whether the OS would honour the
-    /// interruption level anyway. `.notSupported` means the app has no such
-    /// permission to give, which is the entitlement gate showing up at runtime
-    /// rather than only at code-sign time.
-    static func logCapabilities() async {
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        let timeSensitive: String
-        switch settings.timeSensitiveSetting {
-        case .notSupported: timeSensitive = "notSupported"
-        case .disabled: timeSensitive = "disabled"
-        case .enabled: timeSensitive = "enabled"
-        @unknown default: timeSensitive = "unknown"
-        }
-        var parts = ["authorization=\(describe(settings.authorizationStatus))",
-                     "timeSensitive=\(timeSensitive)"]
-        #if os(iOS)
-        parts.append("lockScreen=\(settings.lockScreenSetting == .enabled ? "enabled" : "off")")
-        parts.append("notificationCenter=\(settings.notificationCenterSetting == .enabled ? "enabled" : "off")")
-        parts.append("alertStyle=\(settings.alertStyle == .banner ? "banner" : "\(settings.alertStyle.rawValue)")")
-        #endif
-        SyncLog.line("TaskReminders: capabilities \(parts.joined(separator: " "))")
-    }
-
     /// Seconds-precision stamp for the log, because the seconds are the point.
     private static let logStamp: DateFormatter = {
         let f = DateFormatter()
@@ -159,6 +131,20 @@ enum TaskReminderScheduler {
         case .provisional: return "provisional"
         case .ephemeral: return "ephemeral"
         @unknown default: return "unknown(\(status.rawValue))"
+        }
+    }
+
+    /// Whether the OS will honour `.timeSensitive` for this app at all.
+    ///
+    /// `notSupported` is the entitlement gate showing up at runtime rather than only
+    /// at code-sign time — the app has no such permission to be granted. Logged on
+    /// every reconcile so the answer is never a matter of reasoning again.
+    private static func describe(_ setting: UNNotificationSetting) -> String {
+        switch setting {
+        case .notSupported: return "notSupported"
+        case .disabled: return "disabled"
+        case .enabled: return "enabled"
+        @unknown default: return "unknown(\(setting.rawValue))"
         }
     }
 
@@ -296,7 +282,13 @@ enum TaskReminderScheduler {
         // No permission means nothing we schedule would ever arrive, so drop what
         // we are holding rather than leave stale requests parked in the OS against
         // a permission that may be granted much later.
-        let status = await center.notificationSettings().authorizationStatus
+        // One read, two facts. `timeSensitiveSetting` rides along on the reconcile
+        // summary rather than living in its own call, because a separate diagnostic
+        // at the end of the launch sequence never printed: the app can background
+        // before it gets there. This line always runs.
+        let settings = await center.notificationSettings()
+        let status = settings.authorizationStatus
+        let timeSensitive = describe(settings.timeSensitiveSetting)
         guard status == .authorized || status == .provisional else {
             SyncLog.line("TaskReminders: reconcile skipped, authorization=\(describe(status)) (dropped \(ours.count) pending)")
             if !ours.isEmpty {
@@ -359,7 +351,7 @@ enum TaskReminderScheduler {
             }
         }
 
-        SyncLog.line("TaskReminders: reconcile ok, desired=\(desired.count) added=\(added) pruned=\(stale.count) late=\(deliveredLate) authorization=\(describe(status))")
+        SyncLog.line("TaskReminders: reconcile ok, desired=\(desired.count) added=\(added) pruned=\(stale.count) late=\(deliveredLate) authorization=\(describe(status)) timeSensitive=\(timeSensitive)")
     }
 
     /// Cancel everything this type owns, delivered banners included. Used by the
