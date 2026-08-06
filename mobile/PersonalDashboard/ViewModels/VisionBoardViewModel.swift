@@ -49,6 +49,12 @@ final class VisionBoardViewModel {
         isLoading = true
         defer { isLoading = false }
         do {
+            // Before the read, never after: a board rendered from coordinates on
+            // the old 184pt lattice would be wrong for exactly one frame, and
+            // one frame of a scrambled board is the thing this whole marker
+            // exists to prevent. Costs one fetch once the board is migrated, and
+            // returns before touching the store when nothing needs it.
+            try await board.migrateGridIfNeeded()
             let allTasks = try await todos.list()
             tasksByID = Dictionary(uniqueKeysWithValues: allTasks.map { ($0.id, $0) })
             blocks = try await board.list()
@@ -125,6 +131,30 @@ final class VisionBoardViewModel {
     func setFrame(_ id: UUID, col: Int, row: Int, w: Int, h: Int) async {
         await apply(id) { try await self.board.setFrame(id, col: col, row: row, w: w, h: h) }
         resort()
+    }
+
+    /// Commit a move or a resize TOGETHER with the blocks it pushed aside.
+    ///
+    /// One call rather than a loop over `setFrame`, because a cascade is one
+    /// user action and has to land as one write — see `applyFrames`. The local
+    /// array is patched from the same dictionary rather than re-read, so the
+    /// blocks the user just watched move do not flicker back through their old
+    /// positions while a fetch returns.
+    func applyLayout(_ frames: [UUID: VisionBoardLayout.Slot]) async {
+        guard !frames.isEmpty else { return }
+        do {
+            try await board.applyFrames(frames)
+            for index in blocks.indices {
+                guard let slot = frames[blocks[index].id] else { continue }
+                blocks[index].col = slot.col
+                blocks[index].row = slot.row
+                blocks[index].w = slot.w
+                blocks[index].h = slot.h
+            }
+            resort()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func deleteBlock(_ id: UUID) async {

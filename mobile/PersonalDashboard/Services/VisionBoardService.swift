@@ -70,8 +70,8 @@ struct VisionBoardService {
         title: String,
         col: Int,
         row: Int,
-        w: Int = 2,
-        h: Int = 3,
+        w: Int = VisionGrid.newColumns,
+        h: Int = VisionGrid.newRows,
         state: BlockState = .default
     ) async throws -> VisionBlock {
         let now = Date()
@@ -117,6 +117,88 @@ struct VisionBoardService {
             $0.w = max(VisionGrid.minColumns, w)
             $0.h = max(VisionGrid.minRows, h)
         }
+    }
+
+    /// Move and/or resize SEVERAL blocks in one save.
+    ///
+    /// A displacement cascade is one user action — one drop — and has to land as
+    /// one write. Looping `setFrame` would save once per block, which is both
+    /// slower and, worse, observable: a `.localStoreDidChange` between two saves
+    /// would reload the board mid-cascade and paint an arrangement that overlaps.
+    ///
+    /// Missing ids are skipped rather than thrown on. The caller computed this
+    /// layout from a snapshot; a block deleted in another window between the
+    /// snapshot and the drop should not fail the drop.
+    func applyFrames(_ frames: [UUID: VisionBoardLayout.Slot]) async throws {
+        guard !frames.isEmpty else { return }
+        let now = Date()
+        let ids = Set(frames.keys)
+        let rows = try store.context.fetch(
+            FetchDescriptor<LocalVisionBlock>(predicate: #Predicate { $0.deletedAt == nil })
+        )
+        for row in rows where ids.contains(row.clientUUID) {
+            guard let slot = frames[row.clientUUID] else { continue }
+            row.col = max(0, slot.col)
+            row.row = max(0, slot.row)
+            row.w = max(VisionGrid.minColumns, slot.w)
+            row.h = max(VisionGrid.minRows, slot.h)
+            row.updatedAt = now
+        }
+        try store.context.save()
+    }
+
+    // MARK: - Lattice migration
+
+    /// Rescale any block still stored on the old 184pt-wide lattice (#446).
+    ///
+    /// Called from `VisionBoardViewModel.load()` before the read, so the board
+    /// is never rendered from stale coordinates. It is safe to call on every
+    /// load: `migrateToSquareGrid` returns nothing once every row carries the
+    /// current `gridVersion`, and the fast path below leaves before touching the
+    /// store at all.
+    ///
+    /// Runs over ALL rows including archived and soft-deleted ones. A block
+    /// unarchived next month must come back to the lattice everything else is
+    /// on, and a row skipped here would be a landmine with no marker to find it
+    /// by. Only LIVE rows take part in the overlap repair, though — an archived
+    /// block is not on the board and must not shove a visible one down.
+    ///
+    /// `updatedAt` is deliberately NOT bumped. Nothing about the block changed;
+    /// the coordinate system it is described in did. Bumping would make a
+    /// mechanical rewrite look like the user rearranged their whole board.
+    ///
+    /// - Returns: how many rows were rewritten, for the log line.
+    @discardableResult
+    func migrateGridIfNeeded() async throws -> Int {
+        let all = try store.context.fetch(FetchDescriptor<LocalVisionBlock>())
+        guard all.contains(where: { $0.latticeVersion < VisionGrid.schemaVersion }) else { return 0 }
+
+        let liveIDs = Set(
+            all.filter { $0.deletedAt == nil && $0.archivedAt == nil }.map(\.clientUUID)
+        )
+        let changes = VisionBoardLayout.migrateToSquareGrid(
+            all.map {
+                VisionBoardLayout.StoredFrame(
+                    id: $0.clientUUID,
+                    col: $0.col, row: $0.row, w: $0.w, h: $0.h,
+                    gridVersion: $0.latticeVersion
+                )
+            },
+            repairingOverlapsAmong: liveIDs
+        )
+        guard !changes.isEmpty else { return 0 }
+
+        let byID = Dictionary(uniqueKeysWithValues: changes.map { ($0.id, $0) })
+        for row in all {
+            guard let frame = byID[row.clientUUID] else { continue }
+            row.col = frame.col
+            row.row = frame.row
+            row.w = frame.w
+            row.h = frame.h
+            row.latticeVersion = frame.gridVersion
+        }
+        try store.context.save()
+        return changes.count
     }
 
     /// Soft-delete the block. The tasks it held are untouched: they go back to

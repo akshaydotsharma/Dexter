@@ -159,11 +159,28 @@ enum Tokens {
     /// Warm, never grey. The lattice belongs to the paper it is printed on; a
     /// neutral grey dot at this size reads as dirt on the screen.
     /// The light value is the louder of the two on paper and still the quieter
-    /// of the two on screen: measured against `paper`, the idle dot lands about
-    /// 14 levels down in light mode and about 18 levels UP in dark, which is
-    /// what it takes for the two to read as the same whisper.
-    static let visionLattice       = Color.paper(0xE4DCC6, 0x252019)
-    static let visionLatticeActive = Color.paper(0xC9BE9E, 0x4E4639)
+    /// of the two on screen: measured against `paper`, the dot lands a little
+    /// way down in light mode and a little way UP in dark, which is what it
+    /// takes for the two to read as the same whisper.
+    ///
+    /// **Softened by ~30% on 2026-08-07**, when the lattice became square. The
+    /// horizontal pitch went from 184pt to 68pt, so a given patch of canvas now
+    /// carries 2.7× as many dots, and the ink per unit area went up by the same
+    /// factor at unchanged values. Left alone that is the graph-paper failure
+    /// the reveal-on-attention design was originally trying to avoid. Two
+    /// adjustments together, rather than one large one: `VisionGridLattice`
+    /// takes the dot down to the 1.2pt antialiasing floor (area × 0.73) and
+    /// these values take the contrast down to 0.7, which lands the field at
+    /// roughly 1.4× its old weight. Deliberately not all the way back to 1.0 —
+    /// the lattice IS finer now, and flattening it to invisibility would make it
+    /// useless as the snap reference a drag reads off.
+    ///
+    /// The contrast could not carry the whole correction on its own: below about
+    /// 1.2pt the antialiasing eats most of a dot's delta, so a smaller dot has
+    /// to be made DARKER to stay visible at all, and then it reads as grit
+    /// rather than as texture. Size down to the floor, contrast for the rest.
+    static let visionLattice       = Color.paper(0xEBE5D4, 0x201C15)
+    static let visionLatticeActive = Color.paper(0xD8D0B8, 0x3D362C)
     static let accentSettings  = Color.paper(0x475569, 0x94A3B8)
     static let accentHelp      = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)

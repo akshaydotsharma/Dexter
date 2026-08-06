@@ -33,6 +33,23 @@ final class LocalVisionBlock {
     var w: Int
     var h: Int
 
+    /// Which lattice `col` and `w` are expressed in.
+    ///
+    /// Optional, and nil means the original 184 × 68 lattice — because that is
+    /// literally what a row written before this field existed says. A new
+    /// non-optional attribute would need SwiftData to invent a value for every
+    /// existing row, and the value it invents (0) would only accidentally be the
+    /// right answer; an optional says "this row predates the question", which is
+    /// exactly the fact the migration needs.
+    ///
+    /// Read through `latticeVersion` below, never directly, so the nil-means-0
+    /// reading lives in one place.
+    ///
+    /// This is the marker that makes `VisionBoardLayout.migrateToSquareGrid`
+    /// one-shot: it is written in the same `save()` as the rescaled coordinates,
+    /// so a row can never be half-migrated and a second pass finds nothing to do.
+    var gridVersion: Int?
+
     /// `BlockState.rawValue`. Stored as the raw string and read back through
     /// `blockState`, which falls back to `.idea` rather than trapping, so a
     /// value written by a future build with a state this one has not heard of
@@ -69,8 +86,11 @@ final class LocalVisionBlock {
         intent: String? = nil,
         col: Int = 0,
         row: Int = 0,
-        w: Int = 2,
-        h: Int = 3,
+        w: Int = VisionGrid.newColumns,
+        h: Int = VisionGrid.newRows,
+        // A block made by THIS build is already on the current lattice, so it
+        // is born marked and the migration never touches it.
+        gridVersion: Int? = VisionGrid.schemaVersion,
         state: BlockState = .default,
         members: [UUID] = [],
         position: Int? = nil,
@@ -88,6 +108,7 @@ final class LocalVisionBlock {
         self.row = row
         self.w = w
         self.h = h
+        self.gridVersion = gridVersion
         self.state = state.rawValue
         self.membersData = LocalVisionBlock.encode(members)
         self.position = position
@@ -97,6 +118,13 @@ final class LocalVisionBlock {
         self.deletedAt = deletedAt
         self.archivedAt = archivedAt
         self.needsSync = needsSync
+    }
+
+    /// The lattice this row's columns are expressed in. Nil reads as 0, the
+    /// original 184pt-wide lattice.
+    var latticeVersion: Int {
+        get { gridVersion ?? 0 }
+        set { gridVersion = newValue }
     }
 
     /// Typed view of `state`. Unknown raw values read as `.idea`.

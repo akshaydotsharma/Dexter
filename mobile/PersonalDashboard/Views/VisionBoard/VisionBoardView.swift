@@ -197,7 +197,10 @@ struct VisionBoardView: View {
 
             if let drag = interaction.drag {
                 VisionOriginSlot(slot: drag.origin)
-                VisionTargetSlot(slot: drag.target ?? drag.origin, legal: drag.target != nil)
+                // Always legal now: the target is wherever the pointer is, and
+                // whatever is there gets out of the way. There is no longer an
+                // "occupied" outcome for this to render.
+                VisionTargetSlot(slot: drag.target ?? drag.origin)
                     .animation(instantIfReduced(.snappy(duration: 0.12)), value: drag.target)
             }
 
@@ -243,6 +246,13 @@ struct VisionBoardView: View {
             onSelect: { interaction.selected = block.id }
         )
         .offset(x: origin.x, y: origin.y)
+        // Displaced neighbours slide; the block in hand does not (the animation
+        // resolves to nil for it, see `displacementAnimation`). Scoped to this
+        // one modifier and this one value on purpose — the file's standing rule
+        // is that no animation may be allowed to catch the dragged block's
+        // offset, and a container-level `.animation` is exactly how that
+        // happens.
+        .animation(interaction.displacementAnimation(for: block.id), value: origin)
         .zIndex(isDragging ? 10 : 0)
         // `.gesture`, deliberately not `.highPriorityGesture`. The card's own
         // children — the tile checkboxes, the resize grip, the ellipsis menu,
@@ -310,6 +320,20 @@ struct VisionBoardView: View {
             }
     }
 
+    /// The block goes exactly where the pointer put it; the board gets out of
+    /// the way.
+    ///
+    /// This is the reversal at the heart of the change. The old behaviour nudged
+    /// the DRAGGED block to the nearest free slot, so the one object under your
+    /// hand was the one object that would not obey you — you aimed at a cell,
+    /// something else was already there, and your block skidded off sideways.
+    /// Now the target is simply the cell the pointer is over, and
+    /// `displacements` works out who has to move.
+    ///
+    /// Recomputed only when the target CELL changes, not on every pointer
+    /// sample. The solver is cheap but it is not free, and a cascade that
+    /// re-derives itself sixty times a second inside a pixel is work nobody can
+    /// see.
     private func updateDragTarget(_ block: VisionBlock) {
         guard let drag = interaction.drag else { return }
         // Rounded, not floored: the block should snap to whichever cell it is
@@ -320,15 +344,12 @@ struct VisionBoardView: View {
             w: drag.origin.w,
             h: drag.origin.h
         )
-        // Overlap nudges to the nearest free slot rather than refusing, so it
-        // never feels like a fight.
-        let resolved = VisionBoardLayout.nearestFreeSlot(
-            to: desired, in: viewModel.blocks, excluding: block.id
+        guard desired != drag.target else { return }
+        interaction.drag?.target = desired
+        interaction.drag?.displaced = VisionBoardLayout.displacements(
+            moving: block.id, to: desired, in: viewModel.blocks
         )
-        if resolved != drag.target {
-            interaction.drag?.target = resolved
-            if resolved != nil { alignmentHaptic() }
-        }
+        alignmentHaptic()
     }
 
     // MARK: - Resize
@@ -341,6 +362,15 @@ struct VisionBoardView: View {
     /// The content still re-tiers live, off the QUANTISED width — tier it off
     /// the continuous width and the layout flickers between one and two columns
     /// every time the pointer sits on a cell boundary.
+    ///
+    /// Growth now DISPLACES rather than refusing. *"If a box is there and then
+    /// there is a box to the right of it, I cannot widen it"* was the complaint,
+    /// and it was accurate: `largestFreeSize` capped the edge at the first
+    /// neighbour, so a block hemmed in on the right could never be made wider
+    /// without first moving something else by hand. A resize is the same claim
+    /// as a move — this thing needs more room — so it pushes with the same
+    /// solver, previews the same way, and commits on the same release. The only
+    /// limit left is the minimum size.
     private func resizeDrag(_ block: VisionBlock, translation: CGSize) {
         if interaction.resize?.id != block.id {
             interaction.beginResize(block)
@@ -355,39 +385,29 @@ struct VisionBoardView: View {
             height: base.height + translation.height
         )
 
-        // What the pointer is asking for in cells, and the largest that fits.
-        let desiredW = Int(((wanted.width  + VisionGrid.gutter) / VisionGrid.cellWidth ).rounded())
-        let desiredH = Int(((wanted.height + VisionGrid.gutter) / VisionGrid.cellHeight).rounded())
-        let legal = VisionBoardLayout.largestFreeSize(
-            at: session.origin,
-            desiredW: desiredW,
-            desiredH: desiredH,
-            in: viewModel.blocks,
-            excluding: block.id
-        )
+        // What the pointer is asking for, in cells, floored at the minimum.
+        let cellsW = max(VisionGrid.minColumns, Int(((wanted.width  + VisionGrid.gutter) / VisionGrid.cellWidth ).rounded()))
+        let cellsH = max(VisionGrid.minRows,    Int(((wanted.height + VisionGrid.gutter) / VisionGrid.cellHeight).rounded()))
 
-        // Below the minimum the edge simply stops following, with no error
-        // state; into a neighbour it stops too, because growth cannot displace
-        // a block the user placed deliberately. The ceiling is applied ONLY on
-        // the axis a neighbour actually cut short — otherwise it would also
-        // clamp the perfectly legal half-cell of travel past a rounding
-        // boundary, and the edge would stick every time it crossed one.
+        // The only ceiling left is the floor. Below the minimum the edge simply
+        // stops following, with no error state; above it, there is nothing to
+        // stop for, because whatever is in the way is about to move.
         let floor = VisionGrid.blockSize(columns: VisionGrid.minColumns, rows: VisionGrid.minRows)
-        let ceilingW = legal.w < desiredW
-            ? VisionGrid.blockSize(columns: legal.w, rows: 1).width
-            : CGFloat.greatestFiniteMagnitude
-        let ceilingH = legal.h < desiredH
-            ? VisionGrid.blockSize(columns: 1, rows: legal.h).height
-            : CGFloat.greatestFiniteMagnitude
-
         interaction.resize?.live = CGSize(
-            width:  min(max(wanted.width,  floor.width),  ceilingW),
-            height: min(max(wanted.height, floor.height), ceilingH)
+            width:  max(wanted.width,  floor.width),
+            height: max(wanted.height, floor.height)
         )
 
-        if legal.w != session.w || legal.h != session.h {
-            interaction.resize?.w = legal.w
-            interaction.resize?.h = legal.h
+        if cellsW != session.w || cellsH != session.h {
+            interaction.resize?.w = cellsW
+            interaction.resize?.h = cellsH
+            interaction.resize?.displaced = VisionBoardLayout.displacements(
+                moving: block.id,
+                to: VisionBoardLayout.Slot(
+                    col: session.origin.col, row: session.origin.row, w: cellsW, h: cellsH
+                ),
+                in: viewModel.blocks
+            )
             // On each cell change, not continuously: a haptic that fires on
             // every pointer sample is a buzz, not a signal.
             alignmentHaptic()
@@ -427,15 +447,16 @@ struct VisionBoardView: View {
             interaction.drag?.settling = true
             NSCursor.openHand.set()
             let target = drag.target
-            VisionProbe.line("drag.end target=\(target.map { "\($0.col),\($0.row)" } ?? "none")")
+            VisionProbe.line("drag.end target=\(target.map { "\($0.col),\($0.row)" } ?? "none") pushed=\(drag.displaced.count)")
             Task { @MainActor in
-                // No legal slot anywhere: the block springs back to origin. The
-                // canvas grows on demand, so this is nearly unreachable.
-                if let target, target != drag.origin {
-                    await viewModel.setFrame(
-                        drag.id, col: target.col, row: target.row, w: target.w, h: target.h
-                    )
-                }
+                // The mover and everything it pushed go in ONE write, so the
+                // arrangement the user watched form is the arrangement that
+                // lands. Split across two saves there is a moment where the
+                // mover has committed and its victims have not, and that moment
+                // is an overlapping board.
+                var frames = drag.displaced
+                if let target, target != drag.origin { frames[drag.id] = target }
+                await viewModel.applyLayout(frames)
                 withAnimation(interaction.settle) { interaction.drag = nil }
                 VisionProbe.line("drag.settled")
             }
@@ -443,15 +464,11 @@ struct VisionBoardView: View {
 
         if let resize = interaction.resize, !resize.settling {
             interaction.resize?.settling = true
-            VisionProbe.line("resize.end target=\(resize.w)x\(resize.h)")
+            VisionProbe.line("resize.end target=\(resize.w)x\(resize.h) pushed=\(resize.displaced.count)")
             Task { @MainActor in
-                if resize.w != resize.origin.w || resize.h != resize.origin.h {
-                    await viewModel.setFrame(
-                        resize.id,
-                        col: resize.origin.col, row: resize.origin.row,
-                        w: resize.w, h: resize.h
-                    )
-                }
+                var frames = resize.displaced
+                if resize.target != resize.origin { frames[resize.id] = resize.target }
+                await viewModel.applyLayout(frames)
                 withAnimation(interaction.settle) { interaction.resize = nil }
                 VisionProbe.line("resize.settled")
             }
@@ -460,30 +477,39 @@ struct VisionBoardView: View {
 
     // MARK: - Keyboard move and resize
 
+    /// The keyboard routes push exactly as the pointer routes do.
+    ///
+    /// They have to: arrows and ⌥-arrows are the accessible equivalent of the
+    /// drag and the grip, and an equivalent that refuses where the pointer
+    /// succeeds is not one. A blocked arrow key used to do nothing at all, with
+    /// no feedback, which read as a dead key.
     private func nudge(_ block: VisionBlock, dCol: Int, dRow: Int) async {
-        let desired = VisionBoardLayout.Slot(
+        await push(block, to: VisionBoardLayout.Slot(
             col: max(0, block.col + dCol),
             row: max(0, block.row + dRow),
             w: block.w,
             h: block.h
-        )
-        guard let slot = VisionBoardLayout.nearestFreeSlot(
-            to: desired, in: viewModel.blocks, excluding: block.id
-        ) else { return }
-        await viewModel.setFrame(block.id, col: slot.col, row: slot.row, w: slot.w, h: slot.h)
+        ))
     }
 
     private func resizeBy(_ block: VisionBlock, dW: Int, dH: Int) async {
-        let candidate = VisionBoardLayout.Slot(
+        await push(block, to: VisionBoardLayout.Slot(
             col: block.col,
             row: block.row,
             w: max(VisionGrid.minColumns, block.w + dW),
             h: max(VisionGrid.minRows, block.h + dH)
+        ))
+    }
+
+    /// Put `block` at `target` and shove whatever is in the way, in one write.
+    private func push(_ block: VisionBlock, to target: VisionBoardLayout.Slot) async {
+        let current = VisionBoardLayout.Slot(col: block.col, row: block.row, w: block.w, h: block.h)
+        guard target != current else { return }
+        var frames = VisionBoardLayout.displacements(
+            moving: block.id, to: target, in: viewModel.blocks
         )
-        guard VisionBoardLayout.isFree(candidate, in: viewModel.blocks, excluding: block.id) else { return }
-        await viewModel.setFrame(
-            block.id, col: candidate.col, row: candidate.row, w: candidate.w, h: candidate.h
-        )
+        frames[block.id] = target
+        await viewModel.applyLayout(frames)
     }
 
     // MARK: - Creation
@@ -618,9 +644,16 @@ final class VisionInteraction {
         /// by `setDragPosition`. Held as a position rather than a translation so
         /// there is no unclamped intermediate for a render to read.
         var position: CGPoint
-        /// Nil once the free-slot search has run out of canvas. Renders grey,
-        /// never red: nothing is wrong, there is simply nowhere to put it.
+        /// Exactly the cell the pointer is over. Never nudged: the block goes
+        /// where you put it and the board moves around it.
         var target: VisionBoardLayout.Slot?
+        /// Where every OTHER block would end up if this were dropped now.
+        ///
+        /// The whole preview lives here, and it is the reason cancel needs no
+        /// undo: displacement is never written to a block, only overlaid on it
+        /// at render time, so dropping the session restores the board by
+        /// definition rather than by remembering what to put back.
+        var displaced: [UUID: VisionBoardLayout.Slot] = [:]
         /// Set synchronously the moment the gesture ends, before the async
         /// commit, so a second ending is a no-op.
         var settling = false
@@ -637,6 +670,8 @@ final class VisionInteraction {
         /// renders at, so its edge stays under the pointer instead of jumping a
         /// whole cell at a time.
         var live: CGSize
+        /// Neighbours this growth is pushing aside, same as `DragSession`.
+        var displaced: [UUID: VisionBoardLayout.Slot] = [:]
         var settling = false
 
         var target: VisionBoardLayout.Slot {
@@ -723,16 +758,46 @@ final class VisionInteraction {
         hoverCell = nil
     }
 
-    /// Where a block draws, resting or in hand. Every path goes through the
-    /// clamp, so a block outside the canvas is not a state this view can reach.
+    /// Where this block has been pushed to, if anything is currently pushing it.
+    /// Nil for the block in hand and for everything the cascade did not reach.
+    func displacedSlot(for id: UUID) -> VisionBoardLayout.Slot? {
+        if let slot = drag?.displaced[id] { return slot }
+        return resize?.displaced[id]
+    }
+
+    /// Where a block draws: resting, in hand, or shoved aside by whatever is.
     func renderOrigin(for block: VisionBlock, canvas: CGSize) -> CGPoint {
         let size = VisionGrid.blockSize(columns: block.w, rows: block.h)
         if let drag, drag.id == block.id {
             return VisionBoardLayout.clampedOrigin(drag.position, size: size, in: canvas)
         }
+        if let slot = displacedSlot(for: block.id) {
+            // Deliberately NOT clamped. The clamp exists to keep a pointer from
+            // dragging a block off the edge; this origin is solver output, which
+            // is non-negative by construction and may legitimately sit below the
+            // committed canvas extent for the duration of the preview. Clamping
+            // it would pile the tail of a long cascade up against the bottom
+            // edge and show an overlap that is not going to happen. The extent
+            // catches up on drop, when `canvasSize` re-reads the board.
+            return VisionGrid.origin(col: slot.col, row: slot.row)
+        }
         return VisionBoardLayout.clampedOrigin(
             VisionGrid.origin(col: block.col, row: block.row), size: size, in: canvas
         )
+    }
+
+    /// How a block's own offset animates.
+    ///
+    /// Nil for whatever is under the pointer — the block in hand must track it
+    /// 1:1, and the block being resized is following its own continuous size —
+    /// and a short spring for everything the cascade is moving, which is what
+    /// makes the board read as pushing back rather than teleporting. Per block
+    /// rather than on the container for exactly the reason the lattice's
+    /// animation is: a container animation would also catch the dragged block.
+    func displacementAnimation(for id: UUID) -> Animation? {
+        guard drag?.id != id, resize?.id != id else { return nil }
+        guard !reduceMotion else { return nil }
+        return .spring(response: 0.24, dampingFraction: 0.9)
     }
 
     /// The block's frame as it should TIER right now: quantised, so the layout

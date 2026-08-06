@@ -41,24 +41,42 @@ struct VisionBlock: Identifiable, Hashable, Sendable {
     let createdAt: Date
     let updatedAt: Date
 
-    /// The block's presentation tier, driven by its OWN column count and never
-    /// by the window's width. Recomputed live during a resize, which is the
-    /// whole point of the exercise: growing a block from one column to two makes
-    /// its tiles appear under your hand.
+    /// The block's presentation tier, driven by its OWN rendered width and never
+    /// by the window's. Recomputed live during a resize, which is the whole
+    /// point of the exercise: widening a block past a boundary makes its tiles
+    /// appear under your hand.
     var tier: VisionBlockTier {
-        if w >= 3 { return .large }
-        if w == 2 { return .medium }
-        return .small
+        VisionBlockTier(renderedWidth: VisionGrid.blockSize(columns: w, rows: h).width)
     }
 }
 
-/// How much of itself a block shows. A function of the block's width in cells.
+/// How much of itself a block shows. A function of the block's rendered WIDTH IN
+/// POINTS, deliberately not of its column count.
+///
+/// Columns were the original unit and it was wrong: the tier is a claim about how
+/// much type fits across the card, and expressing a physical claim in lattice
+/// units meant that changing the lattice silently re-tiered the whole board. The
+/// square-grid change (#446) is exactly that event — one column stopped being
+/// 184pt and became 68pt — and in the old formulation every medium block on the
+/// board would have become large.
 enum VisionBlockTier {
-    /// 1 col. Title, state, urgency chip, `3/8`. No tiles. This is what stops a
-    /// thirty-block board from being three hundred lines of task text.
+    /// Under `VisionGrid.mediumMinWidth`. Title, state, urgency chip, `3/8`. No
+    /// tiles. This is what stops a thirty-block board from being three hundred
+    /// lines of task text.
     case small
-    /// 2 col. Adds the intent line, the progress bar, and up to three tiles.
+    /// Adds the intent line, the progress bar, and up to three tiles.
     case medium
-    /// 3+ col. Adds the state eyebrow, every tile that fits, and the add row.
+    /// At `VisionGrid.largeMinWidth` and above. Adds the state eyebrow, every
+    /// tile that fits, and the add row.
     case large
+
+    init(renderedWidth: CGFloat) {
+        if renderedWidth >= VisionGrid.largeMinWidth {
+            self = .large
+        } else if renderedWidth >= VisionGrid.mediumMinWidth {
+            self = .medium
+        } else {
+            self = .small
+        }
+    }
 }

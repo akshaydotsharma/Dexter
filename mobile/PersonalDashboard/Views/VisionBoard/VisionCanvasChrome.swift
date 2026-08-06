@@ -22,17 +22,23 @@ import SwiftUI
 /// it left behind read as an empty document rather than a surface with slots.
 ///
 /// The whole risk in reversing it was turning warm paper into graph paper, so
-/// the idle values are pitched at the threshold: 1.4pt dots at a delta of
-/// roughly fifteen levels from `Tokens.paper` in either theme, on a pitch of
-/// 184 × 68pt. From a normal viewing distance an empty board still reads as one
-/// calm surface, and you notice the lattice only when you look for it — which is
-/// exactly the moment you want it.
+/// the idle values are pitched at the threshold: from a normal viewing distance
+/// an empty board still reads as one calm surface, and you notice the lattice
+/// only when you look for it — which is exactly the moment you want it.
 ///
-/// 1.4pt rather than the 1.5pt the reveal-on-attention version used, and the
-/// sizes matter more than they look: below about 1.2pt the antialiasing eats
-/// most of the delta and the dot goes from faint to absent, so a dot that is
-/// too small has to be made too DARK to compensate, and then it reads as grit
-/// rather than as texture.
+/// ### Retuned for the square lattice (2026-08-07)
+///
+/// The pitch was 184 × 68pt and is now 68 × 68pt, so a patch of canvas carries
+/// 2.7× as many dots and, at the old values, 2.7× as much ink. The dot is now
+/// 1.2pt idle and 1.6pt active, down from 1.4 and 1.8, and `Tokens.visionLattice`
+/// took a matching ~30% cut in contrast; together those land the field at roughly
+/// 1.4× its old weight rather than 2.7×.
+///
+/// 1.2pt is a floor, not a preference. Below about that the antialiasing eats
+/// most of the delta and the dot goes from faint to absent, so a smaller dot has
+/// to be made DARKER to compensate and then it reads as grit rather than as
+/// texture. That is why the correction is split across the size here and the
+/// colour in `Tokens` instead of being taken out of either one alone.
 ///
 /// Strengthening rather than appearing also buys something the fade never
 /// could: the grid the drag snaps to is visibly the same grid that was there
@@ -41,16 +47,16 @@ import SwiftUI
 /// A `Shape` rather than a `Canvas`: the tokens are dynamic light/dark pairs,
 /// and a filled shape lets SwiftUI resolve them exactly the way every other
 /// token in the app is resolved instead of routing them through
-/// `GraphicsContext`. Roughly 470 dots on a 3000 × 2000 canvas, which is one
-/// cheap path — and now a permanently retained one, which is why it stayed a
-/// single path rather than becoming a per-cell view.
+/// `GraphicsContext`. Roughly 1,300 dots on a 3000 × 2000 canvas, up from 470,
+/// which is still one cheap path — and a permanently retained one, which is why
+/// it stayed a single path rather than becoming a per-cell view.
 struct VisionGridLattice: View {
     let size: CGSize
     /// True while a block is being moved or resized.
     let active: Bool
 
     var body: some View {
-        DotLattice(dotSize: active ? 1.8 : 1.4)
+        DotLattice(dotSize: active ? 1.6 : 1.2)
             .fill(active ? Tokens.visionLatticeActive : Tokens.visionLattice)
             .frame(width: size.width, height: size.height)
             .allowsHitTesting(false)
@@ -134,20 +140,20 @@ struct VisionGhostCell: View {
 /// Where the block will land. Accent, because the accent's one job on this board
 /// is "the system is responding to you".
 ///
-/// `legal == false` renders grey, never red. Red means "you did something
-/// wrong"; nothing is wrong, there is simply nowhere of this size left, and the
-/// canvas grows on demand so it should be nearly unreachable in the first place.
+/// It carried a `legal` flag, which rendered grey for "there is nowhere of this
+/// size left". That state no longer exists: since #446's rework the block goes
+/// exactly where the pointer puts it and the board displaces around it, so every
+/// cell is a legal destination and the flag was permanently true.
 struct VisionTargetSlot: View {
     let slot: VisionBoardLayout.Slot
-    let legal: Bool
 
     var body: some View {
         let size = VisionGrid.blockSize(columns: slot.w, rows: slot.h)
         let origin = VisionGrid.origin(col: slot.col, row: slot.row)
-        let tint = legal ? Tokens.accentVision : Tokens.mutedSoft
+        let tint = Tokens.accentVision
 
         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            .fill(tint.opacity(legal ? 0.10 : 0.14))
+            .fill(tint.opacity(0.10))
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     .stroke(tint, style: StrokeStyle(lineWidth: 0.5, dash: [5, 4]))
@@ -231,9 +237,16 @@ struct VisionEmptyBoard: View {
             Button(action: onCreate) {
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     .stroke(Tokens.borderStrong, style: StrokeStyle(lineWidth: 0.5, dash: [6, 5]))
+                    // The size a click actually makes, read from the same
+                    // constants creation reads. It was a hardcoded 2 × 3, which
+                    // was correct until the lattice changed under it and then
+                    // silently promised a block a third the width of the real
+                    // one.
                     .frame(
-                        width: VisionGrid.blockSize(columns: 2, rows: 3).width,
-                        height: VisionGrid.blockSize(columns: 2, rows: 3).height
+                        width: VisionGrid.blockSize(
+                            columns: VisionGrid.newColumns, rows: VisionGrid.newRows).width,
+                        height: VisionGrid.blockSize(
+                            columns: VisionGrid.newColumns, rows: VisionGrid.newRows).height
                     )
                     .overlay {
                         Image(systemName: "plus")

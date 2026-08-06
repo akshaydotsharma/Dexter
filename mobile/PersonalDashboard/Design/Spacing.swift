@@ -338,24 +338,90 @@ enum TripCoverMetrics {
 /// failure mode `RowMetrics` above warns about for related numbers held apart:
 /// two literals that must agree, asserted in a comment rather than in code, have
 /// already silently inverted twice in this codebase.
+///
+/// **The lattice is square** (#446, revised 2026-08-07). It was 184 × 68, which
+/// made a block travel nearly three cells horizontally for every one vertically
+/// and made "one cell" mean two different distances depending on which way you
+/// pushed. Both axes now use the VERTICAL pitch, 68pt, because that was the one
+/// already tuned against the card's interior rhythm — a 56pt block cell plus the
+/// 12pt gutter. Widths therefore quantise nearly three times as finely, which is
+/// the whole point: a block can now be the width it wants to be.
+///
+/// Everything that used to be expressed in columns had to be re-derived, and
+/// every block already on disk had to be rescaled. See
+/// `VisionBoardLayout.migrateToSquareGrid` for the rescale and `schemaVersion`
+/// below for how a block records which lattice it was written under.
 enum VisionGrid {
-    static let gutter:     CGFloat = Space.md   // 12
-    static let cellWidth:  CGFloat = 184        // 172pt of block + 12pt gutter
-    static let cellHeight: CGFloat = 68         //  56pt of block + 12pt gutter
+    static let gutter: CGFloat = Space.md   // 12
 
-    /// Minimum block: 1 col × 2 rows = 172 × 124pt. Fits rail, header, meta
-    /// line, and nothing else, which is exactly the small presentation.
-    static let minColumns = 1
+    /// The one pitch, both axes: 56pt of block + 12pt gutter.
+    static let cell: CGFloat = 68
+
+    /// Held as separate names so the axis a call site means stays legible, and
+    /// so a future non-square lattice is one edit rather than a hunt. They are
+    /// the same number today and `cell` is the only literal.
+    static var cellWidth:  CGFloat { cell }
+    static var cellHeight: CGFloat { cell }
+
+    /// The lattice generation a stored block's `col`/`w` are expressed in.
+    ///
+    /// 0 (or a missing value) is the original 184pt-wide lattice; 1 is the
+    /// square one. Bump this ONLY when a change invalidates stored column
+    /// numbers, and add the matching arm to
+    /// `VisionBoardLayout.migrateToSquareGrid`. The marker is what makes the
+    /// rescale one-shot: it is written in the same save as the new coordinates,
+    /// so a block is either fully on the old lattice or fully on the new one and
+    /// there is no state in which a second pass would scale it twice.
+    static let schemaVersion = 1
+
+    /// Minimum block: 3 × 2 cells = 192 × 124pt.
+    ///
+    /// 3 columns, not 1, because the minimum is a PHYSICAL claim — it is the
+    /// narrowest card that still fits rail, header and meta line — and the
+    /// square lattice changed what a column is worth. 1 column used to mean
+    /// 172pt; the nearest the finer pitch can get is 3 cells at 192pt (2 cells
+    /// is 124pt, which is 48pt short rather than 20pt over).
+    static let minColumns = 3
     static let minRows    = 2
 
-    /// The size a newly created block gets: 2 × 3 cells, the medium tier.
+    /// The size a newly created block gets: 5 × 3 cells = 328 × 192pt, the
+    /// medium tier. The old default was 2 × 3 = 356 × 192pt; 5 cells is the
+    /// closest the finer pitch gets without going over.
     ///
     /// Named rather than defaulted at three call sites, because the ghost cell
     /// under the pointer is a preview of exactly this and a click on it makes
     /// exactly this. The moment the preview and the creation disagree about the
     /// footprint, the plus is pointing at a cell the block will not land in.
-    static let newColumns = 2
+    static let newColumns = 5
     static let newRows    = 3
+
+    /// Tier boundaries in POINTS OF RENDERED WIDTH, never in columns.
+    ///
+    /// Columns were the wrong unit for this: the tier is a statement about how
+    /// much type fits across the card, which is a physical quantity, and pinning
+    /// it to the lattice meant changing the lattice silently re-tiered every
+    /// block on the board. In points the same three tiers survive this change
+    /// and the next one.
+    ///
+    /// The two values are chosen to be stable under the migration's rounding
+    /// rather than to sit exactly on the old boundaries (172 / 356 / 540). A
+    /// block rescaled from the old lattice lands within half a cell of its old
+    /// width, so each boundary sits in the gap between the WORST case of the
+    /// tier below and the BEST case of the tier above:
+    ///
+    /// | was      | rescales to  | rendered  | boundary | tier   |
+    /// |----------|--------------|-----------|----------|--------|
+    /// | 1 col    | 2 or 3 cells | 124 / 192 |          | small  |
+    /// |          |              |           | **240**  |        |
+    /// | 2 cols   | 5 or 6 cells | 328 / 396 |          | medium |
+    /// |          |              |           | **500**  |        |
+    /// | 3 cols   | 8 or 9 cells | 532 / 600 |          | large  |
+    ///
+    /// Both boundaries also reproduce the old tiers exactly when fed the old
+    /// lattice's widths (172 → small, 356 → medium, 540 → large), so nothing
+    /// about the intent moved; only the unit did.
+    static let mediumMinWidth: CGFloat = 240
+    static let largeMinWidth:  CGFloat = 500
 
     /// Rendered size of a block occupying `columns × rows` cells.
     static func blockSize(columns: Int, rows: Int) -> CGSize {

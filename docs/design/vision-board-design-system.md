@@ -185,8 +185,8 @@ neither has one.
 
 ### Worked example: a Waiting block holding a P0 and a P1
 
-The case the brief flags as the one that must not turn to mush. A 2 col × 4 row
-Waiting block, 356 × 260pt:
+The case the brief flags as the one that must not turn to mush. A 5 col × 4 row
+Waiting block, 328 × 260pt:
 
 ```
 ┌────────────────────────────────────────────┐  ← 3pt DASHED rail, #6D4BC4
@@ -329,7 +329,8 @@ panel.
 
 ### Small blocks
 
-At **small** (1 col), rungs 1 and 2 are suppressed. There is 172pt of width and
+At **small** (under 240pt of rendered width), rungs 1 and 2 are suppressed.
+There is as little as 192pt of width and
 the title needs it, and "in 3 weeks" is not worth a truncated title. Rungs 3, 4,
 and 5 are always shown at every size, because those are the ones you scan for.
 
@@ -367,45 +368,78 @@ picked up.
 
 ### Grid metrics
 
-```swift
-/// Snap lattice for the board. A "cell" INCLUDES its gutter, so a block
-/// occupying `c × r` cells renders at `c*cellWidth - gutter` by
-/// `r*cellHeight - gutter`. Expressing it this way means the gutter cannot
-/// drift out of sync with the snap unit, which is the failure the
-/// `RowMetrics` doc comment warns about for related numbers held apart.
-enum VisionGrid {
-    static let gutter:     CGFloat = Space.md   // 12
-    static let cellWidth:  CGFloat = 184        // 172pt of block + 12pt gutter
-    static let cellHeight: CGFloat = 68         //  56pt of block + 12pt gutter
+**Revised 2026-08-07: the lattice is square.** It was 184 × 68, so a block
+travelled nearly three cells sideways for every one it travelled down and "one
+cell" meant two different distances depending on the direction. Both axes now
+use the vertical pitch, 68pt, because that was the one already tuned against the
+card's interior rhythm. Widths quantise nearly three times as finely, which is
+the point: a block can be the width it wants to be rather than the width the
+lattice allows.
 
-    /// Minimum block: 1 col × 2 rows = 172 × 124pt. Fits rail, header,
+```swift
+enum VisionGrid {
+    static let gutter: CGFloat = Space.md   // 12
+
+    /// The one pitch, both axes: 56pt of block + 12pt gutter.
+    static let cell: CGFloat = 68
+
+    /// The lattice generation a stored block's col/w are expressed in.
+    static let schemaVersion = 1
+
+    /// Minimum block: 3 × 2 cells = 192 × 124pt. Fits rail, header,
     /// meta line, and nothing else, which is exactly the small presentation.
-    static let minColumns = 1
+    static let minColumns = 3
     static let minRows    = 2
+
+    /// A new block: 5 × 3 = 328 × 192pt, the medium tier.
+    static let newColumns = 5
+    static let newRows    = 3
+
+    /// Tier boundaries in POINTS OF RENDERED WIDTH, never in columns.
+    static let mediumMinWidth: CGFloat = 240
+    static let largeMinWidth:  CGFloat = 500
 }
 ```
 
-Small = 172pt wide. Medium (2 col) = 356pt. Large (3 col) = 540pt.
+**Tiers are a physical claim and are expressed in points.** Columns were the
+original unit and it was wrong: the tier says how much type fits across the card,
+so pinning it to the lattice meant changing the lattice silently re-tiered every
+block on the board. The two boundaries sit where they survive the migration's
+half-cell rounding, and they still reproduce the old lattice's tiers exactly
+(172 → small, 356 → medium, 540 → large).
+
+**Every block already on disk is rescaled once.** `LocalVisionBlock.gridVersion`
+records which lattice a row's columns are in; `VisionBoardLayout
+.migrateToSquareGrid` scales both EDGES (`col' = round(col × 184/68)`,
+`w' = round((col+w) × 184/68) − col'`) rather than the position and the extent
+independently, because rounding is monotonic and edge scaling therefore cannot
+turn a pair of flush neighbours into an overlapping one. Rows are untouched.
 
 ### Two lattice levels, plus the ghost cell
 
 **1. Idle: the faint lattice.** Dots at every cell corner, on `Tokens.paper`.
 
-- 1.4pt diameter circles, `Tokens.visionLattice`
-- Pitch = `VisionGrid.cellWidth × VisionGrid.cellHeight`. On a 3000 × 2000
-  canvas that is roughly 470 dots, one cheap `Shape` path — now a permanently
-  retained one, which is why it must stay a single path and not become a view
-  per cell
+- 1.2pt diameter circles, `Tokens.visionLattice`
+- Pitch = `VisionGrid.cell` on both axes. On a 3000 × 2000 canvas that is roughly
+  1,300 dots, one cheap `Shape` path — a permanently retained one, which is why
+  it must stay a single path and not become a view per cell
+- The dot went from 1.4pt to 1.2pt and the tokens lost about 30% of their
+  contrast when the lattice became square. A patch of canvas now carries 2.7× as
+  many dots; unchanged values would have carried 2.7× the ink, which is the
+  graph-paper failure this whole section exists to avoid. The two adjustments
+  together land the field at roughly 1.4× its old weight. 1.2pt is a floor, not a
+  preference: below it the antialiasing eats the delta and the dot has to be made
+  darker to survive, at which point it reads as grit
 
 **2. Dragging or resizing: the strong lattice.** Same dots, grown and warmed.
 
-- 1.8pt diameter, `Tokens.visionLatticeActive`
+- 1.6pt diameter, `Tokens.visionLatticeActive`
 - Crossfades over 120ms `.easeOut`, both ways. Under reduced motion it is
   instant: this is a change of emphasis, not a piece of information
 
 **3. Pointer over empty canvas: one ghost cell.** A single `Radius.card` rounded
 rect at the snapped cell under the pointer, sized `newColumns × newRows`
-(2 × 3, the size a block is actually created at):
+(5 × 3, the size a block is actually created at):
 
 - Fill: `Tokens.surface.opacity(0.5)`
 - Border: **dashed** `Tokens.borderStrong`, dash `[4,3]`, 0.5pt
@@ -414,7 +448,7 @@ rect at the snapped cell under the pointer, sized `newColumns × newRows`
 - Follows the pointer by jumping between cells, never sliding
 - Suppressed entirely while a block is in hand, where the strong lattice has
   taken over the job
-- Suppressed where a 2 × 3 block does not fit, which is the only place on empty
+- Suppressed where a `newColumns × newRows` block does not fit, which is the only place on empty
   canvas a click deselects rather than creates
 
 **Revised 2026-08-07.** Two things changed together, and they are the same
@@ -426,7 +460,7 @@ most one block).
 The plus was reading as a button and was not one — clicking it did nothing,
 because creation was bound to the double-click alone. Making it a button then
 raises the bar on the preview: at the minimum size it could sit happily inside a
-gap the real 2 × 3 block does not fit in, and creation would nudge the block
+gap the real `newColumns × newRows` block does not fit in, and creation would nudge the block
 somewhere else, so the plus would have been pointing at a cell the block never
 lands in. Preview, hit test and creation all read the same `creationSlot` now,
 and where it has no answer there is no plus.
@@ -535,7 +569,7 @@ Empty block: suppress the indicator entirely. `0/0` is noise, not information.
 Apply `.contentTransition(.numericText())` to the numerals so a completion does
 not pop the digit. Disabled under reduced motion.
 
-### Small (1 col, 172pt wide, ≥2 rows)
+### Small (under 240pt wide, ≥2 rows)
 
 ```
 ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔   3pt rail
@@ -549,7 +583,7 @@ not pop the digit. Disabled under reduced motion.
 - Meta line: progress numerals, `Spacer`, urgency chip (rungs 3 to 5 only)
 - **Suppressed**: intent line, progress bar, all tiles, `+N more`, add row
 
-### Medium (2 col, 356pt wide)
+### Medium (240 to 500pt wide)
 
 - Everything above, plus:
 - **Intent line** under the title, if set: `.edSubheadline` (Inter 12),
@@ -568,7 +602,7 @@ not pop the digit. Disabled under reduced motion.
   do not list everything"
 - **Suppressed**: add row
 
-### Large (3+ col, 540pt+ wide)
+### Large (500pt wide and up)
 
 - Everything above, plus:
 - **State eyebrow** appears next to the glyph (`ACTIVE`, `WAITING`). This is the
@@ -725,23 +759,45 @@ contrast between continuous and discrete is what communicates snapping.
 - On drop, the block springs into the slot:
   `.spring(response: 0.28, dampingFraction: 0.86)`
 
-### Invalid / occupied drop
+### Occupied drop: the board moves, not the block
 
-The concept doc is explicit: a drop that would overlap **nudges to the nearest free
-slot** rather than refusing. So in normal operation the target slot always shows a
-legal destination and there is no invalid state to render.
+> **Superseded 2026-08-07.** This section originally nudged the DRAGGED block to
+> the nearest free slot. Reviewed against the built surface and reversed: the one
+> object under your hand was the one object that would not obey you. You aimed at
+> a cell, something was already there, and your block skidded off sideways. There
+> is now no invalid drop and no nudge.
 
-The one genuinely unresolvable case is "no free slot of this size within the
-canvas." Then:
+The block goes **exactly** where the pointer puts it. Blocks it would overlap are
+displaced, cascading, previewed live under your hand and committed on release.
+Escape or a failed drop restores every displaced block, which costs nothing to
+implement because displacement is never written to a block — it is overlaid on it
+at render time, so dropping the session IS the undo.
 
-- Target slot renders `Tokens.mutedSoft.opacity(0.14)` fill with a dashed
-  `Tokens.mutedSoft` 0.5pt hairline. **No accent, and no red**
-- On release the block returns to origin,
-  `.spring(response: 0.28, dampingFraction: 0.86)`
+**The push direction is always DOWN.** Not along the drag's direction of travel,
+which was the other candidate:
 
-Grey rather than red on purpose. Red means "you did something wrong." Nothing is
-wrong; there is simply nowhere to put it. The canvas grows on demand in any case,
-so this state should be nearly unreachable.
+1. **Determinism.** Pushing along travel makes the result a function of the
+   pointer's path rather than its destination. Approach the same cell from the
+   left and from below and you get two different boards. Down depends only on
+   where you let go
+2. **Learnability.** One rule held everywhere beats a rule that changes under
+   you, and every grid layout a person has already used — CSS grid auto-flow,
+   Trello, Notion, react-grid-layout — pushes down
+3. **Room.** The canvas grows downward without limit and the window scrolls that
+   way naturally. Sideways is the awkward axis on a Mac, and a block shoved off
+   to the right is hard to find again
+
+The solver (`VisionBoardLayout.settle`) is a single top-to-bottom sweep in
+reading order. A pushed block is placed at the mover's bottom edge, so it is
+always strictly below the mover; nothing in a cascade can therefore reach back up
+and displace the pinned block. A candidate's row is raised only to the bottom of
+something it overlaps, and every raise puts it permanently clear of at least one
+more settled block, so with `n` blocks the sweep cannot exceed `n(n−1)/2` raises
+and cannot loop.
+
+Displaced blocks slide on `.spring(response: 0.24, dampingFraction: 0.9)`. The
+block in hand is deliberately excluded from that animation: it tracks the pointer
+1:1.
 
 ### Resize handle
 
@@ -779,10 +835,10 @@ While resizing:
   continuously, the preview clicks between cells
 - Grid lattice strengthens (§4)
 - The block's body **re-lays-out live**, off the **quantised** width, never the
-  continuous one. Growing from 1 col to 2 makes tiles appear under your hand as
-  you drag, which is the point of the exercise and must not be deferred to drop
-  — but tiering off the continuous width would re-tier twice per boundary as the
-  pointer wobbles across it, and the interior would flicker
+  continuous one. Widening past a tier boundary makes tiles appear under your
+  hand as you drag, which is the point of the exercise and must not be deferred
+  to drop — but tiering off the continuous width would re-tier twice per boundary
+  as the pointer wobbles across it, and the interior would flicker
 - A **dimension readout** appears centred in the block: `3 × 4`, `.edMono`
   (JetBrains Mono 11), `Tokens.muted`, on a `Tokens.surface.opacity(0.9)` capsule
   with `Tokens.border` hairline. Mono because it is a measurement, and mono keeps
@@ -790,13 +846,14 @@ While resizing:
   quantised size, so it changes once per cell
 - The **alignment haptic** fires on each cell change, never continuously. A
   haptic on every pointer sample is a buzz, not a signal
-- Minimum enforced at `VisionGrid.minColumns × minRows` (1 × 2). Below that the
+- Minimum enforced at `VisionGrid.minColumns × minRows` (3 × 2). Below that the
   edge simply stops following, with no error state
-- **Neighbour collision stops the edge too**, on the axis the neighbour is
-  actually on. Growth cannot displace a block the user placed deliberately, so
-  the continuous edge is capped at the last legal cell boundary. The cap is
-  applied only where a neighbour cut the size short: apply it unconditionally and
-  the edge also sticks on every ordinary rounding boundary
+- **Neighbours are pushed, not respected.** *Superseded 2026-08-07:* growth used
+  to stop at the first neighbour, which meant a block hemmed in on the right
+  could not be widened at all without moving something else by hand first. A
+  resize is the same claim as a move — this thing needs more room — so it runs
+  through the same solver, previews the same way, and commits on the same
+  release. The minimum is now the only limit
 
 On release:
 
@@ -880,7 +937,7 @@ scrolled.
 - Headline: `.edDisplay` (Calistoga 22), `Tokens.ink`
 - Body: `.edBody` (Inter 13), `Tokens.muted`, `Space.sm` below the headline
 - `Space.xl` (24) gap
-- **Ghost block** at 2 × 3 cells (356 × 192pt): no fill, dashed
+- **Ghost block** at `newColumns × newRows` (328 × 192pt): no fill, dashed
   `Tokens.borderStrong` 0.5pt hairline at `Radius.card`, centred `plus` 16pt in
   `Tokens.mutedSoft`. Clicking it creates a real block in that position
 
