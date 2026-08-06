@@ -116,6 +116,34 @@ enum TaskReminderScheduler {
         return status == .authorized || status == .provisional
     }
 
+    /// Report what the OS says this app is allowed to do, including whether
+    /// time-sensitive delivery is available to it at all.
+    ///
+    /// `timeSensitiveSetting` is the runtime half of the entitlement question. The
+    /// build error proves we cannot SIGN the Time Sensitive capability on free
+    /// personal-team signing; this proves whether the OS would honour the
+    /// interruption level anyway. `.notSupported` means the app has no such
+    /// permission to give, which is the entitlement gate showing up at runtime
+    /// rather than only at code-sign time.
+    static func logCapabilities() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let timeSensitive: String
+        switch settings.timeSensitiveSetting {
+        case .notSupported: timeSensitive = "notSupported"
+        case .disabled: timeSensitive = "disabled"
+        case .enabled: timeSensitive = "enabled"
+        @unknown default: timeSensitive = "unknown"
+        }
+        var parts = ["authorization=\(describe(settings.authorizationStatus))",
+                     "timeSensitive=\(timeSensitive)"]
+        #if os(iOS)
+        parts.append("lockScreen=\(settings.lockScreenSetting == .enabled ? "enabled" : "off")")
+        parts.append("notificationCenter=\(settings.notificationCenterSetting == .enabled ? "enabled" : "off")")
+        parts.append("alertStyle=\(settings.alertStyle == .banner ? "banner" : "\(settings.alertStyle.rawValue)")")
+        #endif
+        SyncLog.line("TaskReminders: capabilities \(parts.joined(separator: " "))")
+    }
+
     /// Seconds-precision stamp for the log, because the seconds are the point.
     private static let logStamp: DateFormatter = {
         let f = DateFormatter()

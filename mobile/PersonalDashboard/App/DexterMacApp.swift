@@ -78,6 +78,7 @@ struct DexterMacApp: App {
                     await TaskReminderScheduler.registerCategory()
                     TaskReminderScheduler.startObservingStoreChanges()
                     await TaskReminderScheduler.reconcile()
+                    await TaskReminderScheduler.logCapabilities()
                 }
                 // Same in-session recovery as iOS (#428). macOS `.active` fires on window
                 // focus, which the service's throttle is there to absorb.
