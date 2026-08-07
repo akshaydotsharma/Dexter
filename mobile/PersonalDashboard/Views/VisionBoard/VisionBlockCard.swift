@@ -139,28 +139,6 @@ struct VisionBlockCard: View {
         .overlay(selectionHalo)
         .overlay(alignment: .bottomTrailing) { resizeGrip }
         .overlay { dimensionReadout }
-        // Anchored to the CARD, never to the `+N more` button that opens it.
-        //
-        // The button lives inside `if fit.hidden > 0`, and that condition goes
-        // false the moment the list fits — which is reachable while the popover
-        // is open, by resizing the block or by removing a row from inside the
-        // popover itself. SwiftUI then tears the whole representable down with
-        // the popover still on screen, and what is left is a panel nothing alive
-        // can close: the coordinator that owned it is gone. That is the stuck
-        // popover, reproduced headlessly (open it, grow the block until nothing
-        // is hidden, ask it to close, and the window count stays at one).
-        //
-        // The card outlives every condition inside it, so anchoring here means
-        // the popover's owner is alive for exactly as long as the popover is.
-        .macAnchoredPopover(
-            isPresented: showingAllTiles,
-            // Stays up while you work in it; `MacAnchoredPopover` closes it on
-            // the first click outside its own window.
-            behavior: .applicationDefined,
-            preferredEdge: .minY
-        ) {
-            VisionAllTilesPopover(viewModel: viewModel, editor: editor, block: block)
-        }
         .modifier(BlockShadow(dragging: isDragging, hovering: hovering))
         .scaleEffect(isDragging ? 1.02 : 1.0)
         .opacity(isDragging ? 0.92 : 1.0)
@@ -179,6 +157,24 @@ struct VisionBlockCard: View {
             guard beginsInTitleEdit else { return }
             beginTitleEdit()
             onTitleEditBegan()
+        }
+        // A popover with nothing left to reveal closes itself.
+        //
+        // It exists to show the rows that do not fit. Once they all fit — the
+        // block was made taller, or a row was removed — it is a second copy of
+        // the list already on the card, floating over the board, and the control
+        // that would dismiss it (`+N more`) is gone too. That is exactly the
+        // screenshot reported on 2026-08-07: six items on the card and the same
+        // six in a panel below it.
+        //
+        // Held back while an item is being edited, because the caret may be IN
+        // the popover and pulling the panel out from under a half-typed line
+        // would lose it. The close then happens when the edit ends, which is the
+        // next render.
+        .onChange(of: contentFit.hidden) { _, hidden in
+            guard hidden == 0, editor.editingID == nil else { return }
+            guard openPopover == .overflow(block.id) else { return }
+            onPopover(nil)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
@@ -545,6 +541,40 @@ struct VisionBlockCard: View {
         .buttonStyle(.plain)
         .help("Add an item that stays on this block")
         .visionPassThrough()
+        // The overflow popover hangs HERE, not off the `+N more` button that
+        // opens it, and not off the card either.
+        //
+        // Not the button, because it lives inside `if fit.hidden > 0` and that
+        // condition goes false while the popover is open — resize the block, or
+        // remove a row from inside the popover, and the list now fits. SwiftUI
+        // tears the representable down with the popover still on screen and the
+        // coordinator that owned it goes too, leaving a panel nothing alive can
+        // close. Reproduced headlessly: open it, grow the block until nothing is
+        // hidden, ask it to close, and the window count stays at one.
+        //
+        // Not the card either, which was the first fix and was worse to look at:
+        // it anchors the popover to the card's outer edge, so it detaches and
+        // floats below the whole block instead of pointing at the list it is
+        // expanding.
+        //
+        // This row is the one thing that is both ALWAYS present and in the right
+        // place: it sits directly under the list, one row below where `+N more`
+        // appears, so the popover points where the overflow is.
+        .macAnchoredPopover(
+            isPresented: showingAllTiles,
+            // Stays up while you work in it; `MacAnchoredPopover` closes it on
+            // the first click outside its own window.
+            behavior: .applicationDefined,
+            // BESIDE the block, not under it. `.minY` put a full-width panel
+            // directly below the card's bottom edge, which reads as a detached
+            // second card rather than as the rest of this list — and on a short
+            // block it is bigger than the thing it belongs to. To the side it
+            // stays adjacent to the rows it continues, and never covers them.
+            // AppKit flips the edge on its own when the screen has no room.
+            preferredEdge: .maxX
+        ) {
+            VisionAllTilesPopover(viewModel: viewModel, editor: editor, block: block)
+        }
     }
 
     /// The first `limit` rows, except that the item being edited is always among
