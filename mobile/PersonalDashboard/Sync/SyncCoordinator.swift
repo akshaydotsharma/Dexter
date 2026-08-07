@@ -200,6 +200,46 @@ final class SyncCoordinator {
             startPreflightBackupIfNeeded()
         }
         snapshot = await resolvedEngine().runPass(reason: reason)
+        scheduleDownloadRetryIfNeeded()
+    }
+
+    // MARK: - Waiting on iCloud (#451)
+
+    /// Backoff for retrying a pass that stopped short on an undelivered segment.
+    ///
+    /// Short, then longer, then it stops and lets the periodic timer take over —
+    /// the sum is about one timer period, so this never becomes a second timer
+    /// running forever. It exists to close a specific gap: a pass that defers on
+    /// a download used to cost a full 30 seconds before anything looked again,
+    /// so a peer's change could take two poll intervals ON TOP of iCloud's own
+    /// delivery time. Measured on the case that prompted this: a task created at
+    /// 20:55:09 was published by the phone at 20:55:20 and applied on the Mac at
+    /// 20:56:42.
+    private static let downloadRetryDelays: [TimeInterval] = [3, 8, 15]
+
+    private var downloadRetryTask: Task<Void, Never>?
+    private var downloadRetryIndex = 0
+
+    private func scheduleDownloadRetryIfNeeded() {
+        guard snapshot.isWaitingOnDownloads else {
+            // Caught up: forget the backoff so the next wait starts short again.
+            downloadRetryIndex = 0
+            return
+        }
+        guard downloadRetryTask == nil else { return }
+        guard downloadRetryIndex < Self.downloadRetryDelays.count else {
+            SyncLog.line("SyncCoordinator: still waiting on iCloud — leaving it to the timer")
+            downloadRetryIndex = 0
+            return
+        }
+        let delay = Self.downloadRetryDelays[downloadRetryIndex]
+        downloadRetryIndex += 1
+        downloadRetryTask = Task { @MainActor [weak self] in
+            defer { self?.downloadRetryTask = nil }
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if Task.isCancelled { return }
+            await self?.runForegroundPass(reason: "download-retry")
+        }
     }
 
     // MARK: - Pre-flight backup

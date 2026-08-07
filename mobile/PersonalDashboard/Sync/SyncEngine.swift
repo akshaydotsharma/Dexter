@@ -56,6 +56,10 @@ struct SyncStatusSnapshot {
     /// snapshot. Not persisted, so it is zero for a snapshot rebuilt without a
     /// pass; the replay action is the only reader.
     var lastPassOpsApplied: Int = 0
+    /// The pass stopped short because iCloud had not delivered a peer's segment
+    /// yet. Not persisted, and false for a snapshot rebuilt without a pass. The
+    /// coordinator reads it to retry in seconds instead of at the next tick.
+    var isWaitingOnDownloads: Bool = false
     var lastPassOutcome: String = ""
 
     var peers: [Peer] = []
@@ -171,6 +175,9 @@ final class SyncEngine {
         /// it answers "did the thing I just asked for do anything", which only
         /// matters until the next pass.
         var opsApplied = 0
+        /// Whether this pass stopped short waiting for iCloud to deliver a peer's
+        /// segment. Drives the short retry in `SyncCoordinator` (#451).
+        var waitingOnDownloads = false
         var outcome = "OK (\(reason))"
 
         let health = SyncFolder.health()
@@ -197,6 +204,7 @@ final class SyncEngine {
             let inbound = try await readPeers(folder: folder, state: state)
             opsIn = inbound.decoded
             opsApplied = inbound.applied
+            waitingOnDownloads = inbound.waitingOnDownloads
 
             opsOut = try await emitLocalChanges(folder: folder, state: state)
 
@@ -222,6 +230,7 @@ final class SyncEngine {
         recordPass(started: started, opsOut: opsOut, opsIn: opsIn, outcome: outcome)
         var result = (try? snapshot()) ?? SyncStatusSnapshot()
         result.lastPassOpsApplied = opsApplied
+        result.isWaitingOnDownloads = waitingOnDownloads
         return result
     }
 
@@ -440,9 +449,12 @@ final class SyncEngine {
     private func readPeers(
         folder: SyncFolder,
         state: SyncDeviceState
-    ) async throws -> (decoded: Int, applied: Int) {
+    ) async throws -> (decoded: Int, applied: Int, waitingOnDownloads: Bool) {
         let peers = try folder.peerDeviceUUIDs(excluding: state.deviceUUID)
         var applied = 0
+        /// Set when a peer had a segment that iCloud has not delivered yet, so the
+        /// caller can retry in seconds rather than at the next 30s tick (#451).
+        var isWaitingOnDownloads = false
         var deletedLocally = 0
         // Only prune once the enumeration above has SUCCEEDED. `peerDeviceUUIDs`
         // throws if the folder could not be read, so reaching this line means the
@@ -490,13 +502,35 @@ final class SyncEngine {
             var wouldApply = 0
             var failure: String?
 
+            // Ask for ALL of them at once, before waiting on the first (#451).
+            // Segments still apply in order below; this only means iCloud is
+            // fetching the rest while we wait, instead of learning about segment
+            // n+1 a poll interval after segment n lands.
+            SyncFolder.requestDownloads(pending.map { folder.segmentURL(peer, sequence: $0) })
+
             for sequence in pending {
                 let url = folder.segmentURL(peer, sequence: sequence)
                 // A file can be listed while its bytes are still cloud-only.
                 // Reading it then fails in a way indistinguishable from a corrupt
                 // segment, so wait for it rather than misdiagnosing it.
-                guard await SyncFolder.materialize(url) else {
+                //
+                // Five seconds, not twenty (#451). The long wait made a manual
+                // refresh hang for the whole timeout and return nothing, which
+                // reads as a broken button. The download is already requested and
+                // keeps running after this returns, so a shorter wait does not
+                // lose progress — it just hands control back and lets the retry
+                // below pick the segment up when it has landed.
+                guard await SyncFolder.materialize(url, timeout: 5) else {
                     failure = "Segment \(sequence) not yet downloaded from iCloud"
+                    // Said out loud, because this used to be completely silent: the
+                    // pass reported `in=0`, which is exactly what a pass with
+                    // nothing to do reports. That is why a 93-second delivery was
+                    // reported as sync not working at all.
+                    SyncLog.line(
+                        "SyncEngine: waiting on iCloud for \(peer.uuidString.prefix(8)) "
+                        + "seg \(sequence) — deferring, will retry shortly"
+                    )
+                    isWaitingOnDownloads = true
                     break
                 }
                 do {
@@ -567,7 +601,11 @@ final class SyncEngine {
             // segment, so a multi-segment catch-up triggers one reload.
             NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
         }
-        return (decoded: decodedThisPass, applied: applied + deletedLocally)
+        return (
+            decoded: decodedThisPass,
+            applied: applied + deletedLocally,
+            waitingOnDownloads: isWaitingOnDownloads
+        )
     }
 
     /// How many of these ops would change something locally.
