@@ -139,6 +139,40 @@ final class VisionHitTestTests: XCTestCase {
         XCTAssertEqual(hit, .grip(Self.id(1)))
     }
 
+    /// The reported defect: the grip's target used to stop `Space.sm` short of
+    /// the block's corner, so the last 8pt diagonally into the corner was body.
+    /// That is precisely where a person aims, because it is where every window
+    /// and every spreadsheet cell puts its handle, and landing there began a
+    /// MOVE. A block sliding away when you meant to widen it reads as the board
+    /// being broken, not as a missed 8pt.
+    func testTheVeryCornerOfABlockIsGripAndNotBody() {
+        let block = frame(1, col: 0, row: 0)
+
+        // One point in from the corner, on the diagonal: as close as a pointer
+        // can get to the handle without leaving the block.
+        let corner = CGPoint(x: block.rect.maxX - 1, y: block.rect.maxY - 1)
+
+        XCTAssertEqual(
+            VisionHitTest.resolve(point: corner, blocks: [block], exclusions: []),
+            .grip(Self.id(1))
+        )
+    }
+
+    /// The other half of the same rule: widening the target must not eat the
+    /// card. A point just inside the grip's reach is grip; a point just outside
+    /// it is still body, so the block stays draggable everywhere else.
+    func testJustBeyondTheGripsReachIsStillBody() {
+        let block = frame(1, col: 0, row: 0)
+        let grip = VisionHitTest.gripRect(in: block.rect)
+
+        let justOutside = CGPoint(x: grip.minX - 1, y: grip.minY - 1)
+
+        XCTAssertEqual(
+            VisionHitTest.resolve(point: justOutside, blocks: [block], exclusions: []),
+            .body(Self.id(1))
+        )
+    }
+
     // MARK: - Gutters and edges
 
     /// The gutter is the trailing 12pt of a cell, not a cell of its own: a 5 × 3
@@ -181,18 +215,31 @@ final class VisionHitTestTests: XCTestCase {
 
     // MARK: - The grip rect itself
 
-    /// What you can see and what you can grab come from the same two constants.
-    /// They are separated in the card by a `.frame` and a `.padding`, and a
-    /// silent drift between them is a defect nobody can photograph.
-    func testGripRectMatchesTheDrawnGlyph() {
+    /// The target is deliberately LARGER than the glyph, and the relationship
+    /// between them is the thing worth pinning.
+    ///
+    /// This test used to assert they were identical. That was the defect: the
+    /// glyph is inset `Space.sm` for looks, so an exact match left the corner
+    /// itself as body and aiming at the handle moved the block. The glyph still
+    /// draws where it drew; the target now swallows the inset and runs out to
+    /// the corner, so both still derive from the same two constants and cannot
+    /// silently drift apart.
+    func testTheGripTargetCoversTheGlyphAndReachesTheCorner() {
         let rect = CGRect(x: 68, y: 136, width: 328, height: 192)
+        let glyph = CGRect(
+            x: rect.maxX - Space.sm - VisionBlockMetrics.resizeTarget,
+            y: rect.maxY - Space.sm - VisionBlockMetrics.resizeTarget,
+            width: VisionBlockMetrics.resizeTarget,
+            height: VisionBlockMetrics.resizeTarget
+        )
 
         let grip = VisionHitTest.gripRect(in: rect)
 
-        XCTAssertEqual(grip.width, VisionBlockMetrics.resizeTarget)
-        XCTAssertEqual(grip.height, VisionBlockMetrics.resizeTarget)
-        XCTAssertEqual(grip.maxX, rect.maxX - Space.sm)
-        XCTAssertEqual(grip.maxY, rect.maxY - Space.sm)
+        XCTAssertTrue(grip.contains(glyph), "everything drawn must be grabbable")
+        XCTAssertEqual(grip.maxX, rect.maxX, "the target reaches the trailing edge")
+        XCTAssertEqual(grip.maxY, rect.maxY, "the target reaches the bottom edge")
+        XCTAssertEqual(grip.width, VisionBlockMetrics.resizeTarget + Space.sm)
+        XCTAssertEqual(grip.height, VisionBlockMetrics.resizeTarget + Space.sm)
     }
 
     // MARK: - Hover's separate question

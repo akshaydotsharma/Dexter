@@ -62,20 +62,26 @@ enum VisionHitTest {
         }
     }
 
-    /// The grip's hit target, inset from the block's bottom-right corner.
+    /// The grip's hit target: the block's bottom-right corner, out to the edge.
     ///
-    /// `VisionBlockMetrics.resizeTarget` square, `Space.sm` in from both edges,
-    /// which is exactly where `VisionBlockCard` draws the glyph. Derived from
-    /// the same two constants rather than restated, because a grip you can see
-    /// and a grip you can hit drifting apart is a defect nobody can photograph.
+    /// The GLYPH is a `VisionBlockMetrics.resizeTarget` square inset `Space.sm`
+    /// from both edges, but the target deliberately runs past it to the corner
+    /// itself. The inset used to be dead body, so aiming at the very corner —
+    /// which is where a person aims, because that is where every window and
+    /// every spreadsheet cell puts its handle — began a MOVE. The block sliding
+    /// away when you meant to widen it reads as the board being broken rather
+    /// than as a missed 8pt.
+    ///
+    /// Derived from the same two constants the card draws with, rather than
+    /// restated, because a grip you can see and a grip you can hit drifting
+    /// apart is a defect nobody can photograph.
     static func gripRect(in rect: CGRect) -> CGRect {
-        let target = VisionBlockMetrics.resizeTarget
-        let inset = Space.sm
+        let reach = VisionBlockMetrics.resizeTarget + Space.sm
         return CGRect(
-            x: rect.maxX - inset - target,
-            y: rect.maxY - inset - target,
-            width: target,
-            height: target
+            x: rect.maxX - reach,
+            y: rect.maxY - reach,
+            width: reach,
+            height: reach
         )
     }
 

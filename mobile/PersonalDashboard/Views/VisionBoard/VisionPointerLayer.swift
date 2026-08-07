@@ -63,6 +63,12 @@ final class VisionPointerView: NSView {
     /// tasks, and the only thing the cursor needs is where it may not go.
     var tileCounts: [UUID: Int] = [:]
 
+    /// The pointer's last known position in canvas space. Kept so a gesture can
+    /// restore the right cursor when it ends: `mouseMoved` is silent while a
+    /// button is down, so at `mouseUp` this is the only record of where the
+    /// pointer actually is.
+    private var lastPointerPoint: CGPoint = .zero
+
     // MARK: Outputs
 
     /// A click on empty canvas. Returns whether it made a block.
@@ -162,6 +168,10 @@ final class VisionPointerView: NSView {
         case .grip(let id):
             guard let block = block(id) else { return }
             interaction.beginResize(block, from: point)
+            // Held for the whole gesture. `mouseMoved` does not fire while a
+            // button is down, so without this the cursor reverts the instant the
+            // pointer leaves the grip rect, which is immediately.
+            Self.diagonalResize.set()
             VisionProbe.line("resize.begin id=\(id) from=\(block.w)x\(block.h)")
 
         case .body(let id):
@@ -189,6 +199,7 @@ final class VisionPointerView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let interaction else { return }
         let point = canvasPoint(for: event)
+        lastPointerPoint = point
 
         if interaction.drag != nil {
             if interaction.updateDrag(to: point, canvas: canvasSize, blocks: blocks) {
@@ -225,6 +236,60 @@ final class VisionPointerView: NSView {
         }
     }
 
+    // MARK: Cursors
+
+    /// The bottom-right resize cursor.
+    ///
+    /// macOS 15 finally exposed `frameResize(position:directions:)`; before it,
+    /// AppKit's only diagonal cursor was the private
+    /// `_windowResizeNorthWestSouthEastCursor`, which is not worth shipping. The
+    /// target deploys to macOS 14, so the fallback is drawn here: a north-west
+    /// to south-east double arrow, white-haloed so it survives both the light
+    /// paper and the near-black ground.
+    ///
+    /// Built once. A cursor rebuilt on every mouse-moved is a new `NSCursor` and
+    /// a new backing image several hundred times a second.
+    private static let diagonalResize: NSCursor = {
+        if #available(macOS 15.0, *) {
+            return NSCursor.frameResize(position: .bottomRight, directions: .all)
+        }
+        let side: CGFloat = 24
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            let shaft = NSBezierPath()
+            shaft.move(to: NSPoint(x: 6, y: 6))
+            shaft.line(to: NSPoint(x: 18, y: 18))
+
+            func head(at tip: NSPoint, dx: CGFloat, dy: CGFloat) -> NSBezierPath {
+                let path = NSBezierPath()
+                path.move(to: tip)
+                path.line(to: NSPoint(x: tip.x + dx, y: tip.y))
+                path.move(to: tip)
+                path.line(to: NSPoint(x: tip.x, y: tip.y + dy))
+                return path
+            }
+            let arrows = [
+                head(at: NSPoint(x: 6, y: 6), dx: 6, dy: 6),
+                head(at: NSPoint(x: 18, y: 18), dx: -6, dy: -6)
+            ]
+
+            // Halo first, glyph over it, so the cursor reads on any ground.
+            NSColor.white.setStroke()
+            for path in [shaft] + arrows {
+                path.lineWidth = 4
+                path.lineCapStyle = .round
+                path.stroke()
+            }
+            NSColor.black.setStroke()
+            for path in [shaft] + arrows {
+                path.lineWidth = 1.75
+                path.lineCapStyle = .round
+                path.stroke()
+            }
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: side / 2, y: side / 2))
+    }()
+
     // MARK: Hover
 
     override func updateTrackingAreas() {
@@ -241,7 +306,8 @@ final class VisionPointerView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        updateHover(at: canvasPoint(for: event))
+        lastPointerPoint = canvasPoint(for: event)
+        updateHover(at: lastPointerPoint)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -261,13 +327,40 @@ final class VisionPointerView: NSView {
         if let id = VisionHitTest.block(at: point, in: frames) {
             if interaction.hoveredBlock != id { interaction.hoveredBlock = id }
             if interaction.hoverCell != nil { interaction.hoverCell = nil }
-            NSCursor.openHand.set()
         } else {
             if interaction.hoveredBlock != nil { interaction.hoveredBlock = nil }
             let cell = VisionGrid.cell(at: point)
             let next = VisionInteraction.Cell(col: cell.col, row: cell.row)
             if interaction.hoverCell != next { interaction.hoverCell = next }
+        }
+        applyCursor(at: point)
+    }
+
+    /// What the pointer should look like at `point`.
+    ///
+    /// One place, because the cursor has to be right after a gesture ends as
+    /// well as while hovering, and those two used to disagree: `endGesture` set
+    /// an open hand unconditionally, so finishing a resize with the pointer
+    /// still on the grip showed a hand until you happened to move.
+    ///
+    /// The grip's cursor is the whole reason this is not just `openHand`. The
+    /// design system said the glyph carried the affordance on its own, since
+    /// AppKit exposed no public diagonal cursor; reversed in review 2026-08-07
+    /// because it did not survive contact. A corner that looks like the rest of
+    /// the card gets aimed at, missed, and moves the block instead of widening
+    /// it, and an open hand over a resize handle is the interface lying.
+    private func applyCursor(at point: CGPoint) {
+        guard
+            let id = VisionHitTest.block(at: point, in: frames),
+            let frame = frames.last(where: { $0.id == id })
+        else {
             NSCursor.arrow.set()
+            return
+        }
+        if VisionHitTest.gripRect(in: frame.rect).contains(point) {
+            Self.diagonalResize.set()
+        } else {
+            NSCursor.openHand.set()
         }
     }
 
@@ -370,7 +463,7 @@ final class VisionPointerView: NSView {
     /// then teleports to where it went.
     func endGesture() {
         guard let interaction, let frames = interaction.finishManipulation() else { return }
-        NSCursor.openHand.set()
+        applyCursor(at: lastPointerPoint)
         VisionProbe.line("gesture.end frames=\(frames.count)")
 
         let commit = self.commit

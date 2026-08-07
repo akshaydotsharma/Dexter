@@ -811,11 +811,33 @@ block in hand is deliberately excluded from that animation: it tracks the pointe
 - Two diagonal strokes, 1.5pt wide, 10pt and 6pt long, `Tokens.mutedSoft`.
   The Mac scroller-grip idiom
 - `opacity 0` at rest, `1` on block hover, 120ms `.easeOut`
-- Hit target 20 × 20
-- Cursor: **ship `NSCursor.arrow`.** AppKit exposes no public diagonal resize
-  cursor, and `.crosshair` is wrong (it means "precise point", not "drag corner").
-  The visible grip glyph carries the affordance. Do not reach for the private
-  `_windowResizeNorthWestSouthEastCursor`
+- Hit target: the corner itself, `resizeTarget + Space.sm` square, running out
+  to the block's trailing and bottom edges. Deliberately larger than the glyph
+- Cursor: a bottom-right resize cursor while the pointer is over that target,
+  held for the whole gesture
+
+> **Revised 2026-08-07, superseding the two rules above.** This section used to
+> specify a 20 × 20 target inset 8pt from both edges, and:
+>
+> > Cursor: **ship `NSCursor.arrow`.** AppKit exposes no public diagonal resize
+> > cursor, and `.crosshair` is wrong (it means "precise point", not "drag
+> > corner"). The visible grip glyph carries the affordance. Do not reach for the
+> > private `_windowResizeNorthWestSouthEastCursor`.
+>
+> Both failed in use, and they failed together. Matching the target to the glyph
+> left the last 8pt into the corner as block body, and the corner is exactly
+> where a person aims, because that is where every window and every spreadsheet
+> cell puts its handle. Landing there began a move, so the block slid away when
+> the user meant to widen it, which reads as the board being broken rather than
+> as a missed 8pt. An unchanged cursor made that likelier still: with nothing
+> distinguishing the corner, there was no feedback that you were about to grab
+> the wrong thing.
+>
+> The private cursor is still refused. macOS 15 added
+> `NSCursor.frameResize(position:directions:)`, which is what ships; below that
+> the app draws a north-west to south-east double arrow, white-haloed so it
+> reads on both grounds. The glyph keeps carrying the affordance visually, it is
+> simply no longer asked to carry it alone.
 
 The grip's `DragGesture` must use `coordinateSpace: .global`. The grip is pinned
 to the corner the resize is moving, so in local space the pointer appears to stop
