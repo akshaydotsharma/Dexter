@@ -38,22 +38,21 @@ struct VisionBlock: Identifiable, Hashable, Sendable {
     /// May contain ids with no surviving task; see `LocalVisionBlock.members`.
     var members: [UUID]
 
-    /// Ordered line items that belong to this block and to nothing else.
+    /// Ordered items that belong to this block and to nothing else.
     ///
-    /// The counterpart to `members`, and the distinction is the point. A member
-    /// is a real `LocalTodo` that the board borrows: it exists in Tasks, it can
-    /// be completed there, and taking it off the board leaves it alive. A note
-    /// exists only here. It is the scrap of context that would be silly to file
-    /// as a task — a budget, a phone number, the name of the person who owes you
-    /// the answer — and putting it in Tasks would mean carrying it through the
-    /// task surfaces forever.
+    /// The counterpart to `members`, and the distinction is the ONLY thing that
+    /// separates them. A member is a real `LocalTodo` the board borrows: it
+    /// exists in Tasks, it can be completed there, and taking it off the board
+    /// leaves it alive. An item exists only here. Same shape, same checkbox,
+    /// same behaviour — it simply does not turn up in Tasks, which is the whole
+    /// point of being able to make one.
     ///
     /// Defaulted where `members` is not, and the asymmetry is deliberate rather
     /// than an oversight. `members` was there when the type was written, so
-    /// every construction had to decide about it; `notes` arrived afterwards,
+    /// every construction had to decide about it; `items` arrived afterwards,
     /// and every construction that predates it meant "none". A default says
-    /// exactly that, and saves editing a dozen fixtures to write `notes: []`.
-    var notes: [VisionNote] = []
+    /// exactly that, and saves editing a dozen fixtures to write `items: []`.
+    var items: [VisionItem] = []
 
     let createdAt: Date
     let updatedAt: Date
@@ -67,7 +66,15 @@ struct VisionBlock: Identifiable, Hashable, Sendable {
     }
 }
 
-/// One line item on a block (#446).
+/// One item on a block: a checkable line that lives here and nowhere else (#446).
+///
+/// Renders exactly like a task tile, checkbox included, because it IS the same
+/// kind of thing to the person looking at it. The only difference is where it
+/// lives: a task is a `LocalTodo` the board borrows and Tasks also shows, an
+/// item is owned by the block. That is a storage fact, not a visual one, and
+/// giving it a different shape (which the first pass did, as a dot and a line of
+/// grey text) made the board answer a question nobody asked while hiding the one
+/// thing people actually want from a list — a box to tick.
 ///
 /// `Codable` where `VisionBlock` deliberately is not, and the two facts do not
 /// conflict. `VisionBlock` has no wire format because the board is absent from
@@ -76,15 +83,83 @@ struct VisionBlock: Identifiable, Hashable, Sendable {
 /// chosen to survive being put on the wire later without a second migration:
 /// `id` is stable so a peer edit can be matched rather than appended twice, and
 /// `createdAt` gives a deterministic tiebreak when two devices add at once.
-struct VisionNote: Identifiable, Hashable, Sendable, Codable {
+///
+/// `completed` and `completedAt` decode with defaults, so a row written by the
+/// build that shipped before items could be ticked reads as an open item rather
+/// than as a decode failure that would empty the whole block.
+struct VisionItem: Identifiable, Hashable, Sendable, Codable {
     let id: UUID
     var text: String
+    var completed: Bool
+    var completedAt: Date?
     let createdAt: Date
 
-    init(id: UUID = UUID(), text: String, createdAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        text: String,
+        completed: Bool = false,
+        completedAt: Date? = nil,
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.text = text
+        self.completed = completed
+        self.completedAt = completedAt
         self.createdAt = createdAt
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        completed = try container.decodeIfPresent(Bool.self, forKey: .completed) ?? false
+        completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+}
+
+/// One row in a block's list, whichever kind it is (#446).
+///
+/// The board shows a single list. Half of it is borrowed from Tasks and half of
+/// it is the block's own, and the person reading it should not have to care
+/// which — so the split is resolved once, here, and every surface that renders a
+/// block consumes this instead of two arrays it has to interleave itself.
+///
+/// That "itself" is the point. The card and the overflow popover both render the
+/// list, and when each did its own interleaving they were one edit away from
+/// disagreeing about order, which reads as rows moving when you open a popover.
+enum VisionRow: Identifiable, Hashable {
+    case task(Todo)
+    case item(VisionItem)
+
+    var id: UUID {
+        switch self {
+        case .task(let todo): todo.id
+        case .item(let item): item.id
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .task(let todo): todo.title
+        case .item(let item): item.text
+        }
+    }
+
+    var completed: Bool {
+        switch self {
+        case .task(let todo): todo.completed
+        case .item(let item): item.completed
+        }
+    }
+
+    /// True for a real `LocalTodo`. Drives the two places the kinds genuinely
+    /// differ: an item can be edited in place and a task cannot (its title
+    /// belongs to Tasks), and removing an item destroys it where removing a task
+    /// only takes it off the board.
+    var isTask: Bool {
+        if case .task = self { return true }
+        return false
     }
 }
 

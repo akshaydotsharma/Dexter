@@ -76,6 +76,25 @@ final class VisionBoardViewModel {
         return open + done
     }
 
+    /// A block's whole list, both kinds of row, in the one order every surface
+    /// renders it in.
+    ///
+    /// Tasks first, then items, then everything completed. Tasks lead because
+    /// their order is one the user can set (membership is an explicit array),
+    /// where items are simply appended — and it puts a newly added item directly
+    /// above the `+` that made it, which is where the eye already is.
+    ///
+    /// Completed rows sink regardless of kind. `sinkHold` keeps a row you just
+    /// ticked in place for a beat first, so you see the check land on the row you
+    /// clicked instead of watching it leave and wondering what you hit.
+    func rows(for block: VisionBlock) -> [VisionRow] {
+        let all = block.members.compactMap { tasksByID[$0] }.map(VisionRow.task)
+            + block.items.map(VisionRow.item)
+        let open = all.filter { !$0.completed || sinkHold.contains($0.id) }
+        let done = all.filter { $0.completed && !sinkHold.contains($0.id) }
+        return open + done
+    }
+
     /// Tasks not on any block, filtered by `query`. Backs the attach picker.
     func attachableTasks(matching query: String) -> [Todo] {
         let claimed = (try? board.claimedTaskIDs()) ?? []
@@ -184,38 +203,64 @@ final class VisionBoardViewModel {
         await apply(blockID) { try await self.board.detach(taskID: taskID, from: blockID) }
     }
 
-    // MARK: - Notes
+    // MARK: - Items
     //
     // The other half of a block's contents, and the half it owns outright.
-    // Nothing here touches the task table: a note is not a task, does not appear
-    // in Tasks, and does not count toward the block's progress. That last one is
-    // deliberate — `3/8` is a claim about work items, and letting a scribbled
-    // reminder move the number would make the only quantitative thing on the
-    // card stop meaning anything.
+    // Nothing here touches the task table: an item does not appear in Tasks, and
+    // never becomes a `LocalTodo`. Everywhere else it behaves like one, ticking
+    // included, and it DOES count toward the block's progress — `3/8` is a claim
+    // about the list you are looking at, and a list where half the ticks did not
+    // move the number would be lying about itself.
 
-    /// Add a line item and return its id, so the caller can drop a caret into it.
+    /// Add an item and return its id, so the caller can drop a caret into it.
     ///
-    /// A blank note is the normal case: the row appears already in edit. If the
+    /// A blank item is the normal case: the row appears already in edit. If the
     /// user clicks away without typing, committing empty text removes it again
-    /// (`setNoteText`), so an abandoned add leaves nothing behind.
+    /// (`setItemText`), so an abandoned add leaves nothing behind.
     @discardableResult
-    func addNote(to blockID: UUID, text: String = "") async -> UUID? {
+    func addItem(to blockID: UUID, text: String = "") async -> UUID? {
         do {
-            let result = try await board.addNote(to: blockID, text: text)
+            let result = try await board.addItem(to: blockID, text: text)
             replace(result.block)
-            return result.note.id
+            return result.item.id
         } catch {
             errorMessage = error.localizedDescription
             return nil
         }
     }
 
-    func setNoteText(_ noteID: UUID, in blockID: UUID, to text: String) async {
-        await apply(blockID) { try await self.board.setNoteText(noteID, in: blockID, to: text) }
+    func setItemText(_ itemID: UUID, in blockID: UUID, to text: String) async {
+        await apply(blockID) { try await self.board.setItemText(itemID, in: blockID, to: text) }
     }
 
-    func deleteNote(_ noteID: UUID, from blockID: UUID) async {
-        await apply(blockID) { try await self.board.deleteNote(noteID, from: blockID) }
+    /// Tick an item.
+    ///
+    /// `sinkDelay` holds it in place for a beat before it sinks, exactly as
+    /// `toggleTask` does — the two are one list to the person clicking, so a
+    /// tick that behaves differently depending on which kind of row it landed on
+    /// would read as a bug rather than as a distinction.
+    func toggleItem(_ itemID: UUID, in blockID: UUID, sinkDelay: Duration? = .milliseconds(400)) async {
+        do {
+            let updated = try await board.toggleItem(itemID, in: blockID)
+            replace(updated)
+            guard updated.items.first(where: { $0.id == itemID })?.completed == true,
+                  let sinkDelay
+            else {
+                sinkHold.remove(itemID)
+                return
+            }
+            sinkHold.insert(itemID)
+            Task { [weak self] in
+                try? await Task.sleep(for: sinkDelay)
+                self?.sinkHold.remove(itemID)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteItem(_ itemID: UUID, from blockID: UUID) async {
+        await apply(blockID) { try await self.board.deleteItem(itemID, from: blockID) }
     }
 
     // MARK: - Task writes

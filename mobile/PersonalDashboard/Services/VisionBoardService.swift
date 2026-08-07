@@ -254,54 +254,72 @@ struct VisionBoardService {
         }
     }
 
-    // MARK: - Notes
+    // MARK: - Items
 
-    /// Append a line item to a block and hand back the note that was made.
+    /// Append an item to a block and hand back the one that was made.
     ///
-    /// Returns the note as well as the block because the caller puts the new
-    /// note straight into edit, and reading `block.notes.last` to find it would
+    /// Returns the item as well as the block because the caller puts the new
+    /// item straight into edit, and reading `block.items.last` to find it would
     /// be right only for as long as this stays an append. The id is the answer
     /// to "which one did I just make"; position is not.
     ///
     /// An empty or whitespace-only text is accepted here, unlike `rename`.
-    /// Creating a blank note IS the flow — the row appears already in edit and
-    /// the user types into it — and `setNoteText` is where blank becomes a
+    /// Creating a blank item IS the flow — the row appears already in edit and
+    /// the user types into it — and `setItemText` is where blank becomes a
     /// deletion.
     @discardableResult
-    func addNote(to blockID: UUID, text: String = "") async throws -> (block: VisionBlock, note: VisionNote) {
-        let note = VisionNote(text: text.trimmingCharacters(in: .whitespacesAndNewlines))
-        let block = try await mutate(blockID) { $0.notes.append(note) }
-        return (block, note)
+    func addItem(to blockID: UUID, text: String = "") async throws -> (block: VisionBlock, item: VisionItem) {
+        let item = VisionItem(text: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        let block = try await mutate(blockID) { $0.items.append(item) }
+        return (block, item)
     }
 
-    /// Edit a note's text. Empty text DELETES it.
+    /// Edit an item's text. Empty text REMOVES it.
     ///
     /// Deliberately not the block-title rule, which reverts an empty edit
-    /// because a block must always be named. A note has no such requirement, and
-    /// clearing one is the obvious way to ask for it to go: reverting instead
-    /// would leave the user holding a note they had just emptied on purpose,
-    /// with the remove button as the only way out of a thing they had already
-    /// told the interface to drop. It is also what closes the blank-note flow
-    /// above — make one, click away, and nothing is left behind.
+    /// because a block must always be named. An item has no such requirement,
+    /// and clearing one is the obvious way to ask for it to go: reverting
+    /// instead would leave the user holding an item they had just emptied on
+    /// purpose, with the remove button as the only way out of a thing they had
+    /// already told the interface to drop. It is also what closes the blank-item
+    /// flow above — make one, click away, and nothing is left behind.
     @discardableResult
-    func setNoteText(_ noteID: UUID, in blockID: UUID, to text: String) async throws -> VisionBlock {
+    func setItemText(_ itemID: UUID, in blockID: UUID, to text: String) async throws -> VisionBlock {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await mutate(blockID) { block in
             guard trimmed.isEmpty == false else {
-                block.notes.removeAll { $0.id == noteID }
+                block.items.removeAll { $0.id == itemID }
                 return
             }
-            var notes = block.notes
-            guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
-            notes[index].text = trimmed
-            block.notes = notes
+            var items = block.items
+            guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
+            items[index].text = trimmed
+            block.items = items
+        }
+    }
+
+    /// Tick or untick an item.
+    ///
+    /// `completedAt` is set and cleared alongside `completed` rather than left
+    /// behind, so the two can never disagree. Nothing reads it yet; it exists
+    /// because "when did I finish this" is unrecoverable once lost, and the cost
+    /// of carrying it is one field in a JSON blob.
+    @discardableResult
+    func toggleItem(_ itemID: UUID, in blockID: UUID) async throws -> VisionBlock {
+        try await mutate(blockID) { block in
+            var items = block.items
+            guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
+            let nowCompleted = !items[index].completed
+            items[index].completed = nowCompleted
+            items[index].completedAt = nowCompleted ? Date() : nil
+            block.items = items
         }
     }
 
     @discardableResult
-    func deleteNote(_ noteID: UUID, from blockID: UUID) async throws -> VisionBlock {
+    func deleteItem(_ itemID: UUID, from blockID: UUID) async throws -> VisionBlock {
         try await mutate(blockID) { block in
-            block.notes.removeAll { $0.id == noteID }
+            block.items.removeAll { $0.id == itemID }
         }
     }
 

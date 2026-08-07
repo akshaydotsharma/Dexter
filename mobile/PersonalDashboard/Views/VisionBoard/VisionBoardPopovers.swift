@@ -116,52 +116,26 @@ private struct VisionAttachRow: View {
 /// without resizing it, and a popover is the one affordance that does that
 /// without changing the board's layout.
 ///
-/// Notes as well as tiles, because `+N more` counts both and an overflowed note
-/// would otherwise have no route at all — a task at least still exists in Tasks,
-/// where a note exists nowhere else. They keep the card's order: notes first,
-/// then tiles.
+/// Order comes from `rows(for:)`, the same call the card makes, so the list here
+/// cannot disagree with the list you clicked to open it. When the two did their
+/// own ordering they were one edit away from drifting, which reads as rows
+/// jumping when a popover opens.
 struct VisionAllTilesPopover: View {
     let viewModel: VisionBoardViewModel
     let block: VisionBlock
-    let onToggle: (Todo) -> Void
 
-    /// Which note holds a caret. Same ownership as on the card and for the same
+    /// Which item holds a caret. Same ownership as on the card and for the same
     /// reason: one editor at a time, decided in one place.
-    @State private var editingNoteID: UUID?
+    @State private var editingItemID: UUID?
 
     var body: some View {
-        let tiles = viewModel.tiles(for: block)
-
         VStack(alignment: .leading, spacing: Space.sm) {
             Text(block.title).eyebrow()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: VisionBlockMetrics.tileSpacing) {
-                    if !block.notes.isEmpty {
-                        VStack(alignment: .leading, spacing: VisionBlockMetrics.noteSpacing) {
-                            ForEach(block.notes) { note in
-                                VisionNoteRow(
-                                    note: note,
-                                    isEditing: editingNoteID == note.id,
-                                    onBeginEdit: { editingNoteID = note.id },
-                                    onCommit: { text in commit(note, to: text) },
-                                    onDelete: {
-                                        editingNoteID = nil
-                                        Task { await viewModel.deleteNote(note.id, from: block.id) }
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    ForEach(tiles) { todo in
-                        VisionTileRow(
-                            todo: todo,
-                            showsDue: true,
-                            onToggle: { onToggle(todo) },
-                            onRemove: { Task { await viewModel.detach(taskID: todo.id, from: block.id) } },
-                            onDelete: { Task { await viewModel.deleteTask(todo.id, from: block.id) } }
-                        )
+                    ForEach(viewModel.rows(for: block)) { row in
+                        rowView(row)
                     }
                 }
             }
@@ -172,11 +146,63 @@ struct VisionAllTilesPopover: View {
         .background(Tokens.surface)
     }
 
-    private func commit(_ note: VisionNote, to text: String) {
-        editingNoteID = nil
+    /// A deliberate plain function rather than a `@ViewBuilder`.
+    ///
+    /// Three of `VisionTileRow`'s callbacks are nil for one kind of row and a
+    /// closure for the other, and `isTask ? { … } : nil` gives the type checker
+    /// nothing to infer the closure's type from. Binding them as typed locals
+    /// first needs statements, which a `@ViewBuilder` body will not take.
+    private func rowView(_ row: VisionRow) -> some View {
+        let isItem = !row.isTask
+        var beginEdit: (() -> Void)?
+        var commitText: ((String) -> Void)?
+        var removeFromBoard: (() -> Void)?
+
+        if isItem {
+            beginEdit = { editingItemID = row.id }
+            commitText = { text in commit(row, to: text) }
+        } else {
+            removeFromBoard = {
+                Task { await viewModel.detach(taskID: row.id, from: block.id) }
+            }
+        }
+
+        return VisionTileRow(
+            row: row,
+            showsDue: true,
+            isEditing: isItem && editingItemID == row.id,
+            onToggle: { toggle(row) },
+            onBeginEdit: beginEdit,
+            onCommit: commitText,
+            onRemoveFromBoard: removeFromBoard,
+            onRemove: {
+                editingItemID = nil
+                Task {
+                    if row.isTask {
+                        await viewModel.deleteTask(row.id, from: block.id)
+                    } else {
+                        await viewModel.deleteItem(row.id, from: block.id)
+                    }
+                }
+            }
+        )
+    }
+
+    private func toggle(_ row: VisionRow) {
+        Task {
+            if row.isTask {
+                await viewModel.toggleTask(row.id)
+            } else {
+                await viewModel.toggleItem(row.id, in: block.id)
+            }
+        }
+    }
+
+    private func commit(_ row: VisionRow, to text: String) {
+        editingItemID = nil
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != note.text else { return }
-        Task { await viewModel.setNoteText(note.id, in: block.id, to: trimmed) }
+        guard trimmed != row.title else { return }
+        Task { await viewModel.setItemText(row.id, in: block.id, to: trimmed) }
     }
 }
 

@@ -72,7 +72,7 @@ final class LocalVisionBlock {
     /// `VisionBoardService` prunes on write.
     var membersData: Data
 
-    /// Ordered `VisionNote`s, JSON-encoded.
+    /// Ordered `VisionItem`s, JSON-encoded.
     ///
     /// Optional where `membersData` is not, and only because of when each was
     /// added. `membersData` was there when the table was created, so every row
@@ -80,10 +80,16 @@ final class LocalVisionBlock {
     /// non-optional `Data` would need SwiftData to invent a value for each of
     /// them. It invents empty `Data`, which is not valid JSON and would decode
     /// to nothing — the right answer by luck rather than by construction. An
-    /// optional says "this row predates notes", which is the fact, and `notes`
+    /// optional says "this row predates items", which is the fact, and `items`
     /// below turns it into the empty array in one place.
     ///
-    /// Read and write through `notes`, never directly.
+    /// The STORED name stays `notesData` though the concept is now called an
+    /// item. Renaming a `@Model` property renames the column, which is a
+    /// remove-plus-add migration on a live store — and this codebase's rule is
+    /// that fields are added and never removed. The name is frozen; the meaning
+    /// is carried by `items` and by every UI string.
+    ///
+    /// Read and write through `items`, never directly.
     var notesData: Data?
 
     var position: Int?
@@ -107,7 +113,7 @@ final class LocalVisionBlock {
         gridVersion: Int? = VisionGrid.schemaVersion,
         state: BlockState = .default,
         members: [UUID] = [],
-        notes: [VisionNote] = [],
+        items: [VisionItem] = [],
         position: Int? = nil,
         version: Int64 = 0,
         createdAt: Date = Date(),
@@ -126,7 +132,7 @@ final class LocalVisionBlock {
         self.gridVersion = gridVersion
         self.state = state.rawValue
         self.membersData = LocalVisionBlock.encode(members)
-        self.notesData = LocalVisionBlock.encodeNotes(notes)
+        self.notesData = LocalVisionBlock.encodeItems(items)
         self.position = position
         self.version = version
         self.createdAt = createdAt
@@ -157,12 +163,12 @@ final class LocalVisionBlock {
         set { membersData = LocalVisionBlock.encode(newValue) }
     }
 
-    /// Read/write the block's own line items. Nil and a decode failure both read
-    /// as empty, for the same reason `members` does: a block that renders without
-    /// its notes is recoverable, and a board that crashes on load is not.
-    var notes: [VisionNote] {
-        get { LocalVisionBlock.decodeNotes(notesData) }
-        set { notesData = LocalVisionBlock.encodeNotes(newValue) }
+    /// Read/write the block's own items. Nil and a decode failure both read as
+    /// empty, for the same reason `members` does: a block that renders without
+    /// its items is recoverable, and a board that crashes on load is not.
+    var items: [VisionItem] {
+        get { LocalVisionBlock.decodeItems(notesData) }
+        set { notesData = LocalVisionBlock.encodeItems(newValue) }
     }
 
     func toDTO() -> VisionBlock {
@@ -176,7 +182,7 @@ final class LocalVisionBlock {
             h: h,
             state: blockState,
             members: members,
-            notes: notes,
+            items: items,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -196,20 +202,21 @@ final class LocalVisionBlock {
         return strings.compactMap(UUID.init(uuidString:))
     }
 
-    /// Notes go through `VisionNote`'s own `Codable` rather than a hand-rolled
-    /// pair, because unlike a bare UUID a note has fields that will grow.
+    /// Items go through `VisionItem`'s own `Codable` rather than a hand-rolled
+    /// pair, because unlike a bare UUID an item has fields that will grow — it
+    /// has already grown two.
     ///
     /// Named apart from the membership pair rather than overloaded. `Data`
     /// promotes to `Data?` silently, so `decode(membersData)` would still
     /// type-check against a `Data?` overload — and picking the wrong one would
     /// not fail to build, it would return an empty array and read as a block
     /// that had lost its tasks.
-    private static func encodeNotes(_ notes: [VisionNote]) -> Data {
-        (try? JSONEncoder().encode(notes)) ?? Data("[]".utf8)
+    private static func encodeItems(_ items: [VisionItem]) -> Data {
+        (try? JSONEncoder().encode(items)) ?? Data("[]".utf8)
     }
 
-    private static func decodeNotes(_ data: Data?) -> [VisionNote] {
+    private static func decodeItems(_ data: Data?) -> [VisionItem] {
         guard let data else { return [] }
-        return (try? JSONDecoder().decode([VisionNote].self, from: data)) ?? []
+        return (try? JSONDecoder().decode([VisionItem].self, from: data)) ?? []
     }
 }
