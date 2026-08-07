@@ -34,27 +34,44 @@ https://claude.ai/code/artifact/02938dbd-635c-46b4-abd0-b39bc67e0600
 - [x] **AppKit pointer layer replacing SwiftUI gestures** (`dd1d82d`)
 - [x] Grip target reaches the block corner + resize cursor (`b32de4c`)
 - [x] Popover accepts first mouse; row hover; title I-beam (`db29ffa`)
+- [x] Visible remove on a tile; block-owned notes (`9cafce4`)
 
 ## Current state
 
 Tests, all passing and verified in the main session (not just by subagents):
 
-- 16 macOS pointer tests (`DexterMacTests`, `-scheme DexterMac -destination 'platform=macOS' test`)
-- 51 iOS tests (`VisionBoardLayoutTests` 37 + `VisionHitTestTests` 14),
+- 31 macOS tests (`DexterMacTests`: 16 pointer + 15 note),
+  `-scheme DexterMac -destination 'platform=macOS' test`
+- 66 iOS vision tests (`VisionBoardLayoutTests` 37 + `VisionHitTestTests` 14 +
+  `VisionContentFitTests` 15),
   destination `platform=iOS Simulator,id=35C2BC65-8B3F-49EA-BCB8-EACC3EEA2F52`
 - Both targets build clean
 
 Two pre-existing failures in `ItineraryDocumentTests` (wallet card eligibility)
 confirmed present at clean `4f7e945`. Not ours.
 
+Screenshot-verified from this worktree's build against a **snapshot** of the real
+store (copy `.sqlite` + `-wal` + `-shm`, launch with `DEXTER_STORE_PATH` and
+`DEXTER_STORE_PATH_ACK=1`, seed notes with `sqlite3` into `ZNOTESDATA`): notes
+render above tiles at medium and large, the four-note cap folds the rest into
+`+N more`, a single note carries no stray gap, `No tasks yet` is suppressed once
+a block has notes, and an edited note neither clips nor changes size.
+
 ## Next steps
 
-- [ ] User hands-on QA of `db29ffa`: attach-task click, row hover, title I-beam,
-      grip cursor. Nothing visual or click-driven has been verified by anyone.
+- [ ] User hands-on QA, `db29ffa` + `9cafce4`. Everything hover- and
+      click-driven is still unverified by anyone: attach-task click, row hover,
+      title I-beam, grip cursor, the tile and note remove buttons, click-to-edit
+      a note, the add row's task/note menu.
 - [ ] Tile drag between blocks — reduced version only (`.draggable` +
       `.dropDestination`, appends rather than dropping at an index). Never QA'd.
 - [ ] iOS single-column projection (out of scope for #446)
 - [ ] PR once QA passes
+
+Note for QA: every block on the user's real board today is **medium** (largest is
+7 cols = 468pt, and `largeMinWidth` is 500). Medium has no add row, so the only
+route to a note there is the ellipsis menu. Widen a block to 8 columns to see the
+add row and its task/note switch.
 
 ## Context for the next session
 
