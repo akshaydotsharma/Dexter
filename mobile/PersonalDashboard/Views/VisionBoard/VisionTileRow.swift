@@ -49,7 +49,21 @@ struct VisionTileRow: View {
 
     @State private var hovering = false
     @State private var draft = ""
-    @FocusState private var focused: Bool
+    /// Plain `@State`, deliberately NOT `@FocusState`.
+    ///
+    /// It was `@FocusState`, and that is what made renaming an item take two
+    /// clicks. SwiftUI's focus system owns a `@FocusState` value, and nothing
+    /// here binds one with `.focused(_:)` — `MacClearTextField` takes a plain
+    /// `Binding<Bool>` and drives AppKit's first responder itself. So setting it
+    /// true in `onAppear` was reverted by SwiftUI on the same render, the field
+    /// mounted unfocused, and because a mounted `NSTextField` looks almost
+    /// exactly like the `Text` it replaced, the first click appeared to do
+    /// nothing. The second click then focused the field natively, which is why
+    /// it always worked on the second try.
+    ///
+    /// `VisionTileRowFocusTests` is that bug: it hosts this row in a real window
+    /// and asserts the caret is in the field. It fails on `@FocusState`.
+    @State private var focused = false
     /// Set by Escape, before the field resigns.
     ///
     /// Resigning fires the blur, and the blur is the commit path, so without
@@ -96,6 +110,22 @@ struct VisionTileRow: View {
         // otherwise show square-ish corners past the tile's tighter curve.
         .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
         .paperBorder(hovering ? Tokens.borderStrong : Tokens.border, radius: Radius.sm)
+        // The WHOLE tile edits, not just the glyphs of the title.
+        //
+        // A short item leaves most of its row empty, and clicking that empty
+        // space did nothing — which reads as the row being dead rather than as
+        // having missed a target. `contentShape` is what makes the transparent
+        // padding hittable at all; without it a tap gesture here only fires over
+        // drawn content, which is the same small target with extra steps.
+        //
+        // The checkbox and the remove × keep their clicks: a `Button` inside
+        // takes precedence over an ancestor's tap gesture, so the two things the
+        // user named ("the redo button", "the cross") still do their own job.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isEditing else { return }
+            onBeginEdit?()
+        }
         .onHover { hovering = $0 }
         .contextMenu { menu }
         .accessibilityElement(children: .combine)
@@ -165,10 +195,11 @@ struct VisionTileRow: View {
                 .strikethrough(completed, color: Tokens.mutedSoft)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                // Single click drops a caret in, the same as the block title and
-                // every other rename surface in this app. Never a long press,
-                // never a context-menu Rename.
-                .onTapGesture(perform: onBeginEdit)
+                // The tap that starts the edit is on the whole tile, not here.
+                // What is left is the I-BEAM, which stays scoped to the text:
+                // the pointer layer checks text rects before control rects, so
+                // publishing the whole row as text would put an I-beam over the
+                // checkbox and the × as well.
                 .visionPassThrough(cursor: .text)
         } else {
             Text(row.title)

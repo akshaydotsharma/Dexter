@@ -34,6 +34,29 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     /// True while a file panel is open or a read is in flight.
     var isBusy: Bool = false
+    /// Who decides when this closes.
+    ///
+    /// `.semitransient` by default: AppKit closes it when you interact with the
+    /// window behind it, which is the Reminders feel the task editor wants.
+    ///
+    /// `.applicationDefined` hands the whole policy to the caller. The vision
+    /// board needs that, because AppKit's policy and the board's pointer
+    /// handling disagree about what an interaction is. The board's canvas is one
+    /// `NSView` that answers every click and tracks every move, and with a
+    /// semitransient popover up, MOVING THE CURSOR dismissed it — the popover
+    /// went away while the user was travelling toward it. That was measured, not
+    /// guessed: with no key window (an agent-launched app can never get one) the
+    /// popover survives re-renders, hover changes, selection changes, cursor
+    /// changes, store reloads and posted mouse-moved events, so the dismissal is
+    /// coming from AppKit's own monitor in a key window, where it cannot be
+    /// observed or overridden — only declined.
+    ///
+    /// Declining it is safe HERE and only here, because the board already owns
+    /// the outside click: `VisionPointerView.mouseDown` clears
+    /// `VisionInteraction.popover` for any click it claims and leaves it alone
+    /// over a pass-through control. That rule is unit tested; AppKit's was not
+    /// even inspectable.
+    var behavior: NSPopover.Behavior = .semitransient
     var preferredEdge: NSRectEdge = .minX
     @ViewBuilder var content: () -> PopoverContent
 
@@ -47,7 +70,9 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.update(content: content(), isPresented: isPresented, isBusy: isBusy)
+        context.coordinator.update(
+            content: content(), isPresented: isPresented, isBusy: isBusy, behavior: behavior
+        )
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -108,7 +133,12 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
         /// `@MainActor` because the hosting controller is, and this is only ever
         /// reached from `updateNSView`, which is main-actor isolated already.
         @MainActor
-        func update(content: PopoverContent, isPresented: Bool, isBusy: Bool) {
+        func update(
+            content: PopoverContent,
+            isPresented: Bool,
+            isBusy: Bool,
+            behavior: NSPopover.Behavior
+        ) {
             // Keep the hosted content in step so the editor re-renders while open.
             if let hosting {
                 hosting.rootView = content
@@ -119,7 +149,7 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
             }
             // Sized from the content, which the editor fixes at 360x520.
             popover.contentSize = hosting?.view.fittingSize ?? NSSize(width: 360, height: 520)
-            popover.behavior = isBusy ? .applicationDefined : .semitransient
+            popover.behavior = isBusy ? .applicationDefined : behavior
 
             guard let anchor, let window = anchor.window else { return }
             if isPresented, !popover.isShown {
@@ -163,6 +193,7 @@ extension View {
     func macAnchoredPopover<Content: View>(
         isPresented: Binding<Bool>,
         isBusy: Bool = false,
+        behavior: NSPopover.Behavior = .semitransient,
         preferredEdge: NSRectEdge = .minX,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
@@ -170,6 +201,7 @@ extension View {
             MacAnchoredPopover(
                 isPresented: isPresented,
                 isBusy: isBusy,
+                behavior: behavior,
                 preferredEdge: preferredEdge,
                 content: content
             )

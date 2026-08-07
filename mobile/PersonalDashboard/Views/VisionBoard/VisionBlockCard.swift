@@ -68,9 +68,15 @@ struct VisionBlockCard: View {
     private var hovering: Bool { isHovered }
     @State private var editingTitle = false
     @State private var titleDraft = ""
-    @FocusState private var titleFocused: Bool
     @State private var addDraft = ""
-    @FocusState private var addFocused: Bool
+    /// Both plain `@State` rather than `@FocusState`, for the reason recorded on
+    /// `VisionTileRow.focused`: SwiftUI owns a `@FocusState` value and resets one
+    /// that no view has bound with `.focused(_:)`, so the field mounts unfocused
+    /// and the rename needs a second click. `MacClearTextField` takes a plain
+    /// `Binding<Bool>` and drives AppKit's first responder itself, which is the
+    /// whole reason it exists.
+    @State private var titleFocused = false
+    @State private var addFocused = false
 
     /// Bindings onto the board's single popover value. Derived rather than
     /// stored, so two cards can never both believe they have one open.
@@ -309,7 +315,12 @@ struct VisionBlockCard: View {
         // it, which is what makes it visible.
         .visionPassThrough()
         .accessibilityLabel("Block actions")
-        .macAnchoredPopover(isPresented: showingAttach, preferredEdge: .minY) {
+        .macAnchoredPopover(
+            isPresented: showingAttach,
+            // The board owns dismissal; see `MacAnchoredPopover.behavior`.
+            behavior: .applicationDefined,
+            preferredEdge: .minY
+        ) {
             VisionAttachTaskPopover(viewModel: viewModel, blockID: block.id) {
                 showingAttach.wrappedValue = false
             }
@@ -413,7 +424,13 @@ struct VisionBlockCard: View {
                 }
                 .buttonStyle(.plain)
                 .visionPassThrough()
-                .macAnchoredPopover(isPresented: showingAllTiles, preferredEdge: .minY) {
+                .macAnchoredPopover(
+                    isPresented: showingAllTiles,
+                    // Stays up while you work in it. Only a click the
+                    // pointer layer claims closes it.
+                    behavior: .applicationDefined,
+                    preferredEdge: .minY
+                ) {
                     VisionAllTilesPopover(viewModel: viewModel, editor: editor, block: block)
                 }
             }
