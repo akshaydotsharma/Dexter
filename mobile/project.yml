@@ -170,6 +170,7 @@ targets:
       # globbed at the top of this list.
       - path: PersonalDashboard/Views/VisionBoard
       - path: PersonalDashboard/ViewModels/VisionBoardViewModel.swift
+      - path: PersonalDashboard/ViewModels/VisionItemEditor.swift
       - path: PersonalDashboard/Services/VisionBoardService.swift
       - path: PersonalDashboard/Views/Lists/ListsView.swift
       - path: PersonalDashboard/Views/Today/TodayView.swift

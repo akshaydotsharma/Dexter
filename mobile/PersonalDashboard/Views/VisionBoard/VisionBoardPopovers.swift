@@ -122,11 +122,8 @@ private struct VisionAttachRow: View {
 /// jumping when a popover opens.
 struct VisionAllTilesPopover: View {
     let viewModel: VisionBoardViewModel
+    let editor: VisionItemEditor
     let block: VisionBlock
-
-    /// Which item holds a caret. Same ownership as on the card and for the same
-    /// reason: one editor at a time, decided in one place.
-    @State private var editingItemID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
@@ -155,12 +152,20 @@ struct VisionAllTilesPopover: View {
     private func rowView(_ row: VisionRow) -> some View {
         let isItem = !row.isTask
         var beginEdit: (() -> Void)?
-        var commitText: ((String) -> Void)?
+        var commitText: ((String, Bool) -> Void)?
+        var cancelEdit: (() -> Void)?
         var removeFromBoard: (() -> Void)?
 
         if isItem {
-            beginEdit = { editingItemID = row.id }
-            commitText = { text in commit(row, to: text) }
+            beginEdit = { editor.begin(row.id) }
+            commitText = { text, continuing in
+                Task {
+                    await editor.commit(
+                        row.id, in: block.id, text: text, continuing: continuing
+                    )
+                }
+            }
+            cancelEdit = { Task { await editor.cancel(row.id, in: block.id) } }
         } else {
             removeFromBoard = {
                 Task { await viewModel.detach(taskID: row.id, from: block.id) }
@@ -170,13 +175,13 @@ struct VisionAllTilesPopover: View {
         return VisionTileRow(
             row: row,
             showsDue: true,
-            isEditing: isItem && editingItemID == row.id,
+            isEditing: isItem && editor.editingID == row.id,
             onToggle: { toggle(row) },
             onBeginEdit: beginEdit,
             onCommit: commitText,
+            onCancel: cancelEdit,
             onRemoveFromBoard: removeFromBoard,
             onRemove: {
-                editingItemID = nil
                 Task {
                     if row.isTask {
                         await viewModel.deleteTask(row.id, from: block.id)
@@ -196,13 +201,6 @@ struct VisionAllTilesPopover: View {
                 await viewModel.toggleItem(row.id, in: block.id)
             }
         }
-    }
-
-    private func commit(_ row: VisionRow, to text: String) {
-        editingItemID = nil
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != row.title else { return }
-        Task { await viewModel.setItemText(row.id, in: block.id, to: trimmed) }
     }
 }
 

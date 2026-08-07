@@ -30,8 +30,12 @@ import AppKit
 /// drag work once, and the architecture that fixes it is the one whose behaviour
 /// can be asserted with no window, no key status and no screen.
 struct VisionBoardView: View {
-    @State private var viewModel = VisionBoardViewModel()
+    @State private var viewModel: VisionBoardViewModel
     @State private var interaction = VisionInteraction()
+    /// One caret for the whole board, so the card and the overflow popover
+    /// cannot both think they own it — and so the rules for moving it live
+    /// somewhere a test can reach. See `VisionItemEditor`.
+    @State private var editor: VisionItemEditor
     /// Frames of every SwiftUI control inside a block that still handles its own
     /// clicks. Published by `.visionPassThrough()`, consumed by the pointer
     /// layer's `hitTest`.
@@ -40,6 +44,16 @@ struct VisionBoardView: View {
     /// I-beam over them instead of the block's open hand.
     @State private var textRects: [CGRect] = []
     @Bindable var router: AppRouter
+
+    /// Written by hand only because the editor needs the view model instance.
+    /// A property initialiser cannot reference another `@State`, so the pair is
+    /// built here and installed together.
+    init(router: AppRouter) {
+        let model = VisionBoardViewModel()
+        _viewModel = State(initialValue: model)
+        _editor = State(initialValue: VisionItemEditor(viewModel: model))
+        self.router = router
+    }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -202,6 +216,7 @@ struct VisionBoardView: View {
 
         return VisionBlockCard(
             viewModel: viewModel,
+            editor: editor,
             block: live,
             liveSize: interaction.liveSize(for: block),
             isSelected: interaction.selected == block.id,

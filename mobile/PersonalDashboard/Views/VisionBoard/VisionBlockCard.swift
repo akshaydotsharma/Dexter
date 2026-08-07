@@ -25,6 +25,10 @@ import AppKit
 /// than relocating it would not have been a fix.
 struct VisionBlockCard: View {
     let viewModel: VisionBoardViewModel
+    /// Where the caret is, board-wide. Not `@State` here: the rules for moving
+    /// it are ordering-sensitive and had to become testable — see
+    /// `VisionItemEditor`.
+    let editor: VisionItemEditor
     /// The block to render. During a resize the board passes a copy with the
     /// QUANTISED `w`/`h`, so everything derived from cells — the tier, the tile
     /// capacity, the dimension readout — recomputes from one source and changes
@@ -63,12 +67,6 @@ struct VisionBlockCard: View {
     @FocusState private var addFocused: Bool
     @State private var showingAllTiles = false
     @State private var showingAttach = false
-    /// The item currently holding a caret, or nil.
-    ///
-    /// Owned here rather than by the row so that starting an edit on one item
-    /// ends it on any other by construction, and so that an item created by the
-    /// `+` can be opened in edit by the code that created it.
-    @State private var editingItemID: UUID?
 
     /// Continuous while a resize is in hand or settling, the block's cell size
     /// otherwise. When the session finally clears, this expression flips from
@@ -386,7 +384,7 @@ struct VisionBlockCard: View {
                 .buttonStyle(.plain)
                 .visionPassThrough()
                 .macAnchoredPopover(isPresented: $showingAllTiles, preferredEdge: .minY) {
-                    VisionAllTilesPopover(viewModel: viewModel, block: block)
+                    VisionAllTilesPopover(viewModel: viewModel, editor: editor, block: block)
                 }
             }
 
@@ -404,15 +402,23 @@ struct VisionBlockCard: View {
     private func rowView(_ row: VisionRow, cursor: Int) -> some View {
         let isItem = !row.isTask
         var beginEdit: (() -> Void)?
-        var commitText: ((String) -> Void)?
+        var commitText: ((String, Bool) -> Void)?
+        var cancelEdit: (() -> Void)?
         var removeFromBoard: (() -> Void)?
 
         if isItem {
             // An item's text belongs to the block, so a click drops a caret in.
             // A task's belongs to Tasks, and renaming it from here would be the
             // board editing a record it only borrows.
-            beginEdit = { editingItemID = row.id }
-            commitText = { text in commitItem(row, to: text) }
+            beginEdit = { editor.begin(row.id) }
+            commitText = { text, continuing in
+                Task {
+                    await editor.commit(
+                        row.id, in: block.id, text: text, continuing: continuing
+                    )
+                }
+            }
+            cancelEdit = { Task { await editor.cancel(row.id, in: block.id) } }
         } else {
             removeFromBoard = {
                 Task { await viewModel.detach(taskID: row.id, from: block.id) }
@@ -422,13 +428,13 @@ struct VisionBlockCard: View {
         return VisionTileRow(
             row: row,
             showsDue: true,
-            isEditing: isItem && editingItemID == row.id,
+            isEditing: isItem && editor.editingID == row.id,
             onToggle: { toggle(row) },
             onBeginEdit: beginEdit,
             onCommit: commitText,
+            onCancel: cancelEdit,
             onRemoveFromBoard: removeFromBoard,
             onRemove: {
-                editingItemID = nil
                 Task {
                     if row.isTask {
                         await viewModel.deleteTask(row.id, from: block.id)
@@ -492,7 +498,7 @@ struct VisionBlockCard: View {
     private func visibleRows(limit: Int) -> [VisionRow] {
         var shown = Array(rows.prefix(limit))
         guard
-            let editingItemID,
+            let editingItemID = editor.editingID,
             !shown.contains(where: { $0.id == editingItemID }),
             let editing = rows.first(where: { $0.id == editingItemID })
         else { return shown }
@@ -545,29 +551,13 @@ struct VisionBlockCard: View {
         )
     }
 
-    /// Commit an edited item and leave edit mode.
-    ///
-    /// Empty text removes it; the service owns that rule so the `+` route, the
-    /// popover and this all agree about it. Unchanged text writes nothing —
-    /// clicking an item and clicking away should not bump `updatedAt` and make
-    /// the block look edited.
-    private func commitItem(_ row: VisionRow, to text: String) {
-        editingItemID = nil
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != row.title else { return }
-        Task { await viewModel.setItemText(row.id, in: block.id, to: trimmed) }
-    }
-
     /// Add an item and drop a caret straight into it.
     ///
     /// The row appears blank and in edit, which is the same motion as making a
     /// block. If the user types nothing and clicks away, committing empty text
     /// removes it again, so an abandoned add leaves the card exactly as it was.
     private func addItem() {
-        Task {
-            guard let id = await viewModel.addItem(to: block.id) else { return }
-            editingItemID = id
-        }
+        Task { await editor.addItem(to: block.id) }
     }
 
     /// The 400ms pause before a completed row sinks. Without it the row

@@ -37,9 +37,11 @@ struct VisionTileRow: View {
     let onToggle: () -> Void
     /// Click the title. Nil for a task, whose title is not the board's to change.
     let onBeginEdit: (() -> Void)?
-    /// Commit edited text. Empty text removes the item — see
-    /// `VisionBoardService.setItemText`.
-    let onCommit: ((String) -> Void)?
+    /// Report the final text. `continuing` is true when Return was pressed, so
+    /// the editor knows to open the next item. Items only.
+    let onCommit: ((_ text: String, _ continuing: Bool) -> Void)?
+    /// Escape. Items only.
+    let onCancel: (() -> Void)?
     /// Take a task off the board. Nil for an item, which has no board to leave.
     let onRemoveFromBoard: (() -> Void)?
     /// Destroy the row: the task itself, or the item.
@@ -48,6 +50,13 @@ struct VisionTileRow: View {
     @State private var hovering = false
     @State private var draft = ""
     @FocusState private var focused: Bool
+    /// Set by Escape, before the field resigns.
+    ///
+    /// Resigning fires the blur, and the blur is the commit path, so without
+    /// this Escape would save the edit it exists to abandon. Lives on the row
+    /// rather than in the editor because it is about ONE field's teardown, and
+    /// the row is torn down immediately afterwards — nothing outlives it.
+    @State private var cancelling = false
 
     private var completed: Bool { row.completed }
 
@@ -121,11 +130,27 @@ struct VisionTileRow: View {
                 placeholder: "Item",
                 text: $draft,
                 isFocused: Binding(get: { focused }, set: { focused = $0 }),
-                onSubmit: { onCommit(draft) },
+                // Return: save this line and open the next one. The editor
+                // decides whether there IS a next one — a blank line ends the
+                // run — so this only reports which key was pressed.
+                onSubmit: { onCommit(draft, true) },
                 // Clicking away commits too. A row left in edit because the
                 // user's attention moved elsewhere would be lost on the next
                 // reload, and losing typed text is never the safer default.
-                onFocusChange: { isFocused in if !isFocused { onCommit(draft) } },
+                //
+                // This also fires when the field is torn down by a re-render,
+                // which is how a row that has ALREADY lost the caret reports its
+                // text. `VisionItemEditor` is built for that: the write happens,
+                // the focus does not move.
+                onFocusChange: { isFocused in
+                    guard !isFocused else { return }
+                    guard !cancelling else { cancelling = false; return }
+                    onCommit(draft, false)
+                },
+                onCancel: {
+                    cancelling = true
+                    onCancel?()
+                },
                 placeholderColor: Tokens.mutedSoft
             )
             .onAppear {
