@@ -63,17 +63,81 @@ final class SchemaCoverageTests: XCTestCase {
     /// import — surfacing as "your backup is corrupt" long after the change.
     @MainActor
     func testEveryExportedModelHasAManifestCount() {
-        let counted = Set(DataImportService.actualCounts(for: .empty).keys)
         let exported = Set(DataArchive.exportedModels)
-        XCTAssertEqual(
-            exported.subtracting(counted), [],
-            "exported but not counted in DataImportService.actualCounts — every archive "
-            + "written by this build would be rejected on import"
+        // Both sides: the exporter writes the claim, the importer checks it. A
+        // model missing from EITHER map produces the same corrupt-archive error.
+        for (label, counted) in [
+            ("DataExportService.counts", Set(DataExportService.counts(for: .empty).keys)),
+            ("DataImportService.actualCounts", Set(DataImportService.actualCounts(for: .empty).keys)),
+        ] {
+            XCTAssertEqual(
+                exported.subtracting(counted), [],
+                "exported but not counted in \(label) — every archive written by this "
+                + "build would be rejected on import"
+            )
+            XCTAssertEqual(counted.subtracting(exported), [], "counted but not exported, in \(label)")
+        }
+    }
+
+    /// #446 shipped the board outside the archive, so a build without the model
+    /// destroyed eight blocks that no backup and no oplog carried (#449).
+    func testAVisionBlockIsCarriedByTheArchive() {
+        XCTAssertTrue(DataArchive.exportedModels.contains("LocalVisionBlock"))
+        XCTAssertTrue(SyncRecordMapper.syncedEntities.contains("LocalVisionBlock"))
+    }
+
+    /// The block survives the wire format with its layout, state and — the part
+    /// that would be easy to lose — its membership and items blobs byte for byte.
+    func testAVisionBlockRoundTripsThroughTheArchive() throws {
+        let members = [UUID(), UUID()]
+        let dto = DataArchive.VisionBlockDTO(
+            clientUUID: UUID(), title: "Ship #449", intent: "durability",
+            col: 3, row: 4, w: 6, h: 5, gridVersion: 1, state: "ongoing",
+            membersData: try JSONEncoder().encode(members.map(\.uuidString)),
+            notesData: Data(#"[{"id":"x","text":"write it down","done":false}]"#.utf8),
+            position: 2, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2),
+            deletedAt: nil, archivedAt: nil
         )
-        XCTAssertEqual(
-            counted.subtracting(exported), [],
-            "counted but not in exportedModels"
-        )
+        var payload = DataArchive.Payload.empty
+        payload.visionBlocks = [dto]
+
+        let encoded = try DataArchive.makeEncoder().encode(payload)
+        let decoded = try DataArchive.makeDecoder().decode(DataArchive.Payload.self, from: encoded)
+        let back = try XCTUnwrap(decoded.visionBlocks?.first)
+
+        XCTAssertEqual(back.clientUUID, dto.clientUUID)
+        XCTAssertEqual(back.title, dto.title)
+        XCTAssertEqual([back.col, back.row, back.w, back.h], [3, 4, 6, 5])
+        XCTAssertEqual(back.gridVersion, 1)
+        XCTAssertEqual(back.state, "ongoing")
+        XCTAssertEqual(back.membersData, dto.membersData, "membership must survive verbatim")
+        XCTAssertEqual(back.notesData, dto.notesData, "items must survive verbatim")
+        XCTAssertEqual(back.position, 2)
+    }
+
+    /// A block is one sync record, so a membership edit changes the record's
+    /// hash — otherwise adding a task to a board would look like no change and
+    /// would never sync, the trap `ListWithItems` exists to avoid.
+    func testChangingMembershipChangesTheSyncRecord() throws {
+        func record(members: [UUID]) throws -> SyncRecord {
+            var payload = DataArchive.Payload.empty
+            payload.visionBlocks = [DataArchive.VisionBlockDTO(
+                clientUUID: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+                title: "board", intent: nil, col: 0, row: 0, w: 4, h: 4,
+                gridVersion: 1, state: "idea",
+                membersData: try JSONEncoder().encode(members.map(\.uuidString)),
+                notesData: nil, position: nil,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2),
+                deletedAt: nil, archivedAt: nil
+            )]
+            return try XCTUnwrap(
+                SyncRecordMapper.records(from: payload).first { $0.entity == "LocalVisionBlock" }
+            )
+        }
+        let one = UUID(), two = UUID()
+        XCTAssertNotEqual(try record(members: [one]).contentHash, try record(members: [one, two]).contentHash)
+        XCTAssertEqual(try record(members: [one]).contentHash, try record(members: [one]).contentHash)
     }
 
     // MARK: - The rule actually catches things

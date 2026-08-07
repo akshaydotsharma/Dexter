@@ -194,6 +194,9 @@ final class DataImportService {
         case recurringExpenses
         case processedEmails
         case walletCards
+        /// #449. The board joins the archive here as well as in `commit`, or an
+        /// archive carrying only blocks would report "nothing to import".
+        case visionBlocks
 
         var id: String { rawValue }
 
@@ -215,6 +218,7 @@ final class DataImportService {
             case .recurringExpenses: return "Recurring expenses"
             case .processedEmails:   return "Processed emails"
             case .walletCards:       return "Wallet cards"
+            case .visionBlocks:      return "Vision blocks"
             }
         }
 
@@ -236,6 +240,7 @@ final class DataImportService {
             case .recurringExpenses: return "arrow.clockwise.circle"
             case .processedEmails:   return "envelope"
             case .walletCards:       return "wallet.pass"
+            case .visionBlocks:      return "square.grid.2x2"
             }
         }
     }
@@ -361,6 +366,7 @@ final class DataImportService {
         let existingMessageKeys    = try existingStringUUIDs(LocalProcessedEmail.self, keyPath: \.messageKey)
         let existingNoteImageUUIDs = try existingUUIDs(LocalNoteImage.self,          keyPath: \.clientUUID)
         let existingWalletCardIDs  = try existingUUIDs(LocalWalletCard.self,        keyPath: \.clientUUID)
+        let existingVisionBlockIDs = try existingUUIDs(LocalVisionBlock.self,       keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -390,6 +396,7 @@ final class DataImportService {
         record(.recurringExpenses, (payload.recurringExpenses ?? []).map(\.clientUUID), existing: existingRecurringUUIDs)
         record(.processedEmails,   (payload.processedEmails ?? []).map(\.messageKey),  existing: existingMessageKeys)
         record(.walletCards,       (payload.walletCards ?? []).map(\.clientUUID),      existing: existingWalletCardIDs)
+        record(.visionBlocks,      (payload.visionBlocks ?? []).map(\.clientUUID),     existing: existingVisionBlockIDs)
 
         return (skip, repair)
     }
@@ -440,6 +447,7 @@ final class DataImportService {
         let existingNoteImageUUIDs  = mode == .replaceMatching ? [] : try existingUUIDs(LocalNoteImage.self,      keyPath: \.clientUUID)
         let existingTaskTicketUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalTaskTicket.self,     keyPath: \.clientUUID)
         let existingWalletCardUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalWalletCard.self,     keyPath: \.clientUUID)
+        let existingVisionBlockUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalVisionBlock.self,   keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
@@ -700,6 +708,34 @@ final class DataImportService {
                 modelContext.insert(card)
             }
 
+            // #449: vision board blocks. No files to restore — a block is rows
+            // only. The two blobs are assigned after construction because the
+            // initialiser takes decoded arrays, and going through them would
+            // re-encode: a member id or a `VisionItem` field this build does not
+            // know would be dropped by the round trip, which is precisely the
+            // lossy-restore shape #366 had to add a repair path for.
+            for dto in payload.visionBlocks ?? [] where !existingVisionBlockUUIDs.contains(dto.clientUUID) {
+                let block = LocalVisionBlock(
+                    clientUUID: dto.clientUUID,
+                    title: dto.title,
+                    intent: dto.intent,
+                    col: dto.col,
+                    row: dto.row,
+                    w: dto.w,
+                    h: dto.h,
+                    gridVersion: dto.gridVersion,
+                    state: BlockState(rawValue: dto.state) ?? .default,
+                    position: dto.position,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt,
+                    deletedAt: dto.deletedAt,
+                    archivedAt: dto.archivedAt
+                )
+                block.membersData = dto.membersData
+                block.notesData = dto.notesData
+                modelContext.insert(block)
+            }
+
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
                 let restoredPath = try restoreReceipt(for: dto, archiveEntries: preview.entries)
                 if let restoredPath { writtenReceiptPaths.append(restoredPath) }
@@ -933,6 +969,7 @@ final class DataImportService {
         try deleteMatching(LocalEvent.self,          ids: Set((payload.events ?? []).map(\.clientUUID)),  key: \.clientUUID)
         try deleteMatching(LocalStatementImport.self, ids: Set((payload.statementImports ?? []).map(\.clientUUID)), key: \.clientUUID)
         try deleteMatching(LocalWalletCard.self,      ids: Set((payload.walletCards ?? []).map(\.clientUUID)),     key: \.clientUUID)
+        try deleteMatching(LocalVisionBlock.self,     ids: Set((payload.visionBlocks ?? []).map(\.clientUUID)),    key: \.clientUUID)
 
         // String-keyed models.
         try deleteMatching(LocalExpense.self,   ids: Set(payload.expenses.map(\.clientUUID)), key: \.clientUUID)
@@ -1031,6 +1068,7 @@ final class DataImportService {
             "LocalStatementImport": payload.statementImports?.count ?? 0,
             "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
             "LocalWalletCard":      payload.walletCards?.count ?? 0,
+            "LocalVisionBlock":     payload.visionBlocks?.count ?? 0,
         ]
     }
 

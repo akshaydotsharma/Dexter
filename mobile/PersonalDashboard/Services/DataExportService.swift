@@ -220,6 +220,11 @@ final class DataExportService {
         let taskTickets = try modelContext.fetch(FetchDescriptor<LocalTaskTicket>())
         // #398: standalone wallet cards.
         let walletCards = try modelContext.fetch(FetchDescriptor<LocalWalletCard>())
+        // #449: vision board blocks. #446 shipped the board outside the archive,
+        // so a restore returned an empty board while every other surface came
+        // back — and a build without the model could destroy it with no copy
+        // anywhere.
+        let visionBlocks = try modelContext.fetch(FetchDescriptor<LocalVisionBlock>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -258,6 +263,7 @@ final class DataExportService {
         let noteImageDTOs: [DataArchive.NoteImageDTO] = noteImages.map(Self.dto)
         let taskTicketDTOs: [DataArchive.TaskTicketDTO] = taskTickets.map(Self.dto)
         let walletCardDTOs: [DataArchive.WalletCardDTO] = walletCards.map(Self.dto)
+        let visionBlockDTOs: [DataArchive.VisionBlockDTO] = visionBlocks.map(Self.dto)
 
         return DataArchive.Payload(
             tasks: taskDTOs,
@@ -279,13 +285,19 @@ final class DataExportService {
             // images rather than at the end.
             walletCards: walletCardDTOs,
             noteImages: noteImageDTOs,
-            taskTickets: taskTicketDTOs
+            taskTickets: taskTicketDTOs,
+            visionBlocks: visionBlockDTOs
         )
     }
 
     /// #319: per-model row counts written into the manifest and asserted on
     /// import before anything is written. Keys match `DataArchive.exportedModels`.
-    private static func counts(for payload: DataArchive.Payload) -> [String: Int] {
+    /// Not private so `SchemaCoverageTests` can assert this key set against
+    /// `DataArchive.exportedModels` (#449). A model claimed in the manifest but
+    /// missing here has no count, and `DataImportService.verifyManifestClaims`
+    /// rejects that archive outright — so the omission would surface as "your
+    /// backup is corrupt" on the next restore rather than at the change.
+    static func counts(for payload: DataArchive.Payload) -> [String: Int] {
         [
             "LocalTodo":            payload.tasks.count,
             "LocalTaskTicket":      payload.taskTickets?.count ?? 0,
@@ -303,6 +315,7 @@ final class DataExportService {
             "LocalStatementImport": payload.statementImports?.count ?? 0,
             "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
             "LocalWalletCard":      payload.walletCards?.count ?? 0,
+            "LocalVisionBlock":     payload.visionBlocks?.count ?? 0,
         ]
     }
 
@@ -562,6 +575,30 @@ final class DataExportService {
             gate: item.gate,
             venue: item.venue,
             ticketMetaJSON: item.ticketMetaJSON
+        )
+    }
+
+    /// #449. Blobs are carried verbatim (`membersData`, `notesData`) rather than
+    /// decoded and re-encoded, so a `VisionItem` field added later still round
+    /// trips through a build that predates it.
+    private static func dto(_ block: LocalVisionBlock) -> DataArchive.VisionBlockDTO {
+        DataArchive.VisionBlockDTO(
+            clientUUID: block.clientUUID,
+            title: block.title,
+            intent: block.intent,
+            col: block.col,
+            row: block.row,
+            w: block.w,
+            h: block.h,
+            gridVersion: block.gridVersion,
+            state: block.state,
+            membersData: block.membersData,
+            notesData: block.notesData,
+            position: block.position,
+            createdAt: block.createdAt,
+            updatedAt: block.updatedAt,
+            deletedAt: block.deletedAt,
+            archivedAt: block.archivedAt
         )
     }
 

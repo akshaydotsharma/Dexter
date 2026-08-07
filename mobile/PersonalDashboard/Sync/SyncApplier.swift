@@ -280,6 +280,12 @@ struct SyncApplier {
             case "LocalWalletCard":
                 payload.walletCards = (payload.walletCards ?? [])
                     + [try decoder.decode(DataArchive.WalletCardDTO.self, from: data)]
+            // #449. A peer still on a build that predates the model hits the
+            // `default` arm below and skips these ops with a log line, which is
+            // the graceful degrade #447 asks for.
+            case "LocalVisionBlock":
+                payload.visionBlocks = (payload.visionBlocks ?? [])
+                    + [try decoder.decode(DataArchive.VisionBlockDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -348,6 +354,9 @@ struct SyncApplier {
         case "LocalEvent":           return try delete(LocalEvent.self, uuid: recordID, key: \.clientUUID)
         case "LocalStatementImport": return try delete(LocalStatementImport.self, uuid: recordID, key: \.clientUUID)
         case "LocalWalletCard":      return try delete(LocalWalletCard.self, uuid: recordID, key: \.clientUUID)
+        // Deleting a block deletes the block only. Its members are `LocalTodo`
+        // rows the board borrows, and nothing here touches them (#447).
+        case "LocalVisionBlock":     return try delete(LocalVisionBlock.self, uuid: recordID, key: \.clientUUID)
         case "LocalExpense":         return try deleteString(LocalExpense.self, id: recordID, key: \.clientUUID)
         case "RecurringExpense":     return try deleteString(RecurringExpense.self, id: recordID, key: \.clientUUID)
         case "LocalProcessedEmail":  return try deleteString(LocalProcessedEmail.self, id: recordID, key: \.messageKey)
