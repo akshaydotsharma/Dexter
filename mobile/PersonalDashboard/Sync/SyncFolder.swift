@@ -588,12 +588,42 @@ struct SyncFolder {
             return FileManager.default.fileExists(atPath: url.path)
         }
 
-        let deadline = Date().addingTimeInterval(timeout)
+        let started = Date()
+        let deadline = started.addingTimeInterval(timeout)
         while Date() < deadline {
-            if isMaterialized(url) { return true }
+            if isMaterialized(url) {
+                // Logged because this number is the only way to tell iCloud being
+                // slow from a bug in this code. Without it a pass that waited
+                // three seconds and one that found the file already local are
+                // indistinguishable, and so are a slow delivery and a broken
+                // reader (#451).
+                SyncLog.line(String(
+                    format: "SyncFolder: %@ materialised after %.1fs",
+                    url.lastPathComponent, Date().timeIntervalSince(started)
+                ))
+                return true
+            }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return isMaterialized(url)
+    }
+
+    /// Ask iCloud to start downloading every one of these, without waiting.
+    ///
+    /// The reader applies segments strictly in sequence order, so it can only
+    /// consume the first one that is actually down. That is correct, but on its
+    /// own it means nothing ever asks for the SECOND segment until the first has
+    /// been applied — a peer several segments behind then needs one pass each,
+    /// up to a poll interval apart. Requesting them all up front costs nothing
+    /// and lets iCloud fetch them in parallel while we wait for the first (#451).
+    ///
+    /// Failures are ignored on purpose: a non-ubiquitous path (a plain folder in
+    /// a test) or a file that is already local both throw here and both mean
+    /// "nothing to download".
+    static func requestDownloads(_ urls: [URL]) {
+        for url in urls where !isMaterialized(url) {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+        }
     }
 
     private static func isMaterialized(_ url: URL) -> Bool {
