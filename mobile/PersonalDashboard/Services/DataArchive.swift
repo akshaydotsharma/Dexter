@@ -551,8 +551,24 @@ enum DataArchive {
     ///   import (#396). It maps Notes-internal ids to notes we created, which is
     ///   provenance for one Mac's library rather than anything the user authored.
     ///   The notes themselves export normally.
+    /// - The four `Sync*` sidecars (#348): per-device sync bookkeeping. Shipping
+    ///   them would be actively wrong, not merely redundant. `SyncShadow` records
+    ///   what THIS device has published, so a restored copy of another device's
+    ///   shadow would convince this one that changes it never made were already
+    ///   sent, and they would never be emitted. `SyncDeviceState` carries the
+    ///   device identity and Lamport clock, `SyncPeerCursor` how far this device
+    ///   has read each peer, and `SyncTombstone` its own delete log.
+    ///
+    /// ⚠️ This list is half of a contract. `StoreSchemaGuard.archiveCoverageGap`
+    /// asserts that every entry in `SwiftDataStore.schemaModels` is either
+    /// exported or named here, so "not backed up" is always a decision somebody
+    /// wrote down. The four `Sync*` names were added in #449 for exactly that
+    /// reason: they were correctly not exported but were not DECLARED, so the
+    /// assertion could not be written, and `LocalVisionBlock` escaped the archive
+    /// unnoticed until its rows were destroyed.
     static let excludedModels = [
-        "LocalFXRate", "LocalEmailIngestLog", "AppleNotesImportRecord"
+        "LocalFXRate", "LocalEmailIngestLog", "AppleNotesImportRecord",
+        "SyncDeviceState", "SyncShadow", "SyncTombstone", "SyncPeerCursor",
     ]
 
     /// Every model this archive format carries, used for the manifest's claimed

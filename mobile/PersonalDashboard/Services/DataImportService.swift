@@ -1006,7 +1006,14 @@ final class DataImportService {
 
     /// Counts derived from the payload itself, compared against the manifest's
     /// claims. Keys match `DataArchive.exportedModels`.
-    private static func actualCounts(for payload: DataArchive.Payload) -> [String: Int] {
+    ///
+    /// Not private so `SchemaCoverageTests` can assert that key set against
+    /// `exportedModels` (#449). A model added to `exportedModels` but missed
+    /// here would be claimed by every manifest and counted by none, which
+    /// `verifyManifestClaims` rejects as a corrupt archive — so the omission
+    /// would surface as "your backup is broken" on the next restore, long after
+    /// the change that caused it.
+    static func actualCounts(for payload: DataArchive.Payload) -> [String: Int] {
         [
             "LocalTodo":            payload.tasks.count,
             "LocalTaskTicket":      payload.taskTickets?.count ?? 0,

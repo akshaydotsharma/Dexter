@@ -133,6 +133,8 @@ targets:
     sources:
       - path: PersonalDashboard/Models
       - path: PersonalDashboard/Cache/SwiftDataStore.swift
+      # Refuses to open a store holding entities this build does not know (#449).
+      - path: PersonalDashboard/Cache/StoreSchemaGuard.swift
       - path: PersonalDashboard/Cache/StoreChange.swift
       - path: PersonalDashboard/Design
       - path: PersonalDashboard/App/AppRouter.swift

@@ -273,7 +273,7 @@ final class SwiftDataStore {
     /// silent fallback would send a run that asked for a throwaway store
     /// straight at the live one, which is precisely the accident the override
     /// is meant to prevent. Failing to launch touches nobody's data.
-    private static func resolveStoreURL(default defaultURL: URL) -> URL {
+    nonisolated private static func resolveStoreURL(default defaultURL: URL) -> URL {
         #if DEBUG
         // Resolved through the shared seam, which does the three-way itself:
         // absent returns nil, present-but-unusable traps. The distinction is
@@ -329,7 +329,7 @@ final class SwiftDataStore {
     /// They exist precisely so sync does not have to touch the 15 models above
     /// them. Adding a model type is a safe lightweight migration; altering a
     /// live one is not.
-    static let schemaModels: [any PersistentModel.Type] = [
+    nonisolated static let schemaModels: [any PersistentModel.Type] = [
         LocalTodo.self,
         // Ticket attachments for a task (#399). A sidecar for the same reason the
         // Sync types below are: adding a model is a safe lightweight migration,
@@ -369,24 +369,47 @@ final class SwiftDataStore {
         SyncPeerCursor.self,
     ]
 
+    /// The default store location. One expression, called from both the
+    /// bootstrap below and `storeURLForCurrentProcess()`, so a script asking
+    /// which store this build would open cannot be told a different answer from
+    /// the one the app uses.
+    ///
+    /// `create: true` is load-bearing on a fresh simulator, where Application
+    /// Support does not exist yet and CoreData logs a noisy stat failure on
+    /// first run.
+    nonisolated private static func defaultStoreURL() throws -> URL {
+        try FileManager.default
+            .url(for: .applicationSupportDirectory, in: .userDomainMask,
+                 appropriateFor: nil, create: true)
+            .appendingPathComponent("PersonalDashboard.sqlite")
+    }
+
+    /// The store this process would open, resolved without touching `shared`.
+    ///
+    /// Exists for `StoreSchemaGuard`'s check mode (#449), which has to answer
+    /// "would this build damage that store" WITHOUT opening a container — since
+    /// opening it is the damage.
+    nonisolated static func storeURLForCurrentProcess() -> URL {
+        guard let defaultURL = try? defaultStoreURL() else {
+            fatalError("Cannot resolve the Application Support directory")
+        }
+        return resolveStoreURL(default: defaultURL)
+    }
+
     private init() {
         do {
             let schema = Schema(Self.schemaModels)
-            // SwiftData defaults the store URL to Application Support, but
-            // on a fresh simulator that directory doesn't exist yet and
-            // CoreData logs a noisy stat failure on first run. Pre-creating
-            // the directory and pointing the configuration at an explicit
-            // URL avoids both problems.
-            let supportDir = try FileManager.default.url(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            )
-            let defaultURL = supportDir.appendingPathComponent("PersonalDashboard.sqlite")
+            let defaultURL = try Self.defaultStoreURL()
             let storeURL = Self.resolveStoreURL(default: defaultURL)
             Self.isUsingOverrideStore = (storeURL != defaultURL)
             Self.warnIfOverrideStore(storeURL)
+            // ⚠️ BEFORE the container, because after it the damage is done (#449).
+            // A build whose schema lacks an entity the store holds drops that
+            // entity and every row in it, with no error — the accident that lost
+            // the #446 vision blocks. Exits with the entity named rather than
+            // proceeding.
+            StoreSchemaGuard.refuseIfDestructive(storeURL: storeURL)
+            StoreSchemaGuard.reportArchiveCoverageGapInDebug()
             let configuration = ModelConfiguration(
                 schema: schema,
                 url: storeURL
