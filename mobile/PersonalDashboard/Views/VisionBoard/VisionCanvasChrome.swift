@@ -186,6 +186,45 @@ struct VisionOriginSlot: View {
     }
 }
 
+// MARK: - Displacement ghost
+
+/// Where a block the cascade is pushing WOULD end up, drawn while the block
+/// itself stays exactly where it is.
+///
+/// This is the whole of the preview since 2026-08-08, and it reverses what the
+/// board did first. Displaced blocks used to slide to their destination live
+/// under the pointer, which meant the board had already rearranged itself before
+/// you had decided anything: *"if I have not released the mouse, that means I
+/// have not expanded, I am just checking. It should show me just the shadow
+/// behaviour of how the new box will move and where it will move rather than
+/// actually moving it."*
+///
+/// A dashed accent hairline at 45%, deliberately quieter than
+/// `VisionTargetSlot`'s full-strength accent and 10% fill. Same family, because
+/// both are the system answering you; different weight, because one is the thing
+/// in your hand and the other is a consequence of it. No fill at all: a wash
+/// here would read as a second block rather than as the outline of a move.
+///
+/// The solver is unchanged. Only what gets drawn from its output moved.
+struct VisionDisplacementGhost: View {
+    let slot: VisionBoardLayout.Slot
+
+    var body: some View {
+        let size = VisionGrid.blockSize(columns: slot.w, rows: slot.h)
+        let origin = VisionGrid.origin(col: slot.col, row: slot.row)
+
+        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            .stroke(
+                Tokens.accentVision.opacity(0.45),
+                style: StrokeStyle(lineWidth: 0.5, dash: [5, 4])
+            )
+            .frame(width: size.width, height: size.height)
+            .offset(x: origin.x, y: origin.y)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Resize target
 
 /// Where a resize will land, while the block's own edge is still following the

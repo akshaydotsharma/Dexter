@@ -10,10 +10,19 @@ import AppKit
 /// makes tiles appear under your hand, which is the point of the exercise and
 /// must not be deferred to drop.
 ///
-/// The card also owns its keyboard behaviour. Arrow keys move it, ⌥-arrows
-/// resize it, Return enters the tile cursor. That lives here rather than in the
-/// board view because the tile cursor is card-local state, and splitting the key
-/// handling from the state it drives is how the two drift.
+/// The card draws and nothing else. Every click that lands on its chrome — the
+/// drag, the resize, selection, the click on empty canvas — belongs to
+/// `VisionPointerView`, which sits on top of the whole canvas. Its own
+/// interactive children keep their clicks by publishing their frames with
+/// `.visionPassThrough()`, which is what makes the layer above transparent over
+/// them.
+///
+/// The card used to be `.focusable()` and to own the keyboard. Both are gone.
+/// `.focusable()` is the prime suspect for having eaten the block's mouse-down
+/// all along — SwiftUI handles a click on a focusable view through its own
+/// responder path, before any gesture sees it — and the keyboard moved with it
+/// to `VisionPointerView.keyDown`, because removing an accessible route rather
+/// than relocating it would not have been a fix.
 struct VisionBlockCard: View {
     let viewModel: VisionBoardViewModel
     /// The block to render. During a resize the board passes a copy with the
@@ -28,36 +37,25 @@ struct VisionBlockCard: View {
     /// flicker on every boundary.
     let liveSize: CGSize?
     let isSelected: Bool
+    /// Whether the pointer is over this block. Supplied by the board rather than
+    /// read with `.onHover`, because the pointer layer covers every card and
+    /// AppKit, not SwiftUI, is what now knows where the mouse is.
+    let isHovered: Bool
     let isDragging: Bool
     let isResizing: Bool
     /// True while a tile from another block is being dragged over this one.
     let isDropTarget: Bool
+    /// Keyboard cursor within this block's tile stack, or nil when the cursor is
+    /// elsewhere. Lives in `VisionInteraction` now that the key handling does.
+    let tileCursor: Int?
     /// A block created a moment ago opens with its title selected, so naming it
     /// is the same motion as making it. The card consumes the flag on appear.
     let beginsInTitleEdit: Bool
     let onTitleEditBegan: () -> Void
 
-    /// Move by whole cells. The board resolves the target against the rest of
-    /// the board and persists it; the card only says which way.
-    let onNudge: (Int, Int) -> Void
-    /// Resize by whole cells, same split.
-    let onResizeBy: (Int, Int) -> Void
-    /// Live corner drag, in points, and its end.
-    let onResizeDrag: (CGSize) -> Void
-    let onResizeEnd: () -> Void
-    /// Called when this card takes keyboard focus. NOT called from a tap — see
-    /// the note on `contentShape` in `body` for why a card-wide tap recogniser
-    /// cannot live here.
-    let onSelect: () -> Void
-
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var hovering = false
-    /// Keyboard focus on the card itself. Mirrored out to the board as
-    /// selection, because this card disables its focus ring on the grounds that
-    /// the selection treatment IS the focus ring — a claim that was not true
-    /// until something actually joined the two.
-    @FocusState private var focused: Bool
+    private var hovering: Bool { isHovered }
     @State private var editingTitle = false
     @State private var titleDraft = ""
     @FocusState private var titleFocused: Bool
@@ -65,9 +63,6 @@ struct VisionBlockCard: View {
     @FocusState private var addFocused: Bool
     @State private var showingAllTiles = false
     @State private var showingAttach = false
-    /// Keyboard cursor within the tile stack. Nil when the block itself has
-    /// focus; an index once Return has been pressed to "enter" the block.
-    @State private var tileCursor: Int?
 
     /// Continuous while a resize is in hand or settling, the block's cell size
     /// otherwise. When the session finally clears, this expression flips from
@@ -106,58 +101,13 @@ struct VisionBlockCard: View {
         // that grows on hover makes a claim it does not mean, and on a dense
         // board the growth would overlap its neighbours.
         .animation(motion(.easeOut(duration: 0.12)), value: hovering)
-        .onHover { hovering = $0 }
-        .onContinuousHover { phase in
-            // `.set()` on every mouse move rather than push/pop. A push that
-            // loses its matching pop (a hover-out swallowed during a drag, a
-            // view torn down mid-hover) leaves the whole app holding an open
-            // hand, and there is no way back from that without another push.
-            switch phase {
-            case .active:
-                (isDragging ? NSCursor.closedHand : NSCursor.openHand).set()
-            case .ended:
-                NSCursor.arrow.set()
-            }
-        }
-        .focusable()
-        .focused($focused)
-        .focusEffectDisabled()   // the selection treatment IS the focus ring
-        // Which is only true if something joins them. Clicking a focusable view
-        // focuses it, so this is also a selection route that involves no gesture
-        // recogniser at all and therefore cannot compete with the board's drag —
-        // the belt to the tap's braces. It is worth having on its own merits
-        // regardless: Tab-focusing a block used to show nothing whatsoever,
-        // because the ring is off and nothing else had been told.
-        //
-        // Gaining focus selects; losing it does not deselect. Clicking empty
-        // canvas is the deselect, and a block should not lose its selection just
-        // because the pointer moved into its own title field.
-        .onChange(of: focused) { _, isFocused in if isFocused { onSelect() } }
-        .onKeyPress(phases: .down) { handleKey($0) }
-        // The hit shape for the board's drag, and deliberately NOT a tap.
-        //
-        // Selecting a block is a click, so a card-wide `.onTapGesture` here is
-        // the obvious place to put it — and it is the reason the block could not
-        // be moved at all (#446 follow-up). The move gesture lives on the board,
-        // one level OUT from this card, attached with `.gesture`, which Apple
-        // documents as *lower* precedence than gestures defined by the view and
-        // its subviews. A tap spanning the whole card is therefore a subview
-        // recogniser that outranks the drag over every point the drag cares
-        // about, and it claimed the sequence before the drag could reach its
-        // 4pt threshold.
-        //
-        // Selection now has two routes, neither of which can outrank the drag:
-        // the focus change above, and a tap declared AFTER the drag in
-        // `VisionBoardView.blockView` so that it ranks below it. Two, because
-        // which of a same-level tap and drag actually fires is the very thing
-        // this bug proves we cannot predict from the outside, and both routes
-        // set the same id, so a double fire is a no-op.
-        //
-        // Anything genuinely card-local — the title, the tiles, the grip, the
-        // menu — keeps its own recogniser here and still outranks the board's
-        // drag, which is the same precedence rule read the other way round, and
-        // is what keeps the resize grip's own drag safe.
-        .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        // No gesture and no `contentShape`. The card is inert to the pointer;
+        // `VisionPointerView` above it resolves every click against
+        // `VisionHitTest` and drives `VisionInteraction` directly. Nothing
+        // card-spanning may be added back here — a recogniser on the card is
+        // exactly what made the drag unreachable in the first place, and now it
+        // would simply never fire, which is worse because it would look like a
+        // wiring mistake rather than a precedence one.
         .onAppear {
             guard beginsInTitleEdit else { return }
             beginTitleEdit()
@@ -260,6 +210,7 @@ struct VisionBlockCard: View {
                 fontName: "Inter-SemiBold"
             )
             .frame(height: VisionBlockMetrics.titleLine)
+            .visionPassThrough()
         } else {
             Text(block.title)
                 .font(.edHeading)
@@ -268,8 +219,10 @@ struct VisionBlockCard: View {
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 // Single click, caret lands in it. Never a long press, never a
-                // context-menu Rename.
+                // context-menu Rename. The tap survives the pointer layer above
+                // because the title publishes its own rect.
                 .onTapGesture { beginTitleEdit() }
+                .visionPassThrough()
         }
     }
 
@@ -307,7 +260,12 @@ struct VisionBlockCard: View {
         .menuIndicator(.hidden)
         .frame(width: VisionBlockMetrics.ellipsisSlot, height: VisionBlockMetrics.ellipsisSlot)
         .opacity(hovering ? 1 : 0)
-        .allowsHitTesting(hovering)
+        // The slot is always hittable now, not gated on `hovering` the way it
+        // was. Its rect is published to the pointer layer unconditionally — a
+        // dead zone that only sometimes accepts a click is worse than an
+        // invisible control, and you cannot reach this corner without hovering
+        // it, which is what makes it visible.
+        .visionPassThrough()
         .accessibilityLabel("Block actions")
         .macAnchoredPopover(isPresented: $showingAttach, preferredEdge: .minY) {
             VisionAttachTaskPopover(viewModel: viewModel, blockID: block.id) {
@@ -403,6 +361,10 @@ struct VisionBlockCard: View {
                         }
                     }
                     .draggable(todo.id.uuidString)
+                    // The whole row: the checkbox, the context menu, and the
+                    // drag that moves a task to another block all belong to
+                    // SwiftUI and all need the pointer layer to step aside.
+                    .visionPassThrough()
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
@@ -415,6 +377,7 @@ struct VisionBlockCard: View {
                             .foregroundStyle(Tokens.muted)
                     }
                     .buttonStyle(.plain)
+                    .visionPassThrough()
                     .macAnchoredPopover(isPresented: $showingAllTiles, preferredEdge: .minY) {
                         VisionAllTilesPopover(
                             viewModel: viewModel,
@@ -519,6 +482,7 @@ struct VisionBlockCard: View {
                 addFocused ? Tokens.surface2 : Color.clear,
                 in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
             )
+            .visionPassThrough()
         }
         .padding(.top, Space.sm)
     }
@@ -578,24 +542,20 @@ struct VisionBlockCard: View {
     /// public diagonal resize cursor, and `.crosshair` is wrong (it means
     /// "precise point", not "drag corner"). The visible glyph carries the
     /// affordance.
+    ///
+    /// Purely a glyph now: `allowsHitTesting(false)` and no gesture at all. The
+    /// grip's hit target is `VisionHitTest.gripRect(in:)`, derived from the same
+    /// `resizeTarget` and `Space.sm` this padding uses, so what you can see and
+    /// what you can grab are one constant rather than two that can drift apart
+    /// unnoticed.
     private var resizeGrip: some View {
         ResizeGripShape()
             .stroke(Tokens.mutedSoft, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
             .frame(width: VisionBlockMetrics.resizeTarget, height: VisionBlockMetrics.resizeTarget)
-            .contentShape(Rectangle())
             .padding(Space.sm)
             .opacity(hovering || isResizing ? 1 : 0)
             .animation(motion(.easeOut(duration: 0.12)), value: hovering)
-            // `.global`, not the default `.local`. The grip is pinned to the
-            // card's bottom-trailing corner, so as the card grows the grip's own
-            // coordinate space moves with it — in local space the pointer would
-            // appear to stop moving and the resize would fight itself. Global
-            // space is pure pointer travel.
-            .gesture(
-                DragGesture(minimumDistance: 2, coordinateSpace: .global)
-                    .onChanged { onResizeDrag($0.translation) }
-                    .onEnded { _ in onResizeEnd() }
-            )
+            .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
 
@@ -612,56 +572,6 @@ struct VisionBlockCard: View {
                 .background(Tokens.surface.opacity(0.9), in: Capsule())
                 .overlay(Capsule().stroke(Tokens.border, lineWidth: 0.5))
                 .accessibilityHidden(true)
-        }
-    }
-
-    // MARK: - Keyboard
-
-    /// Arrows move, ⌥-arrows resize: the accessible route to both drag and
-    /// resize, and the reason the resize handle itself is
-    /// `accessibilityHidden`.
-    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        let resizing = press.modifiers.contains(.option)
-
-        switch press.key {
-        case .upArrow:
-            if let cursor = tileCursor { tileCursor = max(0, cursor - 1); return .handled }
-            resizing ? onResizeBy(0, -1) : onNudge(0, -1)
-            return .handled
-        case .downArrow:
-            if let cursor = tileCursor { tileCursor = min(tiles.count - 1, cursor + 1); return .handled }
-            resizing ? onResizeBy(0, 1) : onNudge(0, 1)
-            return .handled
-        case .leftArrow:
-            guard tileCursor == nil else { return .ignored }
-            resizing ? onResizeBy(-1, 0) : onNudge(-1, 0)
-            return .handled
-        case .rightArrow:
-            guard tileCursor == nil else { return .ignored }
-            resizing ? onResizeBy(1, 0) : onNudge(1, 0)
-            return .handled
-        case .`return`:
-            // Enter the block: focus moves to its first tile. From there Return
-            // and Space toggle, up and down walk the stack, Escape comes back.
-            if let cursor = tileCursor, tiles.indices.contains(cursor) {
-                toggle(tiles[cursor])
-            } else if !tiles.isEmpty {
-                tileCursor = 0
-            }
-            return .handled
-        case .space:
-            if let cursor = tileCursor, tiles.indices.contains(cursor) {
-                toggle(tiles[cursor])
-            } else if !tiles.isEmpty {
-                tileCursor = 0
-            }
-            return .handled
-        case .escape:
-            guard tileCursor != nil else { return .ignored }
-            tileCursor = nil
-            return .handled
-        default:
-            return .ignored
         }
     }
 
