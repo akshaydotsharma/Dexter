@@ -842,18 +842,42 @@ private extension View {
 /// `shadowSm` at rest, `shadowMd` on hover, `shadowLg` while dragging. A
 /// modifier rather than three chained conditionals so the card body reads as
 /// one statement about elevation.
-private struct BlockShadow: ViewModifier {
+/// Internal rather than private so `BlockShadowRebuildTests` can host it. The
+/// property it has to keep — that flipping `hovering` does not rebuild what it
+/// wraps — is not visible in this file and cost a whole afternoon to find.
+struct BlockShadow: ViewModifier {
     let dragging: Bool
     let hovering: Bool
 
+    /// The same three levels as `shadowLg` / `shadowMd` / `shadowSm`, as values
+    /// rather than as branches. See `body`.
+    private var level: (opacity: Double, radius: CGFloat, y: CGFloat) {
+        if dragging { return (0.10, 20, 10) }
+        if hovering { return (0.08, 6, 4) }
+        return (0.04, 2, 1)
+    }
+
+    /// `content` appears EXACTLY ONCE, and that is not a style preference.
+    ///
+    /// This used to read `if dragging { content.shadowLg() } else if hovering {
+    /// … }`, which puts `content` in three arms of a `_ConditionalContent`. When
+    /// `hovering` flips, SwiftUI swaps arms — and swapping arms means destroying
+    /// the subtree in the old one and building a fresh copy in the new one. The
+    /// whole card, every time the pointer arrives or leaves.
+    ///
+    /// Almost everything survives that invisibly, because SwiftUI views are
+    /// values and rebuilding them is cheap. `NSViewRepresentable` does not: the
+    /// rebuild ran `dismantleNSView` on the coordinator holding the open
+    /// `NSPopover`, which closed it without clearing the binding, and the next
+    /// re-render opened a new one. That is the reported *"I see the pop-up and
+    /// then it disappears; when I move my mouse it comes back"* — measured, at
+    /// `makeNSView` 3.032 / `dismantleNSView` 3.184 against a probe that did
+    /// nothing but set `hoveredBlock`.
+    ///
+    /// Interpolating the values instead also makes the shadow animate with the
+    /// card's 0.12s hover animation rather than snapping between three presets.
     func body(content: Content) -> some View {
-        if dragging {
-            content.shadowLg()
-        } else if hovering {
-            content.shadowMd()
-        } else {
-            content.shadowSm()
-        }
+        content.shadow(color: .black.opacity(level.opacity), radius: level.radius, x: 0, y: level.y)
     }
 }
 

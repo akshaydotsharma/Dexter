@@ -198,8 +198,9 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
             if let anchor, let window = anchor.window, event.window === window {
                 onAnchor = anchor.bounds.contains(anchor.convert(event.locationInWindow, from: nil))
             }
+            let inside = event.window === popover.contentViewController?.view.window
             guard PopoverDismissal.shouldClose(
-                clickedInsidePopover: event.window === popover.contentViewController?.view.window,
+                clickedInsidePopover: inside,
                 clickedOnAnchor: onAnchor
             ) else { return }
             popover.performClose(nil)

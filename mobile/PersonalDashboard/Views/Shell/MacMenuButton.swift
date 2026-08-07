@@ -15,12 +15,17 @@ import AppKit
 ///    leaving a menu floating with nothing to say where it came from. Reported
 ///    as *"the three dots disappear when I click on it"*.
 /// 2. **A menu action must not run inside the menu's own tracking loop.**
-///    "Attach existing task…" opens an `NSPopover`, and a popover shown while
-///    the menu is still dismissing is torn down with it: it appeared, vanished,
-///    and came back on the next mouse move when a re-render found the binding
-///    still true. Reported as *"the popover shows and then hides and when I move
-///    my mouse the popover comes back"*. Here the chosen action runs AFTER
-///    `popUp` returns, which is after the menu is off screen.
+///    Nothing renders while `popUp` is tracking — measured: a timer scheduled
+///    for 1s into the menu did not fire until 2.4s after it closed — so state
+///    set from an item's action would not reach the screen until the menu had
+///    already gone. Running the chosen closure after `popUp` returns makes the
+///    ordering say what it means.
+///
+///    This was ALSO offered as the explanation for the attach popover appearing
+///    and vanishing, and that was wrong. That defect was `BlockShadow` putting
+///    its content in an `if/else`; see `BlockShadowRebuildTests`. Left recorded
+///    here because a plausible cause that survives in a comment is how the same
+///    wrong fix gets made twice.
 /// 3. **The board's hover has to freeze for the menu's lifetime**, which needs a
 ///    begin and an end. That is what `onTrackingChange` is for.
 ///
