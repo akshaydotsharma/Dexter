@@ -53,11 +53,50 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     @MainActor
+    /// A hosting controller whose view answers the first click instead of
+    /// spending it on becoming key.
+    ///
+    /// An `NSView` returns `false` from `acceptsFirstMouse` by default, so a
+    /// click into a window that is not key is consumed activating it and the
+    /// control under the pointer never hears about it. In a popover that reads
+    /// as the thing being broken: you click a row, nothing happens, and the
+    /// popover is still sitting there — which is exactly how the Vision Board's
+    /// attach-task list behaved (#446 follow-up).
+    ///
+    /// Safe to apply to every popover this modifier hosts. Accepting first mouse
+    /// only ever means a click does what it looks like it does; nothing here is
+    /// destructive enough to want an activating click swallowed as protection.
+    private final class FirstMouseHostingController<Content: View>: NSViewController {
+        private final class FirstMouseHostingView<V: View>: NSHostingView<V> {
+            override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        }
+
+        private let hostingView: FirstMouseHostingView<Content>
+
+        /// Reads and writes the hosted view directly, so updating this still
+        /// re-renders the popover while it is open — the reason the caller keeps
+        /// a reference to the controller at all.
+        var rootView: Content {
+            get { hostingView.rootView }
+            set { hostingView.rootView = newValue }
+        }
+
+        init(rootView: Content) {
+            hostingView = FirstMouseHostingView(rootView: rootView)
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("not loaded from a nib") }
+
+        override func loadView() { view = hostingView }
+    }
+
     final class Coordinator: NSObject, NSPopoverDelegate {
         var parent: MacAnchoredPopover
         weak var anchor: NSView?
         private let popover = NSPopover()
-        private var hosting: NSHostingController<PopoverContent>?
+        private var hosting: FirstMouseHostingController<PopoverContent>?
 
         init(parent: MacAnchoredPopover) {
             self.parent = parent
@@ -66,12 +105,15 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
             popover.animates = true
         }
 
+        /// `@MainActor` because the hosting controller is, and this is only ever
+        /// reached from `updateNSView`, which is main-actor isolated already.
+        @MainActor
         func update(content: PopoverContent, isPresented: Bool, isBusy: Bool) {
             // Keep the hosted content in step so the editor re-renders while open.
             if let hosting {
                 hosting.rootView = content
             } else {
-                let controller = NSHostingController(rootView: content)
+                let controller = FirstMouseHostingController(rootView: content)
                 hosting = controller
                 popover.contentViewController = controller
             }

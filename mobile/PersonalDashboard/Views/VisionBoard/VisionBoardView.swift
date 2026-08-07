@@ -36,6 +36,9 @@ struct VisionBoardView: View {
     /// clicks. Published by `.visionPassThrough()`, consumed by the pointer
     /// layer's `hitTest`.
     @State private var exclusions: [CGRect] = []
+    /// The pass-through rects that edit text, so the pointer layer can show an
+    /// I-beam over them instead of the block's open hand.
+    @State private var textRects: [CGRect] = []
     @Bindable var router: AppRouter
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -148,6 +151,7 @@ struct VisionBoardView: View {
                 interaction: interaction,
                 blocks: viewModel.blocks,
                 exclusions: exclusions,
+                textRects: textRects,
                 canvasSize: size,
                 tileCounts: tileCounts,
                 onCanvasClick: { col, row in
@@ -174,6 +178,9 @@ struct VisionBoardView: View {
             // pointer handling, because pointer handling is not a SwiftUI
             // gesture any more.
             exclusions = rects
+        }
+        .onPreferenceChange(VisionTextRectsKey.self) { rects in
+            textRects = rects
         }
     }
 

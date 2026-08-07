@@ -57,6 +57,9 @@ final class VisionPointerView: NSView {
     var blocks: [VisionBlock] = []
     /// Interactive SwiftUI child frames, in canvas space.
     var exclusions: [CGRect] = []
+    /// The subset of `exclusions` that edits text. Cursor only; hit testing
+    /// treats them exactly like any other pass-through.
+    var textRects: [CGRect] = []
     var canvasSize: CGSize = .zero
     /// How many tiles each block has, for the keyboard tile cursor. A count
     /// rather than the tiles themselves: this view has no business holding
@@ -359,6 +362,15 @@ final class VisionPointerView: NSView {
         }
         if VisionHitTest.gripRect(in: frame.rect).contains(point) {
             Self.diagonalResize.set()
+        } else if textRects.contains(where: { $0.contains(point) }) {
+            // A click here puts a caret in, so say so. This is the title's
+            // cursor: it read as the block's open hand before, which promised a
+            // move and delivered an edit.
+            NSCursor.iBeam.set()
+        } else if exclusions.contains(where: { $0.contains(point) }) {
+            // A button, a checkbox, a menu. The Mac arrow, as everywhere else in
+            // the app — not the open hand, because these do not move anything.
+            NSCursor.arrow.set()
         } else {
             NSCursor.openHand.set()
         }
@@ -498,6 +510,7 @@ struct VisionPointerLayer: NSViewRepresentable {
     let interaction: VisionInteraction
     let blocks: [VisionBlock]
     let exclusions: [CGRect]
+    let textRects: [CGRect]
     let canvasSize: CGSize
     let tileCounts: [UUID: Int]
     let onCanvasClick: (Int, Int) -> Bool
@@ -524,6 +537,7 @@ struct VisionPointerLayer: NSViewRepresentable {
         view.interaction = interaction
         view.blocks = blocks
         view.exclusions = exclusions
+        view.textRects = textRects
         view.canvasSize = canvasSize
         view.tileCounts = tileCounts
         view.onCanvasClick = onCanvasClick
@@ -558,16 +572,42 @@ enum VisionCanvasSpace {
     static let name = "visionCanvas"
 }
 
+/// Rects that edit text rather than act on a click.
+///
+/// A separate key rather than a richer `VisionInteractiveRectsKey`, because hit
+/// testing does not care about the difference and the resolver's signature is
+/// worth keeping narrow. Only the cursor cares.
+struct VisionTextRectsKey: PreferenceKey {
+    static let defaultValue: [CGRect] = []
+
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+/// What the pointer should look like over a pass-through control.
+enum VisionPassThroughCursor {
+    /// Buttons, checkboxes, menus. The Mac arrow, as everywhere else.
+    case control
+    /// A field or a click-to-edit label. An I-beam.
+    case text
+}
+
 extension View {
     /// Let this control keep its own clicks: publish its frame so the pointer
     /// layer makes itself transparent over it.
-    func visionPassThrough() -> some View {
+    ///
+    /// `cursor` exists because the layer sets the cursor on every mouse-moved
+    /// and would otherwise paint the whole card with the block's open hand. A
+    /// hand over a click-to-edit title says "pick this up", when what it does is
+    /// put a caret in it.
+    func visionPassThrough(cursor: VisionPassThroughCursor = .control) -> some View {
         background(
             GeometryReader { proxy in
-                Color.clear.preference(
-                    key: VisionInteractiveRectsKey.self,
-                    value: [proxy.frame(in: .named(VisionCanvasSpace.name))]
-                )
+                let rect = proxy.frame(in: .named(VisionCanvasSpace.name))
+                Color.clear
+                    .preference(key: VisionInteractiveRectsKey.self, value: [rect])
+                    .preference(key: VisionTextRectsKey.self, value: cursor == .text ? [rect] : [])
             }
         )
     }

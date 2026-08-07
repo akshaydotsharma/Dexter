@@ -210,7 +210,7 @@ struct VisionBlockCard: View {
                 fontName: "Inter-SemiBold"
             )
             .frame(height: VisionBlockMetrics.titleLine)
-            .visionPassThrough()
+            .visionPassThrough(cursor: .text)
         } else {
             Text(block.title)
                 .font(.edHeading)
@@ -222,7 +222,10 @@ struct VisionBlockCard: View {
                 // context-menu Rename. The tap survives the pointer layer above
                 // because the title publishes its own rect.
                 .onTapGesture { beginTitleEdit() }
-                .visionPassThrough()
+                // `.text`, so the pointer says "caret goes here" rather than
+                // wearing the block's open hand. A hand over a title promises a
+                // move and delivers an edit.
+                .visionPassThrough(cursor: .text)
         }
     }
 

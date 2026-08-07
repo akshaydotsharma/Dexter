@@ -46,30 +46,12 @@ struct VisionAttachTaskPopover: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xxs) {
                         ForEach(matches.prefix(40)) { todo in
-                            Button {
+                            VisionAttachRow(todo: todo) {
                                 Task {
                                     await viewModel.attach(taskID: todo.id, to: blockID)
                                     onDone()
                                 }
-                            } label: {
-                                HStack(spacing: Space.sm) {
-                                    Text(todo.title)
-                                        .font(.edBody)
-                                        .foregroundStyle(Tokens.ink)
-                                        .lineLimit(1)
-                                    Spacer(minLength: Space.xs)
-                                    if let due = todo.dueDate {
-                                        Text(due.formatted(date: .abbreviated, time: .omitted))
-                                            .font(.edCaption)
-                                            .foregroundStyle(Tokens.muted)
-                                    }
-                                }
-                                .padding(.horizontal, Space.sm)
-                                .padding(.vertical, Space.xs)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -79,6 +61,52 @@ struct VisionAttachTaskPopover: View {
         .padding(Space.md)
         .frame(width: 300)
         .background(Tokens.surface)
+    }
+}
+
+/// One attachable task.
+///
+/// Its own view because a row in a list of things you are about to pick has to
+/// say so before you commit: the list read as inert text, so it was not obvious
+/// the rows were even selectable (#446 follow-up). A hover fill plus the
+/// pointing hand is the smallest pair that reads as "this is a choice".
+private struct VisionAttachRow: View {
+    let todo: Todo
+    let onPick: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: onPick) {
+            HStack(spacing: Space.sm) {
+                Text(todo.title)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                Spacer(minLength: Space.xs)
+                if let due = todo.dueDate {
+                    Text(due.formatted(date: .abbreviated, time: .omitted))
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                }
+            }
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, Space.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                    .fill(hovering ? Tokens.surface2 : .clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            hovering = inside
+            // `.set()` rather than push/pop: a push whose pop is lost to a view
+            // being torn down mid-hover leaves the whole app holding the wrong
+            // cursor, with no way back. Same reasoning as the board's canvas.
+            (inside ? NSCursor.pointingHand : NSCursor.arrow).set()
+        }
     }
 }
 
