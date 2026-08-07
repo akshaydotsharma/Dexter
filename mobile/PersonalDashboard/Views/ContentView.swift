@@ -253,6 +253,14 @@ struct ContentView: View {
             // .activity, so this case is unreachable. Restore by replacing
             // EmptyView() with `DashboardView(router: router)`.
             EmptyView()
+        case .visionBoard:
+            // The board is macOS-only for now (#446). A 3000pt canvas on a
+            // 393pt screen is a pan-and-zoom toy, so the phone will get a
+            // different projection of the same blocks — a single ordered
+            // column, read-and-tick only — rather than this surface. Present
+            // but unreachable in the meantime: the side drawer does not list
+            // it, exactly like `.dashboard` above.
+            EmptyView()
         case .activity:
             ActivityView(router: router)
         case .settings:

@@ -358,6 +358,10 @@ final class SwiftDataStore {
         // Standalone wallet cards (#398). A new model type, so a lightweight
         // migration that creates one table and touches nothing above it.
         LocalWalletCard.self,
+        // Vision board blocks (#446). A new model type, so one new table and no
+        // change to anything above it. Membership lives here rather than as a
+        // column on `LocalTodo`, which keeps that model untouched too.
+        LocalVisionBlock.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

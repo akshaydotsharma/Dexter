@@ -110,10 +110,48 @@ struct MacClearTextField: NSViewRepresentable {
     /// Fired whenever the field's editing focus changes; callers use the
     /// `false` edge to commit on blur.
     let onFocusChange: (Bool) -> Void
+    /// Escape, when the caller wants to handle it themselves.
+    ///
+    /// Nil keeps the original behaviour, which is what the Tasks add row wants:
+    /// clear the field and resign, so the resulting end-editing commits empty
+    /// text and no task is created (#287, outcome 4).
+    ///
+    /// That behaviour is destructive anywhere the field is EDITING something
+    /// that already exists rather than drafting something new. On the vision
+    /// board an item is removed when its text is cleared, so Escape on an item
+    /// with text would delete it — the opposite of what Escape means. Supplying
+    /// this leaves the binding untouched and hands the decision back.
+    var onCancel: (() -> Void)? = nil
     /// Optional placeholder color override. When nil, AppKit's default
     /// placeholder styling is used. The macOS Tasks add-row passes
     /// `Tokens.mutedSoft` so the resting field matches the old ghost row (#287).
     var placeholderColor: Color? = nil
+
+    /// Which Inter face the field renders in. Defaults to Regular, which is
+    /// `.edBody` and therefore right for every call site that toggles with body
+    /// text.
+    ///
+    /// It has to be settable because the ramp has two steps at the SAME point
+    /// size and different weights: `.edBody` is Inter Regular 13 on macOS and
+    /// `.edHeading` is Inter SemiBold 13. A field left at the default under a
+    /// heading changes WEIGHT the instant it is clicked, which is a smaller
+    /// version of the exact bug #301 was about — a typographic relationship
+    /// asserted in a comment instead of expressed in code. The vision board's
+    /// block title is `.edHeading` and passes `"Inter-SemiBold"` (#446).
+    var fontName: String = "Inter-Regular"
+
+    /// Point size, defaulting to the body step of the ramp.
+    ///
+    /// Same argument as `fontName` one step further out. That parameter exists
+    /// because two ramp steps share a size and differ in weight; this one exists
+    /// because some do not share a size at all. The vision board's notes render
+    /// as `.edSubheadline`, which is 12pt where body is 13pt, and a field pinned
+    /// to the body size would grow the text the moment it was clicked — the same
+    /// jump #301 fixed, in the other axis.
+    ///
+    /// Nil rather than a literal default so the ramp stays the single source for
+    /// every call site that has not opted out.
+    var pointSize: CGFloat? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -159,8 +197,8 @@ struct MacClearTextField: NSViewRepresentable {
         // drifted 2pt larger and clicking a row to rename would have made the
         // text jump. Reading the size from the ramp couples them in code rather
         // than in a comment nobody re-reads (issue #301).
-        let bodySize = EdMetrics.bodyPointSize
-        field.font = NSFont(name: "Inter-Regular", size: bodySize) ?? .systemFont(ofSize: bodySize)
+        let bodySize = pointSize ?? EdMetrics.bodyPointSize
+        field.font = NSFont(name: fontName, size: bodySize) ?? .systemFont(ofSize: bodySize)
         field.textColor = NSColor(Tokens.ink)
         applyPlaceholder(to: field)
         field.stringValue = text
@@ -235,6 +273,18 @@ struct MacClearTextField: NSViewRepresentable {
             doCommandBy selector: Selector
         ) -> Bool {
             if selector == #selector(NSResponder.cancelOperation(_:)) {
+                if let onCancel = parent.onCancel {
+                    // The caller owns Escape. Told BEFORE the field resigns,
+                    // because resigning fires `controlTextDidEndEditing` and
+                    // therefore `onFocusChange(false)` — the caller's commit
+                    // path. It needs to know a cancel is in flight before that
+                    // arrives, or Escape would save the very edit it is
+                    // abandoning. The field is deliberately NOT cleared, so the
+                    // blur cannot be mistaken for "the user emptied this".
+                    onCancel()
+                    control.window?.makeFirstResponder(nil)
+                    return true
+                }
                 // Escape: abandon the draft/rename without committing. Clear the
                 // field then resign first responder; the resulting end-editing
                 // sees empty text, so no task is created and no rename is saved

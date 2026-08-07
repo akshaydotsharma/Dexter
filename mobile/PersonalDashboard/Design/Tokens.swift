@@ -19,6 +19,17 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case wallet
     case finance
     case vocabulary
+    /// Vision Board (#446). macOS-only surface for now; the iOS projection is a
+    /// later round, so `ContentView` carries the case as present-but-unreachable
+    /// and the side drawer does not list it.
+    ///
+    /// Explicit lowercase raw value, unlike every case above it. `LAUNCH_SECTION`
+    /// and the `dexter://focus/<section>/<uuid>` deep link both lowercase the
+    /// string before `AppSection(rawValue:)`, so a camelCased raw value is
+    /// unreachable by either — which is exactly why `helpCenter` cannot be
+    /// scripted today. Spelling it out here keeps the board reachable from
+    /// `mac-open-for-verification.sh visionboard`, the QA path this feature needs.
+    case visionBoard = "visionboard"
     case settings
     case helpCenter
 
@@ -37,6 +48,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .wallet:      return "Wallet"
         case .finance:     return "Finance"
         case .vocabulary:  return "Vocabulary"
+        case .visionBoard: return "Vision Board"
         case .settings:    return "Settings"
         case .helpCenter:  return "Help center"
         }
@@ -56,6 +68,8 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .wallet:      return "wallet.pass"
         case .finance:     return "dollarsign.circle"
         case .vocabulary:  return "character.book.closed"
+        // Three rectangles at different sizes: literally the board.
+        case .visionBoard: return "rectangle.3.group"
         case .settings:    return "gearshape"
         case .helpCenter:  return "questionmark.circle"
         }
@@ -122,6 +136,51 @@ enum Tokens {
     /// Trips, while staying distinguishable in the drawer and sidebar.
     static let accentWallet    = Color.paper(0xA21CAF, 0xE879F9)
     static let accentFinance   = Color.paper(0x047857, 0x10B981)
+    /// Vision Board section accent (#446). Moss green: the one large unoccupied
+    /// arc of the hue wheel (60 to 100 degrees), 160° from `accentTasks` indigo
+    /// and 177° from `accentItineraries` violet, so the board can never be
+    /// mistaken for either of the two sections it borrows content from.
+    ///
+    /// On the board it owns exactly one job: "the system is responding to you"
+    /// — selection, keyboard focus, the snap target, drop feedback. It never
+    /// encodes data. Block state and task priority own their own regions and
+    /// their own hue families (see `state(for:)` and `priorityWashHue(for:)`),
+    /// which is what keeps three simultaneous signals legible on one card.
+    static let accentVision    = Color.paper(0x456F0D, 0xA9C46B)
+    /// The Vision Board's canvas lattice, at rest and while something is being
+    /// moved or resized (#446, revised in review 2026-08-06).
+    ///
+    /// Two tuned pairs rather than one colour at two opacities. The same alpha
+    /// over cream and over near-black does not read as the same whisper: a
+    /// light dot on `paper`'s dark side gains contrast faster than a dark dot
+    /// on its light side, and it is the dark-mode dot that turns into static
+    /// first. Holding four explicit values lets each theme be judged on its own.
+    ///
+    /// Warm, never grey. The lattice belongs to the paper it is printed on; a
+    /// neutral grey dot at this size reads as dirt on the screen.
+    /// The light value is the louder of the two on paper and still the quieter
+    /// of the two on screen: measured against `paper`, the dot lands a little
+    /// way down in light mode and a little way UP in dark, which is what it
+    /// takes for the two to read as the same whisper.
+    ///
+    /// **Softened by ~30% on 2026-08-07**, when the lattice became square. The
+    /// horizontal pitch went from 184pt to 68pt, so a given patch of canvas now
+    /// carries 2.7× as many dots, and the ink per unit area went up by the same
+    /// factor at unchanged values. Left alone that is the graph-paper failure
+    /// the reveal-on-attention design was originally trying to avoid. Two
+    /// adjustments together, rather than one large one: `VisionGridLattice`
+    /// takes the dot down to the 1.2pt antialiasing floor (area × 0.73) and
+    /// these values take the contrast down to 0.7, which lands the field at
+    /// roughly 1.4× its old weight. Deliberately not all the way back to 1.0 —
+    /// the lattice IS finer now, and flattening it to invisibility would make it
+    /// useless as the snap reference a drag reads off.
+    ///
+    /// The contrast could not carry the whole correction on its own: below about
+    /// 1.2pt the antialiasing eats most of a dot's delta, so a smaller dot has
+    /// to be made DARKER to stay visible at all, and then it reads as grit
+    /// rather than as texture. Size down to the floor, contrast for the rest.
+    static let visionLattice       = Color.paper(0xEBE5D4, 0x201C15)
+    static let visionLatticeActive = Color.paper(0xD8D0B8, 0x3D362C)
     static let accentSettings  = Color.paper(0x475569, 0x94A3B8)
     static let accentHelp      = Color.paper(0x475569, 0x94A3B8)
     static let accentFg        = Color.paper(0xFFFFFF, 0x14110D)
@@ -164,6 +223,19 @@ enum Tokens {
     static let dangerSoft   = Color.paper(0xFEE2E2, 0x450A0A)
     static let info         = Color.paper(0x0E7490, 0x22D3EE)
 
+    // MARK: Vision Board state hues (#446)
+
+    /// Block state: Ongoing. Steel cyan (192°). Cool family, deliberately
+    /// outside the red/amber/green priority family so a block's state can never
+    /// be mistaken for the priority wash on the tasks inside it.
+    static let stateOngoing = Color.paper(0x0E6F87, 0x5FC6DE)
+
+    /// Block state: Waiting. Periwinkle (257°). 65° from `stateOngoing`, which
+    /// is the smallest hue gap in the state set and still discriminable on a 3pt
+    /// rail. The Waiting rail is dashed as well, so the two never rely on hue
+    /// alone — and neither does anyone reading the board in greyscale.
+    static let stateWaiting = Color.paper(0x6D4BC4, 0xAB9BF0)
+
     /// Edge-bar color for a task priority. Uses dedicated priority hues rather
     /// than the alert `danger`/`warning` tokens: those two sit too close in
     /// light mode (brick red vs brownish amber) to tell apart on a thin bar.
@@ -196,6 +268,25 @@ enum Tokens {
         }
     }
 
+    /// Hue for a vision block's state (#446).
+    ///
+    /// Idea and Done deliberately share `muted`, i.e. neither has a colour at
+    /// all. They are told apart by glyph (`lightbulb` vs `checkmark`), by border
+    /// style (dashed vs solid) and by body fill (`surface` vs `paper2`), so
+    /// nobody ever has to discriminate them by hue. Active is `ink` for the same
+    /// reason inverted: the loudest state is encoded by WEIGHT, so the single
+    /// most important signal on the board competes with nothing and survives any
+    /// colour-vision test.
+    static func state(for s: BlockState) -> Color {
+        switch s {
+        case .idea:    return muted
+        case .active:  return ink
+        case .ongoing: return stateOngoing
+        case .waiting: return stateWaiting
+        case .done:    return muted
+        }
+    }
+
     static func accent(for section: AppSection) -> Color {
         switch section {
         case .chat:        return accentChat
@@ -209,6 +300,7 @@ enum Tokens {
         case .wallet:      return accentWallet
         case .finance:     return accentFinance
         case .vocabulary:  return accentVocabulary
+        case .visionBoard: return accentVision
         case .settings:    return accentSettings
         case .helpCenter:  return accentHelp
         }

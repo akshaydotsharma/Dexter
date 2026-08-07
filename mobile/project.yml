@@ -164,6 +164,14 @@ targets:
       - path: PersonalDashboard/Services/ChecklistService.swift
       - path: PersonalDashboard/Services/FinanceSettings.swift
       - path: PersonalDashboard/Views/Tasks
+      # Vision board (#446). Whole folder, like Views/Tasks above: every file in
+      # it belongs to this surface and none of them is iOS-only. The @Model, the
+      # DTO and the state enum need no entry — PersonalDashboard/Models is
+      # globbed at the top of this list.
+      - path: PersonalDashboard/Views/VisionBoard
+      - path: PersonalDashboard/ViewModels/VisionBoardViewModel.swift
+      - path: PersonalDashboard/ViewModels/VisionItemEditor.swift
+      - path: PersonalDashboard/Services/VisionBoardService.swift
       - path: PersonalDashboard/Views/Lists/ListsView.swift
       - path: PersonalDashboard/Views/Today/TodayView.swift
       - path: PersonalDashboard/Views/Notes/NotesView.swift
@@ -181,6 +189,7 @@ targets:
       - path: PersonalDashboard/Views/Components/MarkdownView.swift
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
+      - path: PersonalDashboard/Views/Shell/MacMenuButton.swift
       # Chat (issue #281). Text chat only — the voice capture path
       # (VoiceCaptureViewModel / SpeechTranscriber / overlay / VoiceWaveform /
       # VoiceAurora / WaveformBars) is AVFoundation/Speech-coupled, gated with
@@ -484,6 +493,36 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
 
+  # macOS-hosted logic tests (#446). A second unit-test target rather than more
+  # files in `PersonalDashboardTests`, for one reason that is not negotiable:
+  # the vision board's pointer layer is an `NSView`, `VisionInteraction` is
+  # macOS-only, and neither exists in the iOS module at all. `#if os(macOS)`
+  # guards would compile the file to nothing on the simulator, which is a suite
+  # that reports green while asserting nothing.
+  #
+  # Everything portable stays on the iOS side. `VisionBoardLayoutTests` and
+  # `VisionHitTestTests` both run there, because the solver and the resolver are
+  # pure and carry no AppKit — only the event plumbing needs the Mac.
+  #
+  # Hosted in DexterMac (`dependencies: target`, which makes xcodegen set
+  # TEST_HOST / BUNDLE_LOADER) so `@testable import DexterMac` can reach it.
+  # Wired into the DexterMac scheme's `test` action only, so a plain build of
+  # the app never builds it.
+  DexterMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: DexterMacTests
+    dependencies:
+      - target: DexterMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard.mac.tests
+        DEVELOPMENT_TEAM: "PJFPUSSNUW"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   PersonalDashboard:
     build:
@@ -500,6 +539,11 @@ schemes:
     build:
       targets:
         DexterMac: all
+        DexterMacTests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - DexterMacTests
     run:
       config: Debug
       # OPTIONAL override for the on-device AI key (#343). The normal path is
