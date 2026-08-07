@@ -104,6 +104,25 @@ enum DataArchive {
         let priority: Int?
         let address: String?
         let googleMapsLink: String?
+
+        // MARK: Added in #444
+        // Whether a reminder is armed for `dueDate`. Optional with a nil default
+        // for the same reason as the #319 fields: an archive written before this
+        // existed still decodes, and restores as disarmed, which is the default.
+        //
+        // ⚠️ This field is also what carries reminders across devices, because
+        // sync ships these DTOs (`SyncRecordMapper` maps `TaskDTO` verbatim). A
+        // peer still running a build from before #444 decodes the task WITHOUT it
+        // and writes it back as nil, which reads here as disarmed — the #428 trap.
+        // So both apps have to be on this build before reminders can be trusted to
+        // survive a round trip.
+        var remindMe: Bool? = nil
+
+        /// When the reminder notification was dealt with, on whichever device did it.
+        /// Carried here precisely SO it syncs: notification dismissal is device-local,
+        /// and this is the only way a peer that learns about an overdue reminder can
+        /// tell "not seen yet" from "already swiped away on the phone".
+        var reminderClearedAt: Date? = nil
     }
 
     /// A task's wallet-style ticket attachment (#399).

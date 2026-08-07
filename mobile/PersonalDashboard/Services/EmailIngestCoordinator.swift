@@ -93,12 +93,20 @@ final class EmailIngestCoordinator: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - UNUserNotificationCenterDelegate
 
     /// Show banners even while the app is foregrounded.
+    ///
+    /// `.list` is what keeps the notification afterwards (#444). Without it, one
+    /// that arrives while Dexter is open shows its banner and is then gone: it is
+    /// never added to Notification Center, so it is not on the lock screen and not
+    /// in the pull-down either, and there is nothing left for the person to swipe
+    /// away. A task reminder is exactly the kind of thing you want to still be
+    /// there when you pick the phone up, and the same argument applies to the email
+    /// ingest and recurring-expense notifications that also land here.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler([.banner, .list, .sound])
     }
 
     /// Handle the Undo action on an "added" notification.
@@ -108,6 +116,19 @@ final class EmailIngestCoordinator: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         defer { completionHandler() }
+
+        // Task reminders (#444). Swiping one away or tapping it records that it has
+        // been dealt with, which syncs, so the Mac does not deliver the same reminder
+        // late once it catches up. Inspected first and returns when it was ours, so
+        // the email branch below is untouched.
+        let reminder = TaskReminderScheduler.inspect(response: response)
+        if reminder.isOurs {
+            if let uuid = reminder.clearedTask {
+                Task { @MainActor in TaskReminderScheduler.markCleared(todoUUID: uuid) }
+            }
+            return
+        }
+
         guard response.actionIdentifier == EmailIngestNotifications.undoActionId else { return }
         let userInfo = response.notification.request.content.userInfo
         guard let raw = userInfo[EmailIngestNotifications.logUUIDKey] as? String,

@@ -373,6 +373,11 @@ struct ResetDataView: View {
                 }
             }
             try modelContext.save()
+            // Reminders outlive the rows that own them: the OS holds them, not the
+            // store, so wiping tasks without this leaves banners arriving for
+            // tasks that no longer exist (#444). A reconcile would prune them
+            // anyway, but only on the next launch or write.
+            Task { await TaskReminderScheduler.cancelAll() }
             Haptics.destructive()
             dismiss()
         } catch {

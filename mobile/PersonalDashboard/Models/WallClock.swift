@@ -53,4 +53,26 @@ enum WallClock {
             of: onDay
         ) ?? onDay
     }
+
+    /// Drop the seconds a `DatePicker` never showed, in the DEVICE calendar.
+    ///
+    /// Unrelated to the UTC anchoring above — this one is about *granularity*, not
+    /// about which timezone a stated time belongs to. A `Date` is an instant, so it
+    /// always carries seconds and a fraction of a second, but a picker configured
+    /// `[.date, .hourAndMinute]` lets nobody see or set them. Whatever the value was
+    /// seeded with therefore survives into storage: a task editor opening on
+    /// `Date().addingTimeInterval(3600)` stored a due time of `16:28:44.910929` for
+    /// a 4:28 PM pick (#444).
+    ///
+    /// That is invisible until something compares or schedules against it. It made
+    /// reminders fire most of a minute late, and it makes two tasks that both read
+    /// "4:28 PM" sort by a difference nobody can see. So a value that came from a
+    /// minute-granularity picker is stored at minute granularity.
+    ///
+    /// Truncates rather than rounds: 4:28 means the moment 4:28 begins.
+    static func minutePrecision(_ date: Date) -> Date {
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        return calendar.date(from: parts) ?? date
+    }
 }

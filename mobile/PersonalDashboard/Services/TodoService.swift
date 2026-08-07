@@ -39,11 +39,13 @@ struct TodoService {
             address: request.address,
             googleMapsLink: request.googleMapsLink,
             priority: request.priority,
+            remindMe: request.remindMe,
             createdAt: now,
             updatedAt: now
         )
         store.context.insert(row)
         try store.context.save()
+        reconcileReminders()
         return row.toDTO()
     }
 
@@ -52,13 +54,26 @@ struct TodoService {
         if let title = request.title { row.title = title }
         if let description = request.description { row.todoDescription = description }
         if let completed = request.completed { row.completed = completed }
-        if let dueDate = request.dueDate { row.dueDate = dueDate }
+        // Clearing wins over setting: an editor that turned the toggle off sends
+        // `clearsDueDate` with a stale `dueDate` still in its state.
+        if request.clearsDueDate {
+            row.dueDate = nil
+        } else if let dueDate = request.dueDate {
+            row.dueDate = dueDate
+        }
         if let tag = request.tag { row.tag = tag }
         if let address = request.address { row.address = address }
         if let googleMapsLink = request.googleMapsLink { row.googleMapsLink = googleMapsLink }
         if let priority = request.priority { row.priority = priority }
+        if let remindMe = request.remindMe { row.remindMe = remindMe }
+        // A task with no due date has nothing to remind against (#444), so the
+        // flag cannot survive the date being cleared. Enforced here rather than
+        // only in the editor so the AI and calendar paths cannot leave a task
+        // flagged-but-dateless either.
+        if row.dueDate == nil { row.remindMe = false }
         row.updatedAt = Date()
         try store.context.save()
+        reconcileReminders()
         return row.toDTO()
     }
 
@@ -67,7 +82,19 @@ struct TodoService {
         row.completed.toggle()
         row.updatedAt = Date()
         try store.context.save()
+        // Completing a task must take its pending banner with it (#444).
+        reconcileReminders()
         return row.toDTO()
+    }
+
+    /// Bring the OS's pending reminders back in line with the store (#444).
+    ///
+    /// Every write goes through this service, so this is the one place that has to
+    /// know about it — rather than each of create/update/complete/delete's callers,
+    /// which is what would otherwise have to be kept in step as surfaces are added.
+    /// Detached because a reminder is not worth failing or delaying a save for.
+    private func reconcileReminders() {
+        Task { await TaskReminderScheduler.reconcile(store: store) }
     }
 
     /// Soft-delete the todo. `permanent: true` removes the row from the local
@@ -88,6 +115,8 @@ struct TodoService {
             row.updatedAt = Date()
         }
         try store.context.save()
+        // A deleted task must not go on banner-ing (#444).
+        reconcileReminders()
     }
 
     func restore(_ todo: Todo) async throws -> Todo {
@@ -95,6 +124,7 @@ struct TodoService {
         row.deletedAt = nil
         row.updatedAt = Date()
         try store.context.save()
+        reconcileReminders()
         return row.toDTO()
     }
 

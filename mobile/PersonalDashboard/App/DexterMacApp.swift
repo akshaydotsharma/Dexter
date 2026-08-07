@@ -69,11 +69,23 @@ struct DexterMacApp: App {
                 // relaunch — the latch that makes that safe lives in
                 // `TripCoverService`, not here.
                 .task { await AppMaintenance.runTripCoverSweep() }
+                // Task reminders (#444). The delegate has to be installed before
+                // anything fires, or macOS suppresses the banner whenever Dexter is
+                // the frontmost app. Both calls are idempotent, which is what makes
+                // them safe in a per-WINDOW `.task`.
+                .task {
+                    MacNotificationPresenter.shared.install()
+                    await TaskReminderScheduler.registerCategory()
+                    TaskReminderScheduler.startObservingStoreChanges()
+                    await TaskReminderScheduler.reconcile()
+                }
                 // Same in-session recovery as iOS (#428). macOS `.active` fires on window
                 // focus, which the service's throttle is there to absorb.
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         Task { await AppMaintenance.runTripCoverForegroundSweep() }
+                        // Top the armed reminders up, as on iOS (#444).
+                        Task { await TaskReminderScheduler.reconcile() }
                     }
                 }
         }

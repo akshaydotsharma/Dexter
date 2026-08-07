@@ -363,9 +363,18 @@ private struct TodayTaskRow: View {
                 if todo.dueDate != nil || hasTicket {
                     HStack(spacing: Space.sm) {
                         if let due = todo.dueDate {
-                            Text(dueLabel(due))
-                                .font(.edCaption)
-                                .foregroundStyle(isOverdue(due) ? Tokens.danger : Tokens.muted)
+                            HStack(spacing: 4) {
+                                Text(dueLabel(due))
+                                // #444. Matches the Tasks row: the bell rides with
+                                // the due moment it fires at.
+                                if todo.hasArmedReminder {
+                                    Image(systemName: "bell.fill")
+                                        .font(.system(size: 9))
+                                        .accessibilityLabel("Reminder set")
+                                }
+                            }
+                            .font(.edCaption)
+                            .foregroundStyle(isOverdue(due) ? Tokens.danger : Tokens.muted)
                         }
                         if hasTicket {
                             Image(systemName: "ticket.fill")

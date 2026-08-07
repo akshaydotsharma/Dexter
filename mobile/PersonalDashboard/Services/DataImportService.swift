@@ -480,6 +480,8 @@ final class DataImportService {
                     address: dto.address ?? "",
                     googleMapsLink: dto.googleMapsLink ?? "",
                     priority: dto.priority ?? 0,
+                    remindMe: dto.remindMe ?? false,
+                    reminderClearedAt: dto.reminderClearedAt,
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt,
                     deletedAt: dto.deletedAt,

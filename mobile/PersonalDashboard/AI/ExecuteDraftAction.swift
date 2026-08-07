@@ -559,7 +559,11 @@ struct ExecuteDraftAction {
             throw DraftExecutionError.invalidArgument(field: "title", reason: "required")
         }
         let description = trimmedString(input["description"])
-        let dueDate = parseISODate(trimmedString(input["due_at"]))
+        // Minute precision, matching what the editor writes (#444). The model emits
+        // ISO strings that may carry seconds or even fractional seconds, and a task
+        // asked for "at 5pm" should not land at 17:00:03.4 just because that is what
+        // came back.
+        let dueDate = parseISODate(trimmedString(input["due_at"])).map(WallClock.minutePrecision)
         let tag = trimmedString(input["tag"])
         // Empty / unknown -> no priority (0). Parseable value -> its raw Int.
         let priority = TaskPriority(aiString: trimmedString(input["priority"]))?.rawValue ?? 0
@@ -672,7 +676,7 @@ struct ExecuteDraftAction {
                 row.dueDate = nil; changed = true
             } else if !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       let parsed = parseISODate(raw) {
-                row.dueDate = parsed; changed = true
+                row.dueDate = WallClock.minutePrecision(parsed); changed = true
             }
         }
         if let raw = input["tag"]?.stringValue {

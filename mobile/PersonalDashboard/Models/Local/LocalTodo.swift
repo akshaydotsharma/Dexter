@@ -31,6 +31,33 @@ final class LocalTodo {
     /// migration (no data loss). Drives the colored left-edge bar on task rows.
     var priority: Int = 0
 
+    /// Whether to raise a local notification at `dueDate` (#444). Stored with a
+    /// default so adding it to an existing install is a safe lightweight
+    /// migration.
+    ///
+    /// Only ever meaningful alongside a `dueDate` — there is no separate reminder
+    /// time, the due moment IS the reminder moment. The editor keeps the two in
+    /// step by clearing this when the due date is cleared, and
+    /// `TaskReminderScheduler` treats a nil `dueDate` as disarmed regardless, so
+    /// a stale `true` from an older write can never schedule anything.
+    var remindMe: Bool = false
+
+    /// When the person dealt with this task's reminder notification, on whichever
+    /// device they did it (#444).
+    ///
+    /// Exists because notification dismissal is DEVICE-LOCAL and does not sync,
+    /// while the task does. Without it, a second device that receives an armed
+    /// reminder after its moment has passed cannot tell the difference between "you
+    /// have not seen this yet" and "you already swiped it away on your phone", so it
+    /// either always re-notifies or never does. Set when the notification is
+    /// dismissed or tapped, and it syncs, which is what lets the other device skip a
+    /// late delivery for something already handled.
+    ///
+    /// Completing, deleting, or disarming the task are separate signals and are
+    /// already checked on their own — this covers only "the banner was dealt with
+    /// but the task itself was left alone".
+    var reminderClearedAt: Date? = nil
+
     var version: Int64
 
     var createdAt: Date
@@ -50,6 +77,8 @@ final class LocalTodo {
         address: String = "",
         googleMapsLink: String = "",
         priority: Int = 0,
+        remindMe: Bool = false,
+        reminderClearedAt: Date? = nil,
         version: Int64 = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -66,6 +95,8 @@ final class LocalTodo {
         self.address = address
         self.googleMapsLink = googleMapsLink
         self.priority = priority
+        self.remindMe = remindMe
+        self.reminderClearedAt = reminderClearedAt
         self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -91,7 +122,9 @@ final class LocalTodo {
             deletedAt: deletedAt,
             address: address,
             googleMapsLink: googleMapsLink,
-            priority: priority
+            priority: priority,
+            remindMe: remindMe,
+            reminderClearedAt: reminderClearedAt
         )
     }
 }
