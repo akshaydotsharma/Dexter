@@ -254,6 +254,57 @@ struct VisionBoardService {
         }
     }
 
+    // MARK: - Notes
+
+    /// Append a line item to a block and hand back the note that was made.
+    ///
+    /// Returns the note as well as the block because the caller puts the new
+    /// note straight into edit, and reading `block.notes.last` to find it would
+    /// be right only for as long as this stays an append. The id is the answer
+    /// to "which one did I just make"; position is not.
+    ///
+    /// An empty or whitespace-only text is accepted here, unlike `rename`.
+    /// Creating a blank note IS the flow — the row appears already in edit and
+    /// the user types into it — and `setNoteText` is where blank becomes a
+    /// deletion.
+    @discardableResult
+    func addNote(to blockID: UUID, text: String = "") async throws -> (block: VisionBlock, note: VisionNote) {
+        let note = VisionNote(text: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        let block = try await mutate(blockID) { $0.notes.append(note) }
+        return (block, note)
+    }
+
+    /// Edit a note's text. Empty text DELETES it.
+    ///
+    /// Deliberately not the block-title rule, which reverts an empty edit
+    /// because a block must always be named. A note has no such requirement, and
+    /// clearing one is the obvious way to ask for it to go: reverting instead
+    /// would leave the user holding a note they had just emptied on purpose,
+    /// with the remove button as the only way out of a thing they had already
+    /// told the interface to drop. It is also what closes the blank-note flow
+    /// above — make one, click away, and nothing is left behind.
+    @discardableResult
+    func setNoteText(_ noteID: UUID, in blockID: UUID, to text: String) async throws -> VisionBlock {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await mutate(blockID) { block in
+            guard trimmed.isEmpty == false else {
+                block.notes.removeAll { $0.id == noteID }
+                return
+            }
+            var notes = block.notes
+            guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
+            notes[index].text = trimmed
+            block.notes = notes
+        }
+    }
+
+    @discardableResult
+    func deleteNote(_ noteID: UUID, from blockID: UUID) async throws -> VisionBlock {
+        try await mutate(blockID) { block in
+            block.notes.removeAll { $0.id == noteID }
+        }
+    }
+
     /// Reorder membership within one block, e.g. after a tile drag.
     @discardableResult
     func reorder(_ blockID: UUID, to order: [UUID]) async throws -> VisionBlock {

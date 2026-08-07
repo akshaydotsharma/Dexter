@@ -43,6 +43,7 @@ struct VisionTileRow: View {
                     .foregroundStyle(dueColor(for: due))
                     .lineLimit(1)
             }
+            removeButton
         }
         .padding(.horizontal, Space.sm)
         .padding(.vertical, Space.xs)
@@ -80,6 +81,35 @@ struct VisionTileRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityHidden(true)   // the whole tile is the toggle
+    }
+
+    // MARK: - Remove
+
+    /// Take this task off the board.
+    ///
+    /// Added because the context menu turned out not to count as a way to do
+    /// this (#446 follow-up). Right-click worked the whole time, and that is
+    /// exactly the problem: an action whose only route is a gesture you have to
+    /// already suspect is there reads, to the person using it, as an action that
+    /// does not exist. Reserved always and revealed on hover, so it costs 20pt
+    /// of title width and no layout shift.
+    ///
+    /// Detach, NOT delete — the same split the menu draws. The `help` string is
+    /// load-bearing rather than decorative: an unlabelled × next to a task is
+    /// most naturally read as "delete this task", and the whole point is that it
+    /// does not.
+    private var removeButton: some View {
+        Button(action: onRemove) {
+            Image(systemName: "xmark")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Tokens.mutedSoft)
+                .frame(width: VisionBlockMetrics.rowActionSlot, height: VisionBlockMetrics.rowActionSlot)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(hovering ? 1 : 0)
+        .help("Remove from board")
+        .accessibilityLabel("Remove \(todo.title) from board")
     }
 
     // MARK: - Menu

@@ -128,6 +128,19 @@ struct MacClearTextField: NSViewRepresentable {
     /// block title is `.edHeading` and passes `"Inter-SemiBold"` (#446).
     var fontName: String = "Inter-Regular"
 
+    /// Point size, defaulting to the body step of the ramp.
+    ///
+    /// Same argument as `fontName` one step further out. That parameter exists
+    /// because two ramp steps share a size and differ in weight; this one exists
+    /// because some do not share a size at all. The vision board's notes render
+    /// as `.edSubheadline`, which is 12pt where body is 13pt, and a field pinned
+    /// to the body size would grow the text the moment it was clicked — the same
+    /// jump #301 fixed, in the other axis.
+    ///
+    /// Nil rather than a literal default so the ramp stays the single source for
+    /// every call site that has not opted out.
+    var pointSize: CGFloat? = nil
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     /// Apply the placeholder as either a plain string (default styling) or an
@@ -172,7 +185,7 @@ struct MacClearTextField: NSViewRepresentable {
         // drifted 2pt larger and clicking a row to rename would have made the
         // text jump. Reading the size from the ramp couples them in code rather
         // than in a comment nobody re-reads (issue #301).
-        let bodySize = EdMetrics.bodyPointSize
+        let bodySize = pointSize ?? EdMetrics.bodyPointSize
         field.font = NSFont(name: fontName, size: bodySize) ?? .systemFont(ofSize: bodySize)
         field.textColor = NSColor(Tokens.ink)
         applyPlaceholder(to: field)

@@ -184,6 +184,40 @@ final class VisionBoardViewModel {
         await apply(blockID) { try await self.board.detach(taskID: taskID, from: blockID) }
     }
 
+    // MARK: - Notes
+    //
+    // The other half of a block's contents, and the half it owns outright.
+    // Nothing here touches the task table: a note is not a task, does not appear
+    // in Tasks, and does not count toward the block's progress. That last one is
+    // deliberate — `3/8` is a claim about work items, and letting a scribbled
+    // reminder move the number would make the only quantitative thing on the
+    // card stop meaning anything.
+
+    /// Add a line item and return its id, so the caller can drop a caret into it.
+    ///
+    /// A blank note is the normal case: the row appears already in edit. If the
+    /// user clicks away without typing, committing empty text removes it again
+    /// (`setNoteText`), so an abandoned add leaves nothing behind.
+    @discardableResult
+    func addNote(to blockID: UUID, text: String = "") async -> UUID? {
+        do {
+            let result = try await board.addNote(to: blockID, text: text)
+            replace(result.block)
+            return result.note.id
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func setNoteText(_ noteID: UUID, in blockID: UUID, to text: String) async {
+        await apply(blockID) { try await self.board.setNoteText(noteID, in: blockID, to: text) }
+    }
+
+    func deleteNote(_ noteID: UUID, from blockID: UUID) async {
+        await apply(blockID) { try await self.board.deleteNote(noteID, from: blockID) }
+    }
+
     // MARK: - Task writes
     //
     // The board mutates real tasks, not shadows of them. Completing a tile here
@@ -254,13 +288,16 @@ final class VisionBoardViewModel {
 
     private func apply(_ id: UUID, _ work: () async throws -> VisionBlock) async {
         do {
-            let updated = try await work()
-            if let index = blocks.firstIndex(where: { $0.id == id }) {
-                blocks[index] = updated
-            }
+            replace(try await work())
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Swap a freshly written block into the local array in place.
+    private func replace(_ block: VisionBlock) {
+        guard let index = blocks.firstIndex(where: { $0.id == block.id }) else { return }
+        blocks[index] = block
     }
 
     /// Keep `blocks` in reading order after anything that moves one, so Tab

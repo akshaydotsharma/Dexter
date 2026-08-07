@@ -484,6 +484,30 @@ enum VisionBlockMetrics {
     /// minimum on purpose: the visible grip glyph carries the affordance, the
     /// whole corner reveals it on hover, and ⌥-arrow is the accessible route.
     static let resizeTarget: CGFloat = 20
+
+    /// A note: one line of `.edSubheadline` with no tile chrome around it.
+    ///
+    /// Deliberately shorter than `tileHeight`. A note is the block's own line of
+    /// text, a task is a borrowed record, and the height difference is the
+    /// cheapest signal that they are not the same kind of thing.
+    ///
+    /// 20 and not 18, which is what a 12pt line wants. Clicking a note swaps the
+    /// `Text` for an `NSTextField`, and an `NSTextField` carries cell padding a
+    /// `Text` does not — at 18 it renders its descenders into the clip edge, so
+    /// editing a note would visibly crop it.
+    static let noteRow: CGFloat = 20
+    /// Gap between notes. Tighter than `tileSpacing`, so a run of notes reads as
+    /// one list rather than as several loose rows.
+    static let noteSpacing: CGFloat = Space.xxs
+    /// How many notes a block shows inline before the rest fold into `+N more`.
+    ///
+    /// A ceiling on top of whatever fits, at every tier. Notes are cheap to add
+    /// and a block whose whole face is notes has stopped saying what it is —
+    /// the same reason medium caps tiles at three.
+    static let maxInlineNotes = 4
+    /// Reserved trailing square on a tile or a note for its remove button.
+    /// Always occupied, so revealing the button on hover shifts no text.
+    static let rowActionSlot: CGFloat = 20
 }
 
 extension View {

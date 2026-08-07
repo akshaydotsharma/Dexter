@@ -102,6 +102,8 @@ extension Font {
 enum EdMetrics {
     /// Point size of `.edBody` on this platform.
     static var bodyPointSize: CGFloat { EdSize.body }
+    /// Point size of `.edSubheadline` on this platform.
+    static var subheadlinePointSize: CGFloat { EdSize.subheadline }
 }
 
 // MARK: - Eyebrow modifier

@@ -110,15 +110,24 @@ private struct VisionAttachRow: View {
     }
 }
 
-/// Every tile in a block, for the `+N more` button at medium.
+/// Everything in a block, for the `+N more` button.
 ///
-/// A block that is showing three of nine tiles still has to make the other six
-/// reachable without resizing it, and a popover is the one affordance that does
-/// that without changing the board's layout.
+/// A block showing three of nine rows still has to make the other six reachable
+/// without resizing it, and a popover is the one affordance that does that
+/// without changing the board's layout.
+///
+/// Notes as well as tiles, because `+N more` counts both and an overflowed note
+/// would otherwise have no route at all — a task at least still exists in Tasks,
+/// where a note exists nowhere else. They keep the card's order: notes first,
+/// then tiles.
 struct VisionAllTilesPopover: View {
     let viewModel: VisionBoardViewModel
     let block: VisionBlock
     let onToggle: (Todo) -> Void
+
+    /// Which note holds a caret. Same ownership as on the card and for the same
+    /// reason: one editor at a time, decided in one place.
+    @State private var editingNoteID: UUID?
 
     var body: some View {
         let tiles = viewModel.tiles(for: block)
@@ -128,6 +137,23 @@ struct VisionAllTilesPopover: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: VisionBlockMetrics.tileSpacing) {
+                    if !block.notes.isEmpty {
+                        VStack(alignment: .leading, spacing: VisionBlockMetrics.noteSpacing) {
+                            ForEach(block.notes) { note in
+                                VisionNoteRow(
+                                    note: note,
+                                    isEditing: editingNoteID == note.id,
+                                    onBeginEdit: { editingNoteID = note.id },
+                                    onCommit: { text in commit(note, to: text) },
+                                    onDelete: {
+                                        editingNoteID = nil
+                                        Task { await viewModel.deleteNote(note.id, from: block.id) }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
                     ForEach(tiles) { todo in
                         VisionTileRow(
                             todo: todo,
@@ -144,6 +170,13 @@ struct VisionAllTilesPopover: View {
         .padding(Space.md)
         .frame(width: 320)
         .background(Tokens.surface)
+    }
+
+    private func commit(_ note: VisionNote, to text: String) {
+        editingNoteID = nil
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != note.text else { return }
+        Task { await viewModel.setNoteText(note.id, in: block.id, to: trimmed) }
     }
 }
 

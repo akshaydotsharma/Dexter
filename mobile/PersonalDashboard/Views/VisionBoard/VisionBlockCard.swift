@@ -63,6 +63,14 @@ struct VisionBlockCard: View {
     @FocusState private var addFocused: Bool
     @State private var showingAllTiles = false
     @State private var showingAttach = false
+    /// What the add row's field will make on Return.
+    @State private var addKind: VisionAddKind = .task
+    /// The note currently holding a caret, or nil.
+    ///
+    /// Owned here rather than by `VisionNoteRow` so that starting an edit on one
+    /// note ends it on any other by construction, and so that a note created
+    /// from the menu can be opened in edit by the code that created it.
+    @State private var editingNoteID: UUID?
 
     /// Continuous while a resize is in hand or settling, the block's cell size
     /// otherwise. When the session finally clears, this expression flips from
@@ -134,7 +142,7 @@ struct VisionBlockCard: View {
                 metaLine.padding(.top, Space.xs)
             }
             if tier != .small {
-                tileStack.padding(.top, Space.md)
+                contentStack.padding(.top, Space.md)
             }
             Spacer(minLength: 0)
             if tier == .large {
@@ -246,6 +254,9 @@ struct VisionBlockCard: View {
             }
             Divider()
             Button("Attach existing task…") { showingAttach = true }
+            // Here as well as on the add row, because the add row only exists at
+            // large and a medium block has to be able to take a note too.
+            Button("Add note") { addNote() }
             Divider()
             Button(role: .destructive) {
                 Task { await viewModel.deleteBlock(block.id) }
@@ -332,83 +343,134 @@ struct VisionBlockCard: View {
         total > 0 ? CGFloat(done) / CGFloat(total) : 0
     }
 
-    // MARK: - Tiles
+    // MARK: - Contents
 
+    /// The block's notes and then its tiles, in one stack.
+    ///
+    /// One stack rather than two, because they share a height budget and a
+    /// `+N more` button. Notes come first: reading order on a block runs from
+    /// what it is to what is left to do, and the lines that exist only here
+    /// outrank the ones you can also see in Tasks.
     @ViewBuilder
-    private var tileStack: some View {
-        let all = tiles
-        let capacity = tileCapacity
-        let shown = Array(all.prefix(capacity))
-        let hidden = all.count - shown.count
+    private var contentStack: some View {
+        let fit = contentFit
+        let shownNotes = visibleNotes(limit: fit.notes)
+        let shownTiles = Array(tiles.prefix(fit.tiles))
 
         VStack(alignment: .leading, spacing: VisionBlockMetrics.tileSpacing) {
-            if all.isEmpty {
-                // Never an empty tile skeleton: a bordered empty rectangle reads
-                // as a broken tile, not as an invitation.
-                Text("No tasks yet")
-                    .font(.edSubheadline)
-                    .foregroundStyle(Tokens.mutedSoft)
-            } else {
-                ForEach(Array(shown.enumerated()), id: \.element.id) { index, todo in
-                    VisionTileRow(
-                        todo: todo,
-                        showsDue: true,
-                        onToggle: { toggle(todo) },
-                        onRemove: { Task { await viewModel.detach(taskID: todo.id, from: block.id) } },
-                        onDelete: { Task { await viewModel.deleteTask(todo.id, from: block.id) } }
-                    )
-                    .overlay {
-                        if tileCursor == index {
-                            RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-                                .stroke(Tokens.accentVision, lineWidth: 1)
-                        }
-                    }
-                    .draggable(todo.id.uuidString)
-                    // The whole row: the checkbox, the context menu, and the
-                    // drag that moves a task to another block all belong to
-                    // SwiftUI and all need the pointer layer to step aside.
-                    .visionPassThrough()
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-
-                if hidden > 0 {
-                    Button {
-                        showingAllTiles = true
-                    } label: {
-                        Text("+\(hidden) more")
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                    }
-                    .buttonStyle(.plain)
-                    .visionPassThrough()
-                    .macAnchoredPopover(isPresented: $showingAllTiles, preferredEdge: .minY) {
-                        VisionAllTilesPopover(
-                            viewModel: viewModel,
-                            block: block,
-                            onToggle: { toggle($0) }
+            if !shownNotes.isEmpty {
+                VStack(alignment: .leading, spacing: VisionBlockMetrics.noteSpacing) {
+                    ForEach(shownNotes) { note in
+                        VisionNoteRow(
+                            note: note,
+                            isEditing: editingNoteID == note.id,
+                            onBeginEdit: { editingNoteID = note.id },
+                            onCommit: { text in commitNote(note, to: text) },
+                            onDelete: {
+                                editingNoteID = nil
+                                Task { await viewModel.deleteNote(note.id, from: block.id) }
+                            }
                         )
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
             }
+
+            if tiles.isEmpty, block.notes.isEmpty {
+                // Never an empty tile skeleton: a bordered empty rectangle reads
+                // as a broken tile, not as an invitation. Suppressed once there
+                // are notes — a block with three lines on it is not empty, and
+                // saying so under them would be arguing with what is on screen.
+                Text("No tasks yet")
+                    .font(.edSubheadline)
+                    .foregroundStyle(Tokens.mutedSoft)
+            }
+
+            ForEach(Array(shownTiles.enumerated()), id: \.element.id) { index, todo in
+                VisionTileRow(
+                    todo: todo,
+                    showsDue: true,
+                    onToggle: { toggle(todo) },
+                    onRemove: { Task { await viewModel.detach(taskID: todo.id, from: block.id) } },
+                    onDelete: { Task { await viewModel.deleteTask(todo.id, from: block.id) } }
+                )
+                .overlay {
+                    if tileCursor == index {
+                        RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                            .stroke(Tokens.accentVision, lineWidth: 1)
+                    }
+                }
+                .draggable(todo.id.uuidString)
+                // The whole row: the checkbox, the context menu, the remove
+                // button, and the drag that moves a task to another block all
+                // belong to SwiftUI and all need the pointer layer to step
+                // aside.
+                .visionPassThrough()
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            if fit.hidden > 0 {
+                Button {
+                    showingAllTiles = true
+                } label: {
+                    Text("+\(fit.hidden) more")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                }
+                .buttonStyle(.plain)
+                .visionPassThrough()
+                .macAnchoredPopover(isPresented: $showingAllTiles, preferredEdge: .minY) {
+                    VisionAllTilesPopover(
+                        viewModel: viewModel,
+                        block: block,
+                        onToggle: { toggle($0) }
+                    )
+                }
+            }
         }
-        .animation(motion(.easeOut(duration: 0.18)), value: all.map(\.id))
+        .animation(motion(.easeOut(duration: 0.18)), value: tiles.map(\.id))
+        .animation(motion(.easeOut(duration: 0.18)), value: block.notes.map(\.id))
     }
 
-    /// How many tiles fit, by arithmetic on `VisionBlockMetrics` rather than by
-    /// measuring.
+    /// The first `limit` notes, except that the one being edited is always among
+    /// them.
     ///
-    /// A `GeometryReader` here would be reading back a height this card set
-    /// itself (`rows × cellHeight - gutter`), and during a resize it would feed
-    /// the layout into itself — the hazard `TripCoverMetrics` documents. The
-    /// budget below is deliberately conservative: it always reserves two lines
-    /// for the title, so a one-line title shows one fewer tile than it strictly
-    /// could. The other way round clips the add row off the bottom of the card,
-    /// and only one of those is a visual defect.
-    private var tileCapacity: Int {
-        guard tier != .small else { return 0 }
+    /// Notes append, so a block already showing its maximum puts the note you
+    /// just asked for beyond the fold — and a caret you cannot see, in a field
+    /// that commits on blur, silently eats what you type. The one being edited
+    /// takes the last visible slot instead, which keeps the row count and the
+    /// `+N more` total exactly where they were.
+    private func visibleNotes(limit: Int) -> [VisionNote] {
+        var shown = Array(block.notes.prefix(limit))
+        guard
+            let editingNoteID,
+            !shown.contains(where: { $0.id == editingNoteID }),
+            let editing = block.notes.first(where: { $0.id == editingNoteID })
+        else { return shown }
+        // Nothing fit at all, so one row overflows for the length of the edit.
+        // Better than a field with no pixels, which is the alternative.
+        if !shown.isEmpty { shown.removeLast() }
+        shown.append(editing)
+        return shown
+    }
 
-        let height = VisionGrid.blockSize(columns: block.w, rows: block.h).height
-        var budget = height
+    /// How many notes and tiles this block shows.
+    ///
+    /// The arithmetic itself is in `VisionContentFit`, which is pure and unit
+    /// tested. What is left here is the budget: how much height the card has
+    /// after its own chrome.
+    ///
+    /// Measured by arithmetic and never by a `GeometryReader`, which would be
+    /// reading back a height this card set itself (`rows × cellHeight - gutter`)
+    /// and, during a resize, feeding the layout into itself — the hazard
+    /// `TripCoverMetrics` documents. Deliberately conservative: it always
+    /// reserves two lines for the title, so a one-line title shows one fewer row
+    /// than it strictly could. The other way round clips the add row off the
+    /// bottom of the card, and only one of those is a visual defect.
+    private var contentFit: VisionContentFit.Fit {
+        guard tier != .small else { return .init(notes: 0, tiles: 0, hidden: 0) }
+
+        var budget = VisionGrid.blockSize(columns: block.w, rows: block.h).height
         budget -= VisionGrid.railHeight
         budget -= Space.md * 2                              // card padding
         budget -= VisionBlockMetrics.titleLine * 2          // title, worst case
@@ -417,25 +479,42 @@ struct VisionBlockCard: View {
         budget -= Space.md                                  // gap above the stack
         if tier == .large { budget -= VisionBlockMetrics.addRowBlock }
 
-        let raw = rows(in: budget)
         // The cap of 3 holds even on a tall medium block. A 2 × 8 block showing
         // twelve tiles is exactly the "300 lines of task text" failure the
         // concept doc rules out; the `+N more` row anchors to the foot and the
         // space between is left empty, which is the honest rendering of "you
         // made this tall, and medium blocks do not list everything".
-        let ceiling = tier == .medium ? 3 : Int.max
-        if tiles.count <= min(raw, ceiling) { return min(raw, ceiling) }
-
-        // Overflow, so the `+N more` row has to be paid for out of the same
-        // budget before the remaining rows are counted.
-        let withMore = budget - VisionBlockMetrics.moreRow - VisionBlockMetrics.tileSpacing
-        return max(0, min(rows(in: withMore), ceiling))
+        return VisionContentFit.fit(
+            budget: budget,
+            notes: block.notes.count,
+            tiles: tiles.count,
+            tileCeiling: tier == .medium ? 3 : .max
+        )
     }
 
-    private func rows(in budget: CGFloat) -> Int {
-        guard budget > 0 else { return 0 }
-        let unit = VisionBlockMetrics.tileHeight + VisionBlockMetrics.tileSpacing
-        return max(0, Int(((budget + VisionBlockMetrics.tileSpacing) / unit).rounded(.down)))
+    /// Commit an edited note and leave edit mode.
+    ///
+    /// Empty text removes the note; the service owns that rule so the `+` route,
+    /// the popover and this all agree about it. Unchanged text writes nothing —
+    /// clicking a note and clicking away should not bump `updatedAt` and make
+    /// the block look edited.
+    private func commitNote(_ note: VisionNote, to text: String) {
+        editingNoteID = nil
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != note.text else { return }
+        Task { await viewModel.setNoteText(note.id, in: block.id, to: trimmed) }
+    }
+
+    /// Add a note and drop a caret straight into it.
+    ///
+    /// The row appears blank and in edit, which is the same motion as making a
+    /// block. If the user types nothing and clicks away, committing empty text
+    /// deletes it again, so an abandoned add leaves the card exactly as it was.
+    private func addNote() {
+        Task {
+            guard let id = await viewModel.addNote(to: block.id) else { return }
+            editingNoteID = id
+        }
     }
 
     /// The 400ms pause before a completed tile sinks. Without it the tile
@@ -462,14 +541,10 @@ struct VisionBlockCard: View {
                 .frame(height: 0.5)
 
             HStack(spacing: Space.sm) {
-                Image(systemName: "plus")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Tokens.mutedSoft)
-                    // Aligns with the tile checkboxes above it.
-                    .frame(width: 26 - Space.sm, alignment: .center)
+                addKindMenu
 
                 MacClearTextField(
-                    placeholder: "Add task",
+                    placeholder: addKind.placeholder,
                     text: $addDraft,
                     isFocused: Binding(get: { addFocused }, set: { addFocused = $0 }),
                     onSubmit: { commitAddRow() },
@@ -490,14 +565,51 @@ struct VisionBlockCard: View {
         .padding(.top, Space.sm)
     }
 
+    /// Switches what the field makes. The glyph is the answer, so the control
+    /// says what it will do before you commit rather than after.
+    ///
+    /// A menu on the leading glyph rather than a segmented control beside the
+    /// field: the add row is 26pt tall inside a card that may be 172pt wide, and
+    /// a second visible control would cost more width than the whole feature is
+    /// worth. The placeholder text carries the same answer for anyone who does
+    /// not read the glyph.
+    private var addKindMenu: some View {
+        Menu {
+            Picker("Add", selection: $addKind) {
+                ForEach(VisionAddKind.allCases) { kind in
+                    Label(kind.menuLabel, systemImage: kind.glyph).tag(kind)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: addKind.glyph)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Tokens.mutedSoft)
+                // Aligns with the tile checkboxes above it.
+                .frame(width: 26 - Space.sm, alignment: .center)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 26 - Space.sm)
+        .help("Add a task or a note")
+        .accessibilityLabel("What to add")
+    }
+
     private func commitAddRow() {
         let text = addDraft
         addDraft = ""
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         Task {
-            await viewModel.addTask(title: text, to: block.id)
-            // Focus is deliberately NOT reset: `MacClearTextField` keeps the
-            // field first responder on Return so you can keep going.
+            // Focus is deliberately NOT reset in either branch:
+            // `MacClearTextField` keeps the field first responder on Return so
+            // you can keep going.
+            switch addKind {
+            case .task:
+                await viewModel.addTask(title: text, to: block.id)
+            case .note:
+                await viewModel.addNote(to: block.id, text: text)
+            }
         }
     }
 
@@ -600,6 +712,44 @@ struct VisionBlockCard: View {
         parts.append("\(done) of \(tiles.count) tasks")
         parts.append("Column \(block.col + 1), row \(block.row + 1), \(block.w) by \(block.h) cells")
         return parts.joined(separator: ". ")
+    }
+}
+
+// MARK: - Add kind
+
+/// What the large block's add row is about to make.
+///
+/// A task leaves the block and goes on to live in Tasks. A note never leaves.
+/// That is the entire distinction and it is worth one control, because the two
+/// are indistinguishable at the moment of typing and very different afterwards.
+enum VisionAddKind: String, CaseIterable, Identifiable {
+    case task
+    case note
+
+    var id: String { rawValue }
+
+    var placeholder: String {
+        switch self {
+        case .task: "Add task"
+        case .note: "Add note"
+        }
+    }
+
+    var menuLabel: String {
+        switch self {
+        case .task: "Task"
+        case .note: "Note"
+        }
+    }
+
+    /// `plus` for a task, keeping the add row exactly as it was for the case
+    /// that was already there. `text.append` for a note, which is the closest
+    /// thing SF Symbols has to "another line on this list".
+    var glyph: String {
+        switch self {
+        case .task: "plus"
+        case .note: "text.append"
+        }
     }
 }
 

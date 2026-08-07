@@ -72,6 +72,20 @@ final class LocalVisionBlock {
     /// `VisionBoardService` prunes on write.
     var membersData: Data
 
+    /// Ordered `VisionNote`s, JSON-encoded.
+    ///
+    /// Optional where `membersData` is not, and only because of when each was
+    /// added. `membersData` was there when the table was created, so every row
+    /// has one; this arrives on a model with rows already on disk, and a
+    /// non-optional `Data` would need SwiftData to invent a value for each of
+    /// them. It invents empty `Data`, which is not valid JSON and would decode
+    /// to nothing — the right answer by luck rather than by construction. An
+    /// optional says "this row predates notes", which is the fact, and `notes`
+    /// below turns it into the empty array in one place.
+    ///
+    /// Read and write through `notes`, never directly.
+    var notesData: Data?
+
     var position: Int?
     var version: Int64
     var createdAt: Date
@@ -93,6 +107,7 @@ final class LocalVisionBlock {
         gridVersion: Int? = VisionGrid.schemaVersion,
         state: BlockState = .default,
         members: [UUID] = [],
+        notes: [VisionNote] = [],
         position: Int? = nil,
         version: Int64 = 0,
         createdAt: Date = Date(),
@@ -111,6 +126,7 @@ final class LocalVisionBlock {
         self.gridVersion = gridVersion
         self.state = state.rawValue
         self.membersData = LocalVisionBlock.encode(members)
+        self.notesData = LocalVisionBlock.encodeNotes(notes)
         self.position = position
         self.version = version
         self.createdAt = createdAt
@@ -141,6 +157,14 @@ final class LocalVisionBlock {
         set { membersData = LocalVisionBlock.encode(newValue) }
     }
 
+    /// Read/write the block's own line items. Nil and a decode failure both read
+    /// as empty, for the same reason `members` does: a block that renders without
+    /// its notes is recoverable, and a board that crashes on load is not.
+    var notes: [VisionNote] {
+        get { LocalVisionBlock.decodeNotes(notesData) }
+        set { notesData = LocalVisionBlock.encodeNotes(newValue) }
+    }
+
     func toDTO() -> VisionBlock {
         VisionBlock(
             id: clientUUID,
@@ -152,6 +176,7 @@ final class LocalVisionBlock {
             h: h,
             state: blockState,
             members: members,
+            notes: notes,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -169,5 +194,22 @@ final class LocalVisionBlock {
     private static func decode(_ data: Data) -> [UUID] {
         let strings = (try? JSONDecoder().decode([String].self, from: data)) ?? []
         return strings.compactMap(UUID.init(uuidString:))
+    }
+
+    /// Notes go through `VisionNote`'s own `Codable` rather than a hand-rolled
+    /// pair, because unlike a bare UUID a note has fields that will grow.
+    ///
+    /// Named apart from the membership pair rather than overloaded. `Data`
+    /// promotes to `Data?` silently, so `decode(membersData)` would still
+    /// type-check against a `Data?` overload — and picking the wrong one would
+    /// not fail to build, it would return an empty array and read as a block
+    /// that had lost its tasks.
+    private static func encodeNotes(_ notes: [VisionNote]) -> Data {
+        (try? JSONEncoder().encode(notes)) ?? Data("[]".utf8)
+    }
+
+    private static func decodeNotes(_ data: Data?) -> [VisionNote] {
+        guard let data else { return [] }
+        return (try? JSONDecoder().decode([VisionNote].self, from: data)) ?? []
     }
 }
