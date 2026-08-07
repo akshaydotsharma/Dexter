@@ -145,6 +145,21 @@ final class VisionInteraction {
 
     var isManipulating: Bool { drag != nil || resize != nil }
 
+    /// True while a block's ellipsis menu is on screen.
+    ///
+    /// Set by `MacMenuButton` around the whole life of the `NSMenu`. The pointer
+    /// leaves the card the moment the menu opens, so without this the tracking
+    /// area reports `mouseExited`, hover clears, and the ellipsis — which is
+    /// revealed on hover — disappears under the pointer that just clicked it.
+    /// Reported as *"the three dots disappear when I click on it"*.
+    var menuTracking = false
+
+    /// Hover is frozen: keep reporting whatever it last said.
+    ///
+    /// A drag or a resize owns the pointer, and so does an open menu. In all
+    /// three the cursor's position stops meaning "what am I pointing at".
+    var holdsHover: Bool { isManipulating || menuTracking }
+
     /// One spring for both gestures, so a drop and a resize release read as the
     /// same physical event.
     var settle: Animation {

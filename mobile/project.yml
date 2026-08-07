@@ -189,6 +189,7 @@ targets:
       - path: PersonalDashboard/Views/Components/MarkdownView.swift
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
+      - path: PersonalDashboard/Views/Shell/MacMenuButton.swift
       # Chat (issue #281). Text chat only — the voice capture path
       # (VoiceCaptureViewModel / SpeechTranscriber / overlay / VoiceWaveform /
       # VoiceAurora / WaveformBars) is AVFoundation/Speech-coupled, gated with

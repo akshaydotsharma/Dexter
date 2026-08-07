@@ -62,6 +62,11 @@ struct VisionBlockCard: View {
     /// `VisionInteraction.popover`.
     let openPopover: VisionInteraction.Popover?
     let onPopover: (VisionInteraction.Popover?) -> Void
+    /// True while this block's ellipsis menu is on screen, false once it is
+    /// gone. Freezes the board's hover for the menu's life so the ellipsis stays
+    /// visible under it, and closes any popover, since one thing at a time is
+    /// the whole point of a menu.
+    let onMenuTracking: (Bool) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -300,32 +305,20 @@ struct VisionBlockCard: View {
 
     /// Always 24 × 24, `opacity 0` until hover. Reserved rather than inserted so
     /// hovering a block shifts nothing.
+    ///
+    /// Visible for as long as anything it opened is on screen, not just while
+    /// the pointer is on the card. A menu or a popover with no visible control
+    /// behind it is a panel from nowhere — see `ellipsisIsVisible`.
     private var ellipsisSlot: some View {
-        Menu {
-            Picker("State", selection: stateBinding) {
-                ForEach(BlockState.allCases) { state in
-                    Label(state.displayName, systemImage: state.glyph).tag(state)
-                }
-            }
-            Divider()
-            Button("Attach existing task…") { showingAttach.wrappedValue = true }
-            Divider()
-            Button(role: .destructive) {
-                Task { await viewModel.deleteBlock(block.id) }
-            } label: {
-                Label("Delete block", systemImage: "trash")
-            }
-        } label: {
+        MacMenuButton(entries: menuEntries, onTrackingChange: onMenuTracking) {
             Image(systemName: "ellipsis")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Tokens.muted)
                 .frame(width: VisionBlockMetrics.ellipsisSlot, height: VisionBlockMetrics.ellipsisSlot)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .frame(width: VisionBlockMetrics.ellipsisSlot, height: VisionBlockMetrics.ellipsisSlot)
-        .opacity(hovering ? 1 : 0)
+        .opacity(ellipsisIsVisible ? 1 : 0)
         // The slot is always hittable now, not gated on `hovering` the way it
         // was. Its rect is published to the pointer layer unconditionally — a
         // dead zone that only sometimes accepts a click is worse than an
@@ -345,11 +338,41 @@ struct VisionBlockCard: View {
         }
     }
 
-    private var stateBinding: Binding<BlockState> {
-        Binding(
-            get: { block.state },
-            set: { newValue in Task { await viewModel.setState(block.id, to: newValue) } }
+    /// The ellipsis is on screen while the pointer is on the card, and for as
+    /// long as anything it opened is still up.
+    ///
+    /// Hover alone is not enough. An open menu takes the pointer off the card,
+    /// and a popover outlives the hover that produced it, so the control that
+    /// opened either one would fade out from under it — leaving a panel with
+    /// nothing behind it to say where it came from. `menuTracking` covers the
+    /// first case by freezing hover for the menu's life; this covers the second.
+    private var ellipsisIsVisible: Bool {
+        hovering || openPopover == .attach(block.id)
+    }
+
+    /// Built on press by `MacMenuButton`, so the state checkmark is current.
+    private func menuEntries() -> [MacMenuEntry] {
+        var entries: [MacMenuEntry] = [.header("State")]
+        entries += BlockState.allCases.map { state in
+            .item(
+                title: state.displayName,
+                systemImage: state.glyph,
+                isOn: state == block.state
+            ) {
+                Task { await viewModel.setState(block.id, to: state) }
+            }
+        }
+        entries.append(.separator)
+        entries.append(
+            .item(title: "Attach existing task…") { showingAttach.wrappedValue = true }
         )
+        entries.append(.separator)
+        entries.append(
+            .item(title: "Delete block", systemImage: "trash") {
+                Task { await viewModel.deleteBlock(block.id) }
+            }
+        )
+        return entries
     }
 
     // MARK: - Progress and urgency

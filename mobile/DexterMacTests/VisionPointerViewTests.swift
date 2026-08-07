@@ -529,6 +529,67 @@ final class VisionPointerViewTests: XCTestCase {
         XCTAssertNil(interaction.popover)
     }
 
+    // MARK: - 7c. Hover while a menu is open
+
+    /// Reported 2026-08-07: *"the three dots disappear when I click on it."*
+    ///
+    /// The ellipsis is revealed on block hover, and opening its menu moves the
+    /// pointer onto the menu's own window — so the tracking area reports
+    /// `mouseExited`, hover clears, and the control vanishes from under the
+    /// pointer that just pressed it. The menu is left floating with nothing on
+    /// screen to say where it came from.
+    ///
+    /// A menu owns the pointer the same way a drag does, so hover freezes for
+    /// exactly as long as it is up.
+    func testAnOpenMenuKeepsTheBlockHovered() async throws {
+        let block = try await makeBlock("hovered", col: 0, row: 0)
+        view.mouseMoved(with: mouse(
+            .mouseMoved, at: CGPoint(x: rect(block).midX, y: rect(block).midY)
+        ))
+        XCTAssertEqual(interaction.hoveredBlock, block.id)
+
+        interaction.menuTracking = true
+        // A move-typed event on purpose: `NSEvent.mouseEvent` returns nil for
+        // `.mouseExited` (it wants `enterExitEvent`, which needs a real tracking
+        // area), and `mouseExited(with:)` never reads the event anyway.
+        view.mouseExited(with: mouse(.mouseMoved, at: .zero))
+
+        XCTAssertEqual(interaction.hoveredBlock, block.id, "the ellipsis must stay visible under its own menu")
+    }
+
+    /// And a move onto another block while the menu is up must not re-point the
+    /// hover either: the menu belongs to the block it was opened on.
+    func testAMoveWhileTheMenuIsOpenDoesNotChangeWhatIsHovered() async throws {
+        let block = try await makeBlock("hovered", col: 0, row: 0)
+        let other = try await makeBlock("elsewhere", col: 6, row: 0)
+        view.mouseMoved(with: mouse(
+            .mouseMoved, at: CGPoint(x: rect(block).midX, y: rect(block).midY)
+        ))
+
+        interaction.menuTracking = true
+        view.mouseMoved(with: mouse(
+            .mouseMoved, at: CGPoint(x: rect(other).midX, y: rect(other).midY)
+        ))
+
+        XCTAssertEqual(interaction.hoveredBlock, block.id)
+    }
+
+    /// The freeze is for the menu's lifetime and not a moment longer, or the
+    /// board would be stuck reporting a hover that has nothing to do with where
+    /// the pointer is.
+    func testHoverResumesOnceTheMenuHasClosed() async throws {
+        let block = try await makeBlock("hovered", col: 0, row: 0)
+        view.mouseMoved(with: mouse(
+            .mouseMoved, at: CGPoint(x: rect(block).midX, y: rect(block).midY)
+        ))
+        interaction.menuTracking = true
+
+        interaction.menuTracking = false
+        view.mouseMoved(with: mouse(.mouseMoved, at: CGPoint(x: 68 * 9 + 20, y: 68 * 6 + 20)))
+
+        XCTAssertNil(interaction.hoveredBlock)
+    }
+
     // MARK: - 8. Keyboard parity
 
     /// Arrows and ⌥-arrows are the accessible equivalent of the drag and the

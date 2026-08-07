@@ -231,7 +231,13 @@ struct VisionBoardView: View {
             // against its own id, and passing the board's one popover means a
             // click that closes it closes it everywhere at once.
             openPopover: interaction.popover,
-            onPopover: { interaction.popover = $0 }
+            onPopover: { interaction.popover = $0 },
+            onMenuTracking: { tracking in
+                interaction.menuTracking = tracking
+                // A menu and a popover are both "the one thing you are doing
+                // with this block", so opening the menu puts the popover away.
+                if tracking { interaction.popover = nil }
+            }
         )
         .offset(x: origin.x, y: origin.y)
         // Displaced neighbours slide when the drop lands; the block in hand does

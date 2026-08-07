@@ -341,7 +341,7 @@ final class VisionPointerView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        guard let interaction, !interaction.isManipulating else { return }
+        guard let interaction, !interaction.holdsHover else { return }
         interaction.hoveredBlock = nil
         interaction.hoverCell = nil
         NSCursor.arrow.set()
@@ -352,7 +352,7 @@ final class VisionPointerView: NSView {
     /// block: the grip and the ellipsis are revealed on block hover and would
     /// flicker off the moment you moved toward a checkbox.
     private func updateHover(at point: CGPoint) {
-        guard let interaction, !interaction.isManipulating else { return }
+        guard let interaction, !interaction.holdsHover else { return }
 
         if let id = VisionHitTest.block(at: point, in: frames) {
             if interaction.hoveredBlock != id { interaction.hoveredBlock = id }
