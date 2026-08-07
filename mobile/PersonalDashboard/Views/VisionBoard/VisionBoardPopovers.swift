@@ -157,11 +157,12 @@ struct VisionAllTilesPopover: View {
         var removeFromBoard: (() -> Void)?
 
         if isItem {
-            beginEdit = { editor.begin(row.id) }
+            beginEdit = { editor.begin(row.id, in: .popover) }
             commitText = { text, continuing in
                 Task {
                     await editor.commit(
-                        row.id, in: block.id, text: text, continuing: continuing
+                        row.id, in: block.id, text: text,
+                        continuing: continuing, surface: .popover
                     )
                 }
             }
@@ -175,7 +176,7 @@ struct VisionAllTilesPopover: View {
         return VisionTileRow(
             row: row,
             showsDue: true,
-            isEditing: isItem && editor.editingID == row.id,
+            isEditing: isItem && editor.editingID(in: .popover) == row.id,
             onToggle: { toggle(row) },
             onBeginEdit: beginEdit,
             onCommit: commitText,

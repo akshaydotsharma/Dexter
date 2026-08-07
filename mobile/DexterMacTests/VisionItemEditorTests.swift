@@ -181,8 +181,8 @@ final class VisionItemEditorTests: XCTestCase {
         let b = try XCTUnwrap(caret)
         await editor.commit(b, in: blockID, text: "Second")
 
-        editor.begin(a)
-        editor.begin(b)                                    // clicked B while A was open
+        editor.begin(a, in: .card)
+        editor.begin(b, in: .card)                                    // clicked B while A was open
         await editor.commit(a, in: blockID, text: "First, edited")   // A's late blur
 
         XCTAssertEqual(caret, b)
@@ -197,7 +197,7 @@ final class VisionItemEditorTests: XCTestCase {
         await editor.commit(id, in: blockID, text: "Get three quotes")
         XCTAssertNil(caret, "precondition")
 
-        editor.begin(id)
+        editor.begin(id, in: .card)
 
         XCTAssertEqual(caret, id)
     }
@@ -265,7 +265,7 @@ final class VisionItemEditorTests: XCTestCase {
         await editor.addItem(to: blockID)
         let id = try XCTUnwrap(caret)
         await editor.commit(id, in: blockID, text: "Get three quotes")
-        editor.begin(id)
+        editor.begin(id, in: .card)
 
         await editor.cancel(id, in: blockID)
 
@@ -282,7 +282,7 @@ final class VisionItemEditorTests: XCTestCase {
         await editor.addItem(to: blockID)
         let id = try XCTUnwrap(caret)
         await editor.commit(id, in: blockID, text: "Get three quotes")
-        editor.begin(id)
+        editor.begin(id, in: .card)
 
         await editor.commit(id, in: blockID, text: "   ")
 
@@ -297,7 +297,7 @@ final class VisionItemEditorTests: XCTestCase {
         await editor.commit(id, in: blockID, text: "Get three quotes")
         let before = try XCTUnwrap(viewModel.blocks.first { $0.id == blockID }).updatedAt
 
-        editor.begin(id)
+        editor.begin(id, in: .card)
         await editor.commit(id, in: blockID, text: "Get three quotes")
 
         let after = try XCTUnwrap(viewModel.blocks.first { $0.id == blockID }).updatedAt
@@ -316,5 +316,72 @@ final class VisionItemEditorTests: XCTestCase {
         await editor.commit(id, in: blockID, text: "Typed after removal")
 
         XCTAssertEqual(try texts(), [])
+    }
+
+    // MARK: - Two surfaces, one caret
+
+    /// THE BUG. Type a new item on the card, then click `+N more`.
+    ///
+    /// Both surfaces used to read one bare `editingID`, so both mounted a field
+    /// for the same row. The popover's copy came up blank — its draft is seeded
+    /// from the STORED text, which is still empty while you are typing — took
+    /// the caret, and when the card's field committed the real text and released
+    /// it, the popover's blank field tore down and reported "". Empty text
+    /// removes an item, so the row was created, saved and destroyed in one
+    /// click.
+    ///
+    /// Reported as *"whatever I have written, that item goes away"*.
+    func testTheOverflowNeverMountsAFieldForARowTheCardIsEditing() async throws {
+        await editor.addItem(to: blockID, in: .card)
+        let id = try XCTUnwrap(caret)
+
+        XCTAssertEqual(editor.editingID(in: .card), id)
+        XCTAssertNil(
+            editor.editingID(in: .popover),
+            "the popover must not draw a second field for the row the card holds"
+        )
+    }
+
+    /// And the other way round: editing in the popover does not make the card
+    /// mount one underneath it.
+    func testTheCardNeverMountsAFieldForARowThePopoverIsEditing() async throws {
+        await editor.addItem(to: blockID, in: .popover)
+        let id = try XCTUnwrap(caret)
+
+        XCTAssertEqual(editor.editingID(in: .popover), id)
+        XCTAssertNil(editor.editingID(in: .card))
+    }
+
+    /// The full sequence, as the click produces it: type on the card, the
+    /// popover opens, the card's field blurs. The text survives.
+    func testTypingOnTheCardThenOpeningTheOverflowKeepsWhatYouTyped() async throws {
+        await editor.addItem(to: blockID, in: .card)
+        let id = try XCTUnwrap(caret)
+
+        // Opening the popover changes no editor state — it must not, or the
+        // caret would jump surfaces mid-word.
+        XCTAssertNil(editor.editingID(in: .popover), "no second field appears")
+
+        // The card's field loses focus to the popover window and commits.
+        await editor.commit(id, in: blockID, text: "Book the surveyor", surface: .card)
+
+        XCTAssertEqual(try texts(), ["Book the surveyor"])
+    }
+
+    /// Clicking a row inside the popover moves the caret there, and the card's
+    /// late blur still saves rather than deleting.
+    func testTheCaretMovesToThePopoverAndTheCardsLateBlurStillSaves() async throws {
+        await editor.addItem(to: blockID, in: .card)
+        let id = try XCTUnwrap(caret)
+        await editor.commit(id, in: blockID, text: "First", surface: .card)
+
+        editor.begin(id, in: .popover)
+        XCTAssertNil(editor.editingID(in: .card))
+
+        // The card's field, torn down by the re-render, reports its text late.
+        await editor.commit(id, in: blockID, text: "First", surface: .card)
+
+        XCTAssertEqual(try texts(), ["First"], "not deleted, not duplicated")
+        XCTAssertEqual(editor.editingID(in: .popover), id, "the caret stayed put")
     }
 }
