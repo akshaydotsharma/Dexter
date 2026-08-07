@@ -167,7 +167,10 @@ final class VisionPointerView: NSView {
         window?.makeFirstResponder(self)
 
         let point = canvasPoint(for: event)
-        switch VisionHitTest.resolve(point: point, blocks: frames, exclusions: exclusions) {
+        let hit = VisionHitTest.resolve(point: point, blocks: frames, exclusions: exclusions)
+        dismissPopover(unless: hit)
+
+        switch hit {
         case .grip(let id):
             guard let block = block(id) else { return }
             interaction.beginResize(block, from: point)
@@ -225,7 +228,10 @@ final class VisionPointerView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         guard let interaction else { return }
         let point = canvasPoint(for: event)
-        switch VisionHitTest.resolve(point: point, blocks: frames, exclusions: exclusions) {
+        let hit = VisionHitTest.resolve(point: point, blocks: frames, exclusions: exclusions)
+        dismissPopover(unless: hit)
+
+        switch hit {
         case .grip(let id), .body(let id):
             // Select, and stop. A right click that acts on one block while
             // another one is visibly selected is the failure mode worth
@@ -237,6 +243,27 @@ final class VisionPointerView: NSView {
         case .passThrough:
             super.rightMouseDown(with: event)
         }
+    }
+
+    /// Close whatever popover is open, unless the click was on a pass-through
+    /// control — which is where the popover's own trigger lives, and where its
+    /// content sits once it is up.
+    ///
+    /// This exists because `NSPopover`'s `.semitransient` dismissal does not
+    /// reach a click on this canvas. The pointer layer answers those clicks
+    /// itself, and the popover kept sitting there over a board the user had
+    /// already started dragging. Dismissing it here also removes the reopen
+    /// race: the binding goes false BEFORE `performClose`, so a re-render
+    /// arriving mid-animation cannot find `isPresented == true` alongside a
+    /// popover that is no longer shown and put it back up.
+    ///
+    /// Guarded on there already being one, because `@Observable`'s setter
+    /// publishes on every assignment rather than on every change — writing nil
+    /// over nil would re-render the whole board on each click of a drag.
+    private func dismissPopover(unless hit: VisionHit) {
+        if case .passThrough = hit { return }
+        guard interaction?.popover != nil else { return }
+        interaction?.popover = nil
     }
 
     // MARK: Cursors

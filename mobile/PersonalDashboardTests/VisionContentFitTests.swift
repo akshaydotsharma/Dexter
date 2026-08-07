@@ -69,20 +69,104 @@ final class VisionContentFitTests: XCTestCase {
         XCTAssertEqual(overflowing.rows + overflowing.hidden, 9, "every row is accounted for")
     }
 
-    // MARK: - Tier ceiling
+    /// The user's rule, on the raw arithmetic: one row's worth of space left
+    /// means one more row on the card, not a `+N more` above it.
+    func testOneRowOfSpareSpaceShowsOneMoreRowRatherThanAMoreButton() {
+        let tight = VisionContentFit.fit(budget: budget(3), rows: 4)
+        XCTAssertGreaterThan(tight.hidden, 0, "precondition: four rows do not fit in three")
 
-    /// Medium shows at most three rows however tall it is, so a 2 × 8 block is
-    /// not three hundred lines of text.
-    func testTheMediumCeilingCapsRowsRegardlessOfSpace() {
-        let fit = VisionContentFit.fit(budget: 2000, rows: 20, ceiling: 3)
-        XCTAssertEqual(fit.rows, 3)
-        XCTAssertEqual(fit.hidden, 17)
+        let roomier = VisionContentFit.fit(budget: budget(4), rows: 4)
+        XCTAssertEqual(roomier.rows, 4)
+        XCTAssertEqual(roomier.hidden, 0)
     }
 
-    func testACeilingedBlockWithNothingHiddenShowsNoMoreRow() {
-        let fit = VisionContentFit.fit(budget: 2000, rows: 3, ceiling: 3)
-        XCTAssertEqual(fit.rows, 3)
-        XCTAssertEqual(fit.hidden, 0)
+    // MARK: - A whole block
+
+    /// These go through `fit(for:rows:)` — the budget AND the division — because
+    /// that seam is where the reported defect actually was.
+    ///
+    /// The budget lived in `VisionBlockCard` as a private computed property and
+    /// capped medium blocks at three rows regardless of height. Every test above
+    /// stayed green through it: the pure arithmetic was right, and the card
+    /// handed it a number that was not. Moving the whole calculation here is what
+    /// makes the following assertable at all.
+    private func block(w: Int, h: Int, intent: String? = nil) -> VisionBlock {
+        VisionBlock(
+            id: UUID(),
+            title: "Renovate the kitchen",
+            intent: intent,
+            col: 0, row: 0, w: w, h: h,
+            state: .active,
+            members: [],
+            items: [],
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+    }
+
+    /// Reported 2026-08-07, with a screenshot: a block showing two items, a
+    /// blank third, `+2 more`, and then half a card of empty space beneath it.
+    ///
+    /// 6 × 5 cells is 396 × 328pt — the medium tier, and the block in that
+    /// screenshot. Five rows fit in it with room to spare, so five rows show.
+    func testTheReportedBlockShowsEveryRowRatherThanTwoMore() {
+        let fit = VisionContentFit.fit(for: block(w: 6, h: 5), rows: 5)
+        XCTAssertEqual(fit.rows, 5)
+        XCTAssertEqual(fit.hidden, 0, "no `+N more` while the card has visible space")
+    }
+
+    /// The same block, filled past its height. Now the button is honest.
+    func testAMediumBlockOverflowsOnlyWhenItActuallyRunsOutOfHeight() {
+        let fit = VisionContentFit.fit(for: block(w: 6, h: 5), rows: 30)
+        XCTAssertGreaterThan(fit.hidden, 0)
+        XCTAssertEqual(fit.rows + fit.hidden, 30)
+    }
+
+    /// Growing a block downward shows more of it. The cap made this false — a
+    /// medium block stopped gaining rows after three however far it was dragged,
+    /// which is the resize silently doing nothing.
+    func testMakingAMediumBlockTallerShowsMoreOfIt() {
+        let short = VisionContentFit.fit(for: block(w: 6, h: 3), rows: 12)
+        let tall = VisionContentFit.fit(for: block(w: 6, h: 8), rows: 12)
+        XCTAssertGreaterThan(tall.rows, short.rows)
+        XCTAssertGreaterThan(tall.rows, 3, "the old ceiling would have stopped here")
+    }
+
+    /// An intent line is real height and comes out of the same budget, so a
+    /// block carrying one shows no more rows than the identical block without.
+    func testAnIntentLineIsPaidForOutOfTheRows() {
+        let bare = VisionContentFit.fit(for: block(w: 6, h: 5), rows: 12)
+        let stated = VisionContentFit.fit(
+            for: block(w: 6, h: 5, intent: "Finish before the winter"), rows: 12
+        )
+        XCTAssertLessThanOrEqual(stated.rows, bare.rows)
+    }
+
+    /// Small lists nothing at all, and that tier IS the anti-wall-of-text guard
+    /// now that medium has no hidden cap. A whole tier of presentation is
+    /// visible in a way a subtracted three never was.
+    func testASmallBlockListsNothing() {
+        let fit = VisionContentFit.fit(for: block(w: 3, h: 4), rows: 9)
+        XCTAssertEqual(fit.rows, 0)
+        XCTAssertEqual(fit.hidden, 0, "and shows no `+N more`, because it draws no stack")
+    }
+
+    /// Whatever a block shows, it fits. The guard against the budget drifting
+    /// out from under the arithmetic: rows are 26pt on a card whose interior is
+    /// its height less the rail, the padding, the title, the meta line, the gap
+    /// and the add row.
+    func testWhatABlockShowsAlwaysFitsInsideIt() {
+        for w in [3, 5, 6, 8, 10] {
+            for h in 2...10 {
+                let subject = block(w: w, h: h)
+                let fit = VisionContentFit.fit(for: subject, rows: 40)
+                let interior = VisionGrid.blockSize(columns: w, rows: h).height
+                XCTAssertLessThan(
+                    VisionContentFit.height(ofRows: fit.rows), interior,
+                    "\(w) × \(h) showed \(fit.rows) rows"
+                )
+            }
+        }
     }
 
     // MARK: - Invariants
@@ -92,15 +176,10 @@ final class VisionContentFitTests: XCTestCase {
     func testShownPlusHiddenAlwaysEqualsTheTotal() {
         for budget in stride(from: CGFloat(-50), through: 400, by: 7) {
             for rows in 0...12 {
-                for ceiling in [3, Int.max] {
-                    let fit = VisionContentFit.fit(budget: budget, rows: rows, ceiling: ceiling)
-                    XCTAssertEqual(
-                        fit.rows + fit.hidden, rows,
-                        "budget \(budget), \(rows) rows, ceiling \(ceiling)"
-                    )
-                    XCTAssertLessThanOrEqual(fit.rows, rows)
-                    XCTAssertGreaterThanOrEqual(fit.rows, 0)
-                }
+                let fit = VisionContentFit.fit(budget: budget, rows: rows)
+                XCTAssertEqual(fit.rows + fit.hidden, rows, "budget \(budget), \(rows) rows")
+                XCTAssertLessThanOrEqual(fit.rows, rows)
+                XCTAssertGreaterThanOrEqual(fit.rows, 0)
             }
         }
     }

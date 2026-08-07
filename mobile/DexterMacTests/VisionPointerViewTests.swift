@@ -458,6 +458,77 @@ final class VisionPointerViewTests: XCTestCase {
         )
     }
 
+    // MARK: - 7b. Dismissing a popover
+
+    /// Reported 2026-08-07: *"when I click on the outer surface below Add item,
+    /// it still doesn't go away."*
+    ///
+    /// `NSPopover`'s `.semitransient` dismissal did not fire for a click on this
+    /// canvas — the pointer layer answers those clicks itself — so the overflow
+    /// list sat over a board the user had already started dragging. The board's
+    /// one popover is now state this layer owns, which is what makes the rule
+    /// assertable here rather than by clicking.
+    func testClickingABlockClosesAnOpenPopover() async throws {
+        let block = try await makeBlock("overflowing", col: 0, row: 0)
+        interaction.popover = .overflow(block.id)
+
+        view.mouseDown(with: mouse(
+            .leftMouseDown, at: CGPoint(x: rect(block).midX, y: rect(block).midY)
+        ))
+
+        XCTAssertNil(interaction.popover)
+    }
+
+    /// Empty canvas too. The click the user described was on a block, but a
+    /// popover that survives a click anywhere on the board is the same defect.
+    func testClickingEmptyCanvasClosesAnOpenPopover() async throws {
+        let block = try await makeBlock("overflowing", col: 0, row: 0)
+        interaction.popover = .overflow(block.id)
+
+        view.mouseDown(with: mouse(.leftMouseDown, at: CGPoint(x: 68 * 9 + 20, y: 68 * 6 + 20)))
+
+        XCTAssertNil(interaction.popover)
+    }
+
+    /// The grip as well, so grabbing a corner to resize does not leave a popover
+    /// floating over the block that is changing size under it.
+    func testGrabbingTheGripClosesAnOpenPopover() async throws {
+        let block = try await makeBlock("overflowing", col: 0, row: 0)
+        interaction.popover = .overflow(block.id)
+
+        view.mouseDown(with: mouse(.leftMouseDown, at: grip(of: block)))
+
+        XCTAssertNil(interaction.popover)
+    }
+
+    /// But NOT a click on a pass-through control. That is where the `+N more`
+    /// button itself lives: dismissing on its own click would close the popover
+    /// in the same event that opened it, and it is also where an already-open
+    /// popover's trigger sits while you are aiming at it.
+    func testAClickOnAPassThroughControlLeavesThePopoverAlone() async throws {
+        let block = try await makeBlock("overflowing", col: 0, row: 0)
+        let more = CGRect(x: rect(block).minX + 12, y: rect(block).minY + 96, width: 60, height: 14)
+        view.exclusions = [more]
+        interaction.popover = .overflow(block.id)
+
+        view.mouseDown(with: mouse(.leftMouseDown, at: CGPoint(x: more.midX, y: more.midY)))
+
+        XCTAssertEqual(interaction.popover, .overflow(block.id))
+    }
+
+    /// A right click is a click. It selects a block, and a popover left hanging
+    /// over the context menu it summons is the same wrongness as before.
+    func testRightClickingTheBoardClosesAnOpenPopover() async throws {
+        let block = try await makeBlock("overflowing", col: 0, row: 0)
+        interaction.popover = .attach(block.id)
+
+        view.rightMouseDown(with: mouse(
+            .rightMouseDown, at: CGPoint(x: rect(block).midX, y: rect(block).midY)
+        ))
+
+        XCTAssertNil(interaction.popover)
+    }
+
     // MARK: - 8. Keyboard parity
 
     /// Arrows and ⌥-arrows are the accessible equivalent of the drag and the

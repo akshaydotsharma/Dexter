@@ -94,6 +94,31 @@ final class VisionInteraction {
     /// or Space "enters" the block; Escape leaves it again.
     var tileCursor: Int?
 
+    /// The one popover open on the board, if any.
+    ///
+    /// Board-wide and here rather than `@State` on the card, because the thing
+    /// that has to CLOSE it is the AppKit pointer layer. `NSPopover`'s own
+    /// `.semitransient` dismissal did not fire for a click on this canvas — the
+    /// pointer layer answers those clicks itself, and a re-render landing
+    /// between `performClose` and `popoverDidClose` could reopen a popover that
+    /// had just closed, since the binding still read `true`. Reported as *"when
+    /// I click on the outer surface, it still doesn't go away"*.
+    ///
+    /// Making it state the pointer layer owns replaces that with something
+    /// deterministic and, more to the point, assertable with no window: see
+    /// `testClickingTheBoardClosesAnOpenPopover`.
+    ///
+    /// One value, not one flag per card, because there is one popover on screen.
+    /// Two flags could both be true.
+    var popover: Popover?
+
+    enum Popover: Equatable {
+        /// A block's `+N more`, listing everything that did not fit.
+        case overflow(UUID)
+        /// A block's "Attach existing task…".
+        case attach(UUID)
+    }
+
     /// Mirrored from the environment by the view, because the settle animation
     /// and the haptics run outside any view's body.
     var reduceMotion = false

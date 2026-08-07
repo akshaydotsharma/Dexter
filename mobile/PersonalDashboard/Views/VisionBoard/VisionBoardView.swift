@@ -226,7 +226,12 @@ struct VisionBoardView: View {
             isDropTarget: interaction.tileDropTarget == block.id,
             tileCursor: interaction.selected == block.id ? interaction.tileCursor : nil,
             beginsInTitleEdit: interaction.pendingTitleEdit == block.id,
-            onTitleEditBegan: { interaction.pendingTitleEdit = nil }
+            onTitleEditBegan: { interaction.pendingTitleEdit = nil },
+            // The whole value, not this block's slice of it. The card compares
+            // against its own id, and passing the board's one popover means a
+            // click that closes it closes it everywhere at once.
+            openPopover: interaction.popover,
+            onPopover: { interaction.popover = $0 }
         )
         .offset(x: origin.x, y: origin.y)
         // Displaced neighbours slide when the drop lands; the block in hand does

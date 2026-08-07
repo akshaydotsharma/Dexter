@@ -141,10 +141,18 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
             }
         }
 
-        /// Closed by the system (a click behind it while semitransient), so tell the
-        /// binding rather than letting the two drift apart — a stale `true` would
-        /// stop the next click from reopening it.
-        func popoverDidClose(_ notification: Notification) {
+        /// Closed by the system (a click behind it while semitransient, or Escape),
+        /// so tell the binding rather than letting the two drift apart — a stale
+        /// `true` would stop the next click from reopening it.
+        ///
+        /// `willClose`, not `didClose`. `didClose` fires after the close ANIMATION,
+        /// which leaves a window several frames wide in which the binding still
+        /// reads `true` while `popover.isShown` is already false. Any re-render
+        /// landing in that window hits the `isPresented, !popover.isShown` arm of
+        /// `update` and puts the popover straight back up — which is a popover that
+        /// cannot be dismissed, and on a surface that re-renders on every mouse
+        /// move (the vision board) it is the common case rather than the rare one.
+        func popoverWillClose(_ notification: Notification) {
             if parent.isPresented { parent.isPresented = false }
         }
     }

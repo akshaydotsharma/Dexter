@@ -56,6 +56,12 @@ struct VisionBlockCard: View {
     /// is the same motion as making it. The card consumes the flag on appear.
     let beginsInTitleEdit: Bool
     let onTitleEditBegan: () -> Void
+    /// The board's one open popover, or nil. Not `@State` here for the same
+    /// reason `isHovered` is not: the thing that has to CLOSE it on a click is
+    /// the AppKit pointer layer, which cannot reach a SwiftUI view's state. See
+    /// `VisionInteraction.popover`.
+    let openPopover: VisionInteraction.Popover?
+    let onPopover: (VisionInteraction.Popover?) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -65,8 +71,32 @@ struct VisionBlockCard: View {
     @FocusState private var titleFocused: Bool
     @State private var addDraft = ""
     @FocusState private var addFocused: Bool
-    @State private var showingAllTiles = false
-    @State private var showingAttach = false
+
+    /// Bindings onto the board's single popover value. Derived rather than
+    /// stored, so two cards can never both believe they have one open.
+    private var showingAllTiles: Binding<Bool> {
+        popoverBinding(.overflow(block.id))
+    }
+
+    private var showingAttach: Binding<Bool> {
+        popoverBinding(.attach(block.id))
+    }
+
+    private func popoverBinding(_ kind: VisionInteraction.Popover) -> Binding<Bool> {
+        Binding(
+            get: { openPopover == kind },
+            // A false only clears what this binding actually owns. `NSPopover`
+            // reports its own close through here, and a report arriving late
+            // must not take down a popover that has since opened elsewhere.
+            set: { open in
+                if open {
+                    onPopover(kind)
+                } else if openPopover == kind {
+                    onPopover(nil)
+                }
+            }
+        )
+    }
 
     /// Continuous while a resize is in hand or settling, the block's cell size
     /// otherwise. When the session finally clears, this expression flips from
@@ -254,7 +284,7 @@ struct VisionBlockCard: View {
                 }
             }
             Divider()
-            Button("Attach existing task…") { showingAttach = true }
+            Button("Attach existing task…") { showingAttach.wrappedValue = true }
             Divider()
             Button(role: .destructive) {
                 Task { await viewModel.deleteBlock(block.id) }
@@ -279,9 +309,9 @@ struct VisionBlockCard: View {
         // it, which is what makes it visible.
         .visionPassThrough()
         .accessibilityLabel("Block actions")
-        .macAnchoredPopover(isPresented: $showingAttach, preferredEdge: .minY) {
+        .macAnchoredPopover(isPresented: showingAttach, preferredEdge: .minY) {
             VisionAttachTaskPopover(viewModel: viewModel, blockID: block.id) {
-                showingAttach = false
+                showingAttach.wrappedValue = false
             }
         }
     }
@@ -375,7 +405,7 @@ struct VisionBlockCard: View {
 
             if fit.hidden > 0 {
                 Button {
-                    showingAllTiles = true
+                    showingAllTiles.wrappedValue = true
                 } label: {
                     Text("+\(fit.hidden) more")
                         .font(.edCaption)
@@ -383,7 +413,7 @@ struct VisionBlockCard: View {
                 }
                 .buttonStyle(.plain)
                 .visionPassThrough()
-                .macAnchoredPopover(isPresented: $showingAllTiles, preferredEdge: .minY) {
+                .macAnchoredPopover(isPresented: showingAllTiles, preferredEdge: .minY) {
                     VisionAllTilesPopover(viewModel: viewModel, editor: editor, block: block)
                 }
             }
@@ -511,44 +541,12 @@ struct VisionBlockCard: View {
 
     /// How many rows this block shows.
     ///
-    /// The arithmetic itself is in `VisionContentFit`, which is pure and unit
-    /// tested. What is left here is the budget: how much height the card has
-    /// after its own chrome.
-    ///
-    /// Measured by arithmetic and never by a `GeometryReader`, which would be
-    /// reading back a height this card set itself (`rows × cellHeight - gutter`)
-    /// and, during a resize, feeding the layout into itself — the hazard
-    /// `TripCoverMetrics` documents. Deliberately conservative: it always
-    /// reserves two lines for the title, so a one-line title shows one fewer row
-    /// than it strictly could. The other way round clips a row off the bottom of
-    /// the card, and only one of those is a visual defect.
+    /// Pure, and in `VisionContentFit` — the whole calculation, not just the
+    /// division at the end of it. The budget used to be computed here, which is
+    /// exactly where the reported `+2 more`-above-empty-space defect lived: one
+    /// line below anything a test could reach. See `VisionContentFit.fit(for:rows:)`.
     private var contentFit: VisionContentFit.Fit {
-        guard tier != .small else { return .init(rows: 0, hidden: 0) }
-
-        var budget = VisionGrid.blockSize(columns: block.w, rows: block.h).height
-        budget -= VisionGrid.railHeight
-        budget -= Space.md * 2                              // card padding
-        budget -= VisionBlockMetrics.titleLine * 2          // title, worst case
-        if hasIntent { budget -= VisionBlockMetrics.intentLine + Space.xxs }
-        if !rows.isEmpty { budget -= VisionBlockMetrics.metaLine + Space.xs }
-        budget -= Space.md                                  // gap above the stack
-        // The `+ Add item` row is content-adjacent rather than chrome: it sits
-        // inside the stack and costs a gap above itself. Charged here so it can
-        // never be the thing that gets clipped — it is the only way to put
-        // anything on the block, so losing it costs more than losing a row.
-        budget -= VisionBlockMetrics.addItemRow + VisionBlockMetrics.tileSpacing
-        if tier == .large { budget -= VisionBlockMetrics.addRowBlock }
-
-        // The cap of 3 holds even on a tall medium block. A 2 × 8 block showing
-        // twelve rows is exactly the "300 lines of task text" failure the
-        // concept doc rules out; the `+N more` row anchors to the foot and the
-        // space between is left empty, which is the honest rendering of "you
-        // made this tall, and medium blocks do not list everything".
-        return VisionContentFit.fit(
-            budget: budget,
-            rows: rows.count,
-            ceiling: tier == .medium ? 3 : .max
-        )
+        VisionContentFit.fit(for: block, rows: rows.count)
     }
 
     /// Add an item and drop a caret straight into it.
