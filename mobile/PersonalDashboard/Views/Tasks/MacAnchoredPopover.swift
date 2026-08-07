@@ -77,6 +77,18 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
+    /// SwiftUI removed this representable. Close whatever it was showing.
+    ///
+    /// Without this, a popover whose anchor sits inside a condition that goes
+    /// false while it is open survives its own owner: the coordinator is
+    /// released, so no later `updateNSView` can ever call `performClose`, and
+    /// the panel is stuck on screen for the life of the window. Measured on the
+    /// vision board, where the `+N more` button vanishes the moment its list
+    /// fits. Anchoring is the real fix; this makes the whole class impossible.
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.tearDown()
+    }
+
     @MainActor
     /// A hosting controller whose view answers the first click instead of
     /// spending it on becoming key.
@@ -123,11 +135,74 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
         private let popover = NSPopover()
         private var hosting: FirstMouseHostingController<PopoverContent>?
 
+        /// Live only while an `.applicationDefined` popover is on screen.
+        private var outsideClick: Any?
+        /// Set while SwiftUI is tearing us down, so the close below does not try
+        /// to write to a binding whose view is going away.
+        private var tearingDown = false
+
         init(parent: MacAnchoredPopover) {
             self.parent = parent
             super.init()
             popover.delegate = self
             popover.animates = true
+        }
+
+        deinit { if let outsideClick { NSEvent.removeMonitor(outsideClick) } }
+
+        @MainActor
+        func tearDown() {
+            tearingDown = true
+            stopWatchingForOutsideClicks()
+            if popover.isShown { popover.close() }
+        }
+
+        // MARK: - Our own dismissal
+
+        /// `.applicationDefined` means AppKit will never close this, so the
+        /// caller has to supply the one rule people expect: a click anywhere
+        /// outside closes it.
+        ///
+        /// A local monitor rather than AppKit's `.transient`, because transient
+        /// also dies to a context menu or a file panel taking key — and the
+        /// content here has context menus. This closes on a real click outside
+        /// the popover's own window and on nothing else, which is exactly the
+        /// stated requirement and no more.
+        ///
+        /// The event is always returned unmodified. A monitor that swallowed it
+        /// would make the click that dismisses the popover fail to also do
+        /// whatever it was aimed at.
+        @MainActor
+        private func startWatchingForOutsideClicks() {
+            guard outsideClick == nil else { return }
+            outsideClick = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] event in
+                guard let self else { return event }
+                MainActor.assumeIsolated { self.closeIfClickIsOutside(event) }
+                return event
+            }
+        }
+
+        @MainActor
+        private func stopWatchingForOutsideClicks() {
+            guard let outsideClick else { return }
+            NSEvent.removeMonitor(outsideClick)
+            self.outsideClick = nil
+        }
+
+        @MainActor
+        private func closeIfClickIsOutside(_ event: NSEvent) {
+            guard popover.isShown else { return }
+            var onAnchor = false
+            if let anchor, let window = anchor.window, event.window === window {
+                onAnchor = anchor.bounds.contains(anchor.convert(event.locationInWindow, from: nil))
+            }
+            guard PopoverDismissal.shouldClose(
+                clickedInsidePopover: event.window === popover.contentViewController?.view.window,
+                clickedOnAnchor: onAnchor
+            ) else { return }
+            popover.performClose(nil)
         }
 
         /// `@MainActor` because the hosting controller is, and this is only ever
@@ -166,6 +241,7 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
                 guard let host = window.contentView else { return }
                 let rect = anchor.convert(anchor.bounds, to: host)
                 popover.show(relativeTo: rect, of: host, preferredEdge: parent.preferredEdge)
+                if popover.behavior == .applicationDefined { startWatchingForOutsideClicks() }
             } else if !isPresented, popover.isShown {
                 popover.performClose(nil)
             }
@@ -183,8 +259,29 @@ struct MacAnchoredPopover<PopoverContent: View>: NSViewRepresentable {
         /// cannot be dismissed, and on a surface that re-renders on every mouse
         /// move (the vision board) it is the common case rather than the rare one.
         func popoverWillClose(_ notification: Notification) {
+            stopWatchingForOutsideClicks()
+            guard !tearingDown else { return }
             if parent.isPresented { parent.isPresented = false }
         }
+    }
+}
+
+/// When a click dismisses an `.applicationDefined` popover.
+///
+/// Three lines of boolean logic, pulled out of the event monitor because that is
+/// the only place they could otherwise be checked — and this exact rule has now
+/// been wrong twice. First the popover would not close at all; then AppKit
+/// closed it while the pointer was still travelling toward it. Both were found
+/// by the user rather than by anything here.
+enum PopoverDismissal {
+    /// - Parameters:
+    ///   - clickedInsidePopover: the click landed in the popover's own window.
+    ///     The user is working in it, which is the whole reason it stays up.
+    ///   - clickedOnAnchor: the click landed on the control that opens it.
+    ///     Closing there would close and reopen in one click, which reads as a
+    ///     flicker rather than as a toggle, so that control decides instead.
+    static func shouldClose(clickedInsidePopover: Bool, clickedOnAnchor: Bool) -> Bool {
+        !clickedInsidePopover && !clickedOnAnchor
     }
 }
 

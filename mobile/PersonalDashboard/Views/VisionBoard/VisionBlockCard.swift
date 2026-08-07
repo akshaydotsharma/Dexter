@@ -139,6 +139,28 @@ struct VisionBlockCard: View {
         .overlay(selectionHalo)
         .overlay(alignment: .bottomTrailing) { resizeGrip }
         .overlay { dimensionReadout }
+        // Anchored to the CARD, never to the `+N more` button that opens it.
+        //
+        // The button lives inside `if fit.hidden > 0`, and that condition goes
+        // false the moment the list fits — which is reachable while the popover
+        // is open, by resizing the block or by removing a row from inside the
+        // popover itself. SwiftUI then tears the whole representable down with
+        // the popover still on screen, and what is left is a panel nothing alive
+        // can close: the coordinator that owned it is gone. That is the stuck
+        // popover, reproduced headlessly (open it, grow the block until nothing
+        // is hidden, ask it to close, and the window count stays at one).
+        //
+        // The card outlives every condition inside it, so anchoring here means
+        // the popover's owner is alive for exactly as long as the popover is.
+        .macAnchoredPopover(
+            isPresented: showingAllTiles,
+            // Stays up while you work in it; `MacAnchoredPopover` closes it on
+            // the first click outside its own window.
+            behavior: .applicationDefined,
+            preferredEdge: .minY
+        ) {
+            VisionAllTilesPopover(viewModel: viewModel, editor: editor, block: block)
+        }
         .modifier(BlockShadow(dragging: isDragging, hovering: hovering))
         .scaleEffect(isDragging ? 1.02 : 1.0)
         .opacity(isDragging ? 0.92 : 1.0)
@@ -424,15 +446,6 @@ struct VisionBlockCard: View {
                 }
                 .buttonStyle(.plain)
                 .visionPassThrough()
-                .macAnchoredPopover(
-                    isPresented: showingAllTiles,
-                    // Stays up while you work in it. Only a click the
-                    // pointer layer claims closes it.
-                    behavior: .applicationDefined,
-                    preferredEdge: .minY
-                ) {
-                    VisionAllTilesPopover(viewModel: viewModel, editor: editor, block: block)
-                }
             }
 
             addItemRow
