@@ -68,6 +68,10 @@ enum SyncRecordMapper {
         // collapse every processed email onto one record.
         out += try map("LocalProcessedEmail", payload.processedEmails ?? []) { $0.messageKey }
         out += try map("LocalWalletCard", payload.walletCards ?? []) { $0.clientUUID.uuidString }
+        // #449. Membership travels inside the record as a blob, so a block and
+        // its member list are one sync unit — last write wins on the whole list,
+        // the same call `LocalList` makes about its checklist items.
+        out += try map("LocalVisionBlock", payload.visionBlocks ?? []) { $0.clientUUID.uuidString }
 
         return out
     }

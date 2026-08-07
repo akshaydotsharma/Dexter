@@ -41,6 +41,12 @@ struct PersonalDashboardApp: App {
                     // peer would change here.
                     await SyncCoordinator.shared.runForegroundPass(reason: "launch")
                     SyncCoordinator.shared.startPeriodic()
+                    // Durability, not speed (#449). A change is only ever in one
+                    // SQLite file until a pass copies it out, and the phone
+                    // otherwise passes only on a scene edge — a reminder armed at
+                    // 20:27 reached the Mac at 20:53. This debounces a FULL pass a
+                    // few seconds after any write.
+                    SyncCoordinator.shared.startObservingWrites()
                     // Trip cover repair sweep (#428). Last, because it is the only
                     // pass here that is purely cosmetic, and because a sync pass
                     // may have just delivered trips whose cover file this device

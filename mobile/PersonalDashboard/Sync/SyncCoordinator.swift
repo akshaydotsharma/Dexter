@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftData
 
 /// Process-wide owner of the sync pass. Follows the same shape as
 /// `EmailIngestCoordinator` and `RecurringExpenseCoordinator`: one shared
@@ -266,6 +267,148 @@ final class SyncCoordinator {
                 )
             }
             self?.preflightTask = nil
+        }
+    }
+
+    // MARK: - Write-triggered pass (#449)
+
+    /// How long after a local write the durability pass runs.
+    ///
+    /// Long enough that typing a task title, correcting it and tagging it is one
+    /// pass rather than three; short enough that "durable within seconds" is
+    /// true. The periodic timer stays as the floor for anything this misses.
+    private let writeDebounce: TimeInterval = 3
+
+    /// A real local change has happened and no pass has published it yet.
+    ///
+    /// A flag rather than "run a pass now" because a write can land WHILE a pass
+    /// is running, and that pass may already have read the store — joining it
+    /// would report a publish that did not include this change. Measured on the
+    /// first end-to-end run of this path: an import landed 245ms into the launch
+    /// pass and would have waited for the 30s timer.
+    private var hasUnpublishedWrite = false
+
+    private var writeFlushTask: Task<Void, Never>?
+    private var writeObserver: NSObjectProtocol?
+
+    /// Run a full sync pass shortly after any local write (#449).
+    ///
+    /// The gap this closes is durability, not speed. Local storage is already
+    /// immediate — every write calls `context.save()`. What was missing was an
+    /// off-store copy: until a pass ran, the only copy of a change lived in one
+    /// SQLite file that another branch's build can destroy. Waiting up to 33s for
+    /// the timer, or until a scene edge, is what made the #446 loss total.
+    ///
+    /// ⚠️ THE PASS MUST STAY FULL. `SyncEngine.runPass` reads peers BEFORE
+    /// emitting, deliberately: reading advances the Lamport clock past anything
+    /// they have said, so what we emit sorts after it. An outbound-only shortcut
+    /// would mint ops that look concurrent with changes already observed, which
+    /// is the #380 stale-`lastKnownLamport` bug. Do not add one here for speed.
+    ///
+    /// Listens to `ModelContext.didSave` rather than `localStoreDidChange`, which
+    /// is what #449 proposed. The notification is posted by hand at about nine
+    /// call sites (the AI dispatcher, imports, the reminder scheduler) and NOT by
+    /// the ordinary service-layer writes — adding a task in the UI posts nothing.
+    /// Triggering off it would therefore leave the most common write in the app
+    /// with no durability trigger at all, which is the failure this exists to
+    /// prevent. `didSave` fires for every save the process makes, by
+    /// construction, and cannot be forgotten at a new call site.
+    func startObservingWrites() {
+        guard writeObserver == nil else { return }
+        writeObserver = NotificationCenter.default.addObserver(
+            forName: ModelContext.didSave, object: nil, queue: nil
+        ) { [weak self] note in
+            // `queue: nil` delivers on the saving thread; hop before touching
+            // any of this actor's state.
+            let entities = Self.entityNames(in: note)
+            Task { @MainActor in self?.noteLocalWrite(entities: entities) }
+        }
+    }
+
+    func stopObservingWrites() {
+        if let writeObserver { NotificationCenter.default.removeObserver(writeObserver) }
+        writeObserver = nil
+        writeFlushTask?.cancel()
+        writeFlushTask = nil
+    }
+
+    /// Entity names touched by a `didSave`, from the identifiers SwiftData puts
+    /// in the notification. Empty when the shape is not what we expect, which is
+    /// read as "something changed" rather than "nothing did" — an unrecognised
+    /// notification must not be able to suppress a durability pass.
+    nonisolated static func entityNames(in note: Notification) -> Set<String> {
+        let keys: [ModelContext.NotificationKey] = [
+            .insertedIdentifiers, .updatedIdentifiers, .deletedIdentifiers,
+        ]
+        var names: Set<String> = []
+        for key in keys {
+            guard let ids = note.userInfo?[key.rawValue] as? [PersistentIdentifier] else { continue }
+            names.formUnion(ids.map(\.entityName))
+        }
+        return names
+    }
+
+    /// Whether a save was sync writing its own bookkeeping and nothing else.
+    ///
+    /// Without this the pass that publishes a change schedules the pass that
+    /// publishes nothing, and the app syncs forever at the debounce interval. A
+    /// save that touches a real model as well is a real change, so the test is
+    /// "ONLY sidecars" — and an empty set (an unrecognised notification shape)
+    /// is NOT bookkeeping, because failing that way would silently disable the
+    /// durability trigger this whole path exists to provide.
+    ///
+    /// The names come from `DataArchive.excludedModels`' sync half rather than a
+    /// prefix match, so a future user-facing model called `SyncSomething` cannot
+    /// quietly stop syncing.
+    nonisolated static func isSyncBookkeepingOnly(_ entities: Set<String>) -> Bool {
+        guard !entities.isEmpty else { return false }
+        return entities.isSubset(of: syncSidecarEntities)
+    }
+
+    nonisolated private static let syncSidecarEntities: Set<String> = [
+        "SyncDeviceState", "SyncShadow", "SyncTombstone", "SyncPeerCursor",
+    ]
+
+    /// Record a local change and make sure a pass follows it.
+    private func noteLocalWrite(entities: Set<String>) {
+        guard SyncSettings.enabled else { return }
+        guard !Self.isSyncBookkeepingOnly(entities) else { return }
+        hasUnpublishedWrite = true
+        startWriteFlush()
+    }
+
+    /// One flusher, running until nothing is left unpublished.
+    ///
+    /// Three properties, each of which a naive "cancel and restart a timer"
+    /// version gets wrong:
+    ///
+    /// 1. **Coalescing.** Writes arriving during the debounce share one pass, so
+    ///    typing a title and then tagging it does not cost two.
+    /// 2. **No starvation.** The window is not restarted per write, so a burst of
+    ///    edits still publishes about `writeDebounce` after the first one rather
+    ///    than after the last.
+    /// 3. **A write during a pass still gets published.** The flag is cleared
+    ///    BEFORE the pass, so anything that lands while it runs sets it again and
+    ///    the loop goes round. Waiting on `passTask` first matters for the same
+    ///    reason: `pass(reason:)` joins an in-flight pass rather than starting a
+    ///    new one, and a pass that already read the store cannot have seen this
+    ///    write.
+    ///
+    /// The sleep is at the top of every iteration, not just the first, so the
+    /// loop cannot spin. That is also the backstop against a save this code
+    /// cannot classify: the worst case is a pass every few seconds plus its own
+    /// duration, which is no worse than the periodic timer it sits beside.
+    private func startWriteFlush() {
+        guard writeFlushTask == nil else { return }
+        writeFlushTask = Task { @MainActor [weak self] in
+            defer { self?.writeFlushTask = nil }
+            while let self, self.hasUnpublishedWrite {
+                try? await Task.sleep(nanoseconds: UInt64(self.writeDebounce * 1_000_000_000))
+                if Task.isCancelled { return }
+                if let inFlight = self.passTask { await inFlight.value }
+                self.hasUnpublishedWrite = false
+                await self.runForegroundPass(reason: "local-write")
+            }
         }
     }
 

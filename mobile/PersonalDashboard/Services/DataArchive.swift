@@ -75,6 +75,12 @@ enum DataArchive {
         // written before tasks could hold tickets still decode.
         var taskTickets: [TaskTicketDTO]? = nil
 
+        // MARK: Added in #449 — vision board blocks.
+        // The board shipped in #446 outside the archive entirely, which is why
+        // eight blocks were unrecoverable when a build without the model dropped
+        // the table. Optional like every field added after v1.
+        var visionBlocks: [VisionBlockDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -386,6 +392,49 @@ enum DataArchive {
         let updatedAt: Date
     }
 
+    /// A vision board block (#446), wired into the archive by #449.
+    ///
+    /// Membership and items travel as their RAW blobs, `membersData` and
+    /// `notesData`, rather than re-modelled arrays. That follows
+    /// `ExpenseDTO.splitsData` and `ItineraryDTO.participantsData`: the model's
+    /// accessors already decode defensively and fall back to empty, so a
+    /// byte-for-byte round trip is both the safest shape and the one that cannot
+    /// silently drop a field `VisionItem` gains later. It also keeps the stored
+    /// name `notesData`, which the model froze on purpose.
+    ///
+    /// Membership is an ordered list of task ids held by the block, so over sync
+    /// this record is last-write-wins as a whole, exactly like a list and its
+    /// checklist items. Two devices editing the same block's membership
+    /// concurrently keep the later write's list rather than merging by union —
+    /// which is the answer #447 asks for, and it is the one every other entity
+    /// here already gives. A union would resurrect a member the user had just
+    /// removed on the other device, which is the worse of the two failures.
+    ///
+    /// A block referencing a task that has not reached this device yet renders as
+    /// a missing tile, not an error: `LocalVisionBlock.members` skips ids it
+    /// cannot resolve.
+    struct VisionBlockDTO: Codable {
+        let clientUUID: UUID
+        let title: String
+        let intent: String?
+        let col: Int
+        let row: Int
+        let w: Int
+        let h: Int
+        /// Which lattice `col` and `w` are in. Nil means the original 184 × 68
+        /// one, which is exactly what a row written before the field says, so it
+        /// is carried nil rather than defaulted.
+        let gridVersion: Int?
+        let state: String
+        let membersData: Data
+        let notesData: Data?
+        let position: Int?
+        let createdAt: Date
+        let updatedAt: Date
+        let deletedAt: Date?
+        let archivedAt: Date?
+    }
+
     struct ExpenseDTO: Codable {
         let clientUUID: String
         let date: Date
@@ -551,8 +600,24 @@ enum DataArchive {
     ///   import (#396). It maps Notes-internal ids to notes we created, which is
     ///   provenance for one Mac's library rather than anything the user authored.
     ///   The notes themselves export normally.
+    /// - The four `Sync*` sidecars (#348): per-device sync bookkeeping. Shipping
+    ///   them would be actively wrong, not merely redundant. `SyncShadow` records
+    ///   what THIS device has published, so a restored copy of another device's
+    ///   shadow would convince this one that changes it never made were already
+    ///   sent, and they would never be emitted. `SyncDeviceState` carries the
+    ///   device identity and Lamport clock, `SyncPeerCursor` how far this device
+    ///   has read each peer, and `SyncTombstone` its own delete log.
+    ///
+    /// ⚠️ This list is half of a contract. `StoreSchemaGuard.archiveCoverageGap`
+    /// asserts that every entry in `SwiftDataStore.schemaModels` is either
+    /// exported or named here, so "not backed up" is always a decision somebody
+    /// wrote down. The four `Sync*` names were added in #449 for exactly that
+    /// reason: they were correctly not exported but were not DECLARED, so the
+    /// assertion could not be written, and `LocalVisionBlock` escaped the archive
+    /// unnoticed until its rows were destroyed.
     static let excludedModels = [
-        "LocalFXRate", "LocalEmailIngestLog", "AppleNotesImportRecord"
+        "LocalFXRate", "LocalEmailIngestLog", "AppleNotesImportRecord",
+        "SyncDeviceState", "SyncShadow", "SyncTombstone", "SyncPeerCursor",
     ]
 
     /// Every model this archive format carries, used for the manifest's claimed
@@ -563,6 +628,7 @@ enum DataArchive {
         "RecurringExpense", "LocalPerson", "LocalEvent",
         "LocalStatementImport", "LocalProcessedEmail",
         "LocalWalletCard",
+        "LocalVisionBlock",
     ]
 
     static func makeEncoder() -> JSONEncoder {

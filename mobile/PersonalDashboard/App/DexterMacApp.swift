@@ -36,6 +36,12 @@ struct DexterMacApp: App {
     ///
     /// Release builds are untouched, and this file is macOS-only.
     init() {
+        // FIRST, and before anything can touch the store (#449). Check mode
+        // answers "would this build drop entities the store holds" and exits,
+        // which is what lets `mac-open-for-verification.sh` ask the question
+        // before it quits the user's running instance. Asking by launching the
+        // app would BE the damage. No-op unless DEXTER_SCHEMA_CHECK is set.
+        StoreSchemaGuard.runCheckModeIfRequested()
         #if DEBUG
         _ = SwiftDataStore.shared
         #endif
@@ -218,6 +224,11 @@ private struct MacRootView: View {
             // risk without benefit. Revisit with phase 2.
             await SyncCoordinator.shared.runForegroundPass(reason: "launch")
             SyncCoordinator.shared.startPeriodic()
+            // Durability (#449): a debounced FULL pass a few seconds after any
+            // write, so a change has an off-store copy in the shared folder
+            // rather than waiting up to 33s for the timer. Idempotent, like the
+            // two calls above it, so a second window costs nothing.
+            SyncCoordinator.shared.startObservingWrites()
         }
     }
 

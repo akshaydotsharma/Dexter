@@ -67,6 +67,28 @@ BIN="$APP/Contents/MacOS/DexterMac"
 [ -x "$BIN" ] || { echo "FAIL: no binary at $BIN"; exit 1; }
 echo "==> built: $APP"
 
+# --- schema pre-flight, BEFORE anything is quit or launched (#449) ---
+#
+# Every build from every worktree opens the same store file, and a build whose
+# schema lacks an entity the store holds DROPS that entity and every row in it,
+# reporting nothing but a CoreData line that reads like housekeeping. This
+# script is how that happened on 2026-08-07: it quit the running instance and
+# launched a build that did not know `LocalVisionBlock`.
+#
+# So the question is asked first, by the binary itself, in a mode that opens no
+# container and writes nothing. Ordering is the whole point — a check that ran
+# after the quit would still have destroyed the data it was meant to protect.
+echo "==> schema pre-flight"
+if ! CHECK="$(DEXTER_SCHEMA_CHECK=1 "$BIN" 2>&1)"; then
+    echo "$CHECK"
+    echo
+    echo "FAIL: this build would DESTROY data in the shared store. Nothing was quit or launched."
+    echo "      Run the branch that has those models, merge it first, or point this build at a"
+    echo "      copy: DEXTER_STORE_PATH=/tmp/dexter-qa.sqlite (copy the .sqlite, -wal and -shm)."
+    exit 1
+fi
+echo "    $CHECK"
+
 # Window probe, used both to assert identity after launch and to decide how hard
 # we are allowed to push on a stubborn instance below.
 #
