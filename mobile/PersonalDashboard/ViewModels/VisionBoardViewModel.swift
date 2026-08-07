@@ -79,20 +79,14 @@ final class VisionBoardViewModel {
     /// A block's whole list, both kinds of row, in the one order every surface
     /// renders it in.
     ///
-    /// Tasks first, then items, then everything completed. Tasks lead because
-    /// their order is one the user can set (membership is an explicit array),
-    /// where items are simply appended — and it puts a newly added item directly
-    /// above the `+` that made it, which is where the eye already is.
-    ///
-    /// Completed rows sink regardless of kind. `sinkHold` keeps a row you just
-    /// ticked in place for a beat first, so you see the check land on the row you
-    /// clicked instead of watching it leave and wondering what you hit.
+    /// Dated rows soonest-first, then undated ones where they were added, then
+    /// the same again for anything completed. The rule and its reasoning live in
+    /// `VisionRowOrder.arrange`, which is a pure function so it can be asserted;
+    /// this only assembles the two kinds into one list for it.
     func rows(for block: VisionBlock) -> [VisionRow] {
         let all = block.members.compactMap { tasksByID[$0] }.map(VisionRow.task)
             + block.items.map(VisionRow.item)
-        let open = all.filter { !$0.completed || sinkHold.contains($0.id) }
-        let done = all.filter { $0.completed && !sinkHold.contains($0.id) }
-        return open + done
+        return VisionRowOrder.arrange(all, sinkHold: sinkHold)
     }
 
     /// Tasks not on any block, filtered by `query`. Backs the attach picker.

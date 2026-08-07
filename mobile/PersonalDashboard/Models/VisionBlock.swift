@@ -161,6 +161,72 @@ enum VisionRow: Identifiable, Hashable {
         if case .task = self { return true }
         return false
     }
+
+    /// When this row is due, or nil.
+    ///
+    /// Only a task can carry one. An item is a line you wrote to yourself; it
+    /// has no deadline, which is exactly why it keeps the position you put it in
+    /// rather than being sorted against rows that do.
+    var dueDate: Date? {
+        switch self {
+        case .task(let todo): todo.dueDate
+        case .item: nil
+        }
+    }
+}
+
+/// The one order a block's rows are rendered in (#446).
+///
+/// A pure function on purpose, and here rather than inside the view model,
+/// because the last ordering bug on this surface lived in an untested call site
+/// while every test around it passed. Ordering is a rule; rules get asserted.
+enum VisionRowOrder {
+
+    /// Soonest first, then everything undated in the order it was added, then
+    /// the same again for anything completed.
+    ///
+    /// ### Why dated rows lead
+    ///
+    /// Requested as *"the sub items should be sorted chronologically. If there
+    /// is no date, add them wherever they were added"*. A date is a claim about
+    /// when something has to happen, and a block is read top-down, so the row
+    /// that bites first is the row you should meet first. Undated rows have no
+    /// position to argue for, so they keep the one they were given: tasks in the
+    /// order membership records, then items in the order they were typed, which
+    /// is what puts a newly added item directly above the `+` that made it.
+    ///
+    /// ### Why completed rows are ordered too
+    ///
+    /// They sink as a group, but they are still a list, and a finished block
+    /// whose bottom half is in an arbitrary order reads as a different list from
+    /// the one that was worked through.
+    ///
+    /// - Parameter sinkHold: rows just ticked, held in place for a beat so the
+    ///   check is seen landing on the row that was clicked rather than on one
+    ///   that slid up underneath it.
+    static func arrange(_ rows: [VisionRow], sinkHold: Set<UUID> = []) -> [VisionRow] {
+        let open = rows.filter { !$0.completed || sinkHold.contains($0.id) }
+        let done = rows.filter { $0.completed && !sinkHold.contains($0.id) }
+        return byDueDate(open) + byDueDate(done)
+    }
+
+    /// Dated rows ascending, undated rows after them, both stable.
+    ///
+    /// The index tiebreak is not decoration: `sorted(by:)` is not documented to
+    /// be stable, so two tasks due the same day could otherwise swap places on a
+    /// re-render for no reason the user did anything to cause.
+    private static func byDueDate(_ rows: [VisionRow]) -> [VisionRow] {
+        let dated = rows.enumerated().filter { $0.element.dueDate != nil }
+        let undated = rows.filter { $0.dueDate == nil }
+        let sorted = dated.sorted { left, right in
+            guard let a = left.element.dueDate, let b = right.element.dueDate else {
+                return false
+            }
+            if a != b { return a < b }
+            return left.offset < right.offset
+        }
+        return sorted.map(\.element) + undated
+    }
 }
 
 /// How much of itself a block shows. A function of the block's rendered WIDTH IN
