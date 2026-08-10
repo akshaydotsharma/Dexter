@@ -122,6 +122,25 @@ struct MacClearTextField: NSViewRepresentable {
     /// with text would delete it — the opposite of what Escape means. Supplying
     /// this leaves the binding untouched and hands the decision back.
     var onCancel: (() -> Void)? = nil
+    /// Does Return empty the field?
+    ///
+    /// True is right for a DRAFT row — the Tasks and Lists add rows, `MacAddRow`
+    /// — where one field is typed into over and over and Return means "take this
+    /// one, give me a blank". The field outlives what it created, so it has to be
+    /// cleared or the next line starts with the last one's text.
+    ///
+    /// False is right where the field IS the thing being edited. A vision board
+    /// item is that (#453): Return saves the item and opens a NEW row below, so
+    /// this field is about to be torn down and replaced. Emptying it first was
+    /// destructive, because teardown fires `controlTextDidEndEditing`, which
+    /// reports the field's text as a blur commit — and on the board an item
+    /// committed empty is an item removed. The line was saved and then deleted by
+    /// its own teardown, one keypress apart, which is why the text appeared to
+    /// vanish and have to be typed again.
+    ///
+    /// Keeping the text makes that late blur a no-op: it reports what the store
+    /// already holds, and an unchanged commit writes nothing.
+    var clearsOnSubmit: Bool = true
     /// Optional placeholder color override. When nil, AppKit's default
     /// placeholder styling is used. The macOS Tasks add-row passes
     /// `Tokens.mutedSoft` so the resting field matches the old ghost row (#287).
@@ -296,14 +315,18 @@ struct MacClearTextField: NSViewRepresentable {
                 return true
             }
             if selector == #selector(NSResponder.insertNewline(_:)) {
-                // Return: push current text into the binding, commit, then clear
-                // the field so the draft can chain into the next new task. We
+                // Return: push current text into the binding, then commit. We
                 // keep the field first responder (return true suppresses the
                 // default end-editing).
                 parent.text = textView.string
                 parent.onSubmit()
-                textView.string = ""
-                control.stringValue = ""
+                // A draft field is cleared so it can chain into the next new
+                // task; a field that IS the edited row keeps its text, or its
+                // own teardown would report it as emptied. See `clearsOnSubmit`.
+                if parent.clearsOnSubmit {
+                    textView.string = ""
+                    control.stringValue = ""
+                }
                 return true
             }
             return false
