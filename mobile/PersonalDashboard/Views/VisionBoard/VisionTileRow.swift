@@ -181,6 +181,12 @@ struct VisionTileRow: View {
                     cancelling = true
                     onCancel?()
                 },
+                // This field is the item, not a draft row that outlives what it
+                // makes. Return hands the line to the editor, which opens a
+                // fresh row below and tears this one down; clearing it first
+                // meant the teardown reported the item as emptied, and an empty
+                // item is a removed one (#453).
+                clearsOnSubmit: false,
                 placeholderColor: Tokens.mutedSoft
             )
             .onAppear {

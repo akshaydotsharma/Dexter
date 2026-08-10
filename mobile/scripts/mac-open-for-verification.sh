@@ -42,8 +42,19 @@ mkdir -p "$OUT_DIR"
 
 # Default the expected title to the section, capitalised — matches
 # `navigationTitle`, which drives the macOS window title.
+#
+# One section's title is two words. `AppSection.visionBoard` spells its raw
+# value `visionboard` so `LAUNCH_SECTION` can reach it, but its `displayName`
+# — and therefore its window title — is "Vision Board", which capitalising the
+# raw value can never produce. Without this the script navigates correctly and
+# then fails its own assertion, which is worse than no assertion: it reports a
+# working surface as broken.
+case "$SECTION" in
+    visionboard) TITLE_DEFAULT="Vision Board" ;;
+    *) TITLE_DEFAULT="$(echo "$SECTION" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')" ;;
+esac
 if [ -z "$EXPECT_TITLE" ]; then
-    EXPECT_TITLE="$(echo "$SECTION" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    EXPECT_TITLE="$TITLE_DEFAULT"
 fi
 
 echo "==> generating project"
