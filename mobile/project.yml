@@ -176,6 +176,7 @@ targets:
       - path: PersonalDashboard/Services/VisionBoardService.swift
       - path: PersonalDashboard/Views/Lists/ListsView.swift
       - path: PersonalDashboard/Views/Today/TodayView.swift
+      - path: PersonalDashboard/Views/Notes/NoteAutosave.swift
       - path: PersonalDashboard/Views/Notes/NotesView.swift
       - path: PersonalDashboard/Views/Components/MarkdownEditor.swift
       - path: PersonalDashboard/Views/Activity/ActivityView.swift

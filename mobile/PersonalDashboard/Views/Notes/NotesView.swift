@@ -822,17 +822,40 @@ private struct NewFolderSheet: View {
 }
 
 /// Full-screen note detail per DESIGN_SPEC §10.4. Edits are auto-saved
-/// when the user taps Done or otherwise leaves the view; there is no
-/// modal Cancel/Save pair.
+/// while the user writes, when the app leaves the foreground, and when the
+/// user taps Done or otherwise leaves the view; there is no modal
+/// Cancel/Save pair.
+///
+/// Leaving the view used to be the ONLY save (#455). `.onDisappear` does not
+/// fire when iOS terminates the app, so a crash, a memory reclaim while
+/// backgrounded, or a swipe-away from the app switcher discarded the whole
+/// writing session with no trace: the row's `updatedAt` never moved, and the
+/// backup that runs on backgrounding dutifully archived the note WITHOUT the
+/// text. Hence the two extra triggers below.
 private struct NoteDetailContent: View {
     @Bindable var viewModel: NotesViewModel
     let note: Note
     let onClose: () -> Void
 
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var title: String = ""
     @State private var content: String = ""
     @State private var folderId: UUID?
     @State private var hasLoaded = false
+    /// What is on disk, as of the last write this editor made.
+    ///
+    /// The dirty check reads these rather than `note`, so it stays correct
+    /// whether or not the parent hands us a refreshed `note` after a save. It
+    /// is also what makes a redundant save free: back, then `.onDisappear`,
+    /// then a pending autosave tick all call `persistIfChanged()`, and only
+    /// the first one writes.
+    @State private var savedTitle: String?
+    @State private var savedContent: String?
+    @State private var savedFolderId: UUID?
+    @State private var autosaveTask: Task<Void, Never>?
+    /// When the current run of unsaved edits started, for the max-wait ceiling.
+    @State private var dirtySince: Date?
     @State private var mode: NoteEditMode = Self.launchesInEditMode ? .edit : .preview
 
     /// Open the note straight into EDIT mode with the keyboard up (#395).
@@ -936,6 +959,9 @@ private struct NoteDetailContent: View {
                 title = note.title ?? ""
                 content = note.content ?? ""
                 folderId = note.folderId
+                savedTitle = note.title
+                savedContent = note.content
+                savedFolderId = note.folderId
                 hasLoaded = true
                 // Also focus the editor, which on a device raises the keyboard and
                 // with it the format toolbar.
@@ -968,7 +994,21 @@ private struct NoteDetailContent: View {
                 NoteImageViewer(relativePath: viewingImagePath)
             }
         }
+        .onChange(of: content) { _, _ in scheduleAutosave() }
+        .onChange(of: title) { _, _ in scheduleAutosave() }
+        .onChange(of: folderId) { _, _ in scheduleAutosave() }
+        // Leaving the foreground is the last moment the app is guaranteed to
+        // run code before iOS may kill it (#455). On iOS the phase order is
+        // active -> inactive -> background, so saving on the first non-active
+        // phase lands the write BEFORE the app-level `.background` hook starts
+        // the automatic backup, and the backup therefore contains the text.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase != .active else { return }
+            autosaveTask?.cancel()
+            Task { await persistIfChanged() }
+        }
         .onDisappear {
+            autosaveTask?.cancel()
             Task { await persistIfChanged() }
         }
     }
@@ -1094,11 +1134,53 @@ private struct NoteDetailContent: View {
         return folder.name
     }
 
+    /// What the editor holds right now, normalised the way the store keeps it.
+    private var draft: NoteDraft {
+        NoteDraft(title: title, content: content, folderId: folderId)
+    }
+
+    /// What this editor last wrote.
+    private var saved: NoteDraft {
+        NoteDraft(savedTitle: savedTitle, savedContent: savedContent, folderId: savedFolderId)
+    }
+
+    /// Write the note once the user stops typing (#455).
+    ///
+    /// Each edit restarts the idle timer, so an ordinary pause commits the
+    /// text. `NoteAutosave.wait` clamps that timer so the first unsaved edit
+    /// still lands even if the input never pauses.
+    private func scheduleAutosave() {
+        guard hasLoaded, draft != saved else { return }
+        let start = dirtySince ?? Date()
+        dirtySince = start
+        autosaveTask?.cancel()
+        autosaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(NoteAutosave.wait(dirtySince: start, now: Date())))
+            // `try?` swallows the cancellation error, so check it directly:
+            // a cancelled tick has been superseded by a newer edit.
+            guard !Task.isCancelled else { return }
+            await persistIfChanged()
+        }
+    }
+
+    @MainActor
     private func persistIfChanged() async {
-        let finalTitle = title.trimmingCharacters(in: .whitespaces).isEmpty ? nil : title
-        let finalContent = content.isEmpty ? nil : content
-        if finalTitle != note.title || finalContent != note.content || folderId != note.folderId {
-            await viewModel.updateNote(note, title: finalTitle, content: finalContent, folderId: folderId)
+        let draft = self.draft
+        if draft != saved {
+            // Advance the baseline BEFORE the await, not after: the save on
+            // leaving the view and a pending autosave tick can both be in
+            // flight, and the loser must see the note as clean rather than
+            // write the same body a second time.
+            savedTitle = draft.title
+            savedContent = draft.content
+            savedFolderId = draft.folderId
+            dirtySince = nil
+            await viewModel.updateNote(
+                note,
+                title: draft.title,
+                content: draft.content,
+                folderId: draft.folderId
+            )
         }
         // After the write, not before: the text being saved is what decides which
         // image rows are still referenced (#395).
