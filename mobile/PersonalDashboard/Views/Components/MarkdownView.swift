@@ -13,6 +13,7 @@ import SwiftUI
 //   - Blockquotes: `> `
 //   - Fenced code blocks: ``` ```
 //   - Thematic break: `---`, `***`, `___`
+//   - Tables: GFM pipe tables (see `MarkdownTable`)
 //
 // Inline formatting uses Foundation's `AttributedString(markdown:)` so
 // `**bold**`, `*italic*`, `` `code` `` and `[link](url)` Just Work inside
@@ -174,6 +175,15 @@ struct MarkdownView: View {
         case .image(let path, let alt):
             inlineImage(path: path, alt: alt)
 
+        case .table(let table):
+            MarkdownTableView(
+                table: table,
+                bodyFont: bodyFont,
+                bodyColor: bodyColor,
+                headingColor: headingColor,
+                rowLimit: lineLimit
+            )
+
         case .spacer(let lines):
             // Intentional blank lines the user typed. ~18pt per blank line
             // beyond the first, on top of the normal inter-block spacing.
@@ -193,17 +203,24 @@ struct MarkdownView: View {
     /// with Foundation markdown applied. Falls back to plain Text if parsing
     /// fails so we never crash on malformed inline syntax.
     private func inlineText(_ source: String) -> Text {
-        if let attributed = try? AttributedString(
-            markdown: source,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        ) {
-            return Text(attributed)
-        }
-        return Text(source)
+        markdownInlineText(source)
     }
+}
+
+/// Inline markdown as a `Text`, shared by `MarkdownView`'s blocks and by the
+/// table's cells. Falls back to plain text so malformed inline syntax cannot
+/// crash a note.
+func markdownInlineText(_ source: String) -> Text {
+    if let attributed = try? AttributedString(
+        markdown: source,
+        options: AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace,
+            failurePolicy: .returnPartiallyParsedIfPossible
+        )
+    ) {
+        return Text(attributed)
+    }
+    return Text(source)
 }
 
 // MARK: - Single-line snippet
@@ -263,6 +280,8 @@ enum MarkdownBlock: Hashable {
     case spacer(lines: Int)
     /// An inline note image (#395), referenced by its relative path.
     case image(path: String, alt: String)
+    /// A GFM pipe table (#457).
+    case table(MarkdownTable)
 }
 
 // MARK: - Parser
@@ -296,6 +315,16 @@ enum MarkdownParser {
                 if blanks >= 2, !blocks.isEmpty, i < lines.count {
                     blocks.append(.spacer(lines: blanks - 1))
                 }
+                continue
+            }
+
+            // Tables (#457). Checked before everything else on the line, because a
+            // table is recognised by the pair of lines rather than by this one:
+            // `MarkdownTable.parse` returns nil unless the next line is a real
+            // separator row, which makes the check safe to run first.
+            if let parsed = MarkdownTable.parse(lines, from: i) {
+                blocks.append(.table(parsed.table))
+                i = parsed.nextIndex
                 continue
             }
 
@@ -393,6 +422,10 @@ enum MarkdownParser {
                 let t = lines[i].trimmingCharacters(in: .whitespaces)
                 if t.isEmpty { break }
                 if isSpecialLine(t) { break }
+                // A table header is an ordinary-looking line; only the separator
+                // row below it gives the table away, so this needs the lookahead
+                // that `isSpecialLine` cannot do on a single line (#457).
+                if MarkdownTable.isStart(lines, at: i) { break }
                 paragraphLines.append(t)
                 i += 1
             }

@@ -603,6 +603,8 @@ final class MarkdownFormatToolbarView: UIView {
                 { [weak self] in self?.wrapInline("`") }),
             ("link", "🔗",
                 { [weak self] in self?.insertLink() }),
+            ("table", "▦",
+                { [weak self] in self?.insertTable() }),
         ]
 
         for (id, title, handler) in actions {
@@ -810,6 +812,38 @@ final class MarkdownFormatToolbarView: UIView {
         let urlOffset = inserted.distance(from: inserted.startIndex, to: inserted.lastIndex(of: "(")!) + 1
         let urlLength = (inserted as NSString).length - urlOffset - 1
         tv.selectedRange = NSRange(location: range.location + urlOffset, length: urlLength)
+        onChange?()
+    }
+
+    /// Insert a starter table at the cursor (#457).
+    ///
+    /// Written with its separator row already in place, so it renders as a table
+    /// the moment it lands rather than after the user works out the syntax.
+    private func insertTable() {
+        guard let tv = textViewProvider?() else { return }
+        let ns = tv.text as NSString
+        let range = tv.selectedRange
+
+        // A table has to own its first line. Newline 10 is the only line break
+        // the editor stores, because `applyDisplayString` normalises the text.
+        let atLineStart = range.location == 0 || ns.character(at: range.location - 1) == 10
+        let lead = atLineStart ? "" : "\n"
+        let starter = """
+        | Column | Column |
+        | --- | --- |
+        |  |  |
+        """
+        let insertion = lead + starter + "\n"
+        let updated = ns.replacingCharacters(in: range, with: insertion)
+        tv.applyDisplayString(updated)
+
+        // Select the first header cell so the next keystroke names the column.
+        let placeholder = "Column"
+        let offset = ((lead + "| ") as NSString).length
+        tv.selectedRange = NSRange(
+            location: range.location + offset,
+            length: (placeholder as NSString).length
+        )
         onChange?()
     }
 
