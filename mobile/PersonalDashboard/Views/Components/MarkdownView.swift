@@ -404,7 +404,26 @@ enum MarkdownParser {
                 var counters: [Int: Int] = [:]
                 var items: [MarkdownListItem] = []
 
-                while i < lines.count, let parsed = MarkdownListSyntax.parse(lines[i]) {
+                while i < lines.count {
+                    guard let parsed = MarkdownListSyntax.parse(lines[i]) else {
+                        // A SINGLE blank line between items does not end a list
+                        // — it is a loose list, and it is how people actually
+                        // write one. Ending the run there would restart the
+                        // depth stack, so an indented item after a blank line
+                        // came out at depth 0 with its indent read and then
+                        // discarded one line later.
+                        //
+                        // Two or more blanks still close it: that is the
+                        // deliberate vertical space handled at the top of this
+                        // loop, and the note editor preserves it everywhere.
+                        if lines[i].trimmingCharacters(in: .whitespaces).isEmpty,
+                           i + 1 < lines.count,
+                           MarkdownListSyntax.parse(lines[i + 1]) != nil {
+                            i += 1
+                            continue
+                        }
+                        break
+                    }
                     let depth = resolver.depth(forWidth: parsed.indentWidth)
                     // Coming back out closes every sub-list deeper than this, so
                     // the next one to open there numbers from its own start.

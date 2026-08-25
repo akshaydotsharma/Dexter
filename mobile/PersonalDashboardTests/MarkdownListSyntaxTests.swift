@@ -125,6 +125,32 @@ final class MarkdownListSyntaxTests: XCTestCase {
         XCTAssertEqual(Set(items.map(\.marker)), ["\u{2022}"])
     }
 
+    /// A blank line between items does not end the list (#459 follow-up).
+    ///
+    /// This is how the defect actually reached a real note: the sub-item was
+    /// separated from its parent by an empty line, the list run stopped there,
+    /// and the indented item opened a NEW list whose first width became depth 0.
+    /// The indent was read correctly and then thrown away one line later.
+    func testABlankLineDoesNotEndTheList() {
+        let blocks = MarkdownParser.parse("""
+        - Understanding the interviewer's perspective.
+        - To set yourself up for success, state these:
+
+            - Role and context: state your assumed role.
+        """)
+        guard case .list(let items)? = blocks.first, blocks.count == 1 else {
+            return XCTFail("expected one list block, got \(blocks)")
+        }
+        XCTAssertEqual(items.map(\.depth), [0, 0, 1])
+    }
+
+    func testTwoBlankLinesDoEndTheList() {
+        // Two or more blanks are the deliberate vertical space the note editor
+        // preserves everywhere else, so they close the list as before.
+        let blocks = MarkdownParser.parse("- one\n\n\n- two")
+        XCTAssertEqual(blocks.count, 3)
+    }
+
     // MARK: - Return
 
     func testReturnContinuesAtTheSameIndent() {
