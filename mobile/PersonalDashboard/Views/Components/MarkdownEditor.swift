@@ -146,37 +146,21 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         /// Return-key list continuation. Pressing Return on a list line inserts
-        /// the next marker (bullets repeat, numbers increment). Pressing Return
-        /// on an empty list item removes the marker and exits the list.
+        /// the next marker at the SAME indent (bullets repeat, numbers
+        /// increment). Pressing Return on an empty item steps out one level, and
+        /// leaves the list from the left margin. `MarkdownListSyntax` owns the
+        /// rules so the Mac behaves identically (#459).
         func textView(_ textView: UITextView,
                       shouldChangeTextIn range: NSRange,
                       replacementText replacement: String) -> Bool {
             guard replacement == "\n" else { return true }
-            let ns = textView.text as NSString
-            let lineRange = ns.lineRange(for: NSRange(location: range.location, length: 0))
-            var line = ns.substring(with: lineRange)
-            if line.hasSuffix("\n") { line.removeLast() }
-
-            guard let marker = EditorListMarker(line: line) else { return true }
-
-            let updated: String
-            let cursor: Int
-            if marker.content.trimmingCharacters(in: .whitespaces).isEmpty {
-                // Empty item: strip the marker and drop out of the list.
-                let markerRange = NSRange(location: lineRange.location,
-                                          length: (marker.raw as NSString).length)
-                updated = ns.replacingCharacters(in: markerRange, with: "")
-                cursor = markerRange.location
-            } else {
-                // Continue the list with the next marker.
-                let insertion = "\n" + marker.next
-                updated = ns.replacingCharacters(in: range, with: insertion)
-                cursor = range.location + (insertion as NSString).length
-            }
+            guard let edit = MarkdownListSyntax.returnPressed(
+                in: textView.text, replacing: range
+            ) else { return true }
 
             // `applyDisplayString` rather than `.text =`: assigning a plain String
             // discards every inline image attachment in the note (#395).
-            textView.applyDisplayString(updated, selection: NSRange(location: cursor, length: 0))
+            textView.applyDisplayString(edit.text, selection: edit.selection)
             parent.text = textView.noteMarkdown
             (textView as? PaddedTextView)?.refreshPlaceholder()
             textView.invalidateIntrinsicContentSize()
@@ -597,6 +581,12 @@ final class MarkdownFormatToolbarView: UIView {
                 { [weak self] in self?.prefixLines("- ") }),
             ("numbered", "1.",
                 { [weak self] in self?.numberLines() }),
+            // Nesting (#459). The software keyboard has no Tab key, so the only
+            // way to reach a sub-bullet on the phone is a button.
+            ("outdent", "\u{21E4}",
+                { [weak self] in self?.shiftIndent(-1) }),
+            ("indent", "\u{21E5}",
+                { [weak self] in self?.shiftIndent(1) }),
             ("quote", "❝",
                 { [weak self] in self?.prefixLines("> ") }),
             ("code", "</>",
@@ -847,6 +837,20 @@ final class MarkdownFormatToolbarView: UIView {
         onChange?()
     }
 
+    /// Move the list lines under the selection one level in (`direction` > 0)
+    /// or out (#459).
+    ///
+    /// A press on a line that is not a list item does nothing: indented plain
+    /// text is a code block in markdown, not a nested paragraph.
+    private func shiftIndent(_ direction: Int) {
+        guard let tv = textViewProvider?() else { return }
+        guard let edit = MarkdownListSyntax.shiftIndent(
+            in: tv.text, selection: tv.selectedRange, by: direction
+        ) else { return }
+        tv.applyDisplayString(edit.text, selection: edit.selection)
+        onChange?()
+    }
+
     private func prefixLines(_ prefix: String) {
         guard let tv = textViewProvider?() else { return }
         let ns = tv.text as NSString
@@ -1020,55 +1024,6 @@ extension MarkdownFormatToolbarView: UIDocumentPickerDelegate {
     }
 }
 
-// MARK: - EditorListMarker
-//
-// Parses a leading list marker on an editor line so the Return key can
-// continue the list. Ordered markers carry their integer so the next line
-// increments; unordered markers repeat their bullet character.
-
-private struct EditorListMarker {
-    private enum Kind {
-        case unordered(Character)
-        case ordered(Int)
-    }
-
-    private let kind: Kind
-    /// The leading marker including its trailing space ("- " or "3. ").
-    let raw: String
-    /// The line text after the marker.
-    let content: String
-
-    init?(line: String) {
-        for bullet in ["- ", "* ", "+ "] where line.hasPrefix(bullet) {
-            kind = .unordered(bullet.first!)
-            raw = bullet
-            content = String(line.dropFirst(bullet.count))
-            return
-        }
-
-        var idx = line.startIndex
-        var digits = 0
-        while idx < line.endIndex, line[idx].isNumber, digits < 3 {
-            digits += 1
-            idx = line.index(after: idx)
-        }
-        guard digits >= 1, idx < line.endIndex, line[idx] == "." else { return nil }
-        let space = line.index(after: idx)
-        guard space < line.endIndex, line[space] == " " else { return nil }
-        guard let number = Int(line[line.startIndex..<idx]) else { return nil }
-        kind = .ordered(number)
-        raw = String(line[line.startIndex...space])
-        content = String(line[line.index(after: space)...])
-    }
-
-    /// The marker that opens the next line.
-    var next: String {
-        switch kind {
-        case .unordered(let char): return "\(char) "
-        case .ordered(let number): return "\(number + 1). "
-        }
-    }
-}
 #else
 
 // MARK: - macOS MarkdownEditor
@@ -1076,7 +1031,8 @@ private struct EditorListMarker {
 // Native editor for the Mac port (issue #281). macOS has no software keyboard, so
 // the iOS `inputAccessoryView` format toolbar has no analog; with a full hardware
 // keyboard, typing markdown directly is the natural path. The preview tab renders
-// via `MarkdownView`.
+// via `MarkdownView`. The keys that have no markdown to type — Return continuing a
+// list, Tab nesting one — are handled in the coordinator below (#459).
 //
 // Wraps `NSTextView` rather than SwiftUI's `TextEditor` (#395). `TextEditor` binds
 // a plain `String` and cannot hold an `NSTextAttachment`, so inline images could
@@ -1163,6 +1119,42 @@ struct MarkdownEditor: NSViewRepresentable {
             parent.text = tv.noteMarkdown
             tv.refreshPlaceholder()
             tv.invalidateIntrinsicContentSize()
+        }
+
+        /// List editing from the hardware keyboard (#459).
+        ///
+        /// The Mac has no format toolbar, so Tab and Shift-Tab carry indent and
+        /// outdent here, and this is also where the Mac finally gets the Return
+        /// list continuation the iOS editor has had all along. Returning false
+        /// leaves the key to AppKit, which is what happens on any line that is
+        /// not a list item: Tab still inserts a tab, Return still breaks a line.
+        func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                return apply(MarkdownListSyntax.returnPressed(
+                    in: textView.string, replacing: textView.selectedRange()
+                ), to: textView)
+            case #selector(NSResponder.insertTab(_:)):
+                return apply(MarkdownListSyntax.shiftIndent(
+                    in: textView.string, selection: textView.selectedRange(), by: 1
+                ), to: textView)
+            case #selector(NSResponder.insertBacktab(_:)):
+                return apply(MarkdownListSyntax.shiftIndent(
+                    in: textView.string, selection: textView.selectedRange(), by: -1
+                ), to: textView)
+            default:
+                return false
+            }
+        }
+
+        /// Apply a list edit, or report it unhandled so AppKit does its default.
+        private func apply(_ edit: MarkdownListSyntax.Edit?, to textView: NSTextView) -> Bool {
+            guard let edit else { return false }
+            textView.applyListEdit(edit)
+            parent.text = textView.noteMarkdown
+            (textView as? NoteTextView)?.refreshPlaceholder()
+            textView.invalidateIntrinsicContentSize()
+            return true
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -1370,6 +1362,45 @@ extension NSTextView {
         if let font { base[.font] = font }
         if let textColor { base[.foregroundColor] = textColor }
         typingAttributes = base
+    }
+
+    /// Apply a list edit as the SMALLEST replacement that produces it (#459).
+    ///
+    /// A list edit only ever adds or removes marker and indent characters, so
+    /// narrowing it to the run that actually differs leaves the rest of the text
+    /// storage alone — inline image attachments included, which a whole-string
+    /// assignment would drop (#395). Going through `shouldChangeText` /
+    /// `didChangeText` also keeps it on the undo stack as one step.
+    func applyListEdit(_ edit: MarkdownListSyntax.Edit) {
+        let old = string as NSString
+        let new = edit.text as NSString
+
+        var start = 0
+        while start < min(old.length, new.length),
+              old.character(at: start) == new.character(at: start) {
+            start += 1
+        }
+        var oldEnd = old.length
+        var newEnd = new.length
+        while oldEnd > start, newEnd > start,
+              old.character(at: oldEnd - 1) == new.character(at: newEnd - 1) {
+            oldEnd -= 1
+            newEnd -= 1
+        }
+
+        let range = NSRange(location: start, length: oldEnd - start)
+        let replacement = new.substring(with: NSRange(location: start, length: newEnd - start))
+        guard shouldChangeText(in: range, replacementString: replacement) else { return }
+        textStorage?.replaceCharacters(
+            in: range,
+            with: NSAttributedString(string: replacement, attributes: typingAttributes)
+        )
+        didChangeText()
+        let length = (string as NSString).length
+        setSelectedRange(NSRange(
+            location: min(edit.selection.location, length),
+            length: min(edit.selection.length, max(0, length - min(edit.selection.location, length)))
+        ))
     }
 }
 #endif

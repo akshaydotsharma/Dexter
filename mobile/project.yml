@@ -191,6 +191,7 @@ targets:
       - path: PersonalDashboard/Views/Components/SectionEyebrow.swift
       - path: PersonalDashboard/Views/Components/MarkdownView.swift
       - path: PersonalDashboard/Views/Components/MarkdownTable.swift
+      - path: PersonalDashboard/Views/Components/MarkdownListSyntax.swift
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
       - path: PersonalDashboard/Views/Shell/MacMenuButton.swift
