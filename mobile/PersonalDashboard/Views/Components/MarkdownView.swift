@@ -8,8 +8,8 @@ import SwiftUI
 // Supported blocks:
 //   - Headings: `#`, `##`, `###`
 //   - Paragraphs (with inline formatting below)
-//   - Unordered lists: `- `, `* `, `+ `
-//   - Ordered lists: `1. `
+//   - Unordered lists: `- `, `* `, `+ `, nested by indentation
+//   - Ordered lists: `1. `, nested by indentation
 //   - Blockquotes: `> `
 //   - Fenced code blocks: ``` ```
 //   - Thematic break: `---`, `***`, `___`
@@ -111,32 +111,22 @@ struct MarkdownView: View {
                 .lineLimit(lineLimit)
                 .fixedSize(horizontal: false, vertical: true)
 
-        case .unorderedList(let items):
+        case .list(let items):
+            // One block for the whole list, nested levels included (#459). The
+            // gutter marker carries a minimum width so item text lines up down a
+            // level whether the marker is a glyph or "10.".
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("•")
-                            .foregroundStyle(Tokens.muted)
-                        inlineText(item)
-                            .foregroundStyle(bodyColor)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .font(bodyFont)
-            .lineLimit(lineLimit)
-
-        case .orderedList(let start, let items):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(start + idx).")
+                        Text(item.marker)
                             .foregroundStyle(Tokens.muted)
                             .monospacedDigit()
-                        inlineText(item)
+                            .frame(minWidth: 14, alignment: .leading)
+                        inlineText(item.text)
                             .foregroundStyle(bodyColor)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .padding(.leading, CGFloat(item.depth) * 18)
                 }
             }
             .font(bodyFont)
@@ -269,11 +259,25 @@ private func stripMarkdownBlockPrefix(_ line: String) -> String {
 
 // MARK: - Block model
 
+/// One line of a list, with its nesting already resolved (#459).
+///
+/// `marker` is what gets drawn in the gutter: a glyph for a bullet, the number
+/// for an ordered item. Resolving it at parse time keeps the numbering rules
+/// (restart inside a sub-list, carry on after one) in a single place rather than
+/// spread across the view.
+struct MarkdownListItem: Hashable {
+    /// 0 for a top-level item.
+    let depth: Int
+    let marker: String
+    /// The item's text, marker stripped, inline markdown intact.
+    let text: String
+}
+
 enum MarkdownBlock: Hashable {
     case heading(level: Int, inline: String)
     case paragraph(String)
-    case unorderedList([String])
-    case orderedList(start: Int, items: [String])
+    /// A list: flat or nested, bullets or numbers or a mix of both (#459).
+    case list([MarkdownListItem])
     case blockquote(String)
     case codeBlock(String)
     case divider
@@ -388,31 +392,65 @@ enum MarkdownParser {
                 continue
             }
 
-            if isUnorderedItem(trimmed) {
-                var items: [String] = []
-                while i < lines.count {
-                    let t = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard isUnorderedItem(t) else { break }
-                    items.append(stripUnorderedMarker(t))
-                    i += 1
-                }
-                blocks.append(.unorderedList(items))
-                continue
-            }
+            // Lists (#459). Parsed off the RAW line, because the leading
+            // whitespace IS the nesting: trimming first is exactly what used to
+            // flatten every sub-list into its parent.
+            //
+            // One block per run of list lines whatever the markers are. A
+            // numbered sub-list belongs to the bullet above it, and starting a
+            // new block at each change of marker would open a gap between them.
+            if MarkdownListSyntax.parse(raw) != nil {
+                var resolver = MarkdownListSyntax.DepthResolver()
+                var counters: [Int: Int] = [:]
+                var items: [MarkdownListItem] = []
 
-            if isOrderedItem(trimmed) {
-                // Start from the number the user actually typed, so a list that
-                // resumes at "2." after an intervening bullet sub-list renders
-                // as 2. instead of restarting at 1.
-                let start = orderedStartNumber(trimmed)
-                var items: [String] = []
                 while i < lines.count {
-                    let t = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard isOrderedItem(t) else { break }
-                    items.append(stripOrderedMarker(t))
+                    guard let parsed = MarkdownListSyntax.parse(lines[i]) else {
+                        // A SINGLE blank line between items does not end a list
+                        // — it is a loose list, and it is how people actually
+                        // write one. Ending the run there would restart the
+                        // depth stack, so an indented item after a blank line
+                        // came out at depth 0 with its indent read and then
+                        // discarded one line later.
+                        //
+                        // Two or more blanks still close it: that is the
+                        // deliberate vertical space handled at the top of this
+                        // loop, and the note editor preserves it everywhere.
+                        if lines[i].trimmingCharacters(in: .whitespaces).isEmpty,
+                           i + 1 < lines.count,
+                           MarkdownListSyntax.parse(lines[i + 1]) != nil {
+                            i += 1
+                            continue
+                        }
+                        break
+                    }
+                    let depth = resolver.depth(forWidth: parsed.indentWidth)
+                    // Coming back out closes every sub-list deeper than this, so
+                    // the next one to open there numbers from its own start.
+                    counters = counters.filter { $0.key <= depth }
+
+                    let marker: String
+                    switch parsed.marker {
+                    case .bullet:
+                        marker = bulletGlyphs[depth % bulletGlyphs.count]
+                        // A bullet at this level ends any numbering at it.
+                        counters[depth] = nil
+                    case .number(let typed):
+                        // Seed from the number the user typed, so a list that
+                        // resumes at "2." after an intervening sub-list carries
+                        // on instead of restarting at 1.
+                        let number = counters[depth] ?? typed
+                        marker = "\(number)."
+                        counters[depth] = number + 1
+                    }
+
+                    items.append(MarkdownListItem(
+                        depth: depth, marker: marker, text: parsed.content
+                    ))
                     i += 1
                 }
-                blocks.append(.orderedList(start: start, items: items))
+
+                blocks.append(.list(items))
                 continue
             }
 
@@ -451,50 +489,15 @@ enum MarkdownParser {
         return (level, text)
     }
 
-    private static func isUnorderedItem(_ line: String) -> Bool {
-        line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
-    }
-
-    private static func stripUnorderedMarker(_ line: String) -> String {
-        guard line.count >= 2 else { return line }
-        return String(line.dropFirst(2))
-    }
-
-    private static func isOrderedItem(_ line: String) -> Bool {
-        var idx = line.startIndex
-        var digits = 0
-        while idx < line.endIndex, line[idx].isNumber, digits < 3 {
-            digits += 1
-            idx = line.index(after: idx)
-        }
-        guard digits >= 1, idx < line.endIndex, line[idx] == "." else { return false }
-        let next = line.index(after: idx)
-        return next < line.endIndex && line[next] == " "
-    }
-
-    private static func stripOrderedMarker(_ line: String) -> String {
-        guard let dot = line.firstIndex(of: ".") else { return line }
-        let after = line.index(after: dot)
-        guard after < line.endIndex, line[after] == " " else { return line }
-        return String(line[line.index(after: after)...])
-    }
-
-    /// The leading integer of an ordered-list line ("2. foo" -> 2), or 1 if it
-    /// can't be parsed. Only called on lines that already pass `isOrderedItem`.
-    private static func orderedStartNumber(_ line: String) -> Int {
-        var idx = line.startIndex
-        while idx < line.endIndex, line[idx].isNumber {
-            idx = line.index(after: idx)
-        }
-        return Int(line[line.startIndex..<idx]) ?? 1
-    }
+    /// Gutter glyph per level, cycled so adjacent levels read apart at a glance.
+    /// The three Apple Notes uses.
+    private static let bulletGlyphs = ["•", "◦", "▪"]
 
     private static func isSpecialLine(_ line: String) -> Bool {
         if line.isEmpty { return true }
         if line.hasPrefix("#") { return headingMatch(line) != nil }
         if line.hasPrefix(">") { return true }
-        if isUnorderedItem(line) { return true }
-        if isOrderedItem(line) { return true }
+        if MarkdownListSyntax.parse(line) != nil { return true }
         if line.hasPrefix("```") { return true }
         if line == "---" || line == "***" || line == "___" { return true }
         return false
