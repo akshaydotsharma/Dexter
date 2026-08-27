@@ -128,6 +128,17 @@ struct AddExpenseSheet: View {
     @State private var showingPersonPicker: Bool = false
     @State private var showingEventPicker: Bool = false
 
+    /// Existing tags, listed inline in the Person / Event menus (#463). The
+    /// picker sheet is now only the create surface, so the common case — pick
+    /// one of the handful of people or events you already have — never leaves
+    /// this sheet. Same sort as the picker sheet: people alphabetically,
+    /// events most-recently-touched first.
+    @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
+    private var allPeople: [LocalPerson]
+
+    @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
+    private var allEvents: [LocalEvent]
+
     /// How many people the bill is split among (#188). The amount field holds
     /// the RECEIPT TOTAL; on save we divide by this to get the stored per-share
     /// amount. Default 1 = not split. Clamped to 1...50 by the stepper.
@@ -279,12 +290,12 @@ struct AddExpenseSheet: View {
             }
         }
         .sheet(isPresented: $showingPersonPicker) {
-            PersonPickerSheet(selection: $selectedPerson)
+            PersonPickerSheet(selection: $selectedPerson, startsInCreateMode: true)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingEventPicker) {
-            EventPickerSheet(selection: $selectedEvent)
+            EventPickerSheet(selection: $selectedEvent, startsInCreateMode: true)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -584,9 +595,24 @@ struct AddExpenseSheet: View {
             icon: "person",
             placeholder: "Who was this for?",
             value: selectedPerson?.name,
-            onTap: { showingPersonPicker = true },
             onClear: { selectedPerson = nil }
-        )
+        ) {
+            if selectedPerson != nil {
+                Button("None") { selectedPerson = nil }
+                Divider()
+            }
+            ForEach(allPeople, id: \.clientUUID) { person in
+                Button(person.name) {
+                    selectedPerson = ExpenseTag(uuid: person.clientUUID, name: person.name)
+                }
+            }
+            if !allPeople.isEmpty { Divider() }
+            Button {
+                showingPersonPicker = true
+            } label: {
+                Label("New person…", systemImage: "plus.circle")
+            }
+        }
     }
 
     private var eventField: some View {
@@ -595,9 +621,24 @@ struct AddExpenseSheet: View {
             icon: "calendar",
             placeholder: "Which occasion or trip?",
             value: selectedEvent?.name,
-            onTap: { showingEventPicker = true },
             onClear: { selectedEvent = nil }
-        )
+        ) {
+            if selectedEvent != nil {
+                Button("None") { selectedEvent = nil }
+                Divider()
+            }
+            ForEach(allEvents, id: \.clientUUID) { event in
+                Button(event.name) {
+                    selectedEvent = ExpenseTag(uuid: event.clientUUID, name: event.name)
+                }
+            }
+            if !allEvents.isEmpty { Divider() }
+            Button {
+                showingEventPicker = true
+            } label: {
+                Label("New event…", systemImage: "plus.circle")
+            }
+        }
     }
 
     // MARK: - Split shares (#188)
@@ -988,13 +1029,19 @@ struct AddExpenseSheet: View {
     /// Shared "tappable field that opens a picker" row for Person / Event.
     /// Shows the selected name (or a placeholder), a chevron, and a clear
     /// button when a value is set.
-    private func tagSelectorRow(
+    /// A tag field that drops its options down in place (#463), the same shape
+    /// `categoryField` and `payerField` already use. It used to push a picker
+    /// sheet, which on macOS meant a second window-modal surface for what reads
+    /// as a dropdown — and one that collapsed to nothing (#461). Creating a tag
+    /// still opens the picker sheet, straight into its add form: a new event
+    /// carries dates and a trip link, which no menu can host.
+    private func tagSelectorRow<MenuContent: View>(
         label: String,
         icon: String,
         placeholder: String,
         value: String?,
-        onTap: @escaping () -> Void,
-        onClear: @escaping () -> Void
+        onClear: @escaping () -> Void,
+        @ViewBuilder menuContent: () -> MenuContent
     ) -> some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             HStack {
@@ -1005,7 +1052,9 @@ struct AddExpenseSheet: View {
                     .foregroundStyle(Tokens.mutedSoft)
             }
             HStack(spacing: Space.sm) {
-                Button(action: onTap) {
+                Menu {
+                    menuContent()
+                } label: {
                     HStack(spacing: Space.sm) {
                         Image(systemName: icon)
                             .font(.system(size: 14, weight: .regular))
@@ -1016,15 +1065,12 @@ struct AddExpenseSheet: View {
                             .foregroundStyle(value == nil ? Tokens.inkSoft : Tokens.ink)
                             .lineLimit(1)
                         Spacer()
-                        if value == nil {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Tokens.muted)
-                        }
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Tokens.muted)
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
 
                 if value != nil {
                     Button(action: onClear) {
@@ -1285,6 +1331,12 @@ struct PersonPickerSheet: View {
 
     @Binding var selection: ExpenseTag?
 
+    /// Open straight into the add form (#463). The expense sheet now lists the
+    /// existing people in its own dropdown, so it reaches this sheet only to
+    /// create one. Defaults to false, which is the browse-then-pick behaviour
+    /// the Trips participant row still uses.
+    var startsInCreateMode: Bool = false
+
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var people: [LocalPerson]
 
@@ -1312,7 +1364,9 @@ struct PersonPickerSheet: View {
                         .listRowBackground(Tokens.surface)
                     }
 
-                    ForEach(people, id: \.clientUUID) { person in
+                    // In create mode the caller already listed these in its own
+                    // dropdown, so repeating them here is noise (#463).
+                    ForEach(startsInCreateMode ? [] : people, id: \.clientUUID) { person in
                         Button {
                             selection = ExpenseTag(uuid: person.clientUUID, name: person.name)
                             dismiss()
@@ -1338,7 +1392,7 @@ struct PersonPickerSheet: View {
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
             }
-            .navigationTitle("Person")
+            .navigationTitle(startsInCreateMode ? "New person" : "Person")
             .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1346,13 +1400,20 @@ struct PersonPickerSheet: View {
                         .foregroundStyle(Tokens.muted)
                 }
             }
+            .onAppear {
+                guard startsInCreateMode, !addingNew else { return }
+                addingNew = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { nameFocused = true }
+            }
         }
         // iOS sizes this sheet with presentation detents, which macOS ignores. A
         // macOS sheet sizes itself to its content, and a List reports no
         // intrinsic height, so without a floor the sheet collapses to the
         // height of its navigation bar and the rows are unreachable (#461).
         #if os(macOS)
-        .frame(minWidth: 420, idealWidth: 460, minHeight: 460, idealHeight: 560)
+        .frame(minWidth: 420, idealWidth: 460,
+               minHeight: startsInCreateMode ? 220 : 460,
+               idealHeight: startsInCreateMode ? 260 : 560)
         #endif
     }
 
@@ -1371,7 +1432,7 @@ struct PersonPickerSheet: View {
                     .foregroundStyle(Tokens.danger)
             }
             HStack {
-                Button("Cancel") { addingNew = false; newName = ""; errorMessage = nil }
+                Button("Cancel") { cancelNew() }
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.muted)
                     .buttonStyle(.borderless)
@@ -1384,6 +1445,15 @@ struct PersonPickerSheet: View {
             }
         }
         .listRowBackground(Tokens.surface)
+    }
+
+    /// Backing out of the form. When the sheet exists only to create (#463)
+    /// there is nothing behind the form to go back to, so leave altogether.
+    private func cancelNew() {
+        if startsInCreateMode { dismiss(); return }
+        addingNew = false
+        newName = ""
+        errorMessage = nil
     }
 
     private func commitNew() {
@@ -1408,6 +1478,9 @@ struct EventPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @Binding var selection: ExpenseTag?
+
+    /// Open straight into the add form (#463). See `PersonPickerSheet`.
+    var startsInCreateMode: Bool = false
 
     @Query(sort: [SortDescriptor(\LocalEvent.updatedAt, order: .reverse)])
     private var events: [LocalEvent]
@@ -1443,7 +1516,9 @@ struct EventPickerSheet: View {
                         .listRowBackground(Tokens.surface)
                     }
 
-                    ForEach(events, id: \.clientUUID) { event in
+                    // See PersonPickerSheet: the caller's dropdown already
+                    // lists these when we are here only to create one (#463).
+                    ForEach(startsInCreateMode ? [] : events, id: \.clientUUID) { event in
                         Button {
                             selection = ExpenseTag(uuid: event.clientUUID, name: event.name)
                             dismiss()
@@ -1476,7 +1551,7 @@ struct EventPickerSheet: View {
                 .scrollContentBackground(.hidden)
                 .background(Tokens.paper)
             }
-            .navigationTitle("Event")
+            .navigationTitle(startsInCreateMode ? "New event" : "Event")
             .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1484,13 +1559,20 @@ struct EventPickerSheet: View {
                         .foregroundStyle(Tokens.muted)
                 }
             }
+            .onAppear {
+                guard startsInCreateMode, !addingNew else { return }
+                addingNew = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { nameFocused = true }
+            }
         }
         // iOS sizes this sheet with presentation detents, which macOS ignores. A
         // macOS sheet sizes itself to its content, and a List reports no
         // intrinsic height, so without a floor the sheet collapses to the
         // height of its navigation bar and the rows are unreachable (#461).
         #if os(macOS)
-        .frame(minWidth: 420, idealWidth: 460, minHeight: 460, idealHeight: 560)
+        .frame(minWidth: 420, idealWidth: 460,
+               minHeight: startsInCreateMode ? 220 : 460,
+               idealHeight: startsInCreateMode ? 260 : 560)
         #endif
     }
 
@@ -1577,6 +1659,7 @@ struct EventPickerSheet: View {
     }
 
     private func resetNew() {
+        if startsInCreateMode { dismiss(); return }
         addingNew = false
         newName = ""
         useDates = false
