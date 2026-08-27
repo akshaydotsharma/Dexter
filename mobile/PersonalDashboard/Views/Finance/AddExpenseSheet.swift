@@ -412,7 +412,7 @@ struct AddExpenseSheet: View {
                         Button(code) { currency = code }
                     }
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: Space.sm) {
                         Text(currency)
                             .font(.edBodyMedium)
                             .foregroundStyle(Tokens.ink)
@@ -420,11 +420,11 @@ struct AddExpenseSheet: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(Tokens.muted)
                     }
-                    .padding(.horizontal, Space.md)
-                    .frame(height: 52)
-                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                    .paperBorder(Tokens.border, radius: Radius.md)
+                    .contentShape(Rectangle())
                 }
+                .paperMenuOnMac()
+                .dropdownFieldSurface(fullWidth: false)
+                .frame(height: 52)
                 .accessibilityLabel("Currency")
             }
         }
@@ -455,10 +455,11 @@ struct AddExpenseSheet: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Tokens.muted)
                 }
-                .padding(Space.md)
-                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                .paperBorder(Tokens.border, radius: Radius.md)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
             }
+            .paperMenuOnMac()
+            .dropdownFieldSurface()
             .accessibilityLabel("Category")
         }
     }
@@ -771,6 +772,7 @@ struct AddExpenseSheet: View {
                     Circle()
                         .fill(payerColor)
                         .frame(width: 12, height: 12)
+                        .frame(width: 24)
                     Text(payerName)
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)
@@ -779,10 +781,11 @@ struct AddExpenseSheet: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Tokens.muted)
                 }
-                .padding(Space.md)
-                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                .paperBorder(Tokens.border, radius: Radius.md)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
             }
+            .paperMenuOnMac()
+            .dropdownFieldSurface()
             .accessibilityLabel("Paid by \(payerName)")
         }
     }
@@ -1064,14 +1067,19 @@ struct AddExpenseSheet: View {
                             .font(.edBody)
                             .foregroundStyle(value == nil ? Tokens.inkSoft : Tokens.ink)
                             .lineLimit(1)
-                        Spacer()
+                        Spacer(minLength: Space.sm)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(Tokens.muted)
                     }
+                    .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                 }
+                .paperMenuOnMac()
 
+                // The clear button shares the field's surface rather than
+                // sitting outside it, so a tagged row is the same box as an
+                // untagged one with one more glyph in it.
                 if value != nil {
                     Button(action: onClear) {
                         Image(systemName: "xmark.circle.fill")
@@ -1082,9 +1090,7 @@ struct AddExpenseSheet: View {
                     .accessibilityLabel("Clear \(label.lowercased())")
                 }
             }
-            .padding(Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            .dropdownFieldSurface()
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label): \(value ?? "none")")

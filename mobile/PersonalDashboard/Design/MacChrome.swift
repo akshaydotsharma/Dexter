@@ -360,6 +360,38 @@ extension View {
         #endif
     }
 
+    /// A `Menu` whose label already draws its own paper surface (#463). On
+    /// macOS the default pull-down style wraps that label in system chrome:
+    /// a grey capsule that hugs its content and adds a second chevron on the
+    /// leading edge. The result reads as a small pill floating in a wide row,
+    /// nothing like the text fields above and below it. This hands the label
+    /// back its own appearance so a menu and a `TextField` are the same
+    /// control at a glance. No-op on iOS, which never added the chrome.
+    @ViewBuilder
+    func paperMenuOnMac() -> some View {
+        #if os(macOS)
+        self.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        #else
+        self
+        #endif
+    }
+
+    /// The resting surface shared by every dropdown field in a form (#463):
+    /// the same box, radius and hairline the text inputs beside it use, so the
+    /// column of fields reads as one control repeated rather than four
+    /// different ones.
+    ///
+    /// Pass `fullWidth: false` for a field that is deliberately narrow and
+    /// sits beside another control, like the currency next to the amount.
+    ///
+    /// On macOS it also carries the hover state. Stripping the system chrome
+    /// takes the button's own highlight with it, and without a hover response
+    /// a full-width surface reads as a static caption rather than something
+    /// you can open.
+    func dropdownFieldSurface(fullWidth: Bool = true) -> some View {
+        modifier(DropdownFieldSurface(fullWidth: fullWidth))
+    }
+
     /// The date-picker equivalent of `paperFieldOnMac()` (#368). A `DatePicker`
     /// is an `NSDatePicker`, not a text field, so no SwiftUI style reaches its
     /// bezel — it keeps drawing the same grey slab the text fields used to.
@@ -463,3 +495,35 @@ private struct MacHeaderIconChrome: ViewModifier {
     }
 }
 #endif
+
+
+/// See `View.dropdownFieldSurface(fullWidth:)`.
+struct DropdownFieldSurface: ViewModifier {
+    let fullWidth: Bool
+
+    #if os(macOS)
+    @State private var hovering = false
+    #endif
+
+    func body(content: Content) -> some View {
+        let shaped = content
+            .frame(maxWidth: fullWidth ? .infinity : nil, alignment: .leading)
+            .padding(Space.md)
+
+        #if os(macOS)
+        return shaped
+            .background(hovering ? Tokens.surface2 : Tokens.surface,
+                        in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .paperBorder(hovering ? Tokens.borderStrong : Tokens.border, radius: Radius.md)
+            .contentShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+        #else
+        return shaped
+            .background(Tokens.surface,
+                        in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.md)
+            .contentShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        #endif
+    }
+}
