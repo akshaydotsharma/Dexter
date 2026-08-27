@@ -583,7 +583,9 @@ struct TripDetailView: View {
                 }
             }
         }
-        .padding(.trailing, Space.lg)
+        // 22pt trailing, matching the Tasks / Lists / Notes / Finance FABs so the
+        // add control does not shift when you open a trip (#464).
+        .padding(.trailing, 22)
         .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
         .allowsHitTesting(true)
     }
@@ -624,8 +626,9 @@ struct TripDetailView: View {
                 Label("Ticket from PDF", systemImage: "doc.text")
             }
         } label: {
-            fabCircle
+            Image(systemName: "plus")
         }
+        .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
         .disabled(isProcessingTicket)
         .accessibilityLabel("Add to trip")
     }
@@ -673,8 +676,9 @@ struct TripDetailView: View {
                 Label("Enter manually", systemImage: "pencil")
             }
         } label: {
-            fabCircle
+            Image(systemName: "plus")
         }
+        .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
         .disabled(isProcessingExpenseUpload)
         .accessibilityLabel("Add trip expense")
     }
@@ -696,16 +700,6 @@ struct TripDetailView: View {
                 }
             }
         }
-    }
-
-    /// The shared circular "+" glyph both FABs wear.
-    private var fabCircle: some View {
-        Image(systemName: "plus")
-            .font(.system(size: 17, weight: .regular))
-            .foregroundStyle(Tokens.accentFg)
-            .frame(width: 48, height: 48)
-            .background(Tokens.accent(for: .itineraries), in: Circle())
-            .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
     }
 
     // MARK: - Ticket upload
