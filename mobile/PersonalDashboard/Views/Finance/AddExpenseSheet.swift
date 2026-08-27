@@ -1347,6 +1347,13 @@ struct PersonPickerSheet: View {
                 }
             }
         }
+        // iOS sizes this sheet with presentation detents, which macOS ignores. A
+        // macOS sheet sizes itself to its content, and a List reports no
+        // intrinsic height, so without a floor the sheet collapses to the
+        // height of its navigation bar and the rows are unreachable (#461).
+        #if os(macOS)
+        .frame(minWidth: 420, idealWidth: 460, minHeight: 460, idealHeight: 560)
+        #endif
     }
 
     private var newPersonRow: some View {
@@ -1478,6 +1485,13 @@ struct EventPickerSheet: View {
                 }
             }
         }
+        // iOS sizes this sheet with presentation detents, which macOS ignores. A
+        // macOS sheet sizes itself to its content, and a List reports no
+        // intrinsic height, so without a floor the sheet collapses to the
+        // height of its navigation bar and the rows are unreachable (#461).
+        #if os(macOS)
+        .frame(minWidth: 420, idealWidth: 460, minHeight: 460, idealHeight: 560)
+        #endif
     }
 
     @ViewBuilder
