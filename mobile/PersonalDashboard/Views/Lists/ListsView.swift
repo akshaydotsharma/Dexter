@@ -157,10 +157,12 @@ struct ListsView: View {
         }
         .task { await viewModel.load() }
         .onAppear {
-            // Activity timeline deep-link consumption. Same shape as TasksView:
-            // focus carries the clientUUID. Scroll + pulse on the matching row
-            // is a follow-up; clear here so the focus doesn't loop.
+            // Deep-link consumption: focus carries the clientUUID. It used to be
+            // dropped on the floor, so arriving here from Today or Activity
+            // landed on the index and left you to find the list again (#468).
+            // Open it instead.
             if router.focus?.section == .lists {
+                if let id = router.focus?.id { selectedListId = id }
                 router.focus = nil
             }
             syncBackHandler()

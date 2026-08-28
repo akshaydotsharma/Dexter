@@ -242,11 +242,14 @@ struct NotesView: View {
             }
         }
         .onAppear {
-            // Activity timeline deep-link consumption. Same shape as the
-            // other surfaces: focus carries the clientUUID (folder UUID when
-            // `isFolder` is true). Scroll + pulse on the matching row is a
-            // follow-up; clear here so the focus doesn't loop.
+            // Deep-link consumption: focus carries the clientUUID (folder UUID
+            // when `isFolder` is true). It used to be dropped on the floor, so
+            // arriving here from Today or Activity landed on the index and left
+            // you to find the note again (#468). Open it instead.
             if router.focus?.section == .notes {
+                if let id = router.focus?.id, !(router.focus?.isFolder ?? false) {
+                    selectedNoteId = id
+                }
                 router.focus = nil
             }
             syncBackHandler()
@@ -1044,11 +1047,13 @@ private struct NoteDetailContent: View {
             // collapse to zero height and look broken). Show a quiet hint
             // pointing the user back to edit mode.
             if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Nothing to preview yet. Tap the pencil to write.")
+                Text("Nothing here yet. Tap to write.")
                     .font(.edBody)
                     .foregroundStyle(Tokens.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, Space.xl)
+                    .contentShape(Rectangle())
+                    .onTapGesture { beginEditing() }
             } else {
                 MarkdownView(
                     text: content,
@@ -1057,6 +1062,16 @@ private struct NoteDetailContent: View {
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
+                // Tap the rendered note to write in it (#468). Reaching the
+                // writing surface used to mean finding the pencil, which is the
+                // read-then-edit step this removes — and a tap is what every
+                // other rename surface in the app already answers to.
+                //
+                // The image tap above wins: `onImageTap` is attached inside the
+                // renderer, so tapping a picture still opens it full size
+                // rather than dropping a caret behind it.
+                .contentShape(Rectangle())
+                .onTapGesture { beginEditing() }
             }
         }
     }
@@ -1111,6 +1126,13 @@ private struct NoteDetailContent: View {
     /// preview so the accessory toolbar doesn't briefly hang around, then
     /// refocuses when returning to edit. Shared by the iOS header button and
     /// the macOS toolbar action (issue #291).
+    /// Enter edit mode and put the caret in the body. A no-op when already
+    /// editing, so a stray tap inside the text view cannot re-focus and scroll.
+    private func beginEditing() {
+        guard mode == .preview else { return }
+        togglePreview()
+    }
+
     private func togglePreview() {
         if mode == .edit { contentFocused = false }
         withAnimation(.easeOut(duration: 0.15)) {

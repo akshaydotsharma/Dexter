@@ -1301,7 +1301,7 @@ private enum TaskEditorTarget: Identifiable {
     }
 }
 
-private struct TaskEditorSheet: View {
+struct TaskEditorSheet: View {
     let viewModel: TodosViewModel
     let todo: Todo?
     /// A file to read as soon as the editor appears, filling the draft from it
