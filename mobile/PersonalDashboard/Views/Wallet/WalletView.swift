@@ -276,7 +276,6 @@ struct WalletView: View {
                             isExpanded: expandedID == entry.id,
                             isPast: isPast,
                             onToggle: { toggle(entry) },
-                            onOpen: { open(entry) },
                             onPresent: { present(entry) },
                             onEdit: ownID.map { id in { editorTarget = .existing(id) } },
                             onDelete: ownID.map { id in { pendingDeleteID = id } },
@@ -456,25 +455,6 @@ struct WalletView: View {
         expandedID = grouped.upcoming.first?.id ?? grouped.past.first?.id
     }
 
-    /// Tapping an opened card's body goes to its editor (#468).
-    ///
-    /// It used to open a full-size read-only copy of the card whose own "Edit"
-    /// tile then led here, so reaching the editor from the deck took three taps.
-    /// The card is already on screen and already unfolded by this point, so a
-    /// second rendering of it was never the thing being asked for.
-    ///
-    /// A borrowed card has no wallet row to edit, so it goes to the surface that
-    /// owns it and edits there. Scanning keeps its own button (`present`), which
-    /// is what stops the two intentions sharing one gesture.
-    private func open(_ entry: WalletEntry) {
-        Haptics.light()
-        if let id = walletCardID(of: entry) {
-            editorTarget = .existing(id)
-        } else {
-            openSource(of: entry)
-        }
-    }
-
     /// Straight to the high-contrast barcode: max brightness, idle timer held.
     /// The fast path for someone already standing at the gate. A card with
     /// nothing scannable falls back to its detail rather than presenting an
@@ -495,6 +475,10 @@ struct WalletView: View {
     /// Jump to the surface that owns a borrowed card. Uses the same
     /// `router.focus` deep-link the Activity timeline uses, so the trip opens on
     /// its detail rather than the trip list.
+    ///
+    /// Reached only from the card's context menu and the detail sheet since #483.
+    /// It is the one thing the Wallet does that changes section, so it needs a
+    /// deliberate action behind it rather than a tap on the card.
     private func openSource(of entry: WalletEntry) {
         switch entry.source {
         case .wallet:
@@ -541,17 +525,15 @@ struct WalletView: View {
             Haptics.light()
             if result.degraded {
                 editorTarget = .existing(result.itemUUID)
-            } else if let card = fetchCard(result.itemUUID) {
-                // Straight to the card that was just added, so the upload ends
-                // on something the user can see and scan.
+            } else if fetchCard(result.itemUUID) != nil {
+                // Straight to the card that was just added, so the upload ends on
+                // something the user can see, check and scan.
                 //
                 // Fetched from the context rather than read off `cards`: the
                 // `@Query` has not necessarily republished in the same run-loop
                 // turn as the insert, so reading it here can miss the brand new
                 // row and silently skip this step.
-                if let entry = WalletEntry.build(cards: [card], itineraryItems: [], trips: []).first {
-                    open(entry)
-                }
+                editorTarget = .existing(result.itemUUID)
             }
         } catch {
             ticketError = (error as? LocalizedError)?.errorDescription

@@ -27,8 +27,6 @@ struct WalletTicketCard: View {
     var isPast: Bool = false
     /// Tap the header. `nil` on a surface where there is nothing left to open.
     var onTapHeader: (() -> Void)?
-    /// Tap the ticket body — opens the record behind the card.
-    var onTapBody: (() -> Void)?
     /// Tap the barcode stub — presents the code (#479). Split from `onTapBody`
     /// because holding a code up at a gate and opening the record behind it are
     /// different intentions, and the stub was inheriting the body's.
@@ -84,6 +82,13 @@ struct WalletTicketCard: View {
                         .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
                 }
                 .rotation3DEffect(.degrees(flip), axis: (x: 0, y: 1, z: 0), perspective: 0.4)
+                // The whole body turns the card, either side (#483). On the outer
+                // container rather than on the face, so the back turns back the
+                // same way it turned over — a card you can open and not close is
+                // a trap. A link row on the back is a button and claims its own
+                // tap first, as does the barcode stub on the face.
+                .contentShape(Rectangle())
+                .onTapGesture { if fields.hasBack { turnOver() } }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -133,14 +138,17 @@ struct WalletTicketCard: View {
             onTapBarcode: onTapStub,
             fields: fields
         )
-        .contentShape(Rectangle())
-        .onTapGesture { onTapBody?() }
     }
 
     private var cardBack: some View {
         TicketCardBack(fields: fields, palette: palette)
     }
 
+    /// Turn the card. Called by the info control and by a tap anywhere on the
+    /// body, which are the same intention expressed two ways. The state lives
+    /// here rather than with the parent, so the gesture does too — a card that
+    /// asked its owner to turn it could be sent somewhere else instead, which is
+    /// exactly the defect this closes (#483).
     private func turnOver() {
         Haptics.light()
         withAnimation(.easeInOut(duration: 0.45)) {

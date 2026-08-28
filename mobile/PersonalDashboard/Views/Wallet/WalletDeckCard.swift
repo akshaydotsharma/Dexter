@@ -17,11 +17,8 @@ struct WalletDeckCard: View {
     let isPast: Bool
     /// Tap the header: expand, or collapse if already open.
     let onToggle: () -> Void
-    /// Tap the opened ticket: see the card full size, centred on its own page.
-    let onOpen: () -> Void
-    /// The Present button: straight to the barcode, for someone already at the
-    /// gate. Split from `onOpen` because looking at a ticket and presenting it
-    /// are different intentions and were sharing one gesture.
+    /// The action row's main button: straight to the barcode on iOS, the card
+    /// detail on macOS. Nothing a card does changes section any more (#483).
     let onPresent: () -> Void
     let onEdit: (() -> Void)?
     let onDelete: (() -> Void)?
@@ -36,7 +33,6 @@ struct WalletDeckCard: View {
                 isOpen: isExpanded,
                 isPast: isPast,
                 onTapHeader: onToggle,
-                onTapBody: onOpen,
                 // The barcode goes where the Present button goes (#479): iOS to
                 // the scan surface, macOS to the card detail. Tapping a code and
                 // pressing the button under it are the same intention.
@@ -65,32 +61,41 @@ struct WalletDeckCard: View {
         }
     }
 
-    /// The one action worth a button rather than a hidden tap. Scanning is the
-    /// reason the wallet exists, so it is spelled out instead of relying on the
-    /// user guessing that the card is tappable. It sits below the ticket rather
-    /// than inside it, the way a pass's actions do in Apple Wallet.
-    @ViewBuilder
+    /// The actions worth a button rather than a hidden gesture, side by side
+    /// below the ticket, the way a pass's actions sit in Apple Wallet.
+    ///
+    /// Scanning is the reason the wallet exists, so it is spelled out instead of
+    /// relying on the user guessing the card is tappable. Edit sits beside it for
+    /// a card the wallet owns (#483): the body tap used to reach the editor and
+    /// now turns the card over, so without this the only way in would be a
+    /// context menu nobody opens.
     private var actionRow: some View {
-        #if os(iOS)
-        if entry.card.hasTicket {
-            Button(action: onPresent) {
-                actionLabel(
+        HStack(spacing: Space.sm) {
+            #if os(iOS)
+            if entry.card.hasTicket {
+                actionButton(
                     icon: entry.card.hasBarcode ? "barcode.viewfinder" : "doc.text.magnifyingglass",
-                    title: entry.card.hasBarcode ? "Present to scan" : "View ticket"
+                    title: entry.card.hasBarcode ? "Present to scan" : "View ticket",
+                    action: onPresent
                 )
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(entry.card.hasBarcode ? "Present to scan" : "View ticket")
+            #else
+            // macOS has no present-to-scan surface (it needs the brightness and
+            // idle-timer control), so the equivalent action is the card detail.
+            actionButton(icon: "rectangle.expand.vertical", title: "Open card", action: onPresent)
+            #endif
+            if let onEdit {
+                actionButton(icon: "pencil", title: "Edit", action: onEdit)
+            }
         }
-        #else
-        // macOS has no present-to-scan surface (it needs the brightness and
-        // idle-timer control), so the equivalent action is the card detail.
-        Button(action: onOpen) {
-            actionLabel(icon: "rectangle.expand.vertical", title: "Open card")
+    }
+
+    private func actionButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            actionLabel(icon: icon, title: title)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open card")
-        #endif
+        .accessibilityLabel(title)
     }
 
     private func actionLabel(icon: String, title: String) -> some View {
