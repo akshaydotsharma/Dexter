@@ -72,6 +72,9 @@ struct SyncStatusSnapshot {
     /// Referenced by a row here, and published by nobody. Usually a file that only
     /// ever existed on a device that has left the folder.
     var assetsUnavailable: Int = 0
+    /// Rows the one-shot #411 repair reattached to their original file path by
+    /// reading the append-only log. Non-zero on at most one pass, ever.
+    var assetsRepaired: Int = 0
 
     var peers: [Peer] = []
 
@@ -192,6 +195,8 @@ final class SyncEngine {
         /// What the attachment transfer did this pass (#471). Not persisted: like
         /// `opsApplied`, it answers "did the thing I just asked for do anything".
         var assets = SyncAssetTransfer.Outcome()
+        /// Rows the one-shot #411 repair reattached to their files this pass.
+        var assetsRepaired = 0
         var outcome = "OK (\(reason))"
 
         let health = SyncFolder.health()
@@ -221,6 +226,15 @@ final class SyncEngine {
             waitingOnDownloads = inbound.waitingOnDownloads
 
             opsOut = try await emitLocalChanges(folder: folder, state: state)
+
+            // BEFORE the transfer, because the transfer has nothing to do for a
+            // row whose path #411 already removed. One-shot and latched; it reads
+            // the original paths back out of the append-only log.
+            let peers = (try? folder.peerDeviceUUIDs(excluding: state.deviceUUID)) ?? []
+            if let repair = await SyncAssetRepair(modelContext: modelContext)
+                .runOnceIfNeeded(folder: folder, deviceUUIDs: [state.deviceUUID] + peers) {
+                assetsRepaired = repair.repaired
+            }
 
             // Attachment bytes (#471), after the rows they belong to. The order
             // matters on the receiving side, not here: a peer that has the blob
@@ -259,6 +273,7 @@ final class SyncEngine {
         result.assetsFetched = assets.fetched
         result.assetsArriving = assets.awaiting
         result.assetsUnavailable = assets.unavailable
+        result.assetsRepaired = assetsRepaired
         return result
     }
 

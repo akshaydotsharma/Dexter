@@ -265,6 +265,87 @@ final class SyncAssetTransferTests: XCTestCase {
         )
     }
 
+    // MARK: - Reattaching what #411 detached
+
+    /// The repair reads the original path back out of the append-only log, so it
+    /// has to tell a machine rewrite from a person detaching a file. Both end with
+    /// an empty path; only one of them may be undone.
+    ///
+    /// The discriminator is `updatedAt`. `.replaceMatching` re-inserts the row from
+    /// the peer's DTO, so every other field comes through untouched — measured on
+    /// all twelve damaged rows in the live folder:
+    ///
+    ///     lam=9134  path=…4b97bdc1ad5b.jpg  updatedAt=2026-07-29T18:10:22Z
+    ///     lam=9135  path=(empty)            updatedAt=2026-07-29T18:10:22Z
+    ///
+    /// A person detaching a file goes through the service layer, which stamps a
+    /// new `updatedAt`.
+    func testOnlyAMachineRewriteIsTreatedAsDetached() {
+        let device = UUID()
+        func op(_ lamport: Int64, _ path: String, _ updatedAt: String) -> SyncAssetRepair.Observation {
+            SyncAssetRepair.Observation(
+                lamport: lamport, deviceUUID: device, path: path, updatedAt: updatedAt
+            )
+        }
+
+        let recovered = SyncAssetRepair.detachedPaths(in: [
+            // #411: the path vanishes with `updatedAt` unmoved.
+            "LocalTaskTicket|a": [
+                op(1, "task-tickets/a.jpg", "2026-07-29T18:10:22Z"),
+                op(2, "",                   "2026-07-29T18:10:22Z"),
+            ],
+            // A person detached it. `updatedAt` moved, so it stays detached.
+            "LocalTaskTicket|b": [
+                op(1, "task-tickets/b.jpg", "2026-07-29T18:10:22Z"),
+                op(2, "",                   "2026-07-30T09:00:00Z"),
+            ],
+            // Detached by a person, then a NEW file attached. Nothing to recover,
+            // and certainly not the old path.
+            "LocalTaskTicket|c": [
+                op(1, "task-tickets/old.jpg", "2026-07-29T18:10:22Z"),
+                op(2, "",                     "2026-07-30T09:00:00Z"),
+                op(3, "task-tickets/new.jpg", "2026-07-30T09:05:00Z"),
+            ],
+            // A row that never lost anything.
+            "LocalTaskTicket|d": [
+                op(1, "task-tickets/d.jpg", "2026-07-29T18:10:22Z"),
+            ],
+        ])
+
+        XCTAssertEqual(recovered, ["LocalTaskTicket|a": "task-tickets/a.jpg"])
+    }
+
+    /// The damaged row is repaired even when the blanking op is not the last thing
+    /// in its history — the real log has later blank republishes after the first.
+    func testARepublishedBlankDoesNotHideTheOriginalPath() {
+        let device = UUID()
+        func op(_ lamport: Int64, _ path: String, _ updatedAt: String) -> SyncAssetRepair.Observation {
+            SyncAssetRepair.Observation(
+                lamport: lamport, deviceUUID: device, path: path, updatedAt: updatedAt
+            )
+        }
+        let recovered = SyncAssetRepair.detachedPaths(in: [
+            "LocalTaskTicket|a": [
+                op(9134, "task-tickets/a.jpg", "2026-07-29T18:10:22Z"),
+                op(9135, "",                   "2026-07-29T18:10:22Z"),
+                // Observed in the live log: a later pass republishes the row, by
+                // now legitimately blank, with a moved `updatedAt`.
+                op(9147, "",                   "2026-07-30T06:44:37Z"),
+            ],
+        ])
+        XCTAssertEqual(recovered["LocalTaskTicket|a"], "task-tickets/a.jpg")
+    }
+
+    /// Every column the transfer moves is also a column the repair can reattach.
+    /// A mismatch would silently leave one entity unrepairable.
+    func testTheRepairCoversEveryColumnTheTransferMoves() {
+        XCTAssertEqual(
+            Set(SyncAssetRepair.assetColumns.keys),
+            ["LocalTaskTicket", "LocalItineraryItem", "LocalWalletCard",
+             "LocalExpense", "LocalNoteImage", "LocalTrip"]
+        )
+    }
+
     // MARK: - Wording
 
     func testTheTwoMissingFileSentencesDiffer() {

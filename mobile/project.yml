@@ -258,6 +258,7 @@ targets:
       # two schemas diverge.
       - path: PersonalDashboard/Sync/SyncOp.swift
       - path: PersonalDashboard/Sync/SyncAssets.swift
+      - path: PersonalDashboard/Sync/SyncAssetRepair.swift
       - path: PersonalDashboard/Sync/SyncFolder.swift
       - path: PersonalDashboard/Sync/SyncRecordMapper.swift
       - path: PersonalDashboard/Sync/SyncApplier.swift

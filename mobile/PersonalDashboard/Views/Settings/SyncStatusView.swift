@@ -260,6 +260,12 @@ struct SyncStatusView: View {
             if snapshot.assetsUnavailable > 0 {
                 LabeledContent("Not on any device", value: String(snapshot.assetsUnavailable))
             }
+            // Non-zero on at most one pass, ever. Shown because reattaching a file
+            // to a record is a change to the user's data, and a repair that
+            // happened silently is one nobody can check.
+            if snapshot.assetsRepaired > 0 {
+                LabeledContent("Reattached to their files", value: String(snapshot.assetsRepaired))
+            }
         } header: {
             Text("Attachment files")
         } footer: {
