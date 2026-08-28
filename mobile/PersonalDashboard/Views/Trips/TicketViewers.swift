@@ -99,16 +99,25 @@ struct TicketOriginalViewer: View {
 // MARK: - Attachment thumbnail
 
 /// Small inline preview of a stored ticket file: the image for a photo/scan,
-/// a doc icon for a PDF, a placeholder when the file is gone. Used by the item
-/// editor's ticket section.
+/// a doc icon for a PDF or a pass, a placeholder when the file is gone. Used by
+/// the item editor's ticket section and by every attachment row (#466).
 struct TicketAttachmentThumbnail: View {
     let relativePath: String
+    /// Tints the icon so a row reads as belonging to the section it was added
+    /// from. Defaulted, so the pre-#466 call sites are unchanged.
+    var accent: Color = Tokens.accent(for: .itineraries)
 
     var body: some View {
         Group {
             if let url = TicketStorage.shared.load(relativePath: relativePath) {
-                if TicketStorage.isPDF(relativePath) {
-                    icon("doc.text.fill", tint: Tokens.accent(for: .itineraries))
+                // Checked before the PDF branch: a `.pkpass` is a zip, so it has
+                // no page to render and would otherwise fall through to the
+                // image branch and draw the grey "missing" placeholder for a
+                // file that is present and perfectly valid.
+                if TicketStorage.isPass(relativePath) {
+                    icon("wallet.pass.fill", tint: accent)
+                } else if TicketStorage.isPDF(relativePath) {
+                    icon("doc.text.fill", tint: accent)
                 } else if let image = Image(receiptFileURL: url) {
                     image
                         .resizable()

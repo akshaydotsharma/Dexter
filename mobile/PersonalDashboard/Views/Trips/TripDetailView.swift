@@ -123,7 +123,37 @@ struct TripDetailView: View {
             guard let itemUUID = row.itineraryItemUUID else { continue }
             out[itemUUID, default: 0] += 1
         }
+        // The stop's OWN file counts too (#466). It used to be reachable only
+        // through the boarding-pass card on the timeline, so with that card gone
+        // the tray is the way in and has to know the file is there.
+        //
+        // Keyed on a non-empty `attachmentPath`, deliberately NOT on `hasTicket`,
+        // which is also true for a bare barcode payload with no file behind it.
+        // That distinction is issue #298 expressed as data instead of as a
+        // platform `#if`: a barcode-only stop has nothing to list, so it adds
+        // nothing to the count and grows no tray.
+        for item in items where !item.attachmentPath.trimmingCharacters(in: .whitespaces).isEmpty {
+            out[item.clientUUID, default: 0] += 1
+        }
         return out
+    }
+
+    /// The stop's own scanned ticket, as an entry for the shared attachment list
+    /// (#466). Empty when there is no file, which is also what keeps a
+    /// barcode-only stop out of the list (#298).
+    private func ownerAttachments(for item: LocalItineraryItem) -> [OwnerAttachment] {
+        let path = item.attachmentPath.trimmingCharacters(in: .whitespaces)
+        guard !path.isEmpty else { return [] }
+        return [
+            OwnerAttachment(
+                attachmentPath: path,
+                title: item.title,
+                subtitle: [
+                    TaskAttachmentRow.kindWord(for: path),
+                    item.hasBarcode ? "Scannable ticket" : "Ticket"
+                ].joined(separator: " · ")
+            )
+        ]
     }
 
     /// Trip context handed to `AddExpenseSheet` so it stamps `tripUUID` and
@@ -263,7 +293,8 @@ struct TripDetailView: View {
             if let item = items.first(where: { $0.clientUUID == target.id }) {
                 TaskTicketsSheet(
                     owner: .tripStop(item.clientUUID),
-                    context: TaskTicketContext(itineraryItem: item)
+                    context: TaskTicketContext(itineraryItem: item),
+                    ownerAttachments: ownerAttachments(for: item)
                 )
             }
         }
@@ -386,35 +417,20 @@ struct TripDetailView: View {
                         topPadding: idx == 0 ? Space.xl : Space.xl,
                         documentCounts: documentCounts,
                         onTap: { item in
-                            // A booked stay opens its card in a detail sheet
-                            // (the hub for scan / view-original / edit). A
-                            // non-stay ticket taps straight through to the scan
-                            // surface. Everything else — a plain item, a bare
-                            // stay — opens the editor.
-                            if item.kindEnum == .stay {
-                                if item.hasStayBooking {
-                                    Haptics.light()
-                                    stayDetailTarget = StayDetailTarget(id: item.clientUUID)
-                                } else {
-                                    editingItem = .existing(item.clientUUID)
-                                }
-                            } else if item.hasTicket {
+                            // A booked stay opens its card in a detail sheet (the
+                            // hub for scan / view-original / edit). Everything
+                            // else opens the editor.
+                            //
+                            // A ticketed stop used to tap straight through to the
+                            // scan surface, which is why it needed a per-platform
+                            // special case for a barcode-only row (#298). Since
+                            // #466 presenting a pass belongs to the Wallet and the
+                            // stop's file is reached through its attachment tray,
+                            // so the split is gone and every non-stay row behaves
+                            // the same way on both platforms.
+                            if item.kindEnum == .stay, item.hasStayBooking {
                                 Haptics.light()
-                                #if os(iOS)
-                                scanTarget = TicketScanTarget(id: item.clientUUID)
-                                #else
-                                // `hasTicket` is true for an attachment OR a
-                                // bare barcode payload. macOS presents the
-                                // stored file, so a barcode-only ticket has
-                                // nothing to show and would open an empty
-                                // viewer. Route those to the editor, which does
-                                // surface the ticket details (issue #298).
-                                if item.attachmentPath.trimmingCharacters(in: .whitespaces).isEmpty {
-                                    editingItem = .existing(item.clientUUID)
-                                } else {
-                                    scanTarget = TicketScanTarget(id: item.clientUUID)
-                                }
-                                #endif
+                                stayDetailTarget = StayDetailTarget(id: item.clientUUID)
                             } else {
                                 editingItem = .existing(item.clientUUID)
                             }
@@ -1280,11 +1296,10 @@ private struct TripDayCluster: View {
                     .contentShape(Rectangle())
                     .onTapGesture { onTap(entry.item) }
                     .contextMenu {
-                        // Rows whose tap does NOT open the editor (non-stay
-                        // ticket rows go to scan; booked stays go to the detail
-                        // sheet) get a discoverable edit path in the context
-                        // menu. Plain rows and bare stays already edit on tap.
-                        if entry.item.hasTicket || entry.item.hasStayBooking {
+                        // Rows whose tap does NOT open the editor (a booked stay
+                        // goes to its detail sheet) get a discoverable edit path in
+                        // the context menu. Everything else already edits on tap.
+                        if entry.item.hasStayBooking {
                             Button {
                                 onEdit(entry.item)
                             } label: {
@@ -1399,15 +1414,12 @@ private struct TripTimelineRow: View {
         HStack(alignment: .top, spacing: 0) {
             markerColumn
             VStack(alignment: .leading, spacing: Space.xs) {
-                // A ticket item renders the wallet-style card; everything else
-                // keeps the original plain card (zero visual change for non-ticket
-                // items). We don't swap the check-OUT half of a stay to a ticket
-                // card — the ticket lives on the check-in entry.
-                if showsTicketCard {
-                    TicketCardView(item: TicketCardData(entry.item), timeText: entry.dateTimeLine)
-                } else {
-                    card
-                }
+                // Every stop draws the same plain card (#466). A ticketed one used
+                // to render a wallet-style pass face here, which put a credential
+                // on the timeline instead of on the shelf built for credentials.
+                // The pass still exists, in the Wallet; what the timeline shows is
+                // the stop.
+                card
                 // Under the card rather than inside it, so it reads the same way
                 // whichever card is above it — and so a flight that already renders
                 // as a boarding pass can still say it is carrying two more documents.
@@ -1444,15 +1456,6 @@ private struct TripTimelineRow: View {
                 ? "1 document attached to \(entry.item.title)"
                 : "\(documentCount) documents attached to \(entry.item.title)"
         )
-    }
-
-    /// True when this entry should render the inline wallet-style ticket card.
-    /// Only non-stay ticket items (flights / events) do — they're single
-    /// moments on the timeline. A stay is a duration, so it stays a compact row
-    /// on both its days and opens its card in a detail sheet on tap instead.
-    private var showsTicketCard: Bool {
-        guard entry.item.kindEnum != .stay else { return false }
-        return entry.item.hasTicket
     }
 
     /// Fixed-width column whose center sits on `railLeading`. The marker
