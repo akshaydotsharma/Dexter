@@ -102,6 +102,22 @@ struct TicketCardFields {
 
         // MARK: Back
 
+        // WHICH ticket this is, before WHERE it is (#487). Two cards can carry the
+        // same title, date, venue and booking reference and differ only by seat —
+        // the two Monza cards do — and until this, turning either one over left you
+        // holding a card that would not say which one it was.
+        //
+        // Deliberately a repeat of what the face shows. The `onFace` rule below is
+        // right for a detail and wrong for an identifier: the back is a different
+        // side of the card, not a continuation of the front, and it has to stand on
+        // its own. Apple Wallet's backs carry the serial number for the same reason.
+        if let reference = Self.row(Self.referenceLabel(card.layout), card.sourceConfirmation) {
+            back.append(reference)
+        }
+        if let seat = Self.row("Seat", card.seat) {
+            back.append(seat)
+        }
+
         // Where you are going, first: it is the reason you turn a pass over on
         // the day, and Apple Wallet puts it at the top of every back it issues.
         // Suppressed when the address is just the venue again under a second
@@ -152,7 +168,9 @@ struct TicketCardFields {
         case .stay:
             typed.append(("Venue", card.venue))
         }
-        // A field already on the face is not repeated on the back.
+        // A field already on the face is not repeated on the back. The identity rows
+        // above are appended before this runs and are not filtered by it — they are
+        // repeats on purpose.
         let onFace = Set(([secondary].compactMap { $0 } + auxiliary).map { $0.label.lowercased() })
         for (label, value) in typed {
             guard !onFace.contains(label.lowercased()) else { continue }
@@ -167,7 +185,10 @@ struct TicketCardFields {
         }
 
         // A label the issuer also printed generically would otherwise appear
-        // twice under two spellings of the same word.
+        // twice under two spellings of the same word. First occurrence wins, which
+        // is what keeps the identity rows at the top: a later "Reference" from the
+        // typed list or the issuer's own fields collapses into them rather than
+        // pushing them down.
         var seen = Set<String>()
         self.back = back.filter { seen.insert($0.label.lowercased()).inserted }
     }
@@ -186,6 +207,17 @@ struct TicketCardFields {
               !raw.isEmpty else { return nil }
         if let url = URL(string: raw), url.scheme != nil { return url }
         return URL(string: "https://\(raw)")
+    }
+
+    /// What a booking reference is called, per layout, matching what the same
+    /// number is called elsewhere on the card: the stub prints PNR on a boarding
+    /// pass, and a stay's face already says Confirmation.
+    private static func referenceLabel(_ layout: TicketCardLayout) -> String {
+        switch layout {
+        case .boardingPass: return "PNR"
+        case .stay:         return "Confirmation"
+        case .event:        return "Reference"
+        }
     }
 
     private static func operatorLabel(_ meta: TicketMeta?) -> String? {
