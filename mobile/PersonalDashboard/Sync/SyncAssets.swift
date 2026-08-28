@@ -245,6 +245,17 @@ struct SyncAssetTransfer {
     private static let maxFilesPerPass = 40
     private static let maxBytesPerPass = 40 * 1024 * 1024
 
+    /// Wall-clock ceiling on the whole fetch phase.
+    ///
+    /// Without this the phase is `maxFilesPerPass` × the per-file materialise
+    /// timeout, so a first catch-up on a library whose blobs are all still in the
+    /// cloud would hold the pass for minutes. `SyncEngine.runPass` refuses to
+    /// overlap with itself, so that would stall ROW sync — the thing the user
+    /// actually watches — behind a pile of JPEGs. Whatever does not fit stays
+    /// marked arriving and is asked for again next pass, by which point iCloud has
+    /// been downloading it in the background the whole time.
+    private static let fetchBudget: TimeInterval = 20
+
     /// How long a blob must have been unreferenced before the sweep may remove
     /// it. Cleanup is deliberately not reference-counted (a peer's references are
     /// not knowable here), so the safety comes from age instead: a peer has had a
@@ -452,10 +463,17 @@ struct SyncAssetTransfer {
 
         var landed: Set<String> = []
         var bytesThisPass = 0
+        let deadline = Date().addingTimeInterval(Self.fetchBudget)
 
         for path in available {
             if landed.count >= Self.maxFilesPerPass { break }
             if bytesThisPass >= Self.maxBytesPerPass { break }
+            if Date() >= deadline {
+                // Everything left is still wanted and still arriving, so it keeps
+                // its state and the next pass asks again.
+                outcome.awaiting += 1
+                break
+            }
             guard let offer = offers[path] else { continue }
             let url = folder.blobURL(offer.deviceUUID, blobName: offer.ref.blobName)
 
@@ -522,11 +540,17 @@ struct SyncAssetTransfer {
     ) async -> [String: Offer] {
         var offers: [String: Offer] = [:]
         let peers = (try? folder.peerDeviceUUIDs(excluding: selfUUID)) ?? []
+        let deadline = Date().addingTimeInterval(Self.fetchBudget)
         for peer in peers {
             let sequences = (try? folder.assetManifestSequences(for: peer)) ?? []
             SyncFolder.requestDownloads(sequences.map { folder.assetManifestURL(peer, sequence: $0) })
             for sequence in sequences {
                 let url = folder.assetManifestURL(peer, sequence: sequence)
+                // The same budget covers reading the index, so a peer with a long
+                // manifest history that iCloud has not delivered cannot hold the
+                // pass either. A manifest is a few hundred bytes, so in the steady
+                // state every one of these is already local and returns at once.
+                if Date() >= deadline { break }
                 guard await SyncFolder.materialize(url, timeout: 3) else { continue }
                 guard let manifest = try? folder.readAssetManifest(deviceUUID: peer, sequence: sequence) else {
                     continue
