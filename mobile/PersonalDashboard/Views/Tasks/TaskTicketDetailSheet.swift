@@ -28,7 +28,6 @@ struct TaskTicketDetailSheet: View {
     #if os(iOS)
     @State private var showingApplePass = false
     #endif
-    @State private var isEditing = false
     @State private var showingDeleteConfirm = false
     @State private var errorMessage: String?
 
@@ -87,12 +86,9 @@ struct TaskTicketDetailSheet: View {
                 ScrollView {
                     VStack(spacing: Space.lg) {
                         filePreview
-                        details
-                        if isEditing {
-                            editForm
-                        } else {
-                            actions
-                        }
+                        editForm
+                        extras
+                        actions
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.edCaption)
@@ -107,23 +103,13 @@ struct TaskTicketDetailSheet: View {
             .navigationTitle("Attachment")
             .inlineNavigationTitle()
             .toolbar {
-                if isEditing {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
-                            prefill()
-                            isEditing = false
-                        }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
                         .foregroundStyle(Tokens.muted)
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") { save() }
-                            .foregroundStyle(Tokens.ink)
-                    }
-                } else {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                            .foregroundStyle(Tokens.ink)
-                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .foregroundStyle(Tokens.ink)
                 }
             }
             .onAppear(perform: prefill)
@@ -232,23 +218,17 @@ struct TaskTicketDetailSheet: View {
         .paperBorder(Tokens.border, radius: Radius.md)
     }
 
-    /// Everything the extractor read, as plain labelled fields.
+    /// What the document printed that the form above has no field for: the
+    /// issuer's own extra fields, and the barcode.
     ///
-    /// The card face this replaces showed the first three facts and left the rest
-    /// to "the detail sheet" — which is here, so here they all are. A scrolling
-    /// sheet has none of the width pressure that capped that row at three.
+    /// Since #468 this sheet opens editable, so everything the form owns is shown
+    /// as a field to type in rather than twice. What is left here is the part
+    /// nobody can correct, because it is read verbatim off the file.
     @ViewBuilder
-    private var details: some View {
-        let fields = detailFields
+    private var extras: some View {
+        let fields = extraFields
         if !fields.isEmpty || ticket.hasBarcode {
             VStack(alignment: .leading, spacing: Space.md) {
-                Text(ticket.displayTitle(fallback: ownerTitle))
-                    .font(.edTitle)
-                    .foregroundStyle(Tokens.ink)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
                 ForEach(fields) { field in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(field.label.uppercased())
@@ -298,28 +278,11 @@ struct TaskTicketDetailSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The ordering the card face used, minus its three-slot cap, with the date,
-    /// time and location it carried in its header and secondary slots folded in
-    /// at the front.
-    ///
-    /// `startTimeText` is never reformatted: it is what the document printed.
-    private var detailFields: [TicketDetailField] {
+    /// The fields the form has no input for. Everything else the extractor read
+    /// is editable above, so listing it here as well would show it twice.
+    private var extraFields: [TicketDetailField] {
         let meta = ticket.ticketMeta
-        var out: [TicketDetailField] = [
-            TicketDetailField(
-                label: "Date",
-                value: ticket.eventDate.map {
-                    $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
-                }
-            ),
-            TicketDetailField(label: "Time", value: ticket.startTimeText),
-            TicketDetailField(label: "Location", value: ticket.venue),
-            TicketDetailField(label: "Seat", value: ticket.seat),
-            TicketDetailField(label: "Section", value: meta?.section),
-            TicketDetailField(label: "Row", value: meta?.row),
-            TicketDetailField(label: "Gate", value: ticket.gate),
-            TicketDetailField(label: "Guest", value: meta?.guestName)
-        ]
+        var out = [TicketDetailField(label: "Guest", value: meta?.guestName)]
         // Whatever else the document printed, under its own labels (#420).
         out.append(contentsOf: (meta?.faceFields ?? []).map {
             TicketDetailField(label: $0.label, value: $0.value)
@@ -329,7 +292,6 @@ struct TaskTicketDetailSheet: View {
         out.append(contentsOf: (meta?.backFields ?? []).map {
             TicketDetailField(label: $0.label, value: $0.value)
         })
-        out.append(TicketDetailField(label: "Ref", value: ticket.reference))
         return out.filter { !$0.value.isEmpty }
     }
 
@@ -377,10 +339,6 @@ struct TaskTicketDetailSheet: View {
                 }
             }
             walletRow
-            actionRow(icon: "pencil", title: "Edit details") {
-                Haptics.light()
-                isEditing = true
-            }
             actionRow(icon: "trash", title: "Remove attachment", isDestructive: true) {
                 showingDeleteConfirm = true
             }
@@ -563,10 +521,6 @@ struct TaskTicketDetailSheet: View {
         eventURL = meta?.eventURL ?? ""
         showInWallet = walletOverride ?? ticket.belongsInWallet
 
-        // A ticket the extractor could not read opens straight into the form,
-        // because a card that is blank apart from a barcode has nothing to look
-        // at and everything to fill in.
-        if ticket.isBare { isEditing = true }
     }
 
     private func save() {
@@ -594,7 +548,6 @@ struct TaskTicketDetailSheet: View {
             edited.ticketMetaJSON = meta.isEmpty ? "" : meta.encodedString()
             onSave(edited)
             errorMessage = nil
-            isEditing = false
             dismiss()
             return
         }
@@ -612,7 +565,6 @@ struct TaskTicketDetailSheet: View {
                 meta: meta
             )
             errorMessage = nil
-            isEditing = false
             onChange()
             dismiss()
         } catch {

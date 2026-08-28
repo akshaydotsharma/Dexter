@@ -8,6 +8,10 @@ struct TodayView: View {
     @State private var todosVM = TodosViewModel()
     @State private var notesVM = NotesViewModel()
     @State private var listsVM = ListsViewModel()
+    /// The task whose editor is open (#468). Today used to have no tap target
+    /// beyond the checkbox, so a task glanced at here could not be opened at all
+    /// without going to Tasks and finding it again.
+    @State private var editingTodo: Todo?
 
     var body: some View {
         ZStack {
@@ -49,6 +53,11 @@ struct TodayView: View {
             Task { await loadAll() }
         }
         .task { await loadAll() }
+        // The same editor Tasks presents, on the view model Today already holds,
+        // so an edit made here refreshes this surface without a round trip.
+        .sheet(item: $editingTodo) { todo in
+            TaskEditorSheet(viewModel: todosVM, todo: todo)
+        }
     }
 
     private func loadAll() async {
@@ -130,6 +139,7 @@ struct TodayView: View {
                     TodayTaskRow(
                         todo: todo,
                         onToggle: { Task { await todosVM.toggleCompleted(todo) } },
+                        onOpen: { editingTodo = todo },
                         hasTicket: ticketedTaskIDs.contains(todo.id)
                     )
                     if idx < preview.count - 1 {
@@ -163,7 +173,10 @@ struct TodayView: View {
         ) {
             VStack(spacing: 0) {
                 ForEach(Array(recent.enumerated()), id: \.element.id) { idx, note in
-                    TodayNoteRow(note: note)
+                    TodayNoteRow(note: note) {
+                        router.focus = ActivityFocus(section: .notes, id: note.id)
+                        router.go(to: .notes)
+                    }
                     if idx < recent.count - 1 {
                         Rectangle()
                             .fill(Tokens.divider)
@@ -198,7 +211,10 @@ struct TodayView: View {
         ) {
             VStack(spacing: 0) {
                 ForEach(Array(active.enumerated()), id: \.element.id) { idx, list in
-                    TodayListRow(list: list)
+                    TodayListRow(list: list) {
+                        router.focus = ActivityFocus(section: .lists, id: list.id)
+                        router.go(to: .lists)
+                    }
                     if idx < active.count - 1 {
                         Rectangle()
                             .fill(Tokens.divider)
@@ -332,11 +348,13 @@ private struct TodayCardFooter: View {
 private struct TodayTaskRow: View {
     let todo: Todo
     let onToggle: () -> Void
-    /// Whether the task carries a SCANNABLE attachment (#399, #405). An indicator
-    /// only, not a control: Today is a glance surface and the row has no tap target
-    /// beyond the checkbox, so acting on the ticket belongs in Tasks where the chip
-    /// opens the card. A plain file flies no glyph — there is nothing here to open
-    /// that would correct the impression.
+    /// Opens the task's editor (#468). Today used to stop at the checkbox, so a
+    /// task you were looking at could not be opened from the place you were
+    /// looking at it.
+    var onOpen: () -> Void = {}
+    /// Whether the task carries a SCANNABLE attachment (#399, #405). Still an
+    /// indicator rather than a control: the row's tap belongs to the task, and
+    /// acting on the ticket itself belongs to the Wallet (#466).
     var hasTicket: Bool = false
 
     var body: some View {
@@ -399,6 +417,10 @@ private struct TodayTaskRow: View {
                 .fill(Tokens.priorityColor(for: todo.taskPriority))
                 .frame(width: Space.xs)
         }
+        // The checkbox is its own Button, so it keeps the tap that lands on it.
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .accessibilityLabel("Open \(todo.title)")
     }
 
     private func isOverdue(_ date: Date) -> Bool {
@@ -418,6 +440,8 @@ private struct TodayTaskRow: View {
 
 private struct TodayNoteRow: View {
     let note: Note
+    /// Opens the note where it lives (#468).
+    var onOpen: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -432,6 +456,9 @@ private struct TodayNoteRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .accessibilityLabel("Open \(String(displayTitle.characters))")
     }
 
     // When the note has no title, fall back to a one-line snippet of the
@@ -452,6 +479,8 @@ private struct TodayNoteRow: View {
 
 private struct TodayListRow: View {
     let list: Checklist
+    /// Opens the list where it lives (#468).
+    var onOpen: () -> Void = {}
 
     var body: some View {
         let total = list.items.count
@@ -478,6 +507,9 @@ private struct TodayListRow: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .accessibilityLabel("Open \(list.title)")
     }
 }
 

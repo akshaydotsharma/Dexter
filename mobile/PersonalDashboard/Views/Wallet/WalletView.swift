@@ -456,16 +456,23 @@ struct WalletView: View {
         expandedID = grouped.upcoming.first?.id ?? grouped.past.first?.id
     }
 
-    /// Tapping a card opens the card, full size and centred on the page.
+    /// Tapping an opened card's body goes to its editor (#468).
     ///
-    /// It used to go straight to the scan screen, which is a bare barcode on
-    /// black — correct at a gate, wrong as the answer to "show me this ticket",
-    /// which is what tapping a card in a wallet means. Scanning now has its own
-    /// button (`present`), on the card and in the detail surface, so the two
-    /// intentions stop sharing one gesture.
+    /// It used to open a full-size read-only copy of the card whose own "Edit"
+    /// tile then led here, so reaching the editor from the deck took three taps.
+    /// The card is already on screen and already unfolded by this point, so a
+    /// second rendering of it was never the thing being asked for.
+    ///
+    /// A borrowed card has no wallet row to edit, so it goes to the surface that
+    /// owns it and edits there. Scanning keeps its own button (`present`), which
+    /// is what stops the two intentions sharing one gesture.
     private func open(_ entry: WalletEntry) {
         Haptics.light()
-        detailTarget = WalletDetailTarget(entry: entry)
+        if let id = walletCardID(of: entry) {
+            editorTarget = .existing(id)
+        } else {
+            openSource(of: entry)
+        }
     }
 
     /// Straight to the high-contrast barcode: max brightness, idle timer held.
