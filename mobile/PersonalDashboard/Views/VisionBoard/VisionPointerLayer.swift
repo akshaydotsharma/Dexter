@@ -43,7 +43,7 @@ import AppKit
 ///
 /// Only pointer routing moved. Everything a block draws is still SwiftUI, and
 /// its interactive children — tile checkboxes and their context menus, the
-/// title, `+N more`, the ellipsis menu, the add-task field — still handle their
+/// title, `+N more`, the ellipsis menu, the `+ Add item` row — still handle their
 /// own clicks. They publish their frames through `VisionInteractiveRectsKey`,
 /// this view is handed them as `exclusions`, and `hitTest` returns `nil` over
 /// them so the event falls through to SwiftUI underneath. The exclusion list is
@@ -137,7 +137,7 @@ final class VisionPointerView: NSView {
     /// Transparent over SwiftUI's own controls, opaque everywhere else.
     ///
     /// Returning `nil` is what lets a checkbox, the title, `+N more`, the
-    /// ellipsis menu and the add-task field keep working while this view sits
+    /// ellipsis menu and the `+ Add item` row keep working while this view sits
     /// on top of every one of them. AppKit then continues its search into the
     /// SwiftUI host underneath, which is the standard overlay pattern and the
     /// reason blocks did not have to be rebuilt in AppKit.
