@@ -186,10 +186,11 @@ struct SyncApplier {
     /// the moment either side gained a field, and the symptom would be sync
     /// silently dropping that field.
     ///
-    /// Attachment BYTES do not travel until phase 3, so `entries` is empty and
-    /// `restoreReceipt` no-ops, leaving the expense pointing at its original
-    /// relative path. A synced expense can therefore reference a receipt this
-    /// device does not have. That is the documented phase 2 limitation, not a bug.
+    /// Attachment BYTES never ride in the oplog, so `entries` is empty here. Since
+    /// #471 they travel separately, as content-addressed blobs in the same shared
+    /// folder, and `SyncAssetTransfer` fills them in on a later pass. A row can
+    /// therefore reference a file this device does not have yet, which is now a
+    /// transient state rather than a permanent one.
     private func applyUpserts(_ ops: [SyncOp]) throws -> [String: String] {
         var payload = DataArchive.Payload.empty
         let decoder = DataArchive.makeDecoder()
@@ -308,8 +309,16 @@ struct SyncApplier {
             entries: [:],
             counts: [:]
         )
+        // `.keepPath` is what makes asset transfer possible at all (#471).
+        //
+        // `entries` is empty because attachment BYTES never ride in the oplog; they
+        // travel as content-addressed blobs in the sync folder instead. So every
+        // asset restorer reports `.unresolved` for a row whose file has not landed
+        // here yet, and dropping the path at that moment would throw away the only
+        // reference the arriving bytes have to attach to. Under `.dropPath` this
+        // also blanked rows whose file was sitting on THIS device, which is #411.
         try DataImportService(modelContext: modelContext)
-            .commit(preview: preview, mode: .replaceMatching)
+            .commit(preview: preview, mode: .replaceMatching, unresolvedAssets: .keepPath)
 
         return mergedHashes
     }

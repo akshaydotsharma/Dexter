@@ -1773,6 +1773,15 @@ struct ReceiptFullViewer: View {
                 }
             }
         }
+        #if os(macOS)
+        // Without an explicit size a macOS sheet shrinks to its content's ideal
+        // size, and both branches below are scroll-view-backed, so that size is
+        // next to nothing: the sheet opened as a title, a hairline of receipt and
+        // a Done button (#474). `TicketOriginalViewer` hit this first and carries
+        // the same fix; a receipt is the same kind of document, read the same way,
+        // so it gets the same numbers rather than new ones.
+        .frame(minWidth: 560, idealWidth: 720, minHeight: 560, idealHeight: 860)
+        #endif
     }
 
     @ViewBuilder
@@ -1785,17 +1794,29 @@ struct ReceiptFullViewer: View {
                 ZoomableImageView(image: image)
                     .ignoresSafeArea(edges: .bottom)
             } else {
-                unavailable
+                // Present but undecodable is a damaged file, not an absent one,
+                // so it keeps its own wording.
+                undecodable
             }
         } else {
-            unavailable
+            notOnThisDevice
         }
     }
 
-    private var unavailable: some View {
+    private var undecodable: some View {
         Text("Receipt is no longer available.")
             .font(.edBody)
             .foregroundStyle(Tokens.muted)
+    }
+
+    /// The bytes are not on this device. Since #471 they follow the row.
+    private var notOnThisDevice: some View {
+        Text(SyncAssetMessage.missing(
+            "Receipt",
+            isArriving: SyncAssetInbox.shared.isArriving(relativePath)
+        ))
+        .font(.edBody)
+        .foregroundStyle(Tokens.muted)
     }
 }
 

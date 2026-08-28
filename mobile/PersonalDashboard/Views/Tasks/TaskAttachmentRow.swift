@@ -69,8 +69,19 @@ extension TaskAttachmentRow {
     /// more than the kind does: the row synced across from another device but
     /// its bytes did not, and an unexplained placeholder reads as a bug rather
     /// than as a file that is simply elsewhere.
-    static func subtitle(for ticket: TaskTicket, fileIsPresent: Bool) -> String {
-        guard fileIsPresent else { return "The file is on your other device" }
+    ///
+    /// `isArriving` defaults to false so the caller only has to ask
+    /// `SyncAssetInbox` when it can. Since #471 the bytes do follow the row, so
+    /// the two states have to read differently: one is transient, the other is
+    /// still permanent.
+    static func subtitle(
+        for ticket: TaskTicket,
+        fileIsPresent: Bool,
+        isArriving: Bool = false
+    ) -> String {
+        guard fileIsPresent else {
+            return SyncAssetMessage.missing("File", isArriving: isArriving)
+        }
 
         var parts = [kindWord(for: ticket.attachmentPath)]
         if let date = ticket.eventDate {

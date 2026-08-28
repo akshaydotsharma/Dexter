@@ -43,13 +43,19 @@ mkdir -p "$OUT_DIR"
 # Default the expected title to the section, capitalised — matches
 # `navigationTitle`, which drives the macOS window title.
 #
-# One section's title is two words. `AppSection.visionBoard` spells its raw
-# value `visionboard` so `LAUNCH_SECTION` can reach it, but its `displayName`
-# — and therefore its window title — is "Vision Board", which capitalising the
-# raw value can never produce. Without this the script navigates correctly and
-# then fails its own assertion, which is worse than no assertion: it reports a
-# working surface as broken.
+# Two sections' titles are not their capitalised raw value, so they need naming
+# here. `AppSection.visionBoard` spells its raw value `visionboard` so
+# `LAUNCH_SECTION` can reach it, but its `displayName` — and therefore its window
+# title — is "Vision Board". `AppSection.itineraries` displays as "Trips", which
+# capitalising the raw value can never produce either. Without these the script
+# navigates correctly and then fails its own assertion, which is worse than no
+# assertion: it reports a working surface as broken.
+#
+# `trips` is accepted as an alias for the same reason: it is what the sidebar
+# says, so it is what anyone reaching for this script will type.
 case "$SECTION" in
+    trips) SECTION="itineraries"; TITLE_DEFAULT="Trips" ;;
+    itineraries) TITLE_DEFAULT="Trips" ;;
     visionboard) TITLE_DEFAULT="Vision Board" ;;
     *) TITLE_DEFAULT="$(echo "$SECTION" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')" ;;
 esac

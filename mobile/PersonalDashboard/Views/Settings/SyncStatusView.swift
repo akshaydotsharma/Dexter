@@ -34,6 +34,7 @@ struct SyncStatusView: View {
         folderSection
         thisDeviceSection
         pendingSection
+        attachmentsSection
         peersSection
         lastPassSection
         actionsSection
@@ -232,6 +233,43 @@ struct SyncStatusView: View {
         }
         if snapshot.pendingDeletes > 0 {
             LabeledContent("Deletes", value: String(snapshot.pendingDeletes))
+        }
+    }
+
+    // MARK: - Attachments (#471)
+
+    /// What the last pass did with attachment FILES, which move separately from
+    /// the rows that reference them.
+    ///
+    /// Worth its own section rather than a line in "Last sync pass": a file is the
+    /// one thing here that can be minutes behind its row while everything else
+    /// reports caught up, and without this the only symptom is a card that still
+    /// says the file is elsewhere.
+    ///
+    /// All four counts come from the pass itself and are not persisted, so they
+    /// read zero on a screen opened without one. "Arriving" is the number worth
+    /// watching; "not on any device" means no peer has published those bytes, so
+    /// waiting will not help.
+    private var attachmentsSection: some View {
+        Section {
+            LabeledContent("Published from here", value: String(snapshot.assetsPublished))
+            LabeledContent("Received", value: String(snapshot.assetsFetched))
+            if snapshot.assetsArriving > 0 {
+                LabeledContent("Arriving", value: String(snapshot.assetsArriving))
+            }
+            if snapshot.assetsUnavailable > 0 {
+                LabeledContent("Not on any device", value: String(snapshot.assetsUnavailable))
+            }
+            // Non-zero on at most one pass, ever. Shown because reattaching a file
+            // to a record is a change to the user's data, and a repair that
+            // happened silently is one nobody can check.
+            if snapshot.assetsRepaired > 0 {
+                LabeledContent("Reattached to their files", value: String(snapshot.assetsRepaired))
+            }
+        } header: {
+            Text("Attachment files")
+        } footer: {
+            Text("Tickets, receipts, note pictures and trip covers travel as files alongside the records that reference them. They arrive after the record does, and a large one can take a few passes.")
         }
     }
 

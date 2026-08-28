@@ -23,15 +23,19 @@ import SwiftData
 /// the number on the card has to match the number the gate is reading. Keeping
 /// the printed string means it cannot drift, whatever timezone the phone is in.
 ///
-/// ## These rows sync but their files do not
+/// ## The rows sync, and since #471 so do the files
 ///
 /// Registered with sync like every other archived entity, so a task's ticket
-/// rows reach the other device. The oplog carries JSON only and has no asset
-/// transfer, so the JPEGs and PDFs stay on the device that created them — the
-/// same position receipts, itinerary tickets and note images are already in. The
-/// card renders an explicit "on your other device" state for a row whose file is
-/// missing, which also covers the reinstall case. Files cross devices through
-/// the export archive.
+/// rows reach the other device. The oplog itself still carries JSON only; the
+/// JPEGs and PDFs travel beside it, as content-addressed blobs in the same shared
+/// folder (`SyncAssetTransfer`). A row therefore arrives before its bytes, and
+/// the row renders an explicit arriving state until they land. When no peer has
+/// the file at all — a reinstall, or a device that has left the folder — the
+/// wording falls back to "on your other device" and the export archive is the
+/// way back.
+///
+/// ⚠️ None of this works without #411. A sync apply used to blank
+/// `attachmentPath`, so the reference the bytes attach to did not survive.
 @Model
 final class LocalTaskTicket {
     @Attribute(.unique) var clientUUID: UUID
