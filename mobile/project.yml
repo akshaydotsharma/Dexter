@@ -352,6 +352,7 @@ targets:
       - path: PersonalDashboard/Views/Wallet/WalletView.swift
       - path: PersonalDashboard/Views/Wallet/WalletDeckCard.swift
       - path: PersonalDashboard/Views/Wallet/WalletTicketCard.swift
+      - path: PersonalDashboard/Views/Wallet/TicketCardBack.swift
       - path: PersonalDashboard/Views/Wallet/StayLocationStub.swift
       - path: PersonalDashboard/Views/Wallet/WalletCardDetailSheet.swift
       - path: PersonalDashboard/Views/Wallet/WalletCardEditorSheet.swift

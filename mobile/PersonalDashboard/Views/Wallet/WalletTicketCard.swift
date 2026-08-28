@@ -46,7 +46,20 @@ struct WalletTicketCard: View {
     /// `-1` parks it off the leading edge; `1` has it clear of the trailing one.
     @State private var sheen: CGFloat = -1
 
+    /// How far through the turn the card is, in degrees (#481). `0` is the face,
+    /// `180` is the back. A single angle rather than a `Bool` so both sides can be
+    /// laid on top of each other and swapped exactly at the edge-on frame, where
+    /// the switch is invisible.
+    @State private var flip: Double = 0
+
     private var palette: WalletCardPalette { entry.palette }
+
+    /// Which facts belong on the face and which on the back (#481). Computed once
+    /// here and handed to both sides, so they cannot disagree about who owns a
+    /// field.
+    private var fields: TicketCardFields { TicketCardFields(card: entry.card) }
+
+    private var showingBack: Bool { flip >= 90 }
 
     private var notchY: CGFloat? {
         if let perforationY { return perforationY }
@@ -61,18 +74,16 @@ struct WalletTicketCard: View {
         VStack(spacing: 0) {
             header
             if isOpen {
-                TicketCardView(
-                    item: entry.card,
-                    timeText: entry.timeText,
-                    palette: palette,
-                    // The header above already carries the title; printing it
-                    // again inside the body reads as a mistake.
-                    showsTitle: false,
-                    embedded: true,
-                    onTapBarcode: onTapStub
-                )
-                .contentShape(Rectangle())
-                .onTapGesture { onTapBody?() }
+                ZStack(alignment: .top) {
+                    cardFace
+                        .opacity(showingBack ? 0 : 1)
+                    cardBack
+                        .opacity(showingBack ? 1 : 0)
+                        // Pre-mirrored, so it reads the right way round once the
+                        // container has turned the whole body over.
+                        .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
+                }
+                .rotation3DEffect(.degrees(flip), axis: (x: 0, y: 1, z: 0), perspective: 0.4)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -85,7 +96,14 @@ struct WalletTicketCard: View {
                 endPoint: .bottom
             )
         )
-        .readingTicketNotch { perforationY = $0 }
+        // The back draws its own tear line at the same height but publishes no
+        // anchor, so a nil is retained rather than applied while the card is open:
+        // turning a card over must not change its outline. A card that CLOSES has
+        // genuinely lost its tear line, and the notches fall back to the header
+        // seam, which is what a collapsed band should look like.
+        .readingTicketNotch { measured in
+            if let measured { perforationY = measured } else if !isOpen { perforationY = nil }
+        }
         .clipShape(shape)
         .overlay(shape.stroke(palette.border, lineWidth: 1))
         // Depth is what makes a stack read as a stack rather than a list of
@@ -98,6 +116,36 @@ struct WalletTicketCard: View {
         )
         .opacity(isPast && !isOpen ? 0.72 : 1)
         .accessibilityElement(children: .contain)
+        // Closing a card puts it away face up. Coming back to a stack of cards
+        // left turned over is nobody's intention.
+        .onChange(of: isOpen) { _, open in if !open { flip = 0 } }
+    }
+
+    private var cardFace: some View {
+        TicketCardView(
+            item: entry.card,
+            timeText: entry.timeText,
+            palette: palette,
+            // The header above already carries the title; printing it
+            // again inside the body reads as a mistake.
+            showsTitle: false,
+            embedded: true,
+            onTapBarcode: onTapStub,
+            fields: fields
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onTapBody?() }
+    }
+
+    private var cardBack: some View {
+        TicketCardBack(fields: fields, palette: palette)
+    }
+
+    private func turnOver() {
+        Haptics.light()
+        withAnimation(.easeInOut(duration: 0.45)) {
+            flip = showingBack ? 0 : 180
+        }
     }
 
     // MARK: - Header
@@ -137,6 +185,7 @@ struct WalletTicketCard: View {
                 .padding(.vertical, 4)
                 .background(palette.bandInk.opacity(0.16), in: Capsule())
         }
+        .padding(.trailing, showsTurnControl ? turnControlWidth : 0)
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -170,6 +219,39 @@ struct WalletTicketCard: View {
                 content
             }
         }
+        // Laid over the header rather than placed inside it, because the header
+        // is itself one big button: a sibling here would be a button inside a
+        // button, and the outer one would swallow half its taps.
+        .overlay(alignment: .trailing) {
+            if showsTurnControl { turnControl }
+        }
+    }
+
+    /// Whether the card offers to turn over (#481). Only when it is open — a
+    /// collapsed card is a band, and there is nothing to turn — and only when the
+    /// back has something on it, so the control never reveals an empty table.
+    private var showsTurnControl: Bool { isOpen && fields.hasBack }
+
+    /// Room reserved on the header's trailing edge for the control, so the date
+    /// capsule sits beside it rather than underneath it.
+    private var turnControlWidth: CGFloat { 34 }
+
+    /// The info control, in the corner Apple Wallet puts it in and doing what it
+    /// does there: turning the pass over. It changes glyph rather than position,
+    /// so the way back is exactly where the way in was.
+    private var turnControl: some View {
+        Button(action: turnOver) {
+            Image(systemName: showingBack ? "arrow.uturn.backward" : "info.circle")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(palette.bandInk)
+                .frame(width: 30, height: 30)
+                .background(palette.bandInk.opacity(0.16), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, Space.md)
+        .accessibilityLabel(showingBack ? "Turn the card back over" : "Turn the card over")
+        .accessibilityHint(showingBack ? "Shows the ticket and its code" : "Shows the rest of the ticket's details")
     }
 
     /// A single band of light travelling across the header when the card opens.

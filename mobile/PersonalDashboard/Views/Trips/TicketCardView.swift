@@ -65,10 +65,17 @@ struct TicketCardView: View {
     /// `nil` on the trip timeline, where the card has no separate scan surface and
     /// the stub is a thumbnail rather than the thing you present.
     var onTapBarcode: (() -> Void)? = nil
+    /// The face / back split (#481). Passed in rather than recomputed here so a
+    /// card and its back can never disagree about which side owns a field. `nil`
+    /// derives it from `item`, which is what a one-off call wants.
+    var fields: TicketCardFields? = nil
 
     @Environment(\.openURL) private var openURL
 
     private var meta: TicketMeta? { item.meta }
+
+    /// The resolved face / back split.
+    private var face: TicketCardFields { fields ?? TicketCardFields(card: item) }
 
     /// A `.stay` renders the hotel layout; everything else keeps the original
     /// boarding-pass / event split.
@@ -115,6 +122,13 @@ struct TicketCardView: View {
                     .padding(.horizontal, embedded ? 0 : Space.lg)
                     .padding(.top, embedded ? 0 : Space.md)
                     .padding(.bottom, embedded ? 0 : Space.lg)
+                    // One box for every kind of stub (#481). A 132pt QR fills it;
+                    // a short PDF417 strip and a bare confirmation code centre in
+                    // it rather than shortening the card they sit on. The paper is
+                    // painted on the box rather than on the content, so the spare
+                    // room reads as more stub rather than as a gap under it.
+                    .frame(height: embedded ? TicketCardMetrics.stub : nil)
+                    .background(embedded ? stubPaper : Color.clear)
             }
         }
         .frame(maxWidth: .infinity)
@@ -135,11 +149,16 @@ struct TicketCardView: View {
 
     /// Whether the card grows a tear line and a stub beneath it.
     ///
+    /// Always, in the wallet (#481). A card whose bottom half sometimes exists is
+    /// a card that is sometimes 200 points shorter, and the deck's whole premise
+    /// is that every card is the same size. A pass with nothing to scan tears off
+    /// its confirmation code instead, which is the thing you read out at a desk.
+    ///
     /// The rule is the same for every kind: the stub holds the thing you USE on
     /// the day. A boarding pass or a cinema ticket tears off its barcode. A
     /// hotel booking has nothing to scan, so it tears off its address and a way
     /// to get there.
-    private var showsStub: Bool { item.hasTicket || hasLocationStub }
+    private var showsStub: Bool { embedded || item.hasTicket }
 
     /// A wallet stay with nothing scannable, but somewhere to go.
     private var hasLocationStub: Bool {
@@ -182,7 +201,7 @@ struct TicketCardView: View {
     private var richTop: some View {
         VStack(spacing: 0) {
             heroPanel
-            detailList
+            faceBlock
         }
         .frame(maxWidth: .infinity)
     }
@@ -197,7 +216,10 @@ struct TicketCardView: View {
             // Deep enough that the artwork is a panel in its own right rather
             // than a tinted strip behind two lines of text.
             .padding(.vertical, Space.xxl)
-            .frame(maxWidth: .infinity)
+            // Fixed rather than sized to its content (#481): a stay hero carries
+            // two dates where an event carries one, and a card whose top half
+            // changed height per kind would break the deck's rhythm.
+            .frame(maxWidth: .infinity, minHeight: TicketCardMetrics.hero, maxHeight: TicketCardMetrics.hero)
             .background(alignment: .trailing) {
                 ZStack(alignment: .trailing) {
                     LinearGradient(
@@ -277,167 +299,56 @@ struct TicketCardView: View {
         return departureTime
     }
 
-    /// The card's facts as a vertical list. The same values the compact card
-    /// packs into an equal-width strip, given a line each: at card width a strip
-    /// truncates "IndiGo · 6E681" and stacks four seat numbers into a column two
-    /// characters wide.
-    private var detailList: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(richFacts.enumerated()), id: \.element.id) { index, fact in
-                if index > 0 { detailDivider }
-                detailRow(label: fact.label, value: fact.value, isUnknown: fact.value == nil)
+    /// The face's written half: one full-width line naming the thing, then a row
+    /// of up to three fields side by side (#481).
+    ///
+    /// Fixed height, which is what makes every card in the deck the same size.
+    /// This block used to render every fact the extractor read, so a chatty
+    /// document produced a card three times the height of a quiet one and pushed
+    /// the barcode off the bottom of it. The slots here are the typed ones this
+    /// app understands; everything else the document printed is on the back.
+    ///
+    /// Flush left, label over value, no rules between them: a pass's own grammar
+    /// (#413), and the reason the block reads as printed stock rather than as a
+    /// settings screen.
+    private var faceBlock: some View {
+        VStack(alignment: .leading, spacing: Space.lg) {
+            if let secondary = face.secondary {
+                faceField(secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if showsLocationBlock {
-                if !richFacts.isEmpty { detailDivider }
-                locationRow
+            if !face.auxiliary.isEmpty {
+                HStack(alignment: .top, spacing: Space.md) {
+                    ForEach(face.auxiliary) { row in
+                        faceField(row)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, Space.lg)
-        // A generous gap under the hero artwork. Butted straight up against it
-        // the facts read as a caption on the image; set apart, the card has an
-        // illustrated half and a written half, which is what a printed ticket
-        // looks like.
-        .padding(.top, Space.xxl)
-        .padding(.bottom, Space.lg)
+        .padding(.vertical, Space.lg)
+        // Top-aligned inside a fixed box: a sparse card leaves the space empty
+        // rather than floating two fields in the middle of the ticket.
+        .frame(height: TicketCardMetrics.face, alignment: .top)
     }
 
-    /// Which facts the list carries, per layout. Boarding-pass slots keep their
-    /// em dash for an unknown gate or terminal — on a pass those blanks are
-    /// information ("not assigned yet"), where an event with no row number just
-    /// has no row.
-    private var richFacts: [TicketFact] {
-        switch item.layout {
-        case .stay:
-            return [
-                TicketFact(label: "Check-in",     value: checkInTimeText),
-                TicketFact(label: "Check-out",    value: checkOutTimeText),
-                TicketFact(label: "Confirmation", value: confirmationCode.isEmpty ? nil : confirmationCode)
-            ].filter { $0.value != nil }
-
-        case .boardingPass:
-            var facts: [TicketFact] = []
-            if !operatorLabel.isEmpty {
-                facts.append(TicketFact(label: "Flight", value: operatorLabel))
-            }
-            facts.append(contentsOf: boardingPassFacts)
-            return facts
-
-        case .event:
-            var facts: [TicketFact] = []
-            if !item.venue.isEmpty {
-                facts.append(TicketFact(label: "Venue", value: item.venue))
-            }
-            facts.append(contentsOf: [
-                TicketFact(label: "Section", value: meta?.section),
-                TicketFact(label: "Row",     value: meta?.row),
-                TicketFact(label: "Seat",    value: item.seat.isEmpty ? nil : item.seat),
-                // A gate on an event is a real fact when it is printed (a hall, a
-                // door) and simply absent otherwise, so unlike the boarding pass's
-                // canonical slot it is filtered out rather than dashed.
-                TicketFact(label: "Gate",    value: TicketField.code(item.gate)),
-                // Last of the named facts, because it is the one that matters when
-                // there is no seating at all — which is most events outside a
-                // stadium, and the row a Wallet pass fills with it (#413).
-                TicketFact(label: "Guest",   value: meta?.guestName)
-            ].filter { $0.value != nil })
-            facts.append(contentsOf: extraFacts)
-            return facts
-        }
-    }
-
-    /// Whatever else the document printed, under the issuer's own labels (#420).
-    ///
-    /// This is what keeps the card honest about a pass it has never seen the shape of:
-    /// "Ticket · In-Person", "Organiser · Vibe Coders SG", "Table · 12" all render
-    /// without this view knowing any of those exist. Only fields no typed slot above
-    /// already covers reach here — the importer consumes what it recognises first —
-    /// and only the ones the issuer put on the FACE. The back's fields belong on the
-    /// detail surface, which is where you turn a pass over.
-    private var extraFacts: [TicketFact] {
-        (meta?.faceFields ?? []).map { TicketFact(label: $0.label, value: $0.value) }
-    }
-
-    /// Whether the card prints a location block under its facts: the postal address,
-    /// and a way to get there.
-    ///
-    /// Was stay-only, which meant an event card could never show either (#420). That
-    /// was backwards: you have been to your hotel's city before, and the pass for a
-    /// meetup in a building you have never visited is exactly the one that needs an
-    /// address and a map link — which is why Apple Wallet puts both on the back of
-    /// every event ticket it issues.
-    ///
-    /// Suppressed when the stub is already carrying the same thing underneath, which
-    /// would print it twice.
-    private var showsLocationBlock: Bool {
-        !hasLocationStub && (!addressLine.isEmpty || item.mapsURL != nil)
-    }
-
-    /// The address, unless it is just the venue again.
-    ///
-    /// A pass writes its location at two resolutions and they are often the same
-    /// string: this event's venue and its task address are both "Lorong AI @
-    /// One-North". Printing that twice, once labelled VENUE and once ADDRESS, reads as
-    /// a rendering bug rather than as detail — so the duplicate collapses and the row
-    /// becomes the directions link alone.
-    private var addressLine: String {
-        let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !address.isEmpty else { return "" }
-        let venue = item.venue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return address.caseInsensitiveCompare(venue) == .orderedSame ? "" : address
-    }
-
-    private func detailRow(label: String, value: String?, isUnknown: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            Text(label.uppercased())
+    private func faceField(_ row: TicketCardFields.Row) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(row.label.uppercased())
                 .font(.edEyebrow)
                 .tracking(1.0)
                 .foregroundStyle(Tokens.muted)
-            Spacer(minLength: Space.sm)
-            Text(value ?? TicketField.unknownDash)
+                .lineLimit(1)
+            Text(row.value)
                 .font(.edBodyMedium)
-                .foregroundStyle(isUnknown ? Tokens.mutedSoft : Tokens.ink)
-                .multilineTextAlignment(.trailing)
+                .foregroundStyle(row.isUnknown ? Tokens.mutedSoft : Tokens.ink)
                 .lineLimit(2)
+                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.vertical, Space.md)
-    }
-
-    /// The address plus a way to get there.
-    ///
-    /// The address wraps, so the MAP pill sits under it rather than fighting it for the
-    /// same line. When the address collapsed into the venue there is nothing to print
-    /// above the pill, so the row becomes the label and the pill on one line — the
-    /// point of it being the tap target, not the text.
-    private var locationRow: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-                Text(addressLine.isEmpty ? "DIRECTIONS" : "ADDRESS")
-                    .font(.edEyebrow)
-                    .tracking(1.0)
-                    .foregroundStyle(Tokens.muted)
-                Spacer(minLength: Space.sm)
-                if !addressLine.isEmpty {
-                    Text(addressLine)
-                        .font(.edFootnote)
-                        .foregroundStyle(Tokens.ink)
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(3)
-                } else if let url = item.mapsURL {
-                    mapChip(url: url)
-                }
-            }
-            if !addressLine.isEmpty, let url = item.mapsURL {
-                HStack {
-                    Spacer(minLength: 0)
-                    mapChip(url: url)
-                }
-            }
-        }
-        .padding(.vertical, Space.md)
-    }
-
-    private var detailDivider: some View {
-        Rectangle().fill(palette.factRule).frame(height: 0.5)
     }
 
     /// "JUL 3" style month + day, shared by the stay and event heroes.
@@ -897,7 +808,9 @@ struct TicketCardView: View {
     /// stub rather than a lopsided thumbnail.
     @ViewBuilder
     private var barcodeStub: some View {
-        if hasLocationStub {
+        if !item.hasTicket && !hasLocationStub {
+            codeStub
+        } else if hasLocationStub {
             StayLocationStub(
                 address: item.address,
                 mapsURL: item.mapsURL,
@@ -916,6 +829,40 @@ struct TicketCardView: View {
                 .accessibilityLabel("Present this code")
         } else {
             scannableStub
+        }
+    }
+
+    /// The stub of a card with nothing to scan and nowhere to go: a hand-typed
+    /// membership, a booking held under a reference (#481).
+    ///
+    /// It prints the code large and monospaced, because that is what the stub is
+    /// FOR — the thing you read out at a desk. Empty when there is no code either,
+    /// which keeps the card's silhouette without inventing content for it.
+    private var codeStub: some View {
+        VStack(spacing: Space.xs) {
+            if !confirmationCode.isEmpty {
+                Text(pnrLabel)
+                    .font(.edEyebrow)
+                    .tracking(1.4)
+                    .foregroundStyle(stubMuted)
+                Text(confirmationCode)
+                    .font(.edDisplay)
+                    .monospaced()
+                    .foregroundStyle(stubInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, embedded ? Space.lg : Space.md)
+        .padding(.horizontal, Space.md)
+        .background {
+            if embedded {
+                stubPaper
+            } else {
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .fill(Tokens.ticketStub)
+            }
         }
     }
 

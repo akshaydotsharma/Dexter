@@ -13,6 +13,9 @@ import SwiftUI
 ///  - macOS, which has no present-to-scan surface at all (it depends on
 ///    `UIScreen.brightness` and the idle timer), so every card opens here.
 ///
+/// The card it shows turns over on its own info control (#481), so this surface
+/// no longer renders a separate list of back fields beneath it.
+///
 /// Actions it owns: scan (iOS, when there is a barcode) and view-original.
 /// Actions it delegates: edit and open-the-owning-surface, both handed up so the
 /// parent can dismiss this first and present the editor in its place rather than
@@ -52,7 +55,6 @@ struct WalletCardDetailSheet: View {
                             VStack(spacing: 0) {
                                 Spacer(minLength: 0)
                                 WalletTicketCard(entry: entry, onTapStub: stubTapAction)
-                                if !backFields.isEmpty { passBack }
                                 Spacer(minLength: 0)
                             }
                             .frame(minHeight: proxy.size.height)
@@ -201,93 +203,15 @@ struct WalletCardDetailSheet: View {
     }
     #endif
 
-    /// The stored event page, coercing a bare host to https so a hand-typed value
-    /// still opens. `nil` when there is nothing usable.
-    private var eventPageURL: URL? {
-        guard let raw = card.meta?.eventURL?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else { return nil }
-        if let url = URL(string: raw), url.scheme != nil { return url }
-        return URL(string: "https://\(raw)")
-    }
+    /// The stored event page. Shares the card's own resolver so the action tile
+    /// and the row on the back of the card can never disagree about the link.
+    private var eventPageURL: URL? { TicketCardFields.eventPageURL(card.meta) }
 
-    // MARK: - The back of the pass
-
-    /// Fields the issuer put on the back of the pass (#420).
-    private var backFields: [TicketMeta.PassField] {
-        card.meta?.backFields ?? []
-    }
-
-    /// The back of the pass, rendered as the issuer wrote it.
-    ///
-    /// A pass carries more than fits on its face — the holder's email, the admission
-    /// type, an organiser, a refund policy — and Apple's answer is to let you turn the
-    /// card over. This is that: whatever the document printed on its back, in its own
-    /// order, under its own labels. Nothing here is interpreted, which is why a field
-    /// this app has never heard of still shows up correctly.
-    ///
-    /// Absent entirely for a card with no back fields, so a hand-typed wallet card is
-    /// exactly as it was.
-    private var passBack: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(backFields.enumerated()), id: \.element) { index, field in
-                if index > 0 {
-                    Rectangle()
-                        .fill(Tokens.border)
-                        .frame(height: 0.5)
-                }
-                backRow(field)
-            }
-        }
-        .padding(.horizontal, Space.md)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.md)
-        .padding(.top, Space.lg)
-    }
-
-    /// One back field. A value that is a URL becomes a tap target showing its host,
-    /// because the alternative is 180 characters of query string wrapped across four
-    /// lines of a card.
-    @ViewBuilder
-    private func backRow(_ field: TicketMeta.PassField) -> some View {
-        if let url = field.url {
-            Button {
-                Haptics.light()
-                openURL(url)
-            } label: {
-                backRowBody(
-                    label: field.label,
-                    value: url.host ?? field.value,
-                    isLink: true
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(field.label), opens \(url.host ?? "link")")
-        } else {
-            backRowBody(label: field.label, value: field.value, isLink: false)
-        }
-    }
-
-    private func backRowBody(label: String, value: String, isLink: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            Text(label.uppercased())
-                .font(.edEyebrow)
-                .tracking(1.0)
-                .foregroundStyle(Tokens.muted)
-            Spacer(minLength: Space.sm)
-            Text(value)
-                .font(.edFootnote)
-                .foregroundStyle(isLink ? entry.palette.accent : Tokens.ink)
-                .multilineTextAlignment(.trailing)
-                .lineLimit(3)
-            if isLink {
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(entry.palette.accent)
-            }
-        }
-        .padding(.vertical, Space.md)
-        .contentShape(Rectangle())
-    }
+    // The back of the pass used to be rendered here, below the card, as a
+    // separate panel of the issuer's `back`-placed fields. The card carries its
+    // own back now (#481) and it holds strictly more — the address, the map link
+    // and every generic field, not just the ones placed at `back` — so a second
+    // rendering here would print the same table twice on one screen.
 
     private func actionTile(icon: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
