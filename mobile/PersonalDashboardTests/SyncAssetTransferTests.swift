@@ -265,6 +265,41 @@ final class SyncAssetTransferTests: XCTestCase {
         )
     }
 
+    /// A soft-deleted row's file is not the user's any more, so it must not be
+    /// published, must not be counted as missing, and must not pin a blob against
+    /// the sweep. The rows stay in the table, so this is easy to get wrong: the
+    /// live store had nine soft-deleted task tickets, four still holding a
+    /// published blob and five reported forever as "not on any device".
+    func testASoftDeletedRowsFileIsNotPublished() async throws {
+        let live = "task-tickets/\(UUID().uuidString).pdf"
+        let dead = "task-tickets/\(UUID().uuidString).pdf"
+        try writeLocal(Data("still mine".utf8), to: live, taskTicket: true)
+        try writeLocal(Data("deleted".utf8), to: dead, taskTicket: true)
+
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let kept = LocalTaskTicket(clientUUID: UUID(), todoClientUUID: UUID())
+        kept.attachmentPath = live
+        context.insert(kept)
+        let gone = LocalTaskTicket(clientUUID: UUID(), todoClientUUID: UUID())
+        gone.attachmentPath = dead
+        gone.deletedAt = Date()
+        context.insert(gone)
+        try context.save()
+
+        let folder = makeFolder()
+        let outcome = await SyncAssetTransfer(modelContext: context)
+            .run(folder: folder, state: state(deviceA, in: context))
+
+        XCTAssertEqual(outcome.published, 1, "only the live row's file may be published")
+        let published = folder.blobNames(for: deviceA)
+        XCTAssertTrue(published.contains("\(SyncHash.hex(Data("still mine".utf8))).pdf"))
+        XCTAssertFalse(
+            published.contains("\(SyncHash.hex(Data("deleted".utf8))).pdf"),
+            "a deleted attachment must not be paying for iCloud space"
+        )
+    }
+
     // MARK: - Reattaching what #411 detached
 
     /// The repair reads the original path back out of the append-only log, so it

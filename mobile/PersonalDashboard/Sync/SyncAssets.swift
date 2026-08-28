@@ -321,7 +321,15 @@ struct SyncAssetTransfer {
             paths.insert(path)
         }
 
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalTaskTicket>())) ?? [] {
+        // `deletedAt` is checked on the two models that HAVE it. A soft-deleted
+        // row is still in the table, so without this its file is published (paying
+        // iCloud space for an attachment the user deleted), pinned against the
+        // sweep, which only reclaims what nothing references, and — when the file
+        // is long gone — counted forever as "not on any device". Measured on the
+        // live store: nine soft-deleted task tickets, four of them still holding a
+        // published blob and five inflating that count.
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalTaskTicket>())) ?? []
+        where row.deletedAt == nil {
             add(row.attachmentPath)
         }
         for row in (try? modelContext.fetch(FetchDescriptor<LocalItineraryItem>())) ?? [] {
@@ -333,7 +341,8 @@ struct SyncAssetTransfer {
         for row in (try? modelContext.fetch(FetchDescriptor<LocalExpense>())) ?? [] {
             add(row.receiptImagePath)
         }
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalNoteImage>())) ?? [] {
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalNoteImage>())) ?? []
+        where row.deletedAt == nil {
             add(row.relativePath)
         }
         // Trip covers TRAVEL rather than being regenerated on the peer (#471).
