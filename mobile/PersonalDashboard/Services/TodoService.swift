@@ -52,7 +52,13 @@ struct TodoService {
     func update(_ todo: Todo, _ request: TodoUpdateRequest) async throws -> Todo {
         let row = try fetchLocal(uuid: todo.id)
         if let title = request.title { row.title = title }
-        if let description = request.description { row.todoDescription = description }
+        // "" is how a caller says "clear this" (nil means "leave it alone", which
+        // the inline rename rows rely on). Store it back as nil so the column keeps
+        // ONE representation of "no notes", and a consumer that only unwraps the
+        // optional cannot end up rendering an empty line (#488).
+        if let description = request.description {
+            row.todoDescription = description.isEmpty ? nil : description
+        }
         if let completed = request.completed { row.completed = completed }
         // Clearing wins over setting: an editor that turned the toggle off sends
         // `clearsDueDate` with a stale `dueDate` still in its state.
@@ -61,7 +67,8 @@ struct TodoService {
         } else if let dueDate = request.dueDate {
             row.dueDate = dueDate
         }
-        if let tag = request.tag { row.tag = tag }
+        // Same convention as the notes above: "" clears, nil leaves alone (#488).
+        if let tag = request.tag { row.tag = tag.isEmpty ? nil : tag }
         if let address = request.address { row.address = address }
         if let googleMapsLink = request.googleMapsLink { row.googleMapsLink = googleMapsLink }
         if let priority = request.priority { row.priority = priority }
