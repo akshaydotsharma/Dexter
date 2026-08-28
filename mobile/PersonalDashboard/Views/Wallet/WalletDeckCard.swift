@@ -23,6 +23,9 @@ struct WalletDeckCard: View {
     let onEdit: (() -> Void)?
     let onDelete: (() -> Void)?
     let onOpenSource: (() -> Void)?
+    /// Read the stored file again against the current extractor (#484). `nil` for a
+    /// card with no extraction behind it to redo.
+    let onReread: (() -> Void)?
 
     private var palette: WalletCardPalette { entry.palette }
 
@@ -51,6 +54,11 @@ struct WalletDeckCard: View {
             if let onOpenSource {
                 Button { onOpenSource() } label: {
                     Label("Open \(entry.source.label)", systemImage: "arrow.up.forward.app")
+                }
+            }
+            if let onReread {
+                Button { onReread() } label: {
+                    Label("Read the ticket again", systemImage: "arrow.clockwise.circle")
                 }
             }
             if let onDelete {

@@ -14,8 +14,11 @@ import SwiftUI
 /// a link becomes a tap target showing its host rather than 180 characters of
 /// query string.
 ///
-/// It draws the same tear line at the same height as the face, so turning a card
-/// over changes what it says and nothing about what it is.
+/// No rules and no tear line across it (#484). The dashed line was there to keep
+/// the silhouette identical across the turn, but the notches cut into the card's
+/// outline already do that, and on a full back the line struck through whichever
+/// row it landed on. Evenly spaced rows on plain stock is what the back of a pass
+/// looks like anyway.
 struct TicketCardBack: View {
     let fields: TicketCardFields
     let palette: WalletCardPalette
@@ -24,28 +27,15 @@ struct TicketCardBack: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 0) {
-                ForEach(Array(fields.back.enumerated()), id: \.element.id) { index, row in
-                    if index > 0 {
-                        Rectangle()
-                            .fill(palette.factRule)
-                            .frame(height: 0.5)
-                    }
+            VStack(spacing: Space.lg) {
+                ForEach(fields.back) { row in
                     backRow(row)
                 }
             }
             .padding(.horizontal, Space.lg)
-            .padding(.vertical, Space.md)
+            .padding(.vertical, Space.xl)
         }
         .frame(height: TicketCardMetrics.openBody)
-        // The tear line stays where the face put it, so the card's outline does
-        // not move under the flip. Rows scroll past it the way the print on a
-        // real ticket's back runs across its perforation.
-        .overlay(alignment: .top) {
-            PerforatedDivider(cutout: true, lineColor: palette.factRule)
-                .padding(.top, TicketCardMetrics.hero + TicketCardMetrics.face)
-                .allowsHitTesting(false)
-        }
     }
 
     @ViewBuilder
@@ -82,7 +72,6 @@ struct TicketCardBack: View {
                     .foregroundStyle(palette.accent)
             }
         }
-        .padding(.vertical, Space.md)
         .contentShape(Rectangle())
     }
 }

@@ -27,10 +27,15 @@ enum TicketCardMetrics {
     /// Per platform, because the type ramp is: 16pt body on iOS against 13pt on
     /// the Mac. One shared number would either clip the phone or leave a band of
     /// empty ticket on the desktop.
+    ///
+    /// Includes a generous gap under the hero. Butted straight up against the
+    /// artwork the facts read as a caption on it; set apart, the card has an
+    /// illustrated half and a written half, which is what a printed ticket looks
+    /// like. #481 traded that gap for height and the card lost the distinction.
     #if os(macOS)
-    static let face: CGFloat = 136
+    static let face: CGFloat = 144
     #else
-    static let face: CGFloat = 166
+    static let face: CGFloat = 174
     #endif
 
     /// The dashed tear line. Matches `PerforatedDivider`'s own frame.

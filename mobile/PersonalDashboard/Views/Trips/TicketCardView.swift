@@ -328,7 +328,10 @@ struct TicketCardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, Space.lg)
-        .padding(.vertical, Space.lg)
+        // Deeper above than below: the gap under the hero artwork is what separates
+        // the card's illustrated half from its written one (#484).
+        .padding(.top, Space.xl)
+        .padding(.bottom, Space.lg)
         // Top-aligned inside a fixed box: a sparse card leaves the space empty
         // rather than floating two fields in the middle of the ticket.
         .frame(height: TicketCardMetrics.face, alignment: .top)

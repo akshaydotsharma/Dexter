@@ -279,7 +279,10 @@ struct WalletView: View {
                             onPresent: { present(entry) },
                             onEdit: ownID.map { id in { editorTarget = .existing(id) } },
                             onDelete: ownID.map { id in { pendingDeleteID = id } },
-                            onOpenSource: ownID == nil ? { openSource(of: entry) } : nil
+                            onOpenSource: ownID == nil ? { openSource(of: entry) } : nil,
+                            onReread: rereadableTicketID(of: entry).map { id in
+                                { reread(ticketID: id) }
+                            }
                         )
                         .id(entry.id)
                         .padding(.top, topInset(at: index, in: entries))
@@ -489,6 +492,45 @@ struct WalletView: View {
         case .task(_, let todoID, _):
             router.focus = ActivityFocus(section: .tasks, id: todoID)
             router.go(to: .tasks)
+        }
+    }
+
+    /// The `LocalTaskTicket.clientUUID` behind an entry, when that card can be read
+    /// again (#484).
+    ///
+    /// Only the extracted cards qualify. A `.pkpass` was never guessed at, and a
+    /// standalone wallet card or a trip's inline ticket is edited directly, so
+    /// neither has an extraction to re-run.
+    private func rereadableTicketID(of entry: WalletEntry) -> UUID? {
+        let ticketID: UUID
+        switch entry.source {
+        case .task(let id, _, _):               ticketID = id
+        case .tripDocument(let id, _, _, _):    ticketID = id
+        case .wallet, .trip:                    return nil
+        }
+        let path = entry.card.attachmentPath
+        guard !path.trimmingCharacters(in: .whitespaces).isEmpty,
+              !TicketStorage.isPass(path) else { return nil }
+        return ticketID
+    }
+
+    /// Read a stored ticket again against the current extractor.
+    ///
+    /// The card's face and back are only ever as good as the prompt that was running
+    /// the day the file was uploaded. When that prompt gets better — English labels,
+    /// or no longer keeping the issuer's fiscal codes — this is how a card already in
+    /// the wallet catches up, without re-uploading a file that dedupe would refuse.
+    private func reread(ticketID: UUID) {
+        Task {
+            withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = true }
+            defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = false } }
+            do {
+                try await TaskTicketExtraction().reread(ticketUUID: ticketID, context: modelContext)
+                Haptics.light()
+            } catch {
+                ticketError = (error as? LocalizedError)?.errorDescription
+                    ?? "We couldn't read that ticket again. Please try again."
+            }
         }
     }
 
