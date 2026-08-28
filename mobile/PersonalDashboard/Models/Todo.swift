@@ -203,9 +203,11 @@ struct TodoCreateRequest: Encodable {
 
 struct TodoUpdateRequest: Encodable {
     let title: String?
+    /// `nil` leaves the stored value untouched; "" clears it (#488).
     let description: String?
     let completed: Bool?
     let dueDate: Date?
+    /// `nil` leaves the stored value untouched; "" clears it (#488).
     let tag: String?
     /// `nil` leaves the stored value untouched; a value (incl. "") overwrites.
     var address: String? = nil

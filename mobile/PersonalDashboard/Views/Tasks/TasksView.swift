@@ -2006,12 +2006,25 @@ struct TaskEditorSheet: View {
         }
     }
 
+    /// What an optional text field sends on save.
+    ///
+    /// An emptied field has to CLEAR the stored value (#488), and `nil` cannot say
+    /// that: `TodoService.update` reads `nil` as "leave it alone", which the inline
+    /// rename rows depend on — they pass a task's own notes and tag straight back
+    /// and must not wipe them. So an edit sends "" for an emptied field, the same
+    /// convention Address and the Maps link already use. A new task sends `nil`,
+    /// because there is nothing there to clear.
+    static func savedValue(_ text: String, isEditing: Bool) -> String? {
+        if !text.isEmpty { return text }
+        return isEditing ? "" : nil
+    }
+
     private func save() async {
         guard canSave else { return }
         let typed = title.trimmingCharacters(in: .whitespaces)
         let trimmed = typed.isEmpty ? Self.untitledTicketTaskName : typed
-        let finalDescription = descriptionText.isEmpty ? nil : descriptionText
-        let finalTag = tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag
+        let finalDescription = Self.savedValue(descriptionText, isEditing: todo != nil)
+        let finalTag = Self.savedValue(tag.trimmingCharacters(in: .whitespaces), isEditing: todo != nil)
         // Minute precision, because that is all the picker ever showed (#444). Done
         // here rather than only on the seed so re-saving a task whose stored date
         // predates this normalises it too, instead of writing the stray seconds
