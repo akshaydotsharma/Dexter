@@ -716,6 +716,8 @@ struct TripDetailView: View {
                 // editor to fill in the details.
                 editingItem = .existing(result.itemUUID)
             } else {
+                // A multi-segment booking landed several rows (#475); open the
+                // first, which is the outbound leg. The rest are on the timeline.
                 scanTarget = TicketScanTarget(id: result.itemUUID)
             }
         } catch {

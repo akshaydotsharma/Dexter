@@ -281,6 +281,25 @@ enum BarcodeService {
         return render(pdfPage: page, targetLongEdge: targetLongEdge)
     }
 
+    /// Render the leading pages of a PDF, in order. Empty when the data isn't a
+    /// readable PDF.
+    ///
+    /// `renderFirstPage` is not enough for extraction (#475): a round-trip
+    /// e-ticket routinely prints the outbound leg on page 1 and the return on
+    /// page 2, so reading page 1 alone silently drops half the booking. The page
+    /// cap matches `decode(pdfData:maxPages:)` so both readers see the same
+    /// slice of a document, and it keeps a 30-page fare-rules attachment from
+    /// turning into 30 images on one request.
+    static func renderPages(pdfData: Data, maxPages: Int = 3, targetLongEdge: CGFloat = 2000) -> [PlatformImage] {
+        guard let doc = PDFDocument(data: pdfData) else { return [] }
+        let pages = min(doc.pageCount, maxPages)
+        guard pages > 0 else { return [] }
+        return (0..<pages).compactMap { index in
+            guard let page = doc.page(at: index) else { return nil }
+            return render(pdfPage: page, targetLongEdge: targetLongEdge)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Crop `image` to a Vision-normalised bounding box (bottom-left origin),
