@@ -51,23 +51,25 @@ final class VisionTileRowSubmitTests: XCTestCase {
         return nil
     }
 
+    private func row(isEditing: Bool, text: String = "") -> VisionTileRow {
+        VisionTileRow(
+            row: .item(VisionItem(text: text)),
+            showsDue: false,
+            isEditing: isEditing,
+            onToggle: {},
+            onBeginEdit: {},
+            onCommit: { [self] text, continuing in
+                commits.append((text, continuing))
+            },
+            onCancel: {},
+            onRemoveFromBoard: nil,
+            onRemove: {}
+        )
+    }
+
     /// A blank item in edit, which is exactly the state `addItem` leaves behind.
     private func hostBlankItemInEdit() -> NSHostingView<VisionTileRow> {
-        let view = NSHostingView(
-            rootView: VisionTileRow(
-                row: .item(VisionItem(text: "")),
-                showsDue: false,
-                isEditing: true,
-                onToggle: {},
-                onBeginEdit: {},
-                onCommit: { [self] text, continuing in
-                    commits.append((text, continuing))
-                },
-                onCancel: {},
-                onRemoveFromBoard: nil,
-                onRemove: {}
-            )
-        )
+        let view = NSHostingView(rootView: row(isEditing: true))
         view.frame = NSRect(x: 0, y: 0, width: 400, height: 40)
         window.contentView = view
         return view
@@ -120,5 +122,58 @@ final class VisionTileRowSubmitTests: XCTestCase {
 
         let blur = try XCTUnwrap(commits.last)
         XCTAssertEqual(blur.text, "Book the flights", "the late blur must not report an empty item")
+    }
+
+    // MARK: - Torn down while it still holds the caret
+
+    /// The field is unmounted with the caret still in it, and nothing else takes
+    /// first responder. What was typed must still be reported (#492).
+    ///
+    /// This is the state the board is in when a click ends an edit and starts
+    /// nothing: the row stops rendering a field and no sibling field appears. Up
+    /// to now the commit rode on AppKit's `controlTextDidEndEditing`, which is
+    /// sent when the field RESIGNS — and a field removed from the hierarchy never
+    /// resigns, so the typed text died with the view. Reported as *"if I'm
+    /// editing an item and I click on another item, the change does not get
+    /// saved."*
+    ///
+    /// The text has to come from the field, not from the `text` binding: the
+    /// binding is deliberately synced only on submit and blur, so at this moment
+    /// it still holds what the row was seeded with.
+    func testUnmountingTheFieldMidEditStillReportsWhatWasTyped() async throws {
+        let view = hostBlankItemInEdit()
+        await settle()
+        let field = try XCTUnwrap(self.field(in: view))
+        try type("Grab the tickets", into: field)
+        XCTAssertTrue(commits.isEmpty, "precondition: nothing has committed yet")
+        XCTAssertNotNil(field.currentEditor(), "precondition: the caret is in the field")
+
+        // The re-render that follows the caret being released: this row stops
+        // drawing a field, and no other row starts.
+        view.rootView = row(isEditing: false)
+        await settle()
+
+        let commit = try XCTUnwrap(commits.last, "the teardown reported nothing at all")
+        XCTAssertEqual(commit.text, "Grab the tickets")
+        XCTAssertFalse(commit.continuing, "a teardown is a blur, not a Return")
+    }
+
+    /// A field that already blurred and then unmounts must not report twice with
+    /// stale text. The guard is the live field editor, which is gone once the
+    /// field has resigned.
+    func testAFieldThatAlreadyBlurredDoesNotReportAgainOnUnmount() async throws {
+        let view = hostBlankItemInEdit()
+        await settle()
+        let field = try XCTUnwrap(self.field(in: view))
+        try type("Book the surveyor", into: field)
+
+        window.makeFirstResponder(nil)   // the ordinary blur
+        await settle()
+        let afterBlur = commits.count
+
+        view.rootView = row(isEditing: false)
+        await settle()
+
+        XCTAssertEqual(commits.count, afterBlur, "one commit, not two")
     }
 }
