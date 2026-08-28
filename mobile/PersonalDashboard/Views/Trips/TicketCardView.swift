@@ -1011,7 +1011,6 @@ struct StayBookingDetailSheet: View {
     let onEdit: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var showingScan = false
     @State private var showingOriginal = false
 
     var body: some View {
@@ -1021,9 +1020,7 @@ struct StayBookingDetailSheet: View {
 
                 ScrollView {
                     VStack(spacing: Space.lg) {
-                        // The stay layout reads its times from the item, so the
-                        // timeline's per-row time line isn't needed here.
-                        TicketCardView(item: TicketCardData(item), timeText: nil)
+                        details
                         actions
                     }
                     .padding(Space.lg)
@@ -1038,30 +1035,109 @@ struct StayBookingDetailSheet: View {
                 }
             }
         }
-        // The scan surface is a gate/turnstile idiom that needs the camera-era
-        // brightness + idle-timer control; iOS-only, and `.fullScreenCover` is
-        // unavailable on macOS regardless (issue #281).
-        #if os(iOS)
-        .fullScreenCover(isPresented: $showingScan) {
-            TicketScanView(item: item)
-        }
-        #endif
         .sheet(isPresented: $showingOriginal) {
             TicketOriginalViewer(attachmentPath: item.attachmentPath)
         }
     }
 
+    /// The booking, as plain labelled fields.
+    ///
+    /// This used to be the wallet-style stay card (#466). A booking is not a
+    /// credential: a hotel confirmation code is looked up at a desk, not held up
+    /// at a gate, which is exactly why #434 stopped it earning a Wallet card. So
+    /// this sheet is the only place the booking's own details live, and the fix
+    /// is to render them plainly rather than to remove them.
+    ///
+    /// Same panel treatment as the attachment sheet, so the two read as one idea.
+    @ViewBuilder
+    private var details: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            Text(item.title)
+                .font(.edTitle)
+                .foregroundStyle(Tokens.ink)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ForEach(stayFields) { field in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(field.label.uppercased())
+                        .font(.edEyebrow)
+                        .tracking(1.0)
+                        .foregroundStyle(Tokens.muted)
+                    Text(field.value)
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let url = TicketCardData(item).mapsURL {
+                Link(destination: url) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "map.fill")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("MAP")
+                            .font(.edEyebrow)
+                            .tracking(1.0)
+                    }
+                    .foregroundStyle(WalletCardPalette.itinerary.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
+    /// Check-in and check-out each carry their date and their printed time on one
+    /// line, because that is how a booking is read: a day and a time, twice.
+    ///
+    /// Times come from the UTC-pinned formatter the timeline uses, so they show
+    /// the time the booking states rather than the device's rendering of it.
+    private var stayFields: [StayField] {
+        let dayFormat = Date.FormatStyle.dateTime.weekday(.abbreviated).day().month(.abbreviated).year()
+
+        func when(_ date: Date?, _ time: Date?) -> String? {
+            guard let date else { return nil }
+            var out = date.formatted(dayFormat)
+            if let time {
+                out += " · " + TimelineEntry.itineraryTimeFormatter.string(from: time)
+            }
+            return out
+        }
+
+        var out: [StayField] = [
+            StayField(label: "Check-in", value: when(item.dayDate, item.startTime)),
+            StayField(label: "Check-out", value: when(item.endDate, item.endTime))
+        ]
+        if let nights = nightsCount {
+            out.append(StayField(label: "Nights", value: nights == 1 ? "1 night" : "\(nights) nights"))
+        }
+        out.append(StayField(label: "Confirmation", value: item.sourceConfirmation))
+        out.append(StayField(label: "Address", value: item.address))
+        return out.filter { !$0.value.isEmpty }
+    }
+
+    /// Nights between check-in and check-out. `nil` rather than 0 for a same-day
+    /// or missing check-out, so the field drops out instead of saying "0 nights".
+    private var nightsCount: Int? {
+        guard let end = item.endDate else { return nil }
+        let cal = Calendar.current
+        let n = cal.dateComponents(
+            [.day],
+            from: cal.startOfDay(for: item.dayDate),
+            to: cal.startOfDay(for: end)
+        ).day ?? 0
+        return n > 0 ? n : nil
+    }
+
     private var actions: some View {
         VStack(spacing: Space.sm) {
-            // "Scan ticket" opens the iOS-only present-to-scan surface.
-            #if os(iOS)
-            if item.hasBarcode {
-                actionRow(icon: "barcode.viewfinder", title: "Scan ticket") {
-                    Haptics.light()
-                    showingScan = true
-                }
-            }
-            #endif
+            // No "Scan ticket" row (#466): presenting a pass belongs to the
+            // Wallet, and a stay that earns a card is already on that shelf.
             if !item.attachmentPath.isEmpty {
                 actionRow(icon: "doc.text.magnifyingglass", title: "View original ticket") {
                     Haptics.light()
@@ -1071,6 +1147,19 @@ struct StayBookingDetailSheet: View {
             actionRow(icon: "pencil", title: "Edit details") {
                 onEdit()
             }
+        }
+    }
+
+    /// One label-over-value field. A blank or whitespace-only value collapses to
+    /// an empty string at init, so the panel never renders a labelled blank.
+    struct StayField: Identifiable {
+        let id = UUID()
+        let label: String
+        let value: String
+
+        init(label: String, value: String?) {
+            self.label = label
+            self.value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
     }
 
