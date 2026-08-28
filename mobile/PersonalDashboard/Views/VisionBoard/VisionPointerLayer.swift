@@ -61,6 +61,20 @@ final class VisionPointerView: NSView {
     /// treats them exactly like any other pass-through.
     var textRects: [CGRect] = []
     var canvasSize: CGSize = .zero
+    /// True while an item on the board holds the caret.
+    ///
+    /// A click on this layer already ends that edit as a side effect —
+    /// `makeFirstResponder(self)` resigns the `NSTextField`, which commits on
+    /// blur. What it must NOT also do is the thing it would normally mean. A
+    /// click on empty canvas creates a block, so finishing a line of typing by
+    /// clicking away used to leave a block behind that nobody asked for.
+    ///
+    /// So while this is true the first click is spent on ending the edit and
+    /// nothing else: no creation, no drag, no resize, no change of selection.
+    /// The second click means what it says. Deliberately NOT a
+    /// `claimCreation()`-style timer — this is not about a click arriving twice
+    /// quickly, it is about a click that already had a job.
+    var isEditingText = false
     /// How many tiles each block has, for the keyboard tile cursor. A count
     /// rather than the tiles themselves: this view has no business holding
     /// tasks, and the only thing the cursor needs is where it may not go.
@@ -170,6 +184,11 @@ final class VisionPointerView: NSView {
         let hit = VisionHitTest.resolve(point: point, blocks: frames, exclusions: exclusions)
         dismissPopover(unless: hit)
 
+        // `makeFirstResponder` above has already taken the caret out of whatever
+        // item held it, so this click has done its work. Anything further would
+        // be a second action the user did not ask for. See `isEditingText`.
+        if isEditingText { return }
+
         switch hit {
         case .grip(let id):
             guard let block = block(id) else { return }
@@ -230,6 +249,11 @@ final class VisionPointerView: NSView {
         let point = canvasPoint(for: event)
         let hit = VisionHitTest.resolve(point: point, blocks: frames, exclusions: exclusions)
         dismissPopover(unless: hit)
+
+        // A right click is a click. Same rule, same reason — except over a
+        // pass-through, where the context menu is SwiftUI's and this view has no
+        // business swallowing anything.
+        if isEditingText, hit.isHandledByPointerLayer { return }
 
         switch hit {
         case .grip(let id), .body(let id):
@@ -539,6 +563,7 @@ struct VisionPointerLayer: NSViewRepresentable {
     let exclusions: [CGRect]
     let textRects: [CGRect]
     let canvasSize: CGSize
+    let isEditingText: Bool
     let tileCounts: [UUID: Int]
     let onCanvasClick: (Int, Int) -> Bool
     let commit: ([UUID: VisionBoardLayout.Slot]) async -> Void
@@ -566,6 +591,7 @@ struct VisionPointerLayer: NSViewRepresentable {
         view.exclusions = exclusions
         view.textRects = textRects
         view.canvasSize = canvasSize
+        view.isEditingText = isEditingText
         view.tileCounts = tileCounts
         view.onCanvasClick = onCanvasClick
         view.commit = commit
