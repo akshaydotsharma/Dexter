@@ -78,6 +78,11 @@ struct WalletView: View {
     /// rather than the model so a re-render can't hand the dialog a deleted row.
     @State private var pendingDeleteID: UUID?
 
+    /// Ticket queued for re-reading (#485). Confirmed rather than immediate: a
+    /// re-read re-derives the whole card from the document, so it can overwrite a
+    /// detail someone typed by hand.
+    @State private var pendingRereadID: UUID?
+
     #if os(iOS)
     /// Full-screen present-to-scan target (iOS only — the surface depends on
     /// `UIScreen.brightness` and the idle timer).
@@ -187,6 +192,22 @@ struct WalletView: View {
         } message: {
             Text("The card and its stored ticket file are removed from this device.")
         }
+        .confirmationDialog(
+            "Read this ticket again?",
+            isPresented: Binding(
+                get: { pendingRereadID != nil },
+                set: { if !$0 { pendingRereadID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Read again") {
+                if let id = pendingRereadID { reread(ticketID: id) }
+                pendingRereadID = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRereadID = nil }
+        } message: {
+            Text("The stored file is read again and the card's details are replaced with what it says. Anything you typed by hand is overwritten. The file and its code are untouched.")
+        }
         .alert(
             "Couldn't save the ticket",
             isPresented: Binding(
@@ -281,7 +302,7 @@ struct WalletView: View {
                             onDelete: ownID.map { id in { pendingDeleteID = id } },
                             onOpenSource: ownID == nil ? { openSource(of: entry) } : nil,
                             onReread: rereadableTicketID(of: entry).map { id in
-                                { reread(ticketID: id) }
+                                { pendingRereadID = id }
                             }
                         )
                         .id(entry.id)

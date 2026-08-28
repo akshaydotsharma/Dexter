@@ -279,7 +279,7 @@ struct TaskTicketRead {
         var meta = TicketMeta()
         meta.eventType = Self.clean(extracted?.eventType)
         meta.section = Self.clean(extracted?.section)
-        meta.row = Self.clean(extracted?.row)
+        meta.row = Self.unlabelled(extracted?.row)
         // Left nil when the model declined to judge, so `belongsInWallet` can tell
         // "not a pass" apart from "nobody looked" (#405).
         meta.presentedAtEntry = extracted?.presentedAtEntry
@@ -324,7 +324,7 @@ struct TaskTicketRead {
         // The task's clock time stands in only when the task's DAY is also being
         // used. A file that printed its own date is not given someone else's hour.
         let taskTime: String? = eventDay == nil ? context.dueClockText : nil
-        let resolvedStartTime: String = Self.clean(extracted?.startTimeText)
+        let resolvedStartTime: String = Self.unlabelled(extracted?.startTimeText)
             ?? taskTime
             ?? ""
 
@@ -339,11 +339,11 @@ struct TaskTicketRead {
             eventDate: localDay,
             startTimeText: resolvedStartTime,
             venue: resolvedVenue,
-            seat: Self.clean(extracted?.seat) ?? "",
+            seat: Self.unlabelled(extracted?.seat) ?? "",
             // Short codes are the error-prone ones: a bare "T" or a dash read off
             // the ticket is worse than showing nothing, so the gate goes through
             // the same sanitizer the itinerary card uses.
-            gate: TicketField.code(extracted?.gate) ?? "",
+            gate: TicketField.code(Self.unlabelled(extracted?.gate)) ?? "",
             reference: Self.clean(extracted?.reference) ?? "",
             ticketMetaJSON: metaJSON,
             position: position,
@@ -353,10 +353,63 @@ struct TaskTicketRead {
         )
     }
 
-    private static func clean(_ s: String?) -> String? {
+    static func clean(_ s: String?) -> String? {
         guard let s else { return nil }
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return (t.isEmpty || t.lowercased() == "null") ? nil : t
+    }
+
+    /// Strip a value's own label back off it (#485).
+    ///
+    /// A card prints a label above every value, so a value carrying one too says the
+    /// same word twice — and on a foreign ticket it says it in the wrong language:
+    /// "ROW / fila D", "SEAT / posto 313", "STARTS / Ore: 08:00". The prompt asks for
+    /// the value alone, and mostly gets it, but "mostly" is not a rule: at
+    /// temperature 0.3 the same ticket came back both ways across two runs. So the
+    /// guarantee lives here instead, where it cannot vary.
+    ///
+    /// Two shapes only, both unambiguous:
+    ///  - a single word before a colon ("Ore: 08:00" → "08:00")
+    ///  - two words where the first is a plain word and the second is code-shaped:
+    ///    short, or carrying a digit ("Fila D" → "D", "Posto 313" → "313",
+    ///    "Gate 12" → "12")
+    ///
+    /// Anything else is left exactly as printed. "26b - Tribuna Laterale Destra" is
+    /// the NAME of a stand rather than a label plus a value, and the signage at the
+    /// venue says the same words, so it keeps them. Applied only to the short coded
+    /// slots — row, seat, gate, the printed time — and never to a venue, a section or
+    /// a title, where a leading word is part of the name.
+    nonisolated static func unlabelled(_ raw: String?) -> String? {
+        guard let value = clean(raw) else { return nil }
+
+        if let colon = value.firstIndex(of: ":") {
+            let head = value[value.startIndex..<colon].trimmingCharacters(in: .whitespaces)
+            let tail = value[value.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            // A single alphabetic word before the colon is a label. Two words are a
+            // sentence, and no words at all means the colon belongs to the value —
+            // which is how "08:00" survives this untouched.
+            if !tail.isEmpty,
+               !head.isEmpty,
+               head.allSatisfy({ $0.isLetter || $0.isWhitespace }),
+               head.split(separator: " ").count == 1 {
+                return tail
+            }
+        }
+
+        let parts = value.split(separator: " ")
+        if parts.count == 2,
+           parts[0].allSatisfy(\.isLetter),
+           parts[0].count > 1,
+           // A word before a CLOCK TIME qualifies it rather than labels it:
+           // "Boards 18:20" and "Doors 18:30" say which of the printed times this
+           // is, and dropping the word loses the only thing that distinguished
+           // them. A real label before a time carries a colon ("Ore: 08:00"), which
+           // the rule above has already taken.
+           !parts[1].contains(":"),
+           parts[1].contains(where: \.isNumber) || parts[1].count <= 3 {
+            return String(parts[1])
+        }
+        return value
     }
 }
 
@@ -490,9 +543,17 @@ struct TaskTicketExtraction {
     /// again, no row is created, and the barcode and attachment are not touched — the
     /// file is read, not rewritten.
     ///
-    /// It replaces `fields` and nothing else. Every other property is one the person
-    /// may have corrected by hand since, and a re-read is not a licence to overwrite
-    /// their edit with a fresh guess.
+    /// It re-derives the WHOLE card, not one row of its back (#485). The first cut
+    /// replaced only `fields`, reasoning that every other property might have been
+    /// corrected by hand. That reasoning is wrong for an action invoked by name: the
+    /// person asked for the document to be read again, so the document's answer wins
+    /// across the card. It is why the action confirms before it runs.
+    ///
+    /// It can only improve a card, never empty one. A field the new read returns
+    /// nothing for keeps what it has, so a model that fails to see the venue this
+    /// time does not delete the venue. The one exception is `fields`, which IS
+    /// replaceable with nothing at all: dropping the issuer's bookkeeping is the
+    /// whole point of running this.
     ///
     /// - Returns: how many extra fields the card carries now.
     /// - Throws: when the file is missing, cannot be rendered, or is a `.pkpass`
@@ -541,8 +602,43 @@ struct TaskTicketExtraction {
             throw TaskTicketExtractionError.ticketVanished
         }
         var meta = fresh.ticketMeta ?? TicketMeta()
+
+        // Overwrite only where the new read HAS something. `keep` is what makes this
+        // safe to run twice: a re-read is a second opinion, not a reset.
+        func keep(_ new: String?, _ existing: String) -> String {
+            TaskTicketRead.clean(new) ?? existing
+        }
+        meta.eventType      = TaskTicketRead.clean(extracted.eventType)      ?? meta.eventType
+        meta.section        = TaskTicketRead.unlabelled(extracted.section)   ?? meta.section
+        meta.row            = TaskTicketRead.unlabelled(extracted.row)       ?? meta.row
+        meta.guestName      = TaskTicketRead.clean(extracted.guestName)      ?? meta.guestName
+        meta.address        = TaskTicketRead.clean(extracted.address)        ?? meta.address
+        meta.directionsURL  = TaskTicketRead.clean(extracted.directionsURL)  ?? meta.directionsURL
+        meta.eventURL       = TaskTicketRead.clean(extracted.eventURL)       ?? meta.eventURL
+        meta.presentedAtEntry = extracted.presentedAtEntry ?? meta.presentedAtEntry
+        // The exception: the extra fields are REPLACED, empty included. Clearing the
+        // nine codes an old prompt kept is the reason someone runs this.
         let kept = extracted.fields.filter(\.isRenderable)
         meta.fields = kept.isEmpty ? nil : kept
+
+        fresh.eventTitle    = keep(extracted.eventTitle, fresh.eventTitle)
+        fresh.venue         = keep(extracted.venue, fresh.venue)
+        fresh.seat          = TaskTicketRead.unlabelled(extracted.seat) ?? fresh.seat
+        fresh.gate          = TicketField.code(TaskTicketRead.unlabelled(extracted.gate)) ?? fresh.gate
+        fresh.reference     = keep(extracted.reference, fresh.reference)
+        fresh.startTimeText = TaskTicketRead.unlabelled(extracted.startTimeText) ?? fresh.startTimeText
+        // The date resolves through the same weekday cross-check an upload uses, so a
+        // ticket that prints no year is pinned the same way both times.
+        if let day = TaskTicketRead(
+            attachmentPath: path,
+            barcodePayload: fresh.barcodePayload,
+            barcodeSymbology: fresh.barcodeSymbology,
+            extracted: extracted,
+            degradeMessage: nil
+        ).eventDay, let local = TaskTicketExtraction.localMidnight(ofUTCDay: day) {
+            fresh.eventDate = local
+        }
+
         fresh.ticketMetaJSON = meta.encodedString()
         fresh.updatedAt = Date()
         try? modelContext.save()
@@ -1042,22 +1138,22 @@ extension TaskTicketExtraction {
                 "event_date": field("The date the ticket is valid, as ISO 8601 yyyy-MM-dd. Read the printed day and month exactly. Tickets often print no year: in that case work it out from today's date, given in the message, choosing the NEXT occurrence of that day and month, and cross-check it against printed_weekday if the ticket shows a day name. Never assume the current year is the year of your training data."),
                 "printed_weekday": field("The day of the week printed on the ticket, if any, as printed (e.g. \"Sun\", \"Saturday\"). Omit when the ticket shows no day name. This is what pins down an unprinted year, so do not skip it when it is there."),
                 "year_was_printed": field("\"yes\" when a four-digit year is actually printed on the ticket, \"no\" when you worked the year out from the day and month. Be honest about this: a printed year is trusted as-is, an inferred one is double-checked."),
-                "start_time_text": field("The time the event actually STARTS, EXACTLY as printed, verbatim (e.g. \"20:00\", \"7.30pm\", \"Boards 18:20\"). When BOTH a doors/entry time and a start/show time are printed, use the START time — prefer \"Show 20:00\" over \"Doors 18:30\" — because that is the time the person is trying to be somewhere for. Fall back to the doors time only when no start time is printed, and keep its label then. Do NOT convert to 24-hour, do NOT add a timezone, do NOT reformat. Omit if no time is shown."),
+                "start_time_text": field("The time the event actually STARTS, EXACTLY as printed, verbatim (e.g. \"20:00\", \"7.30pm\", \"Boards 18:20\"), except that a word LABELLING the time is not part of it: \"Ore: 08:00\" is a time of \"08:00\", \"Start 20:00\" is a time of \"20:00\". A word that qualifies the time is part of it and stays: \"Boards 18:20\" and \"Doors 18:30\" are returned whole. When BOTH a doors/entry time and a start/show time are printed, use the START time — prefer \"Show 20:00\" over \"Doors 18:30\" — because that is the time the person is trying to be somewhere for. Fall back to the doors time only when no start time is printed, and keep its label then. Do NOT convert to 24-hour, do NOT add a timezone, do NOT reformat. Omit if no time is shown."),
                 "venue": field("Venue or location name as printed (e.g. \"National Stadium, Singapore\", \"The O2, London\"). Omit if none."),
-                "seat": field("Seat as printed (e.g. \"12A\", \"Seat 8\"). Omit if none."),
+                "seat": field("Seat as printed, WITHOUT the word that labels it: \"Posto 313\" is a seat of \"313\", \"Seat 8\" is a seat of \"8\", \"12A\" is a seat of \"12A\". The card prints SEAT above it already, so a value repeating that word says it twice, and on a foreign ticket says it in the wrong language. Omit if none."),
                 "gate": field("Entry gate or door, ONLY when a real value is explicitly printed (e.g. \"Gate 3\", \"Door B\", \"14\"). Never infer it, never emit a placeholder, a dash, \"TBD\", or a lone letter — omit the field entirely if no real gate is shown."),
                 "reference": field("Booking reference, order number or confirmation code as printed. Omit if none."),
                 "event_url": field("The event's own page or booking URL, when one is printed or written on the document as readable text (e.g. \"https://luma.com/4ptmrf91\", an Eventbrite or Ticketmaster link). Read it EXACTLY. Do NOT decode it out of a QR code or barcode, and do not return a check-in or scan-me link — this is the page someone would open to read about the event, not the code that admits them. Omit if none is written."),
                 "guest_name": field("The name the ticket is issued to, exactly as printed (e.g. \"Akshay Sharma\"). This is the holder or guest, not the performer, the venue, the organiser or the person who sold it. Omit unless a name is clearly printed as the holder."),
                 "event_type": field("Kind of event in a word or two (e.g. \"Concert\", \"Football match\", \"Theatre\", \"Court booking\", \"Class\", \"Appointment\", \"Flight\"). Omit if unclear."),
                 "presented_at_entry": field("\"yes\" when the holder physically hands this over or holds it up to be let in somewhere: a concert or match ticket, a boarding pass, a cinema or museum admission, a collection slip. \"no\" when it merely RECORDS a booking that is looked up under a name on arrival: a restaurant reservation, a hotel booking, a doctor or salon appointment, an order or payment receipt, and a slot booked at a facility (a padel or tennis court, a pitch, a bowling lane, a studio, a gym or fitness class). Booking a court to PLAY on is a reservation, not a match ticket, however sporting it sounds: nobody takes anything off you at a door. A booking with a barcode or QR code to scan is \"yes\" whatever it is for. When you genuinely cannot tell, omit the field rather than guessing."),
-                "section": field("Seating section, block or stand for a seated event (e.g. \"Section 122\", \"Block A\"). Omit if none."),
-                "row": field("Seating row (e.g. \"Row 14\"). Omit if none."),
+                "section": field("Seating section, block or stand for a seated event (e.g. \"Section 122\", \"Block A\"). Return the stand's NAME whole and in the language it is printed in — \"26b - Tribuna Laterale Destra\" is what the signage at the venue says, so translating it sends someone looking for a sign that does not exist. Drop only a bare leading label: \"Settore B\" is a section of \"B\". Omit if none."),
+                "row": field("Seating row, WITHOUT the word that labels it: \"Fila D\" is a row of \"D\", \"Row 14\" is a row of \"14\". The card prints ROW above it already. Omit if none."),
                 "address": field("The full postal or street address, when the document prints one BEYOND the venue's name (e.g. \"69 Ayer Rajah Cres., Level 3 Vidacity, Singapore 139961\"). Return it only when it is a real address with a street or a postcode in it — if all the document shows is the place's name, that is the venue and this field is omitted. Never repeat the venue here."),
                 "directions_url": field("A map link printed on the document (a Google Maps, Apple Maps or share.google URL). Read it exactly. Omit if none is written, and never construct one yourself."),
                 "other_fields": .object([
                     "type": .string("array"),
-                    "description": .string("The few remaining facts the HOLDER would act on that no field above covers, one entry per fact, each as \"Label: value\".\n\nEVERY LABEL IS IN ENGLISH. The label is yours to write, not the document's to dictate, so translate it whenever the ticket is in another language and keep the VALUE exactly as printed. \"Settore: 4\" is wrong and \"Sector: 4\" is right; likewise Tribuna to Stand, Cancello to Gate, Ingresso to Entrance, Porta to Door, Fila to Row, Posto to Seat, Piano to Floor, Anello to Tier. If you are writing a label that is not an English word, you have made a mistake.\n\nLEAVE OUT THE ISSUER'S BOOKKEEPING. A ticket is covered in numbers printed so the seller can reconcile, audit and reprint it, and none of them is a fact anyone acts on: fiscal, tax and VAT identification codes, internal or progressive sequence numbers, system identifiers, ticket-stock and card serial numbers, issue or printing timestamps, seal, authorisation and control codes, checksums and hashes, and category or genre codes that are bare numbers rather than words. The test is not whether it is printed, it is whether the holder would ever read it out, act on it, or need it to get in.\n\nMost tickets have NOTHING to return here, and an empty list is the right answer far more often than a long one. Good entries look like \"Ticket: In-Person\", \"Organiser: Vibe Coders SG\", \"Dress code: Smart casual\", \"Table: 12\", \"Entrance: Gate C from 18:00\". Do NOT repeat anything already returned in another field, in any language: if you returned a section, no entry here restates it under the document's own word for section. Do not include the barcode's contents, and do not invent labels: if the document shows a bare value with no label, omit it."),
+                    "description": .string("The few remaining facts the HOLDER would act on that no field above covers, one entry per fact, each as \"Label: value\".\n\nEVERY LABEL IS IN ENGLISH. The label is yours to write, not the document's to dictate, so translate it whenever the ticket is in another language and keep the VALUE exactly as printed. \"Settore: 4\" is wrong and \"Sector: 4\" is right; likewise Tribuna to Stand, Cancello to Gate, Ingresso to Entrance, Porta to Door, Fila to Row, Posto to Seat, Piano to Floor, Anello to Tier. If you are writing a label that is not an English word, you have made a mistake.\n\nLEAVE OUT THE ISSUER'S BOOKKEEPING. A ticket is covered in numbers printed so the seller can reconcile, audit and reprint it, and none of them is a fact anyone acts on: fiscal, tax and VAT identification codes, internal or progressive sequence numbers, system identifiers, ticket-stock and card serial numbers, issue or printing timestamps, seal, authorisation and control codes, checksums and hashes, and category or genre codes that are bare numbers rather than words. The test is not whether it is printed, it is whether the holder would ever read it out, act on it, or need it to get in.\n\nMost tickets have NOTHING to return here, and an empty list is the right answer far more often than a long one. Good entries look like \"Ticket: In-Person\", \"Organiser: Vibe Coders SG\", \"Dress code: Smart casual\", \"Table: 12\", \"Entrance: Gate C from 18:00\". Do NOT repeat anything already returned in another field, in any language: if you returned a section, no entry here restates it under the document's own word for section. Do not include the barcode's contents, and do not invent labels: if the document shows a bare value with no label, omit it.\n\nLast check before you answer: read back every label you wrote. If any one of them is not an English word, rewrite it in English now. \"Settore\" is not an English word."),
                     "items": .object(["type": .string("string")])
                 ])
             ]),
@@ -1077,6 +1173,8 @@ extension TaskTicketExtraction {
     Extract for the person holding the ticket, not for the company that issued it. A ticket is covered in numbers that exist so the issuer can reconcile, audit and reprint it: fiscal codes, system ids, progressive numbers, seal codes, issue timestamps. None of that is a fact anyone acts on, and every one of them you return is a line pushed in front of the things that matter. Return a fact only when you can say what the holder would do with it.
 
     The person reading the card reads English. Values stay in the ticket's own language, because a seat block is a name and renaming it sends someone to the wrong seat. Labels do not: every label you write in other_fields is in English, whatever language the ticket is printed in.
+
+    A value never repeats its own label. The card prints a label above every value, so a value that carries one too says the same word twice, and on a foreign ticket it says it in the wrong language: "ROW / fila D", "SEAT / posto 313", "STARTS / Ore: 08:00". Return the value alone. "Fila D" is a row of "D", "Posto 313" is a seat of "313", "Ore: 08:00" is a time of "08:00", "Gate 12" is a gate of "12". Strip the labelling word whatever language it is in, and keep everything that is part of the value itself: "26b - Tribuna Laterale Destra" is the NAME of a stand, not a label plus a value, so it is returned whole and in Italian.
 
     The message may also list what the person has already recorded about this event on the task the file is attached to. Those details are trustworthy but strictly secondary: never let one override a value printed on the image, and reach for them only to fill a field the image leaves blank. They do not license guessing — a field neither the image nor that list answers stays omitted.
 
