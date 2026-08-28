@@ -83,7 +83,19 @@ final class VisionItemEditor {
     /// row commits itself when its field tears down, which is the same path that
     /// already works, and the ownership rule makes that commit harmless whenever
     /// it happens to land.
+    ///
+    /// **A click that lands while a DIFFERENT row holds the caret only releases
+    /// it.** The caret does not travel, and the second click is what puts it in
+    /// the row that was clicked. One click, one thing: the same rule the pointer
+    /// layer applies to the canvas (`VisionPointerView.isEditingText`), so
+    /// finishing a line of typing means the same click anywhere on the board.
+    /// Clicking the row that already has the caret changes nothing, since there
+    /// is no other edit for the click to end.
     func begin(_ id: UUID, in surface: Surface) {
+        if let editing, editing.id != id {
+            self.editing = nil
+            return
+        }
         editing = (id, surface)
     }
 

@@ -441,6 +441,104 @@ final class VisionPointerViewTests: XCTestCase {
         XCTAssertNil(interaction.selected)
     }
 
+    // MARK: - 7b. A click that already has a job
+
+    /// The reported defect (#492): finishing an item by clicking away on empty
+    /// canvas left a block behind that nobody asked for. The click's job was to
+    /// end the edit.
+    func testAClickOnEmptyCanvasWhileAnItemIsBeingEditedCreatesNothing() async throws {
+        view.isEditingText = true
+        let point = CGPoint(x: 68 * 7 + 20, y: 68 * 4 + 20)
+
+        view.mouseDown(with: mouse(.leftMouseDown, at: point))
+        view.mouseUp(with: mouse(.leftMouseUp, at: point))
+
+        XCTAssertTrue(createdCells.isEmpty)
+    }
+
+    /// And the click after it means what it says. The flag goes false because the
+    /// first click resigned the field, which committed and released the caret —
+    /// here that is done by hand, since there is no window to make anything first
+    /// responder of.
+    func testTheClickAfterTheEditHasEndedCreates() async throws {
+        view.isEditingText = true
+        let point = CGPoint(x: 68 * 7 + 20, y: 68 * 4 + 20)
+
+        view.mouseDown(with: mouse(.leftMouseDown, at: point))
+        view.mouseUp(with: mouse(.leftMouseUp, at: point))
+        view.isEditingText = false
+        view.mouseDown(with: mouse(.leftMouseDown, at: point))
+        view.mouseUp(with: mouse(.leftMouseUp, at: point))
+
+        XCTAssertEqual(createdCells.count, 1)
+        XCTAssertEqual(createdCells.first?.col, 7)
+    }
+
+    /// The swallowed click must not spend the creation budget either. It shares
+    /// `claimCreation`'s double-click window, so a first click that consumed it
+    /// would make the SECOND click do nothing and the board feel dead.
+    func testTheSwallowedClickDoesNotSpendTheCreationBudget() async throws {
+        view.isEditingText = true
+        let point = CGPoint(x: 68 * 7 + 20, y: 68 * 4 + 20)
+
+        // Both inside `NSEvent.doubleClickInterval` of each other, deliberately.
+        view.mouseDown(with: mouse(.leftMouseDown, at: point, clickCount: 1))
+        view.mouseUp(with: mouse(.leftMouseUp, at: point, clickCount: 1))
+        view.isEditingText = false
+        view.mouseDown(with: mouse(.leftMouseDown, at: point, clickCount: 2))
+        view.mouseUp(with: mouse(.leftMouseUp, at: point, clickCount: 2))
+
+        XCTAssertEqual(createdCells.count, 1)
+    }
+
+    /// A click on a block starts no drag and does not move the selection either.
+    /// "The first click stops the edit" has to mean the whole board, or the rule
+    /// is one the user has to remember the exceptions to.
+    func testAClickOnABlockWhileAnItemIsBeingEditedStartsNoDrag() async throws {
+        let block = try await makeBlock("neighbour", col: 0, row: 0)
+        view.isEditingText = true
+
+        view.mouseDown(with: mouse(.leftMouseDown, at: CGPoint(x: 100, y: 30)))
+
+        XCTAssertNil(interaction.drag)
+        XCTAssertNil(interaction.selected)
+        XCTAssertNotNil(block.id, "block exists; the click simply did nothing to it")
+    }
+
+    /// The grip is the same story: a resize is a second action, and the click
+    /// already had one.
+    func testGrabbingTheGripWhileAnItemIsBeingEditedStartsNoResize() async throws {
+        let block = try await makeBlock("sizer", col: 0, row: 0)
+        let rect = VisionHitTest.Frame(block).rect
+        let grip = CGPoint(x: rect.maxX - 6, y: rect.maxY - 6)
+        XCTAssertEqual(
+            VisionHitTest.resolve(
+                point: grip,
+                blocks: viewModel.blocks.map(VisionHitTest.Frame.init),
+                exclusions: []
+            ),
+            .grip(block.id),
+            "precondition: this point is the grip"
+        )
+        view.isEditingText = true
+
+        view.mouseDown(with: mouse(.leftMouseDown, at: grip))
+
+        XCTAssertNil(interaction.resize)
+    }
+
+    /// A right click is a click. It closes the popover and ends the edit, and
+    /// leaves the selection where it was.
+    func testARightClickWhileAnItemIsBeingEditedDoesNotSelect() async throws {
+        let block = try await makeBlock("neighbour", col: 0, row: 0)
+        view.isEditingText = true
+
+        view.rightMouseDown(with: mouse(.rightMouseDown, at: CGPoint(x: 100, y: 30)))
+
+        XCTAssertNil(interaction.selected)
+        XCTAssertNotNil(block.id)
+    }
+
     func testClickingABlockSelectsIt() async throws {
         let block = try await makeBlock("pick me", col: 0, row: 0)
         let point = CGPoint(x: rect(block).midX, y: rect(block).midY)
