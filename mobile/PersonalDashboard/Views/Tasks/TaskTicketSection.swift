@@ -196,6 +196,10 @@ struct TaskTicketSection: View {
     /// viewer, not the detail sheet: there is no row behind it to edit, remove or
     /// move on and off the Wallet.
     @State private var viewingOwnerAttachment: OwnerAttachment?
+    /// The stored document whose FILE is open (#473). Separate from `selected`,
+    /// which is the same document's details form: a tap on an attachment produces
+    /// the document, and the form is one level further in.
+    @State private var viewingTicketFile: TaskTicket?
 
     private let service = TaskTicketService()
 
@@ -341,6 +345,11 @@ struct TaskTicketSection: View {
         .sheet(item: $viewingOwnerAttachment) { attachment in
             TicketOriginalViewer(attachmentPath: attachment.attachmentPath)
         }
+        // A stored document's file. Same destination as a record's own attachment
+        // above, which is the point of #473: one gesture, one meaning.
+        .sheet(item: $viewingTicketFile) { ticket in
+            TicketOriginalViewer(attachmentPath: ticket.attachmentPath)
+        }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
             CameraPicker { data in
@@ -465,7 +474,27 @@ struct TaskTicketSection: View {
         let fileIsPresent = service.fileURL(for: ticket) != nil
         return Button {
             Haptics.light()
-            selected = ticket
+            // The FILE, not its details form (#473). A row with a thumbnail, a
+            // name and a chevron reads as "here is a document", so the tap has to
+            // produce the document. This used to open the parsed fields instead,
+            // which left the original unreachable from the tap entirely — and
+            // `ownerAttachmentRow` below already did the right thing, so the two
+            // rows behaved differently under the identical gesture.
+            //
+            // A row whose bytes have not arrived is NOT special-cased. The viewer
+            // says where the file is, which beats a details form nobody asked for.
+            //
+            // A `.pkpass` IS the one exception, and it is not a hedge. A pass is a
+            // signed zip with no page to render, so the viewer has nothing to show
+            // and would draw its "no longer available" state over a file that is
+            // present and perfectly valid. The details sheet is where a pass can
+            // actually be acted on — it carries Add to Apple Wallet — so for a pass
+            // that IS the document. Same predicate the sheet's own preview uses.
+            if TicketStorage.isPass(ticket.attachmentPath) {
+                selected = ticket
+            } else {
+                viewingTicketFile = ticket
+            }
         } label: {
             TaskAttachmentRow(
                 title: ticket.displayTitle(fallback: ownerTitle),
@@ -480,18 +509,20 @@ struct TaskTicketSection: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open attachment \(ticket.displayTitle(fallback: ownerTitle))")
-        // Long-press on iPhone, right-click on the Mac: View and Remove on the card
-        // itself (#408). Removing WAS only reachable by opening the card, going to its
-        // actions and confirming, which is a long way round for the thing you most
-        // want when a card should not be there at all — a duplicate.
+        // Long-press on iPhone, right-click on the Mac (#408). Removing WAS only
+        // reachable by opening the card, going to its actions and confirming, which
+        // is a long way round for the thing you most want when a card should not be
+        // there at all — a duplicate.
         //
-        // Tap still opens the card. This is additive, and the detail sheet keeps its
-        // own Remove action for whoever is already in there.
+        // Since #473 this is also the way to the parsed fields, because the tap now
+        // opens the file. They are worth keeping reachable — the barcode, reference,
+        // seat and gate are read off the document and are occasionally wrong — but
+        // they are not what someone is asking for when they click a document.
         .contextMenu {
             Button {
                 selected = ticket
             } label: {
-                Label("View attachment", systemImage: "doc.text.magnifyingglass")
+                Label("Edit details", systemImage: "square.and.pencil")
             }
             Button(role: .destructive) {
                 pendingRemoval = ticket

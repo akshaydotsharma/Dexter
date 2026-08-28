@@ -27,6 +27,24 @@ final class AttachmentRowTests: XCTestCase {
         XCTAssertEqual(TaskAttachmentRow.kindWord(for: "task-tickets/abc.jpg"), "Image")
     }
 
+    /// Where a tap on an attachment row goes (#473).
+    ///
+    /// The rule is "clicking a document produces the document", with one exception
+    /// that is not a hedge: a `.pkpass` is a signed zip with no page to render, so
+    /// the viewer would draw its "no longer available" state over a file that is
+    /// present and valid. The details sheet is the only surface that can act on a
+    /// pass, because it carries Add to Apple Wallet.
+    ///
+    /// Pinned because the predicate is shared with the detail sheet's own preview
+    /// gate, and the two silently disagreeing is exactly the #466 bug where the
+    /// grey missing-file placeholder was drawn over a valid pass.
+    @MainActor
+    func testAPassOpensItsDetailsAndEveryOtherFileOpensTheFile() {
+        XCTAssertTrue(TicketStorage.isPass("task-tickets/abc.pkpass"))
+        XCTAssertFalse(TicketStorage.isPass("task-tickets/abc.pdf"))
+        XCTAssertFalse(TicketStorage.isPass("task-tickets/abc.jpg"))
+    }
+
     /// A row can carry a decoded payload with no file behind it, and calling that
     /// "Image" would promise a preview that can never load.
     func testARowWithNoFileSaysSo() {
