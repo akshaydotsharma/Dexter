@@ -131,7 +131,11 @@ struct TicketCardFields {
         // The typed facts the face has no slot for. Appended after the issuer's
         // own fields so the back reads as "the document, then what we know about
         // it" rather than interleaving the two.
-        var typed: [(String, String?)] = [("Type", meta?.eventType)]
+        // `eventType` deliberately absent (#486). It renders as "TYPE / Formula 1
+        // race" under a title reading "Formula 1 Gran Premio d'Italia 2026", which
+        // is the title again in fewer words. It is a classification this app sorts
+        // and colours cards by, not a fact the holder reads off the back.
+        var typed: [(String, String?)] = []
         switch card.layout {
         // The confirmation is not repeated here for either of these: the stub
         // already prints it under the code, as "PNR" or "REF", which is where you

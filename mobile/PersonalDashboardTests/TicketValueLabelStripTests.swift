@@ -77,3 +77,50 @@ final class TicketValueLabelStripTests: XCTestCase {
         XCTAssertNil(strip("null"))
     }
 }
+
+/// An extra field must never repeat a value the card already shows (#486).
+///
+/// The Monza ticket came back with `fila = D` beside a `row` of `D`: the same fact
+/// twice, once under the document's own Italian word for it. Matched on the VALUE
+/// rather than the label, because the label is precisely what differs when this goes
+/// wrong.
+final class TicketFieldEchoTests: XCTestCase {
+
+    private func field(_ label: String, _ value: String) -> TicketMeta.PassField {
+        TicketMeta.PassField(label: label, value: value, placement: .auxiliary)
+    }
+
+    private func labels(_ fields: [TicketMeta.PassField]) -> [String] {
+        fields.map(\.label)
+    }
+
+    func testDropsAFieldEchoingATypedValueUnderAnotherName() {
+        let kept = TaskTicketRead.withoutEchoes(
+            [field("fila", "D"), field("Ticket", "In-Person")],
+            of: ["D", nil, "313"]
+        )
+        XCTAssertEqual(labels(kept), ["Ticket"])
+    }
+
+    func testMatchesIgnoringCaseAndSurroundingSpace() {
+        let kept = TaskTicketRead.withoutEchoes(
+            [field("Settore", " settore b ")],
+            of: ["Settore B"]
+        )
+        XCTAssertTrue(kept.isEmpty)
+    }
+
+    func testKeepsAFieldThatMatchesNothingTyped() {
+        let kept = TaskTicketRead.withoutEchoes(
+            [field("PIN code", "0226"), field("Phone", "+39 328 918 9473")],
+            of: ["D", "313", "26b - Tribuna Laterale Destra"]
+        )
+        XCTAssertEqual(labels(kept), ["PIN code", "Phone"])
+    }
+
+    func testKeepsEverythingWhenNothingIsTyped() {
+        let fields = [field("Host", "Ashley Gomez"), field("Valid On", "17/08/2026")]
+        let kept = TaskTicketRead.withoutEchoes(fields, of: [nil, "", "   "])
+        XCTAssertEqual(labels(kept), ["Host", "Valid On"])
+    }
+}

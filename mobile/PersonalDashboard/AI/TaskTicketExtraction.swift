@@ -298,7 +298,14 @@ struct TaskTicketRead {
         meta.directionsURL = Self.clean(extracted?.directionsURL)
         // Anything printed that no typed field above covers. Left nil rather than an
         // empty array so an ordinary ticket's meta JSON stays as short as it was.
-        let extraFields = extracted?.fields.filter(\.isRenderable) ?? []
+        // Echoes of a typed slot are dropped here rather than trusted to the prompt
+        // (#486): a card printing its row twice, once in Italian, is what prompted it.
+        let resolvedSeat = Self.unlabelled(extracted?.seat)
+        let extraFields = Self.withoutEchoes(
+            extracted?.fields.filter(\.isRenderable) ?? [],
+            of: [meta.section, meta.row, resolvedSeat, extracted?.reference,
+                 extracted?.venue, meta.guestName, extracted?.gate]
+        )
         meta.fields = extraFields.isEmpty ? nil : extraFields
 
         // Stored at LOCAL midnight of the printed day, because every surface that
@@ -339,7 +346,7 @@ struct TaskTicketRead {
             eventDate: localDay,
             startTimeText: resolvedStartTime,
             venue: resolvedVenue,
-            seat: Self.unlabelled(extracted?.seat) ?? "",
+            seat: resolvedSeat ?? "",
             // Short codes are the error-prone ones: a bare "T" or a dash read off
             // the ticket is worse than showing nothing, so the gate goes through
             // the same sanitizer the itinerary card uses.
@@ -357,6 +364,29 @@ struct TaskTicketRead {
         guard let s else { return nil }
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return (t.isEmpty || t.lowercased() == "null") ? nil : t
+    }
+
+    /// Drop an extra field that only repeats a value the card already has (#486).
+    ///
+    /// The Monza ticket came back with `fila = D` beside a `row` of `D`: the same
+    /// fact twice, once under the document's Italian word for it. The prompt says
+    /// not to, and mostly it does not, but "mostly" is the same problem the label
+    /// strip has, so the guarantee lives here.
+    ///
+    /// Matched on the VALUE, not the label, because the label is precisely what
+    /// differs when this goes wrong. A value that matches nothing typed is kept
+    /// whatever it is called.
+    nonisolated static func withoutEchoes(
+        _ fields: [TicketMeta.PassField],
+        of typed: [String?]
+    ) -> [TicketMeta.PassField] {
+        let taken = Set(
+            typed.compactMap { clean($0)?.lowercased() }
+        )
+        guard !taken.isEmpty else { return fields }
+        return fields.filter { field in
+            !taken.contains(field.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }
     }
 
     /// Strip a value's own label back off it (#485).
@@ -618,7 +648,11 @@ struct TaskTicketExtraction {
         meta.presentedAtEntry = extracted.presentedAtEntry ?? meta.presentedAtEntry
         // The exception: the extra fields are REPLACED, empty included. Clearing the
         // nine codes an old prompt kept is the reason someone runs this.
-        let kept = extracted.fields.filter(\.isRenderable)
+        let kept = TaskTicketRead.withoutEchoes(
+            extracted.fields.filter(\.isRenderable),
+            of: [meta.section, meta.row, TaskTicketRead.unlabelled(extracted.seat),
+                 extracted.reference, extracted.venue, meta.guestName, extracted.gate]
+        )
         meta.fields = kept.isEmpty ? nil : kept
 
         fresh.eventTitle    = keep(extracted.eventTitle, fresh.eventTitle)
@@ -1153,7 +1187,7 @@ extension TaskTicketExtraction {
                 "directions_url": field("A map link printed on the document (a Google Maps, Apple Maps or share.google URL). Read it exactly. Omit if none is written, and never construct one yourself."),
                 "other_fields": .object([
                     "type": .string("array"),
-                    "description": .string("The few remaining facts the HOLDER would act on that no field above covers, one entry per fact, each as \"Label: value\".\n\nEVERY LABEL IS IN ENGLISH. The label is yours to write, not the document's to dictate, so translate it whenever the ticket is in another language and keep the VALUE exactly as printed. \"Settore: 4\" is wrong and \"Sector: 4\" is right; likewise Tribuna to Stand, Cancello to Gate, Ingresso to Entrance, Porta to Door, Fila to Row, Posto to Seat, Piano to Floor, Anello to Tier. If you are writing a label that is not an English word, you have made a mistake.\n\nLEAVE OUT THE ISSUER'S BOOKKEEPING. A ticket is covered in numbers printed so the seller can reconcile, audit and reprint it, and none of them is a fact anyone acts on: fiscal, tax and VAT identification codes, internal or progressive sequence numbers, system identifiers, ticket-stock and card serial numbers, issue or printing timestamps, seal, authorisation and control codes, checksums and hashes, and category or genre codes that are bare numbers rather than words. The test is not whether it is printed, it is whether the holder would ever read it out, act on it, or need it to get in.\n\nMost tickets have NOTHING to return here, and an empty list is the right answer far more often than a long one. Good entries look like \"Ticket: In-Person\", \"Organiser: Vibe Coders SG\", \"Dress code: Smart casual\", \"Table: 12\", \"Entrance: Gate C from 18:00\". Do NOT repeat anything already returned in another field, in any language: if you returned a section, no entry here restates it under the document's own word for section. Do not include the barcode's contents, and do not invent labels: if the document shows a bare value with no label, omit it.\n\nLast check before you answer: read back every label you wrote. If any one of them is not an English word, rewrite it in English now. \"Settore\" is not an English word."),
+                    "description": .string("The few remaining facts the HOLDER would act on that no field above covers, one entry per fact, each as \"Label: value\".\n\nEVERY LABEL IS IN ENGLISH. The label is yours to write, not the document's to dictate, so translate it whenever the ticket is in another language and keep the VALUE exactly as printed. \"Settore: 4\" is wrong and \"Sector: 4\" is right; likewise Tribuna to Stand, Cancello to Gate, Ingresso to Entrance, Porta to Door, Fila to Row, Posto to Seat, Piano to Floor, Anello to Tier. If you are writing a label that is not an English word, you have made a mistake.\n\nLEAVE OUT THE ISSUER'S BOOKKEEPING. A ticket is covered in numbers printed so the seller can reconcile, audit and reprint it, and none of them is a fact anyone acts on: fiscal, tax and VAT identification codes, internal or progressive sequence numbers, system identifiers, ticket-stock and card serial numbers, issue or printing timestamps, seal, authorisation and control codes, checksums and hashes, and category or genre codes that are bare numbers rather than words.\n\nLEAVE OUT THE EVENT'S PROGRAMME. A schedule printed on a ticket is the event's, not the holder's: session times, running order, support races, set times, undercard, opening hours, a list of what happens when. A race ticket printing thirteen practice and qualifying sessions has thirteen facts about the WEEKEND and none about this admission. Return none of them.\n\nLEAVE OUT WHAT THE BOOKING INCLUDES. A list whose values are all \"included\", \"yes\", a tick or the same word down the column is a list of terms of sale: insurance, breakdown cover, unlimited mileage, extras, protections. It says what was bought, not what happens on the day. What the person collects or presents IS a fact and stays: the car booked, the return time, the return place, the total paid.\n\nThe test is not whether it is printed, it is whether the holder would ever read it out, act on it, or need it to get in. Most tickets have NOTHING to return here, and an empty list is the right answer far more often than a long one. SIX is the most any document should need: if you are about to return more, you are keeping things that do not belong here, so cut back to the ones that matter. Good entries look like \"Ticket: In-Person\", \"Organiser: Vibe Coders SG\", \"Dress code: Smart casual\", \"Table: 12\", \"Entrance: Gate C from 18:00\", \"PIN code: 0226\", \"Phone: +39 328 918 9473\", \"Check-out: Monday 7 September, 00:00 - 11:00\". A number to CALL on the day — the host, the property, the desk, the driver — is one of the most useful things a card can carry, so keep it whenever one is printed. Do NOT repeat anything already returned in another field, in any language: if you returned a section, no entry here restates it under the document's own word for section. Do not include the barcode's contents, and do not invent labels: if the document shows a bare value with no label, omit it.\n\nLast check before you answer: read back every label you wrote. If any one of them is not an English word, rewrite it in English now. \"Settore\" is not an English word."),
                     "items": .object(["type": .string("string")])
                 ])
             ]),
