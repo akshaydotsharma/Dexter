@@ -158,6 +158,12 @@ struct TaskTicketSection: View {
     /// drives `interactiveDismissDisabled` on the sheet, for the stray-click half of
     /// the same problem.
     var isBusy: Binding<Bool>? = nil
+    /// Attachments stored on the owning record itself rather than as documents of
+    /// its own (#466) — a trip stop's `LocalItineraryItem.attachmentPath`. Listed
+    /// here so a stop has ONE attachment list, read-only because removing one
+    /// clears eight fields on the stop and that action lives in its editor.
+    /// Always empty for a task.
+    var ownerAttachments: [OwnerAttachment] = []
 
     @State private var stored: [TaskTicket] = []
     @State private var selected: TaskTicket?
@@ -186,6 +192,10 @@ struct TaskTicketSection: View {
     @State private var showingPhotoLibrary = false
     #endif
     @State private var showingFilePicker = false
+    /// The record's own attachment the person asked to see. Opens the plain file
+    /// viewer, not the detail sheet: there is no row behind it to edit, remove or
+    /// move on and off the Wallet.
+    @State private var viewingOwnerAttachment: OwnerAttachment?
 
     private let service = TaskTicketService()
 
@@ -221,12 +231,19 @@ struct TaskTicketSection: View {
                 addControl
             }
 
-            if tickets.isEmpty && !isIngesting {
+            if tickets.isEmpty && ownerAttachments.isEmpty && !isIngesting {
                 emptyHint
             } else {
-                VStack(spacing: Space.md) {
+                // Rows, not cards, so they sit closer together than the passes
+                // they replaced (#466). The record's own attachment leads: on a
+                // trip stop that is the ticket the stop was created from, and
+                // everything below it arrived afterwards.
+                VStack(spacing: Space.sm) {
+                    ForEach(ownerAttachments) { attachment in
+                        ownerAttachmentRow(for: attachment)
+                    }
                     ForEach(tickets) { ticket in
-                        cardButton(for: ticket)
+                        attachmentRow(for: ticket)
                     }
                 }
             }
@@ -320,6 +337,9 @@ struct TaskTicketSection: View {
                     onChange: reload
                 )
             }
+        }
+        .sheet(item: $viewingOwnerAttachment) { attachment in
+            TicketOriginalViewer(attachmentPath: attachment.attachmentPath)
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingCamera) {
@@ -420,7 +440,7 @@ struct TaskTicketSection: View {
             Text("Drop a file here, or use Add.")
                 .font(.edCaption)
                 .foregroundStyle(isTargetedForDrop ? accent : Tokens.inkSoft)
-            Text("An image or a PDF. Dexter reads the details off it, and turns a barcode into a card you can scan at the door.")
+            Text("An image, a PDF or a pass. Dexter reads the details off it, and anything with a barcode also lands in your Wallet.")
                 .font(.edCaption)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -441,15 +461,17 @@ struct TaskTicketSection: View {
         )
     }
 
-    private func cardButton(for ticket: TaskTicket) -> some View {
-        Button {
+    private func attachmentRow(for ticket: TaskTicket) -> some View {
+        let fileIsPresent = service.fileURL(for: ticket) != nil
+        return Button {
             Haptics.light()
             selected = ticket
         } label: {
-            TaskTicketCardView(
-                ticket: ticket,
-                ownerTitle: ownerTitle,
-                fileIsPresent: service.fileURL(for: ticket) != nil
+            TaskAttachmentRow(
+                title: ticket.displayTitle(fallback: ownerTitle),
+                subtitle: TaskAttachmentRow.subtitle(for: ticket, fileIsPresent: fileIsPresent),
+                attachmentPath: ticket.attachmentPath,
+                accent: accent
             )
         }
         .buttonStyle(.plain)
@@ -471,6 +493,32 @@ struct TaskTicketSection: View {
                 pendingRemoval = ticket
             } label: {
                 Label("Remove attachment", systemImage: "trash")
+            }
+        }
+    }
+
+    /// A record's own attachment: the same row, without the actions that need a
+    /// document row behind them. View is the only thing offered, because there is
+    /// nothing here to edit and removing it belongs to the record's editor.
+    private func ownerAttachmentRow(for attachment: OwnerAttachment) -> some View {
+        Button {
+            Haptics.light()
+            viewingOwnerAttachment = attachment
+        } label: {
+            TaskAttachmentRow(
+                title: attachment.title,
+                subtitle: attachment.subtitle,
+                attachmentPath: attachment.attachmentPath,
+                accent: accent
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open attachment \(attachment.title)")
+        .contextMenu {
+            Button {
+                viewingOwnerAttachment = attachment
+            } label: {
+                Label("View attachment", systemImage: "doc.text.magnifyingglass")
             }
         }
     }
@@ -691,6 +739,9 @@ struct TaskTicketsSheet: View {
     /// The whole record, not just its title: a file added from here is read against
     /// everything it knows, exactly as one added from the editor is (#408).
     let context: TaskTicketContext
+    /// The record's own attachment, when it has one (#466). Defaulted so the
+    /// Tasks presenter, where a task never has one, is unchanged.
+    var ownerAttachments: [OwnerAttachment] = []
 
     @Environment(\.dismiss) private var dismiss
 
@@ -709,7 +760,8 @@ struct TaskTicketsSheet: View {
                         owner: owner.ref,
                         context: context,
                         pending: .constant([]),
-                        reading: $reading
+                        reading: $reading,
+                        ownerAttachments: ownerAttachments
                     )
                     .padding(Space.lg)
                 }

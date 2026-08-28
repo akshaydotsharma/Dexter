@@ -24,7 +24,6 @@ struct TaskTicketDetailSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showingScan = false
     @State private var showingOriginal = false
     #if os(iOS)
     @State private var showingApplePass = false
@@ -87,7 +86,8 @@ struct TaskTicketDetailSheet: View {
 
                 ScrollView {
                     VStack(spacing: Space.lg) {
-                        card
+                        filePreview
+                        details
                         if isEditing {
                             editForm
                         } else {
@@ -128,13 +128,8 @@ struct TaskTicketDetailSheet: View {
             }
             .onAppear(perform: prefill)
         }
-        // The scan surface is a gate/turnstile idiom needing brightness and
-        // idle-timer control; iOS-only, and `.fullScreenCover` is unavailable on
-        // macOS regardless (issue #281).
+        // Apple Wallet is where you look at a `.pkpass`, and PassKit is iOS-only.
         #if os(iOS)
-        .fullScreenCover(isPresented: $showingScan) {
-            TicketScanView(pass: ScannablePass(ticket: ticket, ownerTitle: ownerTitle))
-        }
         .sheet(isPresented: $showingApplePass) {
             if let passData = storedPassData {
                 AddPassToAppleWallet(data: passData) { showingApplePass = false }
@@ -157,54 +152,197 @@ struct TaskTicketDetailSheet: View {
             // stays would be describing something that does not exist.
             Text(
                 onDelete == nil
-                    ? "The file will be deleted from this device. The task itself stays."
+                    ? "The file will be deleted from this device. The \(ticket.owner.noun) itself stays."
                     : "The file will be deleted from this device."
             )
         }
     }
 
-    // MARK: - Card
+    /// One label-over-value field. Blank and whitespace-only values collapse to an
+    /// empty string at init, so the panel never renders a labelled blank.
+    struct TicketDetailField: Identifiable {
+        let id = UUID()
+        let label: String
+        let value: String
 
-    @ViewBuilder
-    private var card: some View {
-        let cardView = TaskTicketCardView(
-            ticket: ticket,
-            ownerTitle: ownerTitle,
-            fileIsPresent: fileIsPresent
-        )
-
-        #if os(iOS)
-        // Tapping the card goes straight to the scanner: at a gate that is the
-        // one action worth reaching for, so it should not be buried in a list.
-        if ticket.hasBarcode {
-            Button {
-                Haptics.light()
-                showingScan = true
-            } label: {
-                cardView
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Present this ticket to scan")
-        } else {
-            cardView
+        init(label: String, value: String?) {
+            self.label = label
+            self.value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
-        #else
-        cardView
-        #endif
+    }
+
+    // MARK: - The file, and what was read off it
+
+    /// A preview of the stored file, big enough to recognise it by.
+    ///
+    /// This replaces the wallet-style card face this sheet used to lead with
+    /// (#466). A pass belongs on the shelf built for passes, and every document
+    /// that reached this sheet got the pass treatment whether or not it was one.
+    /// What is useful here is the file itself and everything read off it.
+    @ViewBuilder
+    private var filePreview: some View {
+        // A `.pkpass` has no page to render, so its preview is an icon and there
+        // is nothing for a tap to open. Same predicate as the "View original
+        // file" row below, so the two can never disagree about what is viewable.
+        let canOpen = fileIsPresent && !TicketStorage.isPass(ticket.attachmentPath)
+
+        if fileIsPresent {
+            let preview = TicketAttachmentThumbnail(
+                relativePath: ticket.attachmentPath,
+                accent: accent
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 180)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.md)
+
+            if canOpen {
+                Button {
+                    Haptics.light()
+                    showingOriginal = true
+                } label: {
+                    preview
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("View the original file")
+            } else {
+                preview
+            }
+        } else {
+            missingFileNote
+        }
+    }
+
+    /// Shown when the row synced across from another device but its bytes did
+    /// not. Being explicit about this beats an empty frame that reads as a bug:
+    /// the file is not lost, it is just elsewhere.
+    private var missingFileNote: some View {
+        HStack(spacing: Space.sm) {
+            Image(systemName: "iphone.and.arrow.forward")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Tokens.mutedSoft)
+            Text("The file is on your other device")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(Space.md)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
+    /// Everything the extractor read, as plain labelled fields.
+    ///
+    /// The card face this replaces showed the first three facts and left the rest
+    /// to "the detail sheet" — which is here, so here they all are. A scrolling
+    /// sheet has none of the width pressure that capped that row at three.
+    @ViewBuilder
+    private var details: some View {
+        let fields = detailFields
+        if !fields.isEmpty || ticket.hasBarcode {
+            VStack(alignment: .leading, spacing: Space.md) {
+                Text(ticket.displayTitle(fallback: ownerTitle))
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                ForEach(fields) { field in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(field.label.uppercased())
+                            .font(.edEyebrow)
+                            .tracking(1.0)
+                            .foregroundStyle(Tokens.muted)
+                        Text(field.value)
+                            .font(.edFootnote)
+                            .foregroundStyle(Tokens.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if ticket.hasBarcode { barcodeField }
+            }
+            .padding(Space.md)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
+
+    /// The document's own barcode, rendered as one more field rather than as a
+    /// tear-off stub.
+    ///
+    /// Load-bearing on macOS, which has no present-to-scan surface at all: without
+    /// it, a `.pkpass` or a PDF whose preview is an icon would leave a Mac user no
+    /// way to see the code the file carries.
+    private var barcodeField: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("BARCODE")
+                .font(.edEyebrow)
+                .tracking(1.0)
+                .foregroundStyle(Tokens.muted)
+            BarcodeImageView(
+                payload: ticket.barcodePayload,
+                symbology: ticket.barcodeSymbology,
+                attachmentPath: ticket.attachmentPath,
+                height: 62,
+                compact: true,
+                alignment: .leading
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Space.sm)
+            .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The ordering the card face used, minus its three-slot cap, with the date,
+    /// time and location it carried in its header and secondary slots folded in
+    /// at the front.
+    ///
+    /// `startTimeText` is never reformatted: it is what the document printed.
+    private var detailFields: [TicketDetailField] {
+        let meta = ticket.ticketMeta
+        var out: [TicketDetailField] = [
+            TicketDetailField(
+                label: "Date",
+                value: ticket.eventDate.map {
+                    $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
+                }
+            ),
+            TicketDetailField(label: "Time", value: ticket.startTimeText),
+            TicketDetailField(label: "Location", value: ticket.venue),
+            TicketDetailField(label: "Seat", value: ticket.seat),
+            TicketDetailField(label: "Section", value: meta?.section),
+            TicketDetailField(label: "Row", value: meta?.row),
+            TicketDetailField(label: "Gate", value: ticket.gate),
+            TicketDetailField(label: "Guest", value: meta?.guestName)
+        ]
+        // Whatever else the document printed, under its own labels (#420).
+        out.append(contentsOf: (meta?.faceFields ?? []).map {
+            TicketDetailField(label: $0.label, value: $0.value)
+        })
+        // Back fields are the ones Wallet puts behind the pass: the full address,
+        // the ticket type, the guest email.
+        out.append(contentsOf: (meta?.backFields ?? []).map {
+            TicketDetailField(label: $0.label, value: $0.value)
+        })
+        out.append(TicketDetailField(label: "Ref", value: ticket.reference))
+        return out.filter { !$0.value.isEmpty }
     }
 
     // MARK: - Actions
 
     private var actions: some View {
         VStack(spacing: Space.sm) {
-            #if os(iOS)
-            if ticket.hasBarcode {
-                actionRow(icon: "barcode.viewfinder", title: "Scan ticket") {
-                    Haptics.light()
-                    showingScan = true
-                }
-            }
-            #endif
+            // No "Scan ticket" row (#466). Presenting a pass at a gate is what the
+            // Wallet is for, and a document that earns a card is already on that
+            // shelf. One that does not carries a barcode nobody scans at a door — a
+            // rental company's manage-my-booking QR, say — and it stays visible as
+            // a field above rather than being dressed up as a credential here.
+            //
             // A `.pkpass` is a signed data bundle with no page to render, so the viewer
             // would show its "unavailable" state on an intact file (#420). Apple Wallet
             // is where you look at a pass, and it is iOS-only.
@@ -267,7 +405,7 @@ struct TaskTicketDetailSheet: View {
                 Text("Show in Wallet")
                     .font(.edBodyMedium)
                     .foregroundStyle(Tokens.ink)
-                Text(showInWallet ? "Kept with your passes" : "Stays on the task only")
+                Text(showInWallet ? "Kept with your passes" : "Stays on the \(ticket.owner.noun) only")
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
             }

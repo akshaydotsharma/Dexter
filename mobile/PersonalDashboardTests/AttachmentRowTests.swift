@@ -1,0 +1,66 @@
+import XCTest
+@testable import PersonalDashboard
+
+/// The attachment row's kind word (#466).
+///
+/// Since #466 an attachment is a plain row rather than a wallet-style pass, and
+/// the second line has to say what kind of file it is. That reduces to one
+/// ordering question with a real trap in it: a `.pkpass` is a signed zip, so it
+/// is neither a PDF nor an image, and every check order except "pass first"
+/// files it under the wrong one. The same ordering bug in the thumbnail drew the
+/// grey missing-file placeholder over a file that was present and valid, which
+/// reads as data loss.
+///
+/// Cheap to pin, invisible to a build, and the sort of thing a later refactor
+/// reorders without thinking.
+final class AttachmentRowTests: XCTestCase {
+
+    func testAPassIsNamedAPassAndNotAPDF() {
+        XCTAssertEqual(TaskAttachmentRow.kindWord(for: "task-tickets/abc.pkpass"), "Pass")
+    }
+
+    func testAPDFIsNamedAPDF() {
+        XCTAssertEqual(TaskAttachmentRow.kindWord(for: "task-tickets/abc.pdf"), "PDF")
+    }
+
+    func testAPhotoIsNamedAnImage() {
+        XCTAssertEqual(TaskAttachmentRow.kindWord(for: "task-tickets/abc.jpg"), "Image")
+    }
+
+    /// A row can carry a decoded payload with no file behind it, and calling that
+    /// "Image" would promise a preview that can never load.
+    func testARowWithNoFileSaysSo() {
+        XCTAssertEqual(TaskAttachmentRow.kindWord(for: ""), "Barcode only")
+        XCTAssertEqual(TaskAttachmentRow.kindWord(for: "   "), "Barcode only")
+    }
+
+    /// The missing-file case outranks the kind. The row synced across from another
+    /// device but its bytes did not, and that is worth saying in words: an
+    /// unexplained placeholder reads as a bug rather than as a file that is
+    /// simply elsewhere.
+    func testAnAbsentFileIsExplainedRatherThanLabelled() {
+        let ticket = TaskTicket(
+            id: UUID(),
+            todoId: UUID(),
+            attachmentPath: "task-tickets/abc.pdf",
+            barcodePayload: "",
+            barcodeSymbology: "",
+            eventTitle: "Odette",
+            eventDate: nil,
+            startTimeText: "",
+            venue: "",
+            seat: "",
+            gate: "",
+            reference: "",
+            ticketMetaJSON: "",
+            position: 0,
+            createdAt: .now,
+            updatedAt: .now,
+            deletedAt: nil
+        )
+        XCTAssertEqual(
+            TaskAttachmentRow.subtitle(for: ticket, fileIsPresent: false),
+            "The file is on your other device"
+        )
+    }
+}

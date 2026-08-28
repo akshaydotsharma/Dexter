@@ -309,10 +309,16 @@ final class ItineraryDocumentTests: XCTestCase {
         XCTAssertFalse(hasTripCard)
     }
 
-    /// The arm that keeps every email-imported booking. A flight with a PNR and
-    /// nothing scannable is exactly the card you want at a counter, and it is not a
-    /// stay, so `hasStayBooking` would not have saved it.
-    func testAFlightWithOnlyAConfirmationCodeKeepsItsWalletCard() throws {
+    /// #433 admitted every booking carrying a confirmation code, and #434 deleted
+    /// that arm the day it shipped: it let in 12 of 12 booked stops, 11 of them
+    /// with nothing scannable, burying the one card holding a real barcode.
+    ///
+    /// A PNR is looked up at a counter, not held up at a gate, and it is already
+    /// legible on the timeline row. These two tests asserted the old arm and were
+    /// left behind when it went, so they have failed on `main` ever since. They now
+    /// pin the rule that replaced it: gating on a field every row of a kind carries
+    /// is not a gate.
+    func testAFlightWithOnlyAConfirmationCodeGetsNoWalletCard() throws {
         let trip = insertTrip()
         insertStop(on: trip, title: "SQ 356 to Milan", confirmation: "HM84R8")
 
@@ -320,10 +326,10 @@ final class ItineraryDocumentTests: XCTestCase {
             if case .trip = entry.source { return true }
             return false
         }
-        XCTAssertTrue(hasTripCard, "an email-imported booking lost its card")
+        XCTAssertFalse(hasTripCard, "a booking code is not a credential (#434)")
     }
 
-    func testAStayWithAConfirmationCodeKeepsItsWalletCard() throws {
+    func testAStayWithAConfirmationCodeGetsNoWalletCard() throws {
         let trip = insertTrip()
         insertStop(on: trip, title: "207 Inn", kind: .stay, confirmation: "BK-4413")
 
@@ -331,7 +337,7 @@ final class ItineraryDocumentTests: XCTestCase {
             if case .trip = entry.source { return true }
             return false
         }
-        XCTAssertTrue(hasTripCard)
+        XCTAssertFalse(hasTripCard)
     }
 
     func testAScannableStopKeepsItsWalletCard() throws {
