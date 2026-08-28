@@ -1773,6 +1773,15 @@ struct ReceiptFullViewer: View {
                 }
             }
         }
+        #if os(macOS)
+        // Without an explicit size a macOS sheet shrinks to its content's ideal
+        // size, and both branches below are scroll-view-backed, so that size is
+        // next to nothing: the sheet opened as a title, a hairline of receipt and
+        // a Done button (#474). `TicketOriginalViewer` hit this first and carries
+        // the same fix; a receipt is the same kind of document, read the same way,
+        // so it gets the same numbers rather than new ones.
+        .frame(minWidth: 560, idealWidth: 720, minHeight: 560, idealHeight: 860)
+        #endif
     }
 
     @ViewBuilder
