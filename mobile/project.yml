@@ -308,6 +308,11 @@ targets:
       - path: PersonalDashboard/Services/TicketStorage.swift
       - path: PersonalDashboard/Services/BarcodeService.swift
       - path: PersonalDashboard/AI/TicketExtraction.swift
+      # Pulled in by TicketExtraction since #475: an uploaded ticket is stamped
+      # with the same segment-precise dedupe signature the email path writes, so
+      # a later forwarded email cannot duplicate a leg. Portable
+      # Foundation/SwiftData, no UIKit.
+      - path: PersonalDashboard/AI/EmailItemDedupe.swift
       - path: PersonalDashboard/Views/Trips/TripsView.swift
       - path: PersonalDashboard/Views/Trips/TripDetailView.swift
       - path: PersonalDashboard/Views/Trips/TripExpensesView.swift
