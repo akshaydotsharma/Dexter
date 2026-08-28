@@ -56,7 +56,6 @@ struct TripDetailView: View {
     @State private var scanTarget: TicketScanTarget?
     /// Present the stay booking detail sheet (the card + its actions) for a
     /// booked stay.
-    @State private var stayDetailTarget: StayDetailTarget?
     /// Present a stop's documents: its boarding passes, vouchers and receipts (#432).
     @State private var documentsTarget: StopDocumentsTarget?
     /// Hard-failure banner (only when the upload couldn't be saved at all — the
@@ -277,15 +276,6 @@ struct TripDetailView: View {
         // and its "Done" button closes either form (issue #281). Shown from
         // either the check-in or the check-out row — both resolve to the same
         // item.
-        #if os(iOS)
-        .fullScreenCover(item: $stayDetailTarget) { target in
-            stayBookingDetail(for: target)
-        }
-        #else
-        .sheet(item: $stayDetailTarget) { target in
-            stayBookingDetail(for: target)
-        }
-        #endif
         // A stop's documents (#432). A sheet on both platforms: unlike the scan
         // surface this is a place you read and edit in, not something you hold up
         // at a gate, so it has no reason to take the whole screen.
@@ -428,14 +418,10 @@ struct TripDetailView: View {
                             // stop's file is reached through its attachment tray,
                             // so the split is gone and every non-stay row behaves
                             // the same way on both platforms.
-                            if item.kindEnum == .stay, item.hasStayBooking {
-                                Haptics.light()
-                                stayDetailTarget = StayDetailTarget(id: item.clientUUID)
-                            } else {
-                                editingItem = .existing(item.clientUUID)
-                            }
-                        },
-                        onEdit: { item in
+                            // Every row, including a booked stay (#468). The stay
+                            // used to open its own read-only sheet with an "Edit
+                            // details" tile inside, which put a surface in front
+                            // of the editor instead of on the way to it.
                             editingItem = .existing(item.clientUUID)
                         },
                         onDocuments: { item in
@@ -697,25 +683,6 @@ struct TripDetailView: View {
         .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
         .disabled(isProcessingExpenseUpload)
         .accessibilityLabel("Add trip expense")
-    }
-
-    /// Shared builder for the booked-stay detail surface, presented as a
-    /// full-screen cover on iOS and a sheet on macOS (issue #281). Kept in one
-    /// place so both presentations carry identical content + Edit routing.
-    @ViewBuilder
-    private func stayBookingDetail(for target: StayDetailTarget) -> some View {
-        if let item = items.first(where: { $0.clientUUID == target.id }) {
-            StayBookingDetailSheet(item: item) {
-                // Route Edit to the existing editor. Dismiss this surface
-                // first, then present the editor on the next runloop so the
-                // two presentations don't fight.
-                let uuid = item.clientUUID
-                stayDetailTarget = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    editingItem = .existing(uuid)
-                }
-            }
-        }
     }
 
     // MARK: - Ticket upload
@@ -1216,17 +1183,10 @@ struct TicketScanTarget: Identifiable {
     let id: UUID
 }
 
-/// Identifiable wrapper for the `.sheet(item:)` that drives the stay booking
-/// detail sheet. Carries the item's UUID; the view resolves the live item from
-/// the trip's `@Query` results so it always reflects the latest edits.
-struct StayDetailTarget: Identifiable {
-    let id: UUID
-}
-
 /// Identifiable wrapper for the `.sheet(item:)` that drives a stop's documents
-/// (#432). Carries the stop's UUID and resolves the live row, for the same reason
-/// `StayDetailTarget` does: a document added in the sheet changes the stop's
-/// `updatedAt`, and holding the model here would pin a stale copy.
+/// (#432). Carries the stop's UUID and resolves the live row rather than the
+/// model itself: a document added in the sheet changes the stop's `updatedAt`,
+/// and holding the model here would pin a stale copy.
 struct StopDocumentsTarget: Identifiable {
     let id: UUID
 }
@@ -1249,7 +1209,6 @@ private struct TripDayCluster: View {
     let onTap: (LocalItineraryItem) -> Void
     /// Opens the editor. Wired to the context-menu "Edit details" action on
     /// ticket rows (whose tap goes to the scan surface instead of the editor).
-    let onEdit: (LocalItineraryItem) -> Void
     /// Opens the stop's documents: the tray under a stop that has some, and the
     /// context menu on every stop, which is where you go to add the first one.
     let onDocuments: (LocalItineraryItem) -> Void
@@ -1296,16 +1255,6 @@ private struct TripDayCluster: View {
                     .contentShape(Rectangle())
                     .onTapGesture { onTap(entry.item) }
                     .contextMenu {
-                        // Rows whose tap does NOT open the editor (a booked stay
-                        // goes to its detail sheet) get a discoverable edit path in
-                        // the context menu. Everything else already edits on tap.
-                        if entry.item.hasStayBooking {
-                            Button {
-                                onEdit(entry.item)
-                            } label: {
-                                Label("Edit details", systemImage: "pencil")
-                            }
-                        }
                         // On every stop, not only ones that already have documents:
                         // this is the way in for the first one, and a boarding pass
                         // turning up the day before a flight is the case the whole
