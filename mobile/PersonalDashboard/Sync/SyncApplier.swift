@@ -118,8 +118,11 @@ struct SyncApplier {
             mergedHashes = try applyUpserts(verified)
             outcome.applied = verified.count
         }
+        var orphanCandidates: Set<String> = []
         if !deletes.isEmpty {
-            outcome.deleted = try applyDeletes(deletes, localDeviceUUID: localDeviceUUID)
+            let result = try applyDeletes(deletes, localDeviceUUID: localDeviceUUID)
+            outcome.deleted = result.deleted
+            orphanCandidates = result.orphanCandidates
         }
 
         // Shadow LAST, and in the same save as the deletes' tombstones, so a
@@ -130,6 +133,15 @@ struct SyncApplier {
             recordShadow(for: op, existing: shadows, mergedHashes: mergedHashes)
         }
         try modelContext.save()
+
+        // Files LAST, after the save. The "is anything still pointing at this
+        // path" check reads the store, so it has to run against committed state:
+        // asking while the deletes are only pending risks counting a row that is
+        // on its way out as a live reference and keeping the file forever. Doing
+        // it after the save also means a failure above leaves every file intact,
+        // which is the right way round — the rows retry next pass, and a file
+        // deleted for a delete that never committed would be unrecoverable.
+        deleteOrphanedFiles(orphanCandidates)
 
         return outcome
     }
@@ -325,9 +337,20 @@ struct SyncApplier {
 
     // MARK: - Deletes
 
-    private func applyDeletes(_ ops: [SyncOp], localDeviceUUID: UUID) throws -> Int {
+    /// Applies the deletes and reports the attachment paths those rows held, for
+    /// the caller to clean up once the save has committed.
+    private struct DeleteOutcome {
         var deleted = 0
+        var orphanCandidates: Set<String> = []
+    }
+
+    private func applyDeletes(_ ops: [SyncOp], localDeviceUUID: UUID) throws -> DeleteOutcome {
+        var deleted = 0
+        // Attachment paths of the rows about to go, read BEFORE the delete: once
+        // the row is gone there is nothing left to ask (#477).
+        var orphanCandidates: Set<String> = []
         for op in ops {
+            orphanCandidates.formUnion(attachmentPaths(entity: op.entity, recordID: op.recordID))
             if try deleteRecord(entity: op.entity, recordID: op.recordID) {
                 deleted += 1
             }
@@ -345,7 +368,92 @@ struct SyncApplier {
                 ))
             }
         }
-        return deleted
+        return DeleteOutcome(deleted: deleted, orphanCandidates: orphanCandidates)
+    }
+
+    /// Remove the local files the deleted rows were holding.
+    ///
+    /// A local delete already does this from the view layer
+    /// (`ItineraryDocumentCleanup.removeEverything`, `TicketStorage.delete`), but
+    /// every one of those call sites is in a view or a service, so a delete
+    /// arriving over sync used to remove the row and leave the file on disk
+    /// forever, unreferenced by anything (#477).
+    ///
+    /// A path is only removed once NO surviving row points at it. Two rows can
+    /// legitimately share one file — #475 gives each leg of a round trip its own
+    /// copy precisely because a shared path is unsafe, but an archive restore or
+    /// a future importer could still produce one — and deleting a file another
+    /// row still names would leave that row with a broken viewer, which is worse
+    /// than an orphan by a wide margin.
+    ///
+    /// Best-effort throughout: a delete op must not fail because a file was
+    /// already gone, on a read-only volume, or under a path this build does not
+    /// recognise. Orphaned bytes cost disk; a thrown error costs the whole pass.
+    private func deleteOrphanedFiles(_ candidates: Set<String>) {
+        guard !candidates.isEmpty else { return }
+        let stillReferenced = SyncAssetStorage.referencedPaths(in: modelContext)
+        for path in candidates.subtracting(stillReferenced) {
+            guard SyncAssetStorage.isRecognised(path) else { continue }
+            do {
+                try SyncAssetStorage.delete(at: path)
+                SyncLog.line("SyncApplier: removed orphaned attachment \(path)")
+            } catch {
+                SyncLog.line("SyncApplier: could not remove \(path): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Attachment paths held by the row a delete op names, or empty when the row
+    /// carries none, is absent, or is not one of the attachment-bearing
+    /// entities. Only the columns `SyncAssetStorage.referencedPaths` knows about,
+    /// so the two cannot disagree about what an attachment is.
+    private func attachmentPaths(entity: String, recordID: String) -> Set<String> {
+        var found: Set<String> = []
+        func add(_ path: String?) {
+            guard let path, !path.isEmpty, SyncAssetStorage.isRecognised(path) else { return }
+            found.insert(path)
+        }
+
+        switch entity {
+        case "LocalItineraryItem":
+            for row in rows(LocalItineraryItem.self, uuid: recordID, key: \.clientUUID) {
+                add(row.attachmentPath)
+            }
+        case "LocalWalletCard":
+            for row in rows(LocalWalletCard.self, uuid: recordID, key: \.clientUUID) {
+                add(row.attachmentPath)
+            }
+        case "LocalTaskTicket":
+            for row in rows(LocalTaskTicket.self, uuid: recordID, key: \.clientUUID) {
+                add(row.attachmentPath)
+            }
+        case "LocalNoteImage":
+            for row in rows(LocalNoteImage.self, uuid: recordID, key: \.clientUUID) {
+                add(row.relativePath)
+            }
+        case "LocalTrip":
+            for row in rows(LocalTrip.self, uuid: recordID, key: \.clientUUID) {
+                add(row.coverImagePath)
+            }
+        case "LocalExpense":
+            for row in (try? modelContext.fetch(FetchDescriptor<LocalExpense>())) ?? []
+            where row.clientUUID == recordID {
+                add(row.receiptImagePath)
+            }
+        default:
+            break
+        }
+        return found
+    }
+
+    private func rows<M: PersistentModel>(
+        _ type: M.Type,
+        uuid: String,
+        key: KeyPath<M, UUID>
+    ) -> [M] {
+        guard let target = UUID(uuidString: uuid) else { return [] }
+        let all = (try? modelContext.fetch(FetchDescriptor<M>())) ?? []
+        return all.filter { $0[keyPath: key] == target }
     }
 
     private func deleteRecord(entity: String, recordID: String) throws -> Bool {

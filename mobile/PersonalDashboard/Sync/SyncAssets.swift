@@ -138,6 +138,24 @@ enum SyncAssetStorage {
         }
     }
 
+    /// Remove the bytes a row no longer needs.
+    ///
+    /// The mirror of `write`, and the counterpart the sync path was missing
+    /// (#477): a delete arriving from a peer removed the row and left the file
+    /// on disk forever. An unrecognised prefix is ignored rather than guessed
+    /// at, for the same reason `write` throws on one — this is a delete, so
+    /// guessing is the one mistake that cannot be undone.
+    static func delete(at relativePath: String) throws {
+        switch directoryName(of: relativePath) {
+        case "tickets":      try TicketStorage.shared.delete(relativePath: relativePath)
+        case "task-tickets": try TicketStorage.taskTickets.delete(relativePath: relativePath)
+        case "receipts":     try ReceiptStorage.shared.delete(relativePath: relativePath)
+        case "note-images":  try ReceiptStorage.noteImages.delete(relativePath: relativePath)
+        case "trip-covers":  try ReceiptStorage.tripCovers.delete(relativePath: relativePath)
+        default:             throw SyncAssetError.unrecognisedPath(relativePath)
+        }
+    }
+
     private static func directoryName(of relativePath: String) -> String {
         String(relativePath.split(separator: "/").first ?? "")
     }
@@ -306,65 +324,10 @@ struct SyncAssetTransfer {
 
     // MARK: Row enumeration
 
-    /// Every relative path a live row points at.
-    ///
-    /// Six columns across five directories. A full sweep of the tables rather
-    /// than a hook at each save site, for the same reason
-    /// `SyncEngine.computeLocalChanges` is a full diff: attachments are written
-    /// from services, AI tool use, email ingest and the archive importer, and any
-    /// site we forget would mean a file that silently never travels.
+    /// Every relative path a live row points at, in a stable order.
+    /// See `SyncAssetStorage.referencedPaths(in:)` for what it walks and why.
     private func referencedPaths() -> [String] {
-        var paths: Set<String> = []
-
-        func add(_ path: String?) {
-            guard let path, !path.isEmpty, SyncAssetStorage.isRecognised(path) else { return }
-            paths.insert(path)
-        }
-
-        // `deletedAt` is checked on the two models that HAVE it. A soft-deleted
-        // row is still in the table, so without this its file is published (paying
-        // iCloud space for an attachment the user deleted), pinned against the
-        // sweep, which only reclaims what nothing references, and — when the file
-        // is long gone — counted forever as "not on any device". Measured on the
-        // live store: nine soft-deleted task tickets, four of them still holding a
-        // published blob and five inflating that count.
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalTaskTicket>())) ?? []
-        where row.deletedAt == nil {
-            add(row.attachmentPath)
-        }
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalItineraryItem>())) ?? [] {
-            add(row.attachmentPath)
-        }
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalWalletCard>())) ?? [] {
-            add(row.attachmentPath)
-        }
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalExpense>())) ?? [] {
-            add(row.receiptImagePath)
-        }
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalNoteImage>())) ?? []
-        where row.deletedAt == nil {
-            add(row.relativePath)
-        }
-        // Trip covers TRAVEL rather than being regenerated on the peer (#471).
-        //
-        // They are the one arguable exclusion: generated art, content-addressed
-        // on destination plus prompt version, so a peer could re-derive them from
-        // the trip's name instead. Transferring wins on every axis that matters
-        // here. A cover is 200–350 KB and about 10 MB across a whole library, so
-        // the bytes are noise next to the tickets and receipts already moving.
-        // Regenerating costs an image-model call per destination and needs an API
-        // key the peer may not have — the Mac had no OpenAI key at all until #439,
-        // which is exactly why covers stayed blank there. And because the filename
-        // is derived from the destination, both devices name the same file, so the
-        // blob a peer publishes is the one this device is already looking for.
-        //
-        // `TripCoverService.runRepairSweep` stays as the fallback for a cover no
-        // peer has.
-        for row in (try? modelContext.fetch(FetchDescriptor<LocalTrip>())) ?? [] {
-            add(row.coverImagePath)
-        }
-
-        return paths.sorted()
+        SyncAssetStorage.referencedPaths(in: modelContext).sorted()
     }
 
     // MARK: Publish
@@ -664,5 +627,76 @@ struct SyncAssetTransfer {
             guard let created = createdAt(name) else { return false }
             return created < cutoff
         }.sorted()
+    }
+}
+
+// MARK: - Referenced paths
+
+extension SyncAssetStorage {
+
+    /// Every relative path a live row points at.
+    ///
+    /// Six columns across five directories. A full sweep of the tables rather
+    /// than a hook at each save site, for the same reason
+    /// `SyncEngine.computeLocalChanges` is a full diff: attachments are written
+    /// from services, AI tool use, email ingest and the archive importer, and any
+    /// site we forget would mean a file that silently never travels.
+    ///
+    /// Shared by the asset transfer (what to publish, what to sweep) and by the
+    /// applier's file cleanup (#477), so "which columns hold attachments" is
+    /// answered in ONE place. Two hand-maintained lists of models is the shape
+    /// that let #446's blocks go unbacked-up, and it is not repeated here.
+    static func referencedPaths(in modelContext: ModelContext) -> Set<String> {
+        var paths: Set<String> = []
+
+        func add(_ path: String?) {
+            guard let path, !path.isEmpty, SyncAssetStorage.isRecognised(path) else { return }
+            paths.insert(path)
+        }
+
+        // `deletedAt` is checked on the two models that HAVE it. A soft-deleted
+        // row is still in the table, so without this its file is published (paying
+        // iCloud space for an attachment the user deleted), pinned against the
+        // sweep, which only reclaims what nothing references, and — when the file
+        // is long gone — counted forever as "not on any device". Measured on the
+        // live store: nine soft-deleted task tickets, four of them still holding a
+        // published blob and five inflating that count.
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalTaskTicket>())) ?? []
+        where row.deletedAt == nil {
+            add(row.attachmentPath)
+        }
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalItineraryItem>())) ?? [] {
+            add(row.attachmentPath)
+        }
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalWalletCard>())) ?? [] {
+            add(row.attachmentPath)
+        }
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalExpense>())) ?? [] {
+            add(row.receiptImagePath)
+        }
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalNoteImage>())) ?? []
+        where row.deletedAt == nil {
+            add(row.relativePath)
+        }
+        // Trip covers TRAVEL rather than being regenerated on the peer (#471).
+        //
+        // They are the one arguable exclusion: generated art, content-addressed
+        // on destination plus prompt version, so a peer could re-derive them from
+        // the trip's name instead. Transferring wins on every axis that matters
+        // here. A cover is 200–350 KB and about 10 MB across a whole library, so
+        // the bytes are noise next to the tickets and receipts already moving.
+        // Regenerating costs an image-model call per destination and needs an API
+        // key the peer may not have — the Mac had no OpenAI key at all until #439,
+        // which is exactly why covers stayed blank there. And because the filename
+        // is derived from the destination, both devices name the same file, so the
+        // blob a peer publishes is the one this device is already looking for.
+        //
+        // `TripCoverService.runRepairSweep` stays as the fallback for a cover no
+        // peer has.
+        for row in (try? modelContext.fetch(FetchDescriptor<LocalTrip>())) ?? [] {
+            add(row.coverImagePath)
+        }
+
+        return paths
     }
 }
