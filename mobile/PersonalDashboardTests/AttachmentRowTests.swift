@@ -38,6 +38,10 @@ final class AttachmentRowTests: XCTestCase {
     /// device but its bytes did not, and that is worth saying in words: an
     /// unexplained placeholder reads as a bug rather than as a file that is
     /// simply elsewhere.
+    ///
+    /// Since #471 the bytes do follow the row, so this sentence is the case where
+    /// no peer has published them. The arriving variant is covered in
+    /// `SyncAssetTransferTests`.
     func testAnAbsentFileIsExplainedRatherThanLabelled() {
         let ticket = TaskTicket(
             id: UUID(),
@@ -60,7 +64,7 @@ final class AttachmentRowTests: XCTestCase {
         )
         XCTAssertEqual(
             TaskAttachmentRow.subtitle(for: ticket, fileIsPresent: false),
-            "The file is on your other device"
+            "File on your other device"
         )
     }
 }

@@ -14,14 +14,15 @@ import SwiftData
 /// and for the same reason: the absolute container path changes on every
 /// reinstall, so an absolute path would be dead the moment it was stored.
 ///
-/// ## These rows sync but their files do not
+/// ## The rows sync, and since #471 so do the files
 ///
 /// The model is registered with sync like every other archived entity, so a
-/// note's image rows reach the other device. The oplog carries JSON only and
-/// has no asset transfer, so the JPEGs stay on the device that created them —
-/// the same situation receipts and tickets are already in. The strip renders a
-/// "not on this device" tile for a row whose file is missing, which also covers
-/// the reinstall case. Images cross devices through the export archive.
+/// note's image rows reach the other device. The oplog itself still carries JSON
+/// only; the JPEGs travel beside it, as content-addressed blobs in the same
+/// shared folder (`SyncAssetTransfer`). So a row arrives before its bytes and the
+/// strip renders a "not on this device" tile in the meantime, which is now a
+/// transient state rather than a permanent one. It still covers the reinstall
+/// case, where no peer has the file and the export archive is the way back.
 @Model
 final class LocalNoteImage {
     @Attribute(.unique) var clientUUID: UUID

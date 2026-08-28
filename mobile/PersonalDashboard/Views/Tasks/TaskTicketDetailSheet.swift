@@ -207,7 +207,10 @@ struct TaskTicketDetailSheet: View {
             Image(systemName: "iphone.and.arrow.forward")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Tokens.mutedSoft)
-            Text("The file is on your other device")
+            Text(SyncAssetMessage.missing(
+                "File",
+                isArriving: SyncAssetInbox.shared.isArriving(ticket.attachmentPath)
+            ))
                 .font(.edCaption)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)

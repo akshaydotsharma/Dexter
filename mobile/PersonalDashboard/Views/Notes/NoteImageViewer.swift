@@ -4,8 +4,9 @@ import SwiftUI
 /// note's preview mode.
 ///
 /// Takes the relative path rather than a resolved image so it can render the
-/// not-on-this-device case itself: a row can outlive its bytes, since sync moves
-/// the note but not the picture.
+/// not-on-this-device case itself: a row can outlive its bytes. Since #471 the
+/// picture follows the note, so that case is usually transient — the viewer says
+/// which of the two it is looking at.
 ///
 /// Zoomable, because a fitted photo is often too small to read — a whiteboard
 /// shot or a scanned page is the whole reason the image is in the note. Pinch and
@@ -19,6 +20,12 @@ struct NoteImageViewer: View {
 
     private var fileURL: URL? {
         ReceiptStorage.noteImages.load(relativePath: relativePath)
+    }
+
+    /// A peer has published these bytes and they have not landed here yet (#471),
+    /// so the empty state is a wait rather than a dead end.
+    private var isArriving: Bool {
+        SyncAssetInbox.shared.isArriving(relativePath)
     }
 
     var body: some View {
@@ -75,10 +82,12 @@ struct NoteImageViewer: View {
             Image(systemName: "icloud.slash")
                 .font(.system(size: 32, weight: .regular))
                 .foregroundStyle(Tokens.mutedSoft)
-            Text("This image is on your other device")
+            Text(SyncAssetMessage.missing("Image", isArriving: isArriving))
                 .font(.edBody)
                 .foregroundStyle(Tokens.muted)
-            Text("Sync moves the note but not its pictures. Bring them across with Export & import.")
+            Text(isArriving
+                 ? "Sync is bringing the picture across. It appears here once it lands."
+                 : "No other device has published this picture. Bring it across with Export & import.")
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.mutedSoft)
                 .multilineTextAlignment(.center)

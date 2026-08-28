@@ -1785,17 +1785,29 @@ struct ReceiptFullViewer: View {
                 ZoomableImageView(image: image)
                     .ignoresSafeArea(edges: .bottom)
             } else {
-                unavailable
+                // Present but undecodable is a damaged file, not an absent one,
+                // so it keeps its own wording.
+                undecodable
             }
         } else {
-            unavailable
+            notOnThisDevice
         }
     }
 
-    private var unavailable: some View {
+    private var undecodable: some View {
         Text("Receipt is no longer available.")
             .font(.edBody)
             .foregroundStyle(Tokens.muted)
+    }
+
+    /// The bytes are not on this device. Since #471 they follow the row.
+    private var notOnThisDevice: some View {
+        Text(SyncAssetMessage.missing(
+            "Receipt",
+            isArriving: SyncAssetInbox.shared.isArriving(relativePath)
+        ))
+        .font(.edBody)
+        .foregroundStyle(Tokens.muted)
     }
 }
 

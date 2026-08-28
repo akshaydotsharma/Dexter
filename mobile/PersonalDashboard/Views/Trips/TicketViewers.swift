@@ -82,17 +82,30 @@ struct TicketOriginalViewer: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(edges: .bottom)
             } else {
-                unavailable
+                // The file IS here, it just would not decode. That is a damaged
+                // file, not an absent one, so it keeps its own wording.
+                undecodable
             }
         } else {
-            unavailable
+            notOnThisDevice
         }
     }
 
-    private var unavailable: some View {
+    private var undecodable: some View {
         Text("The ticket file is no longer available.")
             .font(.edBody)
             .foregroundStyle(Tokens.muted)
+    }
+
+    /// The bytes are not on this device. Since #471 they follow the row, so this
+    /// is usually a wait rather than a dead end.
+    private var notOnThisDevice: some View {
+        Text(SyncAssetMessage.missing(
+            "Ticket",
+            isArriving: SyncAssetInbox.shared.isArriving(attachmentPath)
+        ))
+        .font(.edBody)
+        .foregroundStyle(Tokens.muted)
     }
 }
 

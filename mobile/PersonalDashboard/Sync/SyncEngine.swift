@@ -62,6 +62,17 @@ struct SyncStatusSnapshot {
     var isWaitingOnDownloads: Bool = false
     var lastPassOutcome: String = ""
 
+    /// Attachment files moved by the last pass (#471). Not persisted, so all four
+    /// are zero for a snapshot rebuilt without a pass. `assetsArriving` is the one
+    /// worth reading on its own: it is how many files a peer has published that
+    /// this device is still waiting on.
+    var assetsPublished: Int = 0
+    var assetsFetched: Int = 0
+    var assetsArriving: Int = 0
+    /// Referenced by a row here, and published by nobody. Usually a file that only
+    /// ever existed on a device that has left the folder.
+    var assetsUnavailable: Int = 0
+
     var peers: [Peer] = []
 
     var tombstoneCount: Int = 0
@@ -178,6 +189,9 @@ final class SyncEngine {
         /// Whether this pass stopped short waiting for iCloud to deliver a peer's
         /// segment. Drives the short retry in `SyncCoordinator` (#451).
         var waitingOnDownloads = false
+        /// What the attachment transfer did this pass (#471). Not persisted: like
+        /// `opsApplied`, it answers "did the thing I just asked for do anything".
+        var assets = SyncAssetTransfer.Outcome()
         var outcome = "OK (\(reason))"
 
         let health = SyncFolder.health()
@@ -208,6 +222,16 @@ final class SyncEngine {
 
             opsOut = try await emitLocalChanges(folder: folder, state: state)
 
+            // Attachment bytes (#471), after the rows they belong to. The order
+            // matters on the receiving side, not here: a peer that has the blob
+            // but not the row has nothing to attach it to, whereas the reverse is
+            // the arriving state the UI already renders.
+            //
+            // Inside the security scope opened above, and never on its own — a
+            // blob is only ever written for a path a local row already names.
+            assets = await SyncAssetTransfer(modelContext: modelContext)
+                .run(folder: folder, state: state)
+
             // Pointer file last, so it never advertises a segment that is not
             // on disk yet. A peer that reads a torn meta.json just sees a stale
             // hint, which costs nothing because segments are the truth.
@@ -231,6 +255,10 @@ final class SyncEngine {
         var result = (try? snapshot()) ?? SyncStatusSnapshot()
         result.lastPassOpsApplied = opsApplied
         result.isWaitingOnDownloads = waitingOnDownloads
+        result.assetsPublished = assets.published
+        result.assetsFetched = assets.fetched
+        result.assetsArriving = assets.awaiting
+        result.assetsUnavailable = assets.unavailable
         return result
     }
 

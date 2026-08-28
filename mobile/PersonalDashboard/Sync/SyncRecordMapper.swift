@@ -43,15 +43,15 @@ enum SyncRecordMapper {
         var out: [SyncRecord] = []
 
         out += try map("LocalTodo",       payload.tasks)        { $0.clientUUID.uuidString }
-        // #399. The rows travel; their JPEGs and PDFs do not, because the oplog
-        // carries JSON only. A peer that receives one and has no file renders the
-        // card's "on your other device" state.
+        // #399. The rows travel here; the JPEGs and PDFs travel beside them as
+        // blobs (#471), because the oplog carries JSON only. A peer that receives a
+        // row before its bytes renders the card's arriving state.
         out += try map("LocalTaskTicket", payload.taskTickets ?? []) { $0.clientUUID.uuidString }
         out += try map("LocalNote",       payload.notes)        { $0.clientUUID.uuidString }
         out += try map("LocalNoteFolder", payload.noteFolders)  { $0.clientUUID.uuidString }
-        // #395. The rows travel; their JPEGs do not, because the oplog carries
-        // JSON only. A peer that receives one and has no file shows the image as
-        // living on the other device.
+        // #395. Same as task tickets above: the row travels in the oplog and its
+        // JPEG travels beside it as a blob (#471). Until the bytes land, the strip
+        // shows the image as living on the other device.
         out += try map("LocalNoteImage",  payload.noteImages ?? []) { $0.clientUUID.uuidString }
         out += try map("LocalList",       listRecords(payload)) { $0.list.clientUUID.uuidString }
         out += try map("LocalTrip",       payload.itineraries)  { $0.clientUUID.uuidString }

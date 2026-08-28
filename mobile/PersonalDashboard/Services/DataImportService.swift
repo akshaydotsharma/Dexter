@@ -107,6 +107,56 @@ final class DataImportService {
         case replaceMatching
     }
 
+    /// What to do with a row that names an attachment whose bytes are neither on
+    /// this device nor in the archive being imported.
+    ///
+    /// The two callers genuinely want different answers, so this is a parameter
+    /// rather than a rule.
+    enum UnresolvedAssetPolicy {
+        /// Archive restore. The row ends up with no path, so it never claims bytes
+        /// that exist nowhere. This is the behaviour #319 and #399 chose and #411
+        /// keeps.
+        case dropPath
+        /// Sync apply (#471). The reference is KEPT, because the bytes travel
+        /// separately now and a row with no path has nothing left for them to
+        /// attach to. The card renders an arriving state until the blob lands.
+        case keepPath
+    }
+
+    /// What an asset restorer did.
+    ///
+    /// `alreadyPresent` and `written` are deliberately distinct: the callers
+    /// register restored paths for rollback, and only a file this import actually
+    /// wrote may be deleted if the commit fails. See `restoreAsset` below.
+    enum RestoredAsset {
+        /// The bytes are already on this device. The row keeps pointing at them.
+        case alreadyPresent(String)
+        /// This import wrote the bytes out of the archive.
+        case written(String)
+        /// A path was declared but the bytes are nowhere. `UnresolvedAssetPolicy`
+        /// decides whether the row keeps the reference.
+        case unresolved(String)
+        /// The row names no attachment at all.
+        case noPath
+
+        /// Registered for rollback. Nil for everything this import did not write.
+        var writtenPath: String? {
+            if case .written(let path) = self { return path }
+            return nil
+        }
+
+        func path(unresolved policy: UnresolvedAssetPolicy) -> String? {
+            switch self {
+            case .alreadyPresent(let path), .written(let path):
+                return path
+            case .unresolved(let path):
+                return policy == .keepPath ? path : nil
+            case .noPath:
+                return nil
+            }
+        }
+    }
+
     struct Preview {
         let manifest: DataArchive.Manifest
         let archiveURL: URL
@@ -418,7 +468,11 @@ final class DataImportService {
     /// the receipts written so far are rolled back so re-running the
     /// import after the error is still a clean no-op for the rows that
     /// did succeed.
-    func commit(preview: Preview, mode: Mode = .skipExisting) throws {
+    func commit(
+        preview: Preview,
+        mode: Mode = .skipExisting,
+        unresolvedAssets: UnresolvedAssetPolicy = .dropPath
+    ) throws {
         let payload = preview.manifest.data
 
         // In replace mode the matching rows are removed FIRST and saved, so the
@@ -506,12 +560,12 @@ final class DataImportService {
             for dto in payload.taskTickets ?? []
             where !existingTaskTicketUUIDs.contains(dto.clientUUID) {
                 let restored = try restoreTaskTicket(for: dto, archiveEntries: preview.entries)
-                if let restored { writtenTaskTicketPaths.append(restored) }
+                if let written = restored.writtenPath { writtenTaskTicketPaths.append(written) }
                 modelContext.insert(LocalTaskTicket(
                     clientUUID: dto.clientUUID,
                     todoClientUUID: dto.todoClientUUID,
                     itineraryItemUUID: dto.itineraryItemUUID,
-                    attachmentPath: restored ?? "",
+                    attachmentPath: restored.path(unresolved: unresolvedAssets) ?? "",
                     barcodePayload: dto.barcodePayload,
                     barcodeSymbology: dto.barcodeSymbology,
                     eventTitle: dto.eventTitle,
@@ -614,9 +668,9 @@ final class DataImportService {
                     relativePath: dto.coverImagePath,
                     archiveEntries: preview.entries
                 )
-                if let restoredCover {
-                    writtenTripCoverPaths.append(restoredCover)
-                    trip.coverImagePath = restoredCover
+                if let written = restoredCover.writtenPath { writtenTripCoverPaths.append(written) }
+                if let coverPath = restoredCover.path(unresolved: unresolvedAssets) {
+                    trip.coverImagePath = coverPath
                 }
                 modelContext.insert(trip)
             }
@@ -664,9 +718,9 @@ final class DataImportService {
                     relativePath: dto.attachmentPath,
                     archiveEntries: preview.entries
                 )
-                if let restoredTicket {
-                    writtenTicketPaths.append(restoredTicket)
-                    item.attachmentPath = restoredTicket
+                if let written = restoredTicket.writtenPath { writtenTicketPaths.append(written) }
+                if let ticketPath = restoredTicket.path(unresolved: unresolvedAssets) {
+                    item.attachmentPath = ticketPath
                 }
                 modelContext.insert(item)
             }
@@ -701,9 +755,9 @@ final class DataImportService {
                     relativePath: dto.attachmentPath,
                     archiveEntries: preview.entries
                 )
-                if let restoredCardFile {
-                    writtenTicketPaths.append(restoredCardFile)
-                    card.attachmentPath = restoredCardFile
+                if let written = restoredCardFile.writtenPath { writtenTicketPaths.append(written) }
+                if let cardPath = restoredCardFile.path(unresolved: unresolvedAssets) {
+                    card.attachmentPath = cardPath
                 }
                 modelContext.insert(card)
             }
@@ -738,7 +792,13 @@ final class DataImportService {
 
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
                 let restoredPath = try restoreReceipt(for: dto, archiveEntries: preview.entries)
-                if let restoredPath { writtenReceiptPaths.append(restoredPath) }
+                if let written = restoredPath.writtenPath { writtenReceiptPaths.append(written) }
+                // `.keepPath` regardless of the caller's policy, because receipts
+                // have ALWAYS kept their reference — the old code fell back to
+                // `dto.receiptImagePath` here. #411 does not change that; it only
+                // brings task tickets, itinerary tickets and wallet cards into line
+                // on the sync path.
+                let receiptPath = restoredPath.path(unresolved: .keepPath)
 
                 let expense = LocalExpense(
                     clientUUID: dto.clientUUID,
@@ -751,7 +811,7 @@ final class DataImportService {
                     sgdAmount: dto.sgdAmount,
                     fxRate: dto.fxRate,
                     paymentMethod: dto.paymentMethod,
-                    receiptImagePath: restoredPath ?? dto.receiptImagePath,
+                    receiptImagePath: receiptPath ?? dto.receiptImagePath,
                     source: dto.source,
                     createdAt: dto.createdAt,
                     isRefund: dto.isRefund ?? false,
@@ -884,12 +944,16 @@ final class DataImportService {
             // archive still restores: the strip shows it as "on your other
             // device", which is exactly what it is.
             for dto in (payload.noteImages ?? []) where !existingNoteImageUUIDs.contains(dto.clientUUID) {
-                let restoredPath = try restoreNoteImage(for: dto, archiveEntries: preview.entries)
-                if let restoredPath { writtenNoteImagePaths.append(restoredPath) }
+                let restoredImage = try restoreNoteImage(for: dto, archiveEntries: preview.entries)
+                if let written = restoredImage.writtenPath { writtenNoteImagePaths.append(written) }
+                // `.keepPath` for the same reason receipts use it: #395 already
+                // decided that an image row with no bytes is a real attachment
+                // living on the other device, and kept the DTO's path to say so.
+                let imagePath = restoredImage.path(unresolved: .keepPath)
                 modelContext.insert(LocalNoteImage(
                     clientUUID: dto.clientUUID,
                     noteClientUUID: dto.noteClientUUID,
-                    relativePath: restoredPath ?? dto.relativePath,
+                    relativePath: imagePath ?? dto.relativePath,
                     position: dto.position,
                     pixelWidth: dto.pixelWidth,
                     pixelHeight: dto.pixelHeight,
@@ -994,16 +1058,13 @@ final class DataImportService {
     private func restoreReceipt(
         for expense: DataArchive.ExpenseDTO,
         archiveEntries: [String: Data]
-    ) throws -> String? {
-        guard let relativePath = expense.receiptImagePath,
-              !relativePath.isEmpty,
-              let archivedData = archiveEntries[relativePath] else {
-            return nil
-        }
-        if receiptStorage.load(relativePath: relativePath) != nil {
-            return relativePath
-        }
-        return try receiptStorage.write(data: archivedData, relativePath: relativePath)
+    ) throws -> RestoredAsset {
+        try restoreAsset(
+            relativePath: expense.receiptImagePath,
+            archiveEntries: archiveEntries,
+            load: { receiptStorage.load(relativePath: $0) },
+            write: { try receiptStorage.write(data: $0, relativePath: $1) }
+        )
     }
 
     /// Verify what the manifest claims against what its payload actually holds
@@ -1072,66 +1133,51 @@ final class DataImportService {
         ]
     }
 
-    /// #319 counterpart of `restoreReceipt` for ticket attachments. Returns nil
-    /// when the archive carries no file for this row, and the caller then leaves
-    /// `attachmentPath` empty rather than pointing at a file that isn't there.
+    /// #319 counterpart of `restoreReceipt` for ticket attachments.
     ///
     /// Takes the bare relative path (#398) so itinerary items and wallet cards,
     /// which share the `tickets/` directory, restore through one implementation.
     private func restoreTicket(
         relativePath: String?,
         archiveEntries: [String: Data]
-    ) throws -> String? {
-        guard let relativePath,
-              !relativePath.isEmpty,
-              let archivedData = archiveEntries[relativePath] else {
-            return nil
-        }
-        if ticketStorage.load(relativePath: relativePath) != nil {
-            return relativePath
-        }
-        return try ticketStorage.write(data: archivedData, relativePath: relativePath)
+    ) throws -> RestoredAsset {
+        try restoreAsset(
+            relativePath: relativePath,
+            archiveEntries: archiveEntries,
+            load: { ticketStorage.load(relativePath: $0) },
+            write: { try ticketStorage.write(data: $0, relativePath: $1) }
+        )
     }
 
     /// #395 counterpart for note image attachments.
     ///
-    /// Unlike receipts and tickets, returning nil does NOT mean the row loses its
-    /// path: an image row with no bytes is still a real attachment that lives on
-    /// the user's other device, and the strip says so. The caller keeps the DTO's
-    /// original path so a later import of the Mac's archive can fill it in.
+    /// An unresolved image row does NOT lose its path: an image row with no bytes
+    /// is still a real attachment that lives on the user's other device, and the
+    /// strip says so. The caller keeps the DTO's original path so a later import
+    /// of the Mac's archive, or the asset transfer added by #471, can fill it in.
     private func restoreNoteImage(
         for image: DataArchive.NoteImageDTO,
         archiveEntries: [String: Data]
-    ) throws -> String? {
-        let relativePath = image.relativePath
-        guard !relativePath.isEmpty,
-              let archivedData = archiveEntries[relativePath] else {
-            return nil
-        }
-        // An existing file at the same UUID-keyed path is the same logical image,
-        // so it wins rather than being rewritten. Same rule as receipts.
-        if noteImageStorage.load(relativePath: relativePath) != nil {
-            return relativePath
-        }
-        return try noteImageStorage.write(data: archivedData, relativePath: relativePath)
+    ) throws -> RestoredAsset {
+        try restoreAsset(
+            relativePath: image.relativePath,
+            archiveEntries: archiveEntries,
+            load: { noteImageStorage.load(relativePath: $0) },
+            write: { try noteImageStorage.write(data: $0, relativePath: $1) }
+        )
     }
 
-    /// #399 counterpart for task ticket attachments. Returns nil when the archive
-    /// carries no file for this row, and the caller then leaves `attachmentPath`
-    /// empty rather than pointing at a file that isn't there.
+    /// #399 counterpart for task ticket attachments.
     private func restoreTaskTicket(
         for ticket: DataArchive.TaskTicketDTO,
         archiveEntries: [String: Data]
-    ) throws -> String? {
-        let relativePath = ticket.attachmentPath
-        guard !relativePath.isEmpty,
-              let archivedData = archiveEntries[relativePath] else {
-            return nil
-        }
-        if taskTicketStorage.load(relativePath: relativePath) != nil {
-            return relativePath
-        }
-        return try taskTicketStorage.write(data: archivedData, relativePath: relativePath)
+    ) throws -> RestoredAsset {
+        try restoreAsset(
+            relativePath: ticket.attachmentPath,
+            archiveEntries: archiveEntries,
+            load: { taskTicketStorage.load(relativePath: $0) },
+            write: { try taskTicketStorage.write(data: $0, relativePath: $1) }
+        )
     }
 
     /// #428 counterpart for trip cover photographs. Returns nil when the archive
@@ -1165,12 +1211,46 @@ final class DataImportService {
     private func restoreTripCover(
         relativePath: String?,
         archiveEntries: [String: Data]
-    ) throws -> String? {
-        guard let relativePath, !relativePath.isEmpty else { return nil }
-        if tripCoverStorage.load(relativePath: relativePath) != nil {
-            return relativePath
+    ) throws -> RestoredAsset {
+        try restoreAsset(
+            relativePath: relativePath,
+            archiveEntries: archiveEntries,
+            load: { tripCoverStorage.load(relativePath: $0) },
+            write: { try tripCoverStorage.write(data: $0, relativePath: $1) }
+        )
+    }
+
+    /// The one implementation behind all five asset restorers above.
+    ///
+    /// ## The local file is checked FIRST, and that ordering is the whole of #411
+    ///
+    /// `SyncApplier` replays a peer's winning ops through this importer in
+    /// `.replaceMatching` mode with `entries: [:]`, because attachment bytes do not
+    /// ride in the oplog. Under the old ordering — archive first, disk second — an
+    /// empty archive meant every restorer returned nil, so every sync apply wrote an
+    /// empty path over a row whose file was sitting on this device. Measured on the
+    /// Mac: four `LocalTaskTicket` rows with a zero-length `ZATTACHMENTPATH` while
+    /// `~/Documents/task-tickets/` still held their JPEGs. `restoreTripCover` was
+    /// given this ordering by #428 for exactly the same reason; the other four now
+    /// share it rather than each rediscovering it.
+    ///
+    /// ## Why the return type is not `String?`
+    ///
+    /// The callers register every restored path for rollback, and a failed commit
+    /// deletes each one. Once "already on disk" can produce a path, an undifferentiated
+    /// `String?` makes a rollback delete a file this import never wrote — the user's
+    /// own bytes. Only `.written` is registered.
+    private func restoreAsset(
+        relativePath: String?,
+        archiveEntries: [String: Data],
+        load: (String) -> URL?,
+        write: (Data, String) throws -> String
+    ) rethrows -> RestoredAsset {
+        guard let relativePath, !relativePath.isEmpty else { return .noPath }
+        if load(relativePath) != nil { return .alreadyPresent(relativePath) }
+        guard let archivedData = archiveEntries[relativePath] else {
+            return .unresolved(relativePath)
         }
-        guard let archivedData = archiveEntries[relativePath] else { return nil }
-        return try tripCoverStorage.write(data: archivedData, relativePath: relativePath)
+        return .written(try write(archivedData, relativePath))
     }
 }

@@ -469,7 +469,11 @@ struct TaskTicketSection: View {
         } label: {
             TaskAttachmentRow(
                 title: ticket.displayTitle(fallback: ownerTitle),
-                subtitle: TaskAttachmentRow.subtitle(for: ticket, fileIsPresent: fileIsPresent),
+                subtitle: TaskAttachmentRow.subtitle(
+                    for: ticket,
+                    fileIsPresent: fileIsPresent,
+                    isArriving: SyncAssetInbox.shared.isArriving(ticket.attachmentPath)
+                ),
                 attachmentPath: ticket.attachmentPath,
                 accent: accent
             )

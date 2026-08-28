@@ -16,6 +16,9 @@ import Foundation
 //       meta.json                    <- mutable HINT, may fork, never trusted
 //       seg-000001.json              <- sealed, immutable
 //       seg-000002.json
+//       assets/                      <- attachment bytes (#471)
+//         man-000001.json            <- sealed, immutable: path -> content hash
+//         <sha256>.jpg               <- the blob, named for its own contents
 //
 // THE RULE: A DEVICE NEVER CREATES A PATH THAT ANOTHER DEVICE ALSO CREATES.
 // Not just files. Directories too.
@@ -205,6 +208,10 @@ struct SyncFolder {
     static let metaFileName = "meta.json"
     private static let segmentPrefix = "seg-"
     private static let segmentSuffix = ".json"
+    /// Attachment blobs and their manifests (#471), INSIDE the device's own
+    /// directory. See `assetsDirectory` for why it may not live any higher up.
+    static let assetsDirectoryName = "assets"
+    private static let manifestPrefix = "man-"
 
     // MARK: Resolution
 
@@ -422,6 +429,131 @@ struct SyncFolder {
             at: deviceDirectory(deviceUUID),
             withIntermediateDirectories: true
         )
+    }
+
+    // MARK: Attachment assets (#471)
+
+    /// Where a device publishes its attachment blobs and their manifests.
+    ///
+    /// ⚠️ NESTED INSIDE THE DEVICE'S OWN DIRECTORY, and it has to stay there. A
+    /// shared `<picked folder>/blobs/` would be created independently by every
+    /// device, which is precisely the shape iCloud forked in #353 — two devices
+    /// each creating one directory at one path produced `devices/` and
+    /// `devices 2/`, and each device then read only its own branch while both
+    /// reported a healthy folder. `DexterSync-<uuid>/assets/` has exactly one
+    /// creator, so THE RULE at the top of this file still holds: no path here is
+    /// ever created by two devices.
+    func assetsDirectory(_ deviceUUID: UUID) -> URL {
+        deviceDirectory(deviceUUID)
+            .appendingPathComponent(Self.assetsDirectoryName, isDirectory: true)
+    }
+
+    /// A blob, named for the SHA-256 of its own contents.
+    ///
+    /// Content addressing buys three things at once: re-publishing is idempotent
+    /// (the name is already there, so nothing is written), the same bytes attached
+    /// twice cost one copy, and a peer can verify what it downloaded against the
+    /// name it asked for before writing it into the user's Documents. The
+    /// extension rides along so the file is still recognisable by eye in Finder.
+    func blobURL(_ deviceUUID: UUID, blobName: String) -> URL {
+        assetsDirectory(deviceUUID).appendingPathComponent(blobName)
+    }
+
+    func assetManifestURL(_ deviceUUID: UUID, sequence: Int) -> URL {
+        assetsDirectory(deviceUUID)
+            .appendingPathComponent(Self.manifestFileName(sequence))
+    }
+
+    static func manifestFileName(_ sequence: Int) -> String {
+        String(format: "%@%06d%@", manifestPrefix, sequence, segmentSuffix)
+    }
+
+    /// Rejects iCloud conflict copies ("man-000003 2.json") the same way
+    /// `sequence(fromFileName:)` does, and for the same reason.
+    static func manifestSequence(fromFileName name: String) -> Int? {
+        guard name.hasPrefix(manifestPrefix), name.hasSuffix(segmentSuffix) else { return nil }
+        let start = name.index(name.startIndex, offsetBy: manifestPrefix.count)
+        let end = name.index(name.endIndex, offsetBy: -segmentSuffix.count)
+        return Int(name[start..<end])
+    }
+
+    func ensureAssetsDirectory(for deviceUUID: UUID) throws {
+        try FileManager.default.createDirectory(
+            at: assetsDirectory(deviceUUID),
+            withIntermediateDirectories: true
+        )
+    }
+
+    /// Manifest sequences published by a device, ascending.
+    ///
+    /// The manifests ARE the index. Nothing durable is kept on this side of the
+    /// wire about which blob holds which attachment: a device that wants a file
+    /// re-reads the peers' manifests on the pass that needs it. That is what lets
+    /// a failed or deferred fetch retry for free next pass instead of needing a
+    /// queue in the store, and it means asset transfer added no `@Model` at all.
+    func assetManifestSequences(for deviceUUID: UUID) throws -> [Int] {
+        let directory = assetsDirectory(deviceUUID)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        let entries = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        return entries.compactMap { Self.manifestSequence(fromFileName: $0.lastPathComponent) }.sorted()
+    }
+
+    func readAssetManifest(deviceUUID: UUID, sequence: Int) throws -> SyncAssetManifest {
+        let url = assetManifestURL(deviceUUID, sequence: sequence)
+        let data = try coordinatedRead(url)
+        do {
+            return try DataArchive.makeDecoder().decode(SyncAssetManifest.self, from: data)
+        } catch {
+            throw SyncFolderError.decodeFailed(url.lastPathComponent, error)
+        }
+    }
+
+    /// Seal a manifest. Refuses to overwrite one, exactly as `writeSegment` does:
+    /// a rewritten manifest is a mutable file, and a mutable file is the one thing
+    /// iCloud will fork.
+    func writeAssetManifest(_ manifest: SyncAssetManifest) throws {
+        try ensureAssetsDirectory(for: manifest.deviceUUID)
+        let destination = assetManifestURL(manifest.deviceUUID, sequence: manifest.sequence)
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            throw SyncFolderError.segmentAlreadyExists(manifest.sequence)
+        }
+        let data = try DataArchive.makeEncoder().encode(manifest)
+        try Self.coordinatedWrite(data, to: destination, replacing: false)
+    }
+
+    /// Publish one blob. Returns false when the name was already there, which is
+    /// the ordinary outcome for content-addressed bytes and not an error.
+    @discardableResult
+    func writeBlob(_ data: Data, deviceUUID: UUID, blobName: String) throws -> Bool {
+        try ensureAssetsDirectory(for: deviceUUID)
+        let destination = blobURL(deviceUUID, blobName: blobName)
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return false }
+        try Self.coordinatedWrite(data, to: destination, replacing: false)
+        return true
+    }
+
+    /// Blob names this device has on disk. Names only, so this stays one cheap
+    /// directory read however large the blobs are.
+    func blobNames(for deviceUUID: UUID) -> Set<String> {
+        let directory = assetsDirectory(deviceUUID)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else {
+            return []
+        }
+        return Set(names.filter { Self.manifestSequence(fromFileName: $0) == nil && !$0.hasPrefix(".") })
+    }
+
+    func deleteBlob(deviceUUID: UUID, blobName: String) throws {
+        let url = blobURL(deviceUUID, blobName: blobName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
+    }
+
+    func readBlob(_ url: URL) throws -> Data {
+        try coordinatedRead(url)
     }
 
     // MARK: Writing

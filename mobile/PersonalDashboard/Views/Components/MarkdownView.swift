@@ -83,7 +83,10 @@ struct MarkdownView: View {
                 Image(systemName: "icloud.slash")
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(Tokens.mutedSoft)
-                Text("Image on your other device")
+                Text(SyncAssetMessage.missing(
+                    "Image",
+                    isArriving: SyncAssetInbox.shared.isArriving(path)
+                ))
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.muted)
             }
