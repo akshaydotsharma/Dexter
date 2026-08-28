@@ -27,8 +27,12 @@ struct WalletTicketCard: View {
     var isPast: Bool = false
     /// Tap the header. `nil` on a surface where there is nothing left to open.
     var onTapHeader: (() -> Void)?
-    /// Tap the ticket body — goes to the barcode.
+    /// Tap the ticket body — opens the record behind the card.
     var onTapBody: (() -> Void)?
+    /// Tap the barcode stub — presents the code (#479). Split from `onTapBody`
+    /// because holding a code up at a gate and opening the record behind it are
+    /// different intentions, and the stub was inheriting the body's.
+    var onTapStub: (() -> Void)?
 
     /// Where the tear line landed, measured from the body and fed back into the
     /// outline so the notches line up with the dashes.
@@ -64,7 +68,8 @@ struct WalletTicketCard: View {
                     // The header above already carries the title; printing it
                     // again inside the body reads as a mistake.
                     showsTitle: false,
-                    embedded: true
+                    embedded: true,
+                    onTapBarcode: onTapStub
                 )
                 .contentShape(Rectangle())
                 .onTapGesture { onTapBody?() }

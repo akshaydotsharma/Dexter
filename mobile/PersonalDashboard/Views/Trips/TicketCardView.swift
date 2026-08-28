@@ -54,6 +54,17 @@ struct TicketCardView: View {
     /// supply the outline, and bleeds the barcode stub edge to edge. False
     /// everywhere on the trip timeline, which keeps its self-contained card.
     var embedded: Bool = false
+    /// Tap handler for the barcode stub (#479).
+    ///
+    /// The stub is the one part of a ticket that has an intention of its own: you
+    /// tap a code to hold it up at a gate, never to edit the record behind it. In
+    /// the wallet the whole card body carries a tap that opens the editor (or, for
+    /// a borrowed card, the surface that owns it), so without this the barcode
+    /// inherited that destination and tapping a QR code navigated away from it.
+    ///
+    /// `nil` on the trip timeline, where the card has no separate scan surface and
+    /// the stub is a thumbnail rather than the thing you present.
+    var onTapBarcode: (() -> Void)? = nil
 
     @Environment(\.openURL) private var openURL
 
@@ -895,6 +906,14 @@ struct TicketCardView: View {
                 muted: palette.stubMuted,
                 buttonFill: palette.band
             )
+        } else if let onTapBarcode {
+            // The stub's own gesture sits INSIDE the body's, so SwiftUI hands the
+            // tap to this one and the body's handler never fires for it.
+            scannableStub
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onTapBarcode)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Present this code")
         } else {
             scannableStub
         }

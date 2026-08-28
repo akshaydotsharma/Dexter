@@ -36,7 +36,11 @@ struct WalletDeckCard: View {
                 isOpen: isExpanded,
                 isPast: isPast,
                 onTapHeader: onToggle,
-                onTapBody: onOpen
+                onTapBody: onOpen,
+                // The barcode goes where the Present button goes (#479): iOS to
+                // the scan surface, macOS to the card detail. Tapping a code and
+                // pressing the button under it are the same intention.
+                onTapStub: onPresent
             )
 
             if isExpanded {

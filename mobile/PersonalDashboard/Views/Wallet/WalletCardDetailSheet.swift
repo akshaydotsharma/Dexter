@@ -51,7 +51,7 @@ struct WalletCardDetailSheet: View {
                         ScrollView {
                             VStack(spacing: 0) {
                                 Spacer(minLength: 0)
-                                WalletTicketCard(entry: entry)
+                                WalletTicketCard(entry: entry, onTapStub: stubTapAction)
                                 if !backFields.isEmpty { passBack }
                                 Spacer(minLength: 0)
                             }
@@ -96,6 +96,22 @@ struct WalletCardDetailSheet: View {
         .sheet(isPresented: $showingOriginal) {
             TicketOriginalViewer(attachmentPath: card.attachmentPath)
         }
+    }
+
+    /// Tapping the barcode here does what the Scan tile does (#479). On macOS
+    /// this surface already IS the enlarged card, so the stub has nowhere further
+    /// to go and stays inert rather than being a tap target that does nothing
+    /// visible.
+    private var stubTapAction: (() -> Void)? {
+        #if os(iOS)
+        guard card.hasBarcode else { return nil }
+        return {
+            Haptics.light()
+            showingScan = true
+        }
+        #else
+        return nil
+        #endif
     }
 
     /// The actions as a single row of icon tiles rather than a stack of
