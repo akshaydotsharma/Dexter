@@ -211,6 +211,48 @@ final class VisionItemEditorTests: XCTestCase {
         XCTAssertEqual(caret, b)
     }
 
+    /// The field is asked to commit BEFORE the caret is taken off it, and while
+    /// the caret is still the outgoing row's.
+    ///
+    /// This is the ordering the reported defect turned on (#492). A click on a
+    /// SwiftUI row resigns nothing, so if the caret is cleared first the field is
+    /// removed by the re-render with the typed text still only inside AppKit. The
+    /// resign is what makes the field report its own text.
+    func testTheReleaseAsksTheFieldToCommitBeforeClearingTheCaret() async throws {
+        await editor.addItem(to: blockID)
+        let a = try XCTUnwrap(caret)
+        await editor.commit(a, in: blockID, text: "First")
+        await editor.addItem(to: blockID)
+        let b = try XCTUnwrap(caret)
+        await editor.commit(b, in: blockID, text: "Second")
+
+        var caretWhenAsked: [UUID?] = []
+        editor.endFieldEditing = { [editor] in caretWhenAsked.append(editor?.editingID) }
+
+        editor.begin(a, in: .card)
+        editor.begin(b, in: .card)   // clicked B while A was open
+
+        XCTAssertEqual(caretWhenAsked, [a], "asked once, while A still held the caret")
+        XCTAssertNil(caret, "and released after")
+    }
+
+    /// Opening a row with nothing else in flight resigns nothing. There is no
+    /// field to commit, and reaching into AppKit to clear a first responder that
+    /// belongs to some other surface is not this class's business.
+    func testOpeningARowWithNoEditInFlightDoesNotTouchTheFieldEditor() async throws {
+        await editor.addItem(to: blockID)
+        let id = try XCTUnwrap(caret)
+        await editor.commit(id, in: blockID, text: "First")
+
+        var asked = 0
+        editor.endFieldEditing = { asked += 1 }
+
+        editor.begin(id, in: .card)
+
+        XCTAssertEqual(asked, 0)
+        XCTAssertEqual(caret, id)
+    }
+
     /// Clicking the row that already holds the caret is not a click that has to
     /// end anything, so it leaves the edit exactly where it was rather than
     /// closing the field under the pointer.
