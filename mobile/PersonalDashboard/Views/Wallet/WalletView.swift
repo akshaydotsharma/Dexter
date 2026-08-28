@@ -78,6 +78,11 @@ struct WalletView: View {
     /// rather than the model so a re-render can't hand the dialog a deleted row.
     @State private var pendingDeleteID: UUID?
 
+    /// Ticket queued for re-reading (#485). Confirmed rather than immediate: a
+    /// re-read re-derives the whole card from the document, so it can overwrite a
+    /// detail someone typed by hand.
+    @State private var pendingRereadID: UUID?
+
     #if os(iOS)
     /// Full-screen present-to-scan target (iOS only — the surface depends on
     /// `UIScreen.brightness` and the idle timer).
@@ -187,6 +192,22 @@ struct WalletView: View {
         } message: {
             Text("The card and its stored ticket file are removed from this device.")
         }
+        .confirmationDialog(
+            "Read this ticket again?",
+            isPresented: Binding(
+                get: { pendingRereadID != nil },
+                set: { if !$0 { pendingRereadID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Read again") {
+                if let id = pendingRereadID { reread(ticketID: id) }
+                pendingRereadID = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRereadID = nil }
+        } message: {
+            Text("The stored file is read again and the card's details are replaced with what it says. Anything you typed by hand is overwritten. The file and its code are untouched.")
+        }
         .alert(
             "Couldn't save the ticket",
             isPresented: Binding(
@@ -276,11 +297,13 @@ struct WalletView: View {
                             isExpanded: expandedID == entry.id,
                             isPast: isPast,
                             onToggle: { toggle(entry) },
-                            onOpen: { open(entry) },
                             onPresent: { present(entry) },
                             onEdit: ownID.map { id in { editorTarget = .existing(id) } },
                             onDelete: ownID.map { id in { pendingDeleteID = id } },
-                            onOpenSource: ownID == nil ? { openSource(of: entry) } : nil
+                            onOpenSource: ownID == nil ? { openSource(of: entry) } : nil,
+                            onReread: rereadableTicketID(of: entry).map { id in
+                                { pendingRereadID = id }
+                            }
                         )
                         .id(entry.id)
                         .padding(.top, topInset(at: index, in: entries))
@@ -456,25 +479,6 @@ struct WalletView: View {
         expandedID = grouped.upcoming.first?.id ?? grouped.past.first?.id
     }
 
-    /// Tapping an opened card's body goes to its editor (#468).
-    ///
-    /// It used to open a full-size read-only copy of the card whose own "Edit"
-    /// tile then led here, so reaching the editor from the deck took three taps.
-    /// The card is already on screen and already unfolded by this point, so a
-    /// second rendering of it was never the thing being asked for.
-    ///
-    /// A borrowed card has no wallet row to edit, so it goes to the surface that
-    /// owns it and edits there. Scanning keeps its own button (`present`), which
-    /// is what stops the two intentions sharing one gesture.
-    private func open(_ entry: WalletEntry) {
-        Haptics.light()
-        if let id = walletCardID(of: entry) {
-            editorTarget = .existing(id)
-        } else {
-            openSource(of: entry)
-        }
-    }
-
     /// Straight to the high-contrast barcode: max brightness, idle timer held.
     /// The fast path for someone already standing at the gate. A card with
     /// nothing scannable falls back to its detail rather than presenting an
@@ -495,6 +499,10 @@ struct WalletView: View {
     /// Jump to the surface that owns a borrowed card. Uses the same
     /// `router.focus` deep-link the Activity timeline uses, so the trip opens on
     /// its detail rather than the trip list.
+    ///
+    /// Reached only from the card's context menu and the detail sheet since #483.
+    /// It is the one thing the Wallet does that changes section, so it needs a
+    /// deliberate action behind it rather than a tap on the card.
     private func openSource(of entry: WalletEntry) {
         switch entry.source {
         case .wallet:
@@ -505,6 +513,45 @@ struct WalletView: View {
         case .task(_, let todoID, _):
             router.focus = ActivityFocus(section: .tasks, id: todoID)
             router.go(to: .tasks)
+        }
+    }
+
+    /// The `LocalTaskTicket.clientUUID` behind an entry, when that card can be read
+    /// again (#484).
+    ///
+    /// Only the extracted cards qualify. A `.pkpass` was never guessed at, and a
+    /// standalone wallet card or a trip's inline ticket is edited directly, so
+    /// neither has an extraction to re-run.
+    private func rereadableTicketID(of entry: WalletEntry) -> UUID? {
+        let ticketID: UUID
+        switch entry.source {
+        case .task(let id, _, _):               ticketID = id
+        case .tripDocument(let id, _, _, _):    ticketID = id
+        case .wallet, .trip:                    return nil
+        }
+        let path = entry.card.attachmentPath
+        guard !path.trimmingCharacters(in: .whitespaces).isEmpty,
+              !TicketStorage.isPass(path) else { return nil }
+        return ticketID
+    }
+
+    /// Read a stored ticket again against the current extractor.
+    ///
+    /// The card's face and back are only ever as good as the prompt that was running
+    /// the day the file was uploaded. When that prompt gets better — English labels,
+    /// or no longer keeping the issuer's fiscal codes — this is how a card already in
+    /// the wallet catches up, without re-uploading a file that dedupe would refuse.
+    private func reread(ticketID: UUID) {
+        Task {
+            withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = true }
+            defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = false } }
+            do {
+                try await TaskTicketExtraction().reread(ticketUUID: ticketID, context: modelContext)
+                Haptics.light()
+            } catch {
+                ticketError = (error as? LocalizedError)?.errorDescription
+                    ?? "We couldn't read that ticket again. Please try again."
+            }
         }
     }
 
@@ -541,17 +588,15 @@ struct WalletView: View {
             Haptics.light()
             if result.degraded {
                 editorTarget = .existing(result.itemUUID)
-            } else if let card = fetchCard(result.itemUUID) {
-                // Straight to the card that was just added, so the upload ends
-                // on something the user can see and scan.
+            } else if fetchCard(result.itemUUID) != nil {
+                // Straight to the card that was just added, so the upload ends on
+                // something the user can see, check and scan.
                 //
                 // Fetched from the context rather than read off `cards`: the
                 // `@Query` has not necessarily republished in the same run-loop
                 // turn as the insert, so reading it here can miss the brand new
                 // row and silently skip this step.
-                if let entry = WalletEntry.build(cards: [card], itineraryItems: [], trips: []).first {
-                    open(entry)
-                }
+                editorTarget = .existing(result.itemUUID)
             }
         } catch {
             ticketError = (error as? LocalizedError)?.errorDescription
