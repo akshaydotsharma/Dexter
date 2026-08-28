@@ -71,6 +71,42 @@ final class VisionTileRowFocusTests: XCTestCase {
         return view
     }
 
+    /// Clicking an item leaves a CARET at the end, not the line selected.
+    ///
+    /// Reported: *"when I select an item to be edited, it selects the whole text
+    /// and then I need to click again to add a text."* AppKit selects the whole
+    /// string when a field takes first responder, so the next keystroke replaced
+    /// the line — which is why a second click was needed to get a caret.
+    func testTheCaretLandsAtTheEndOfTheExistingText() async throws {
+        let item = VisionItem(text: "Product Design")
+        let view = host(.item(item), isEditing: true)
+        await settle()
+
+        let field = try XCTUnwrap(self.field(in: view))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView, "the field is editing")
+
+        XCTAssertEqual(
+            editor.selectedRange(),
+            NSRange(location: "Product Design".count, length: 0),
+            "an empty selection at the end: a caret, ready to type the next character"
+        )
+    }
+
+    /// And typing appends rather than replacing, which is the thing the person
+    /// actually noticed. Asserted through the field editor because that is the
+    /// only writer the field listens to.
+    func testTypingAfterOneClickAppendsInsteadOfReplacing() async throws {
+        let item = VisionItem(text: "Product")
+        let view = host(.item(item), isEditing: true)
+        await settle()
+
+        let field = try XCTUnwrap(self.field(in: view))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.insertText(" Sense", replacementRange: editor.selectedRange())
+
+        XCTAssertEqual(field.stringValue, "Product Sense")
+    }
+
     /// A row rendered in edit must have a field, and that field must hold the
     /// caret. If it does not, the click that opened the edit is spent making the
     /// row swap its `Text` for a `TextField` and the NEXT click is what actually

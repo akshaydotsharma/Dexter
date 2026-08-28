@@ -52,6 +52,17 @@ final class ClearBackgroundTextField: NSTextField {
                 editor.backgroundColor = .clear
                 // Keep the caret clearly visible against the paper row.
                 editor.insertionPointColor = NSColor(Tokens.ink)
+                // A caret at the end, not a selected line (#492).
+                //
+                // AppKit selects the whole string when a text field takes first
+                // responder, which is right for a form field you are about to
+                // replace and wrong for a row you clicked to keep writing in:
+                // the next character typed wipes what was there, so the click
+                // has to be followed by a second one to place the caret. These
+                // fields are all inline edits of an existing line — an item, a
+                // task title, a block title — so clicking one means "carry on
+                // from the end", the same as a Finder rename or a Notes line.
+                editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
             }
         }
         return ok
