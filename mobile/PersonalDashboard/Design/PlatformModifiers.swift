@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(AppKit) && os(macOS)
+import AppKit
+#endif
 
 /// Cross-platform shims for SwiftUI text/navigation modifiers that exist only
 /// on iOS. Each applies the real modifier on iOS and is a no-op on macOS, so
@@ -72,6 +75,40 @@ extension ToolbarItemPlacement {
         .topBarTrailing
         #else
         .automatic
+        #endif
+    }
+}
+
+/// Ending a live text edit from outside the field that holds it.
+///
+/// On macOS a text field commits when it RESIGNS first responder
+/// (`controlTextDidEndEditing` → `MacClearTextField.onFocusChange(false)`), and
+/// that is the only path that reads the field's own live text — the `text`
+/// binding is deliberately synced on submit and blur only, so anything else
+/// reporting on the field's behalf reports what the row was seeded with.
+///
+/// The catch is that clicking a SwiftUI view which cannot take focus (an item
+/// row, a label, the block body) does not resign anything. The field keeps the
+/// caret, no commit fires, and if the caret is then released in state the field
+/// is torn down with the typed text still only in AppKit. That is the defect in
+/// #492: *"if I'm editing an item and I click on another item, the change does
+/// not get saved."*
+///
+/// So whoever releases the caret asks for the edit to end first, here, and the
+/// field commits itself the way it always has.
+enum PlatformFieldEditing {
+
+    /// Resign any live field editor, in whatever window holds it.
+    ///
+    /// Every window rather than `NSApp.keyWindow`, because a popover is its own
+    /// window and is frequently NOT key — the overflow popover edits items too.
+    /// A window with no text edit in flight has no `NSText` first responder, so
+    /// this is a no-op there rather than a stray focus change.
+    static func end() {
+        #if canImport(AppKit) && os(macOS)
+        for window in NSApplication.shared.windows where window.firstResponder is NSText {
+            window.makeFirstResponder(nil)
+        }
         #endif
     }
 }

@@ -167,6 +167,11 @@ struct VisionBoardView: View {
                 exclusions: exclusions,
                 textRects: textRects,
                 canvasSize: size,
+                // One caret on the board, so one flag. Read here rather than
+                // inside the pointer layer, which holds no reference to the
+                // editor and should not start holding one: it is told what is
+                // true and decides nothing.
+                isEditingText: editor.editingID != nil,
                 tileCounts: tileCounts,
                 onCanvasClick: { col, row in
                     // The ghost, the click and the creation all read this one

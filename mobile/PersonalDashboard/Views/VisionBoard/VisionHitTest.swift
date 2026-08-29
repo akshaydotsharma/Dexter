@@ -16,6 +16,15 @@ enum VisionHit: Equatable {
     /// the ellipsis menu, the `+ Add item` row. The pointer layer must make itself
     /// transparent here.
     case passThrough
+
+    /// True when the pointer layer answers this click itself.
+    ///
+    /// Which is the same question as "may this click be spent on ending a text
+    /// edit instead": a pass-through belongs to SwiftUI, so this view is not the
+    /// one deciding what it means.
+    var isHandledByPointerLayer: Bool {
+        self != .passThrough
+    }
 }
 
 /// Where the pointer is, worked out with no AppKit, no view state and no window.

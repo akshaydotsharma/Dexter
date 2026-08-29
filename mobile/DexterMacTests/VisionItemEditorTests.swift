@@ -171,9 +171,14 @@ final class VisionItemEditorTests: XCTestCase {
 
     // MARK: - Moving between items
 
-    /// Click item B's text while item A is being edited. B gets the caret, and
-    /// A's late teardown commit saves A without stealing it back.
-    func testClickingAnotherItemMovesTheCaretAndStillSavesTheOldOne() async throws {
+    /// Click item B's text while item A is being edited. The click ENDS A and
+    /// stops there; the caret does not travel. A's late teardown commit still
+    /// saves what was typed into it.
+    ///
+    /// The rule the user asked for (#492): a click that lands while something is
+    /// being edited is spent on ending that edit. Before this, one click both
+    /// closed A and opened B, which is the same click doing two things.
+    func testClickingAnotherItemEndsTheEditAndStillSavesTheOldOne() async throws {
         await editor.addItem(to: blockID)
         let a = try XCTUnwrap(caret)
         await editor.commit(a, in: blockID, text: "First")
@@ -185,8 +190,80 @@ final class VisionItemEditorTests: XCTestCase {
         editor.begin(b, in: .card)                                    // clicked B while A was open
         await editor.commit(a, in: blockID, text: "First, edited")   // A's late blur
 
+        XCTAssertNil(caret, "the first click only released A")
+        XCTAssertEqual(try texts(), ["First, edited", "Second"], "and A still saved")
+    }
+
+    /// The second click is the one that opens B. Otherwise the rule above would
+    /// not be "one click, one thing" — it would be "B is unreachable".
+    func testTheSecondClickOnAnotherItemOpensIt() async throws {
+        await editor.addItem(to: blockID)
+        let a = try XCTUnwrap(caret)
+        await editor.commit(a, in: blockID, text: "First")
+        await editor.addItem(to: blockID)
+        let b = try XCTUnwrap(caret)
+        await editor.commit(b, in: blockID, text: "Second")
+
+        editor.begin(a, in: .card)
+        editor.begin(b, in: .card)
+        editor.begin(b, in: .card)
+
         XCTAssertEqual(caret, b)
-        XCTAssertEqual(try texts(), ["First, edited", "Second"])
+    }
+
+    /// The field is asked to commit BEFORE the caret is taken off it, and while
+    /// the caret is still the outgoing row's.
+    ///
+    /// This is the ordering the reported defect turned on (#492). A click on a
+    /// SwiftUI row resigns nothing, so if the caret is cleared first the field is
+    /// removed by the re-render with the typed text still only inside AppKit. The
+    /// resign is what makes the field report its own text.
+    func testTheReleaseAsksTheFieldToCommitBeforeClearingTheCaret() async throws {
+        await editor.addItem(to: blockID)
+        let a = try XCTUnwrap(caret)
+        await editor.commit(a, in: blockID, text: "First")
+        await editor.addItem(to: blockID)
+        let b = try XCTUnwrap(caret)
+        await editor.commit(b, in: blockID, text: "Second")
+
+        var caretWhenAsked: [UUID?] = []
+        editor.endFieldEditing = { [editor] in caretWhenAsked.append(editor?.editingID) }
+
+        editor.begin(a, in: .card)
+        editor.begin(b, in: .card)   // clicked B while A was open
+
+        XCTAssertEqual(caretWhenAsked, [a], "asked once, while A still held the caret")
+        XCTAssertNil(caret, "and released after")
+    }
+
+    /// Opening a row with nothing else in flight resigns nothing. There is no
+    /// field to commit, and reaching into AppKit to clear a first responder that
+    /// belongs to some other surface is not this class's business.
+    func testOpeningARowWithNoEditInFlightDoesNotTouchTheFieldEditor() async throws {
+        await editor.addItem(to: blockID)
+        let id = try XCTUnwrap(caret)
+        await editor.commit(id, in: blockID, text: "First")
+
+        var asked = 0
+        editor.endFieldEditing = { asked += 1 }
+
+        editor.begin(id, in: .card)
+
+        XCTAssertEqual(asked, 0)
+        XCTAssertEqual(caret, id)
+    }
+
+    /// Clicking the row that already holds the caret is not a click that has to
+    /// end anything, so it leaves the edit exactly where it was rather than
+    /// closing the field under the pointer.
+    func testClickingTheRowThatAlreadyHasTheCaretChangesNothing() async throws {
+        await editor.addItem(to: blockID)
+        let id = try XCTUnwrap(caret)
+
+        editor.begin(id, in: .card)
+
+        XCTAssertEqual(caret, id)
+        XCTAssertEqual(editor.editingID(in: .card), id)
     }
 
     /// Clicking an existing item's text puts the caret in it. The obvious case,

@@ -70,6 +70,16 @@ final class VisionItemEditor {
 
     private let viewModel: VisionBoardViewModel
 
+    /// Ends whatever text edit AppKit currently has live, so the field commits
+    /// its OWN text before the caret is taken away from it.
+    ///
+    /// Injected, for two reasons. This class is `@Observable` view-model code and
+    /// stays free of AppKit, and the ordering it exists to guarantee — the field
+    /// reports, then the caret goes — is only assertable if a test can see the
+    /// call. See `PlatformFieldEditing.end` for why the release cannot simply
+    /// rely on the field being torn down.
+    var endFieldEditing: () -> Void = { PlatformFieldEditing.end() }
+
     init(viewModel: VisionBoardViewModel) {
         self.viewModel = viewModel
     }
@@ -83,7 +93,30 @@ final class VisionItemEditor {
     /// row commits itself when its field tears down, which is the same path that
     /// already works, and the ownership rule makes that commit harmless whenever
     /// it happens to land.
+    ///
+    /// **A click that lands while a DIFFERENT row holds the caret only releases
+    /// it.** The caret does not travel, and the second click is what puts it in
+    /// the row that was clicked. One click, one thing: the same rule the pointer
+    /// layer applies to the canvas (`VisionPointerView.isEditingText`), so
+    /// finishing a line of typing means the same click anywhere on the board.
+    /// Clicking the row that already has the caret changes nothing, since there
+    /// is no other edit for the click to end.
+    ///
+    /// The release asks AppKit to end the edit BEFORE it clears the caret, and
+    /// the order is the whole point. Clicking a row cannot resign a text field on
+    /// its own — a SwiftUI row does not take focus — so without this the field
+    /// keeps the caret until the re-render removes it, and what was typed exists
+    /// nowhere but in an `NSTextField` that is going away. The resign makes the
+    /// field commit itself, with its own live text, through the blur path that
+    /// already works. That commit releases the caret too (it owns it), so the
+    /// assignment below is usually a no-op — kept because the release must hold
+    /// even where there is no live field to resign.
     func begin(_ id: UUID, in surface: Surface) {
+        if let editing, editing.id != id {
+            endFieldEditing()
+            self.editing = nil
+            return
+        }
         editing = (id, surface)
     }
 
