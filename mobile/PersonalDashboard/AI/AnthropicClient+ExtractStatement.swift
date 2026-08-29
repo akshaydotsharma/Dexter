@@ -283,20 +283,44 @@ extension AnthropicClient {
     /// Page-boundary duplicates (a rare row read on both sides of a split) are
     /// harmless: the merged list flows through the EXISTING `ExpenseDedupe` in
     /// `StatementImporter.insert`, which collapses structural duplicates.
-    func extractStatement(pdfData: Data) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
+    /// `onProgress` reports (chunks finished, chunks in total) after each chunk
+    /// lands, so a caller can show "3 of 5" rather than an unchanging spinner
+    /// (#498). It is called on the main actor and is awaited, so the reports
+    /// arrive in order. A single-chunk statement reports (1, 1) once.
+    ///
+    /// `cancellation` is polled BETWEEN chunks (#498). When it is set, the loop
+    /// stops and returns the lines read so far, flagged `stoppedEarly`, rather
+    /// than throwing: those rows still insert, and a later re-import is
+    /// idempotent, so a stopped run self-heals. Cancelling the `Task` instead
+    /// would make the insert pass's FX lookups throw and count every non-SGD
+    /// row as failed.
+    func extractStatement(
+        pdfData: Data,
+        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
+        cancellation: ImportCancellationToken? = nil
+    ) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool, stoppedEarly: Bool) {
         let chunks = PDFChunker.split(pdfData)
 
         // Single chunk (small or unsplittable statement): identical behaviour
         // to the pre-#202 path — one call, same request bytes.
         if chunks.count <= 1 {
-            return try await extractStatementChunk(pdfData: chunks.first ?? pdfData)
+            let (lines, meta, truncated) = try await extractStatementChunk(pdfData: chunks.first ?? pdfData)
+            await onProgress?(1, 1)
+            return (lines, meta, truncated, false)
         }
 
         var mergedLines: [ExtractedStatementLine] = []
         var mergedMeta: ExtractedStatementMeta?
         var anyTruncated = false
+        var stoppedEarly = false
 
-        for chunk in chunks {
+        for (index, chunk) in chunks.enumerated() {
+            // Poll before spending the call, so a cancel taps out at the next
+            // boundary rather than after one more multi-second request.
+            if cancellation?.isCancelled == true {
+                stoppedEarly = true
+                break
+            }
             let (lines, meta, truncated) = try await extractStatementChunk(pdfData: chunk)
             mergedLines.append(contentsOf: lines)
             anyTruncated = anyTruncated || truncated
@@ -306,12 +330,13 @@ extension AnthropicClient {
             if mergedMeta == nil, Self.metaHasContent(meta) {
                 mergedMeta = meta
             }
+            await onProgress?(index + 1, chunks.count)
         }
 
         let finalMeta = mergedMeta ?? ExtractedStatementMeta(
             issuer: nil, last4: nil, statementMonth: nil, statementYear: nil
         )
-        return (mergedLines, finalMeta, anyTruncated)
+        return (mergedLines, finalMeta, anyTruncated, stoppedEarly)
     }
 
     /// True when a parsed header carries at least one readable field, so the
