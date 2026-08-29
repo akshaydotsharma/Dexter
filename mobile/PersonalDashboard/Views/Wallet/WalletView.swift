@@ -402,23 +402,14 @@ struct WalletView: View {
                 Label("Add manually", systemImage: "square.and.pencil")
             }
         } label: {
-            fabCircle
+            Image(systemName: "plus")
         }
+        .buttonStyle(EdIconCircleButtonStyle(kind: .primary))
         .disabled(isProcessingTicket)
         .padding(.trailing, 22)
         .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .accessibilityLabel("Add a card")
-    }
-
-    /// Same circular FAB the trip timeline uses, in the wallet's accent.
-    private var fabCircle: some View {
-        Image(systemName: "plus")
-            .font(.system(size: 17, weight: .regular))
-            .foregroundStyle(Tokens.accentFg)
-            .frame(width: 48, height: 48)
-            .background(Tokens.accent(for: .wallet), in: Circle())
-            .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
     }
 
     private var processingOverlay: some View {
