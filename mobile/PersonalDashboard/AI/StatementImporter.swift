@@ -46,6 +46,12 @@ struct StatementImportResult: Sendable {
     /// lookup failed is still counted in `deposits` but omitted here, so this is
     /// a lower bound on money received. Defaults to 0.
     var depositsTotalSGD: Double = 0
+    /// True when the user cancelled part-way and the extractor stopped between
+    /// chunks (#498). Distinct from `possiblyTruncated`: that means the model
+    /// ran out of output budget, this means the user asked us to stop. The rows
+    /// read before the stop still imported, and a re-import is idempotent, so
+    /// the remedy is simply to import the statement again. Defaults to false.
+    var stoppedEarly: Bool = false
 
     var totalParsed: Int {
         imported + skippedDuplicates + ignoredNonSpend + deposits + failed
@@ -87,6 +93,22 @@ struct StatementImportResult: Sendable {
             parts.append("\(failed) couldn't be added")
         }
         let counts = parts.joined(separator: " · ")
+
+        // A user-initiated stop takes precedence over the truncation warning:
+        // the run ended because it was asked to, and the remedy is different
+        // (import again, rather than "the statement was too long"). No em dash
+        // in this user-facing string (project no-em-dash rule).
+        if stoppedEarly {
+            return """
+            Import stopped
+
+            \(counts)
+
+            The rest of the statement was not read. Import it again to finish; \
+            the transactions already added will not be duplicated.
+            """
+        }
+
         guard possiblyTruncated else { return counts }
 
         // Chunking makes this essentially unreachable, but if a single chunk
@@ -178,9 +200,31 @@ struct StatementImporter {
     /// one share, the user as payer). nil keeps today's Finance behaviour (no
     /// trip, no split). Dedup is unaffected: trip linkage is stamped AFTER the
     /// dedup decisions, which never consider it.
-    func importStatement(pdfData: Data, fileName: String? = nil, trip: LocalTrip? = nil) async throws -> StatementImportResult {
-        let (lines, meta, truncated) = try await anthropic.extractStatement(pdfData: pdfData)
-        return await insert(lines: lines, meta: meta, fileName: fileName, possiblyTruncated: truncated, trip: trip)
+    /// `onProgress` and `cancellation` are forwarded to the chunked extractor
+    /// (#498) so the caller can show "3 of 5" and stop a long run between
+    /// chunks. Both default to nil, so every existing call site and test is
+    /// unaffected. A stopped run is NOT an error: whatever was read before the
+    /// stop is inserted as normal and the result carries `stoppedEarly`.
+    func importStatement(
+        pdfData: Data,
+        fileName: String? = nil,
+        trip: LocalTrip? = nil,
+        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
+        cancellation: ImportCancellationToken? = nil
+    ) async throws -> StatementImportResult {
+        let (lines, meta, truncated, stoppedEarly) = try await anthropic.extractStatement(
+            pdfData: pdfData,
+            onProgress: onProgress,
+            cancellation: cancellation
+        )
+        return await insert(
+            lines: lines,
+            meta: meta,
+            fileName: fileName,
+            possiblyTruncated: truncated,
+            trip: trip,
+            stoppedEarly: stoppedEarly
+        )
     }
 
     /// Bucket + insert already-parsed lines. Split out from `importStatement`
@@ -209,7 +253,8 @@ struct StatementImporter {
         receiptImagePath: String? = nil,
         recordsImportHistory: Bool = true,
         possiblyTruncated: Bool,
-        trip: LocalTrip? = nil
+        trip: LocalTrip? = nil,
+        stoppedEarly: Bool = false
     ) async -> StatementImportResult {
         var imported = 0
         var refunds = 0
@@ -523,7 +568,8 @@ struct StatementImporter {
             possiblyTruncated: possiblyTruncated,
             importedUUIDs: importedUUIDs,
             deposits: deposits,
-            depositsTotalSGD: depositsTotalSGD
+            depositsTotalSGD: depositsTotalSGD,
+            stoppedEarly: stoppedEarly
         )
     }
 

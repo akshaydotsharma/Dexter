@@ -164,12 +164,53 @@ struct TripDetailView: View {
         return TripExpenseContext(tripUUID: trip.clientUUID, participants: participants)
     }
 
+    /// Imports belonging to THIS trip, owned by `ImportJobCenter` (#498). A
+    /// trip import is scoped to the trip rather than to Finance because its
+    /// rows are `hiddenFromFinance` by default (#277), so a Finance banner
+    /// would point at rows Finance is not counting.
+    private var tripJobs: [ImportJob] { ImportJobCenter.shared.jobs(in: .trip(trip.clientUUID)) }
+
+    /// Show a finished import's outcome and clear the row (#498). Removing on
+    /// tap rather than on dismiss is deliberate: seen once, then gone.
+    private func openFinishedJob(_ job: ImportJob) {
+        switch job.outcome {
+        case .summary(let text):
+            statementImportSummary = text
+        case .failure(let text):
+            expenseCaptureError = text
+        case .none:
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            ImportJobCenter.shared.acknowledge(job.id)
+        }
+    }
+
     var body: some View {
         ZStack {
             Tokens.paper.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 tripTabBar
+
+                // Trip statement imports (#498). Shown on both tabs, because
+                // the run outlives whichever one the user is looking at, and
+                // rendered as a banner rather than the blocking overlay this
+                // path used to raise: a statement is read in sequential 3-page
+                // chunks, so a long one froze this screen for minutes.
+                if !tripJobs.isEmpty {
+                    VStack(spacing: Space.xs) {
+                        ForEach(tripJobs) { job in
+                            FinanceProcessingRow(
+                                job: job,
+                                onOpen: { openFinishedJob(job) },
+                                onCancel: { ImportJobCenter.shared.cancel(job.id) }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, Space.lg)
+                    .padding(.top, Space.sm)
+                }
 
                 switch tab {
                 case .itinerary:
@@ -864,22 +905,36 @@ struct TripDetailView: View {
     /// row gets the trip FK and — when the trip has participants — the default
     /// equal split. Dedup is unchanged.
     private func importTripStatement(pdfData: Data, fileName: String? = nil) async {
-        withAnimation(.easeInOut(duration: 0.15)) { isProcessingExpenseUpload = true }
-        defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingExpenseUpload = false } }
+        // No blocking overlay and no `defer` removal (#498): the banner row is
+        // cleared by `openFinishedJob` once the user has read the outcome, so
+        // leaving the trip mid-import and coming back shows the run as it
+        // stands rather than losing it with the view.
+        let bannerLabel = fileName
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            .map { "Importing \($0)…" }
+        let (jobID, token) = ImportJobCenter.shared.begin(
+            kind: .statement,
+            scope: .trip(trip.clientUUID),
+            overrideLabel: bannerLabel
+        )
 
         do {
             let result = try await StatementImporter.default().importStatement(
                 pdfData: pdfData,
                 fileName: fileName,
-                trip: trip
+                trip: trip,
+                onProgress: { done, total in
+                    ImportJobCenter.shared.reportProgress(jobID, completed: done, total: total)
+                },
+                cancellation: token
             )
-            statementImportSummary = tripImportSummary(result.summaryLine)
+            ImportJobCenter.shared.finish(jobID, outcome: .summary(tripImportSummary(result.summaryLine)))
         } catch {
             let message: String = {
                 if let typed = error as? StatementExtractionError { return typed.localizedDescription }
                 return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
             }()
-            expenseCaptureError = message
+            ImportJobCenter.shared.finish(jobID, outcome: .failure(message))
         }
     }
 

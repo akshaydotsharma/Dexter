@@ -114,7 +114,13 @@ struct FinanceView: View {
     /// rows pinned above the expense list (#186). Modelled as an array (not a
     /// bool) so two uploads in a row show two rows and the list stays fully
     /// interactive while extraction / import runs in the background.
-    @State private var processingJobs: [ProcessingJob] = []
+    /// In-flight and just-finished imports, owned by `ImportJobCenter` rather
+    /// than by this view (#498). The router is a plain `switch`, so leaving
+    /// Finance destroys this view; holding the jobs here meant a running import
+    /// lost its spinner and a finished one lost its summary. Reading the
+    /// singleton in `body` is enough for Observation to re-render this view as
+    /// the jobs change.
+    private var financeJobs: [ImportJob] { ImportJobCenter.shared.jobs(in: .finance) }
 
     /// Summary shown after a statement import completes (#184), e.g.
     /// "Imported 42 · Skipped 8 duplicates · Ignored 5 payments/refunds".
@@ -345,13 +351,16 @@ struct FinanceView: View {
         //    Previously the row only appeared after the synchronous HEIC→JPEG
         //    compress finished on the main actor, which read as a lag on
         //    multi-MB photos. Removed on every exit path.
-        let job = ProcessingJob(kind: .receipt)
-        withAnimation(.easeInOut(duration: 0.15)) {
-            processingJobs.append(job)
-        }
+        //    The job lives on `ImportJobCenter` so the row survives navigation
+        //    (#498), but a receipt still DISCARDS on exit rather than leaving an
+        //    outcome to tap: every receipt path ends by opening the expense
+        //    editor on this screen, and that sheet is the feedback. Only the
+        //    multi-expense photo case produces a summary, and it routes through
+        //    the same alert the statement path uses.
+        let (jobID, _) = ImportJobCenter.shared.begin(kind: .receipt, scope: .finance)
         defer {
             withAnimation(.easeInOut(duration: 0.15)) {
-                processingJobs.removeAll { $0.id == job.id }
+                ImportJobCenter.shared.discard(jobID)
             }
         }
 
@@ -567,19 +576,28 @@ struct FinanceView: View {
         let bannerLabel = fileName
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
             .map { "Importing \($0)…" }
-        let job = ProcessingJob(kind: .statement, overrideLabel: bannerLabel)
-        withAnimation(.easeInOut(duration: 0.15)) {
-            processingJobs.append(job)
-        }
-        defer {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                processingJobs.removeAll { $0.id == job.id }
-            }
-        }
+        // Registered on `ImportJobCenter`, NOT on this view (#498). A statement
+        // is read in sequential 3-page chunks, so a long one runs for minutes;
+        // the user can leave Finance and come back to find it still going, and a
+        // run that finished while they were away waits as a tappable row.
+        // Deliberately no `defer` removal: the row is cleared by
+        // `openFinishedJob`, once its outcome has actually been seen.
+        let (jobID, token) = ImportJobCenter.shared.begin(
+            kind: .statement,
+            scope: .finance,
+            overrideLabel: bannerLabel
+        )
 
         do {
-            let result = try await StatementImporter.default().importStatement(pdfData: pdfData, fileName: fileName)
-            statementImportSummary = result.summaryLine
+            let result = try await StatementImporter.default().importStatement(
+                pdfData: pdfData,
+                fileName: fileName,
+                onProgress: { done, total in
+                    ImportJobCenter.shared.reportProgress(jobID, completed: done, total: total)
+                },
+                cancellation: token
+            )
+            ImportJobCenter.shared.finish(jobID, outcome: .summary(result.summaryLine))
         } catch {
             let message: String = {
                 if let typed = error as? StatementExtractionError {
@@ -587,7 +605,24 @@ struct FinanceView: View {
                 }
                 return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
             }()
-            captureErrorMessage = message
+            ImportJobCenter.shared.finish(jobID, outcome: .failure(message))
+        }
+    }
+
+    /// Show a finished job's outcome and clear the row (#498). The alert IS the
+    /// acknowledgement, so the job is removed on tap rather than on dismiss:
+    /// the user asked to see the status once, then have it gone.
+    private func openFinishedJob(_ job: ImportJob) {
+        switch job.outcome {
+        case .summary(let text):
+            statementImportSummary = text
+        case .failure(let text):
+            captureErrorMessage = text
+        case .none:
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            ImportJobCenter.shared.acknowledge(job.id)
         }
     }
 
@@ -645,22 +680,28 @@ struct FinanceView: View {
                 // Grouped under a "Processing" eyebrow header (#200) so it's
                 // clear the rows are in-flight work; the whole block — header
                 // included — disappears when nothing is in flight.
-                if !processingJobs.isEmpty {
+                if !financeJobs.isEmpty {
                     VStack(alignment: .leading, spacing: Space.sm) {
                         HStack {
-                            Text("Processing")
+                            // "Imports", not "Processing": the block now also
+                            // holds finished runs waiting to be read (#498).
+                            Text("Imports")
                                 .eyebrow()
                             Spacer()
-                            if processingJobs.count > 1 {
-                                Text("\(processingJobs.count)")
+                            if financeJobs.count > 1 {
+                                Text("\(financeJobs.count)")
                                     .font(.edFootnote)
                                     .monospacedDigit()
                                     .foregroundStyle(Tokens.muted)
                             }
                         }
                         VStack(spacing: Space.xs) {
-                            ForEach(processingJobs) { job in
-                                FinanceProcessingRow(job: job)
+                            ForEach(financeJobs) { job in
+                                FinanceProcessingRow(
+                                    job: job,
+                                    onOpen: { openFinishedJob(job) },
+                                    onCancel: { ImportJobCenter.shared.cancel(job.id) }
+                                )
                             }
                         }
                     }

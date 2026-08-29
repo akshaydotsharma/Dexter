@@ -220,6 +220,7 @@ targets:
       - path: PersonalDashboard/Services/AIStreamingService.swift
       - path: PersonalDashboard/Services/FXService.swift
       - path: PersonalDashboard/Services/ExpenseService.swift
+      - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift
       - path: PersonalDashboard/Services/EventService.swift
       - path: PersonalDashboard/Services/RecurringExpenseService.swift
