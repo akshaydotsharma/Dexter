@@ -73,7 +73,6 @@ struct VisionBlockCard: View {
     private var hovering: Bool { isHovered }
     @State private var editingTitle = false
     @State private var titleDraft = ""
-    @State private var addDraft = ""
     /// Both plain `@State` rather than `@FocusState`, for the reason recorded on
     /// `VisionTileRow.focused`: SwiftUI owns a `@FocusState` value and resets one
     /// that no view has bound with `.focused(_:)`, so the field mounts unfocused
@@ -81,7 +80,6 @@ struct VisionBlockCard: View {
     /// `Binding<Bool>` and drives AppKit's first responder itself, which is the
     /// whole reason it exists.
     @State private var titleFocused = false
-    @State private var addFocused = false
 
     /// Bindings onto the board's single popover value. Derived rather than
     /// stored, so two cards can never both believe they have one open.
@@ -205,9 +203,6 @@ struct VisionBlockCard: View {
                 contentStack.padding(.top, Space.md)
             }
             Spacer(minLength: 0)
-            if tier == .large {
-                addRow
-            }
         }
         .padding(Space.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -571,9 +566,11 @@ struct VisionBlockCard: View {
     /// The `+` that puts a new item on the block.
     ///
     /// Directly under the last row, which is where the list ends and therefore
-    /// where the next thing goes. Always visible, never hover-revealed: it is
-    /// the only way to create anything on a block, and at medium it is the only
-    /// adder of any kind.
+    /// where the next thing goes. Always visible, never hover-revealed, and at
+    /// every tier the ONLY adder on the card: the large-only `Add task` field
+    /// that used to sit at the block's foot is gone, so a block creates items
+    /// and nothing else. A task reaches a block through the ellipsis menu's
+    /// `Attach existing task…`, which keeps Tasks the one place a task is born.
     private var addItemRow: some View {
         Button(action: addItem) {
             HStack(spacing: Space.sm) {
@@ -651,68 +648,6 @@ struct VisionBlockCard: View {
             } else {
                 await viewModel.toggleItem(row.id, in: block.id, sinkDelay: delay)
             }
-        }
-    }
-
-    // MARK: - Add task row (large only)
-
-    /// Creates a real `LocalTodo` and files it here — the one adder that puts
-    /// something in Tasks as well as on the board.
-    ///
-    /// Kept alongside the inline `+ Add item`, which is the primary create and
-    /// exists at every tier. The two make visually identical rows and differ
-    /// only in where the row also shows up, so the labels have to carry the
-    /// whole distinction: "item" stays here, "task" goes to Tasks. That is a
-    /// choice worth offering rather than guessing at, which is why the
-    /// short-lived menu that made you pick a kind BEFORE typing is gone — it put
-    /// the decision in front of the words.
-    private var addRow: some View {
-        VStack(spacing: Space.sm) {
-            // `Tokens.border`, not `Tokens.divider`. The block body is
-            // `surface`, and divider is unreliable on light surfaces in light
-            // mode — a trap this codebase has already hit.
-            Rectangle()
-                .fill(Tokens.border)
-                .frame(height: 0.5)
-
-            HStack(spacing: Space.sm) {
-                Image(systemName: "plus")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Tokens.mutedSoft)
-                    // Aligns with the tile checkboxes above it.
-                    .frame(width: 26 - Space.sm, alignment: .center)
-
-                MacClearTextField(
-                    placeholder: "Add task",
-                    text: $addDraft,
-                    isFocused: Binding(get: { addFocused }, set: { addFocused = $0 }),
-                    onSubmit: { commitAddRow() },
-                    onFocusChange: { _ in },
-                    placeholderColor: Tokens.mutedSoft
-                )
-            }
-            .padding(.horizontal, Space.sm)
-            .frame(height: 26)
-            // On focus the row takes the shape of a tile, previewing what it is
-            // about to create.
-            .background(
-                addFocused ? Tokens.surface2 : Color.clear,
-                in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-            )
-            .visionPassThrough()
-        }
-        .padding(.top, Space.sm)
-        .help("Add a task, which also appears in Tasks")
-    }
-
-    private func commitAddRow() {
-        let text = addDraft
-        addDraft = ""
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        Task {
-            // Focus is deliberately NOT reset: `MacClearTextField` keeps the
-            // field first responder on Return so you can keep going.
-            await viewModel.addTask(title: text, to: block.id)
         }
     }
 

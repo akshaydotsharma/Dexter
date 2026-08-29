@@ -13,7 +13,7 @@ enum VisionHit: Equatable {
     /// Empty canvas, at this cell.
     case canvas(col: Int, row: Int)
     /// A SwiftUI child that owns this point — a checkbox, the title, `+N more`,
-    /// the ellipsis menu, the add-task field. The pointer layer must make itself
+    /// the ellipsis menu, the `+ Add item` row. The pointer layer must make itself
     /// transparent here.
     case passThrough
 }
@@ -107,10 +107,10 @@ enum VisionHitTest {
     ///   - exclusions: interactive SwiftUI children, in canvas space, collected
     ///     by `VisionInteractiveRectsKey`.
     ///
-    /// The grip is tested BEFORE exclusions on purpose. At `large` the add-task
-    /// field spans the block's foot and its rect reaches under the grip; the
-    /// grip is drawn on top of it, so it has to hit first or a wide block could
-    /// not be resized at all.
+    /// The grip is tested BEFORE exclusions on purpose. A full-width row near
+    /// the block's foot has a rect that reaches under the grip; the grip is
+    /// drawn on top of it, so it has to hit first or a wide block could not be
+    /// resized at all.
     static func resolve(
         point: CGPoint,
         blocks: [Frame],

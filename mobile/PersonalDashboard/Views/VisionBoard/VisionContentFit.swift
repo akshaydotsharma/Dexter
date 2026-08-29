@@ -82,7 +82,6 @@ enum VisionContentFit {
         // never be the thing that gets clipped — it is the only way to put
         // anything on the block, so losing it costs more than losing a row.
         budget -= VisionBlockMetrics.addItemRow + VisionBlockMetrics.tileSpacing
-        if block.tier == .large { budget -= VisionBlockMetrics.addRowBlock }
 
         return fit(budget: budget, rows: rows)
     }

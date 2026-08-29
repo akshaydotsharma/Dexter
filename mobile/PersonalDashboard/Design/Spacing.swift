@@ -475,8 +475,6 @@ enum VisionBlockMetrics {
     static let tileSpacing: CGFloat = Space.xs
     /// The `+N more` button row.
     static let moreRow: CGFloat = 14
-    /// Rule plus add-row, at large only.
-    static let addRowBlock: CGFloat = 26 + Space.sm + 0.5
     /// Reserved square for the hover-revealed ellipsis menu. Always occupied at
     /// rest so hovering a block shifts nothing.
     static let ellipsisSlot: CGFloat = 24

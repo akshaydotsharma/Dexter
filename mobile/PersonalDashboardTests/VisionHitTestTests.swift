@@ -124,16 +124,16 @@ final class VisionHitTestTests: XCTestCase {
         )
     }
 
-    /// At `large` the add-task field spans the block's foot and its rect reaches
-    /// under the grip, which is drawn on top of it. Resolve the other way round
-    /// and a wide block could not be resized at all.
+    /// A full-width row at the block's foot has a rect that reaches under the
+    /// grip, which is drawn on top of it. Resolve the other way round and a wide
+    /// block could not be resized at all.
     func testTheGripOutranksAnOverlappingExclusion() {
         let block = frame(1, col: 0, row: 0)
-        let addRow = CGRect(x: 12, y: 154, width: 304, height: 26)
-        XCTAssertTrue(addRow.contains(CGPoint(x: 310, y: 174)), "precondition: the rects overlap")
+        let footRow = CGRect(x: 12, y: 154, width: 304, height: 26)
+        XCTAssertTrue(footRow.contains(CGPoint(x: 310, y: 174)), "precondition: the rects overlap")
 
         let hit = VisionHitTest.resolve(
-            point: CGPoint(x: 310, y: 174), blocks: [block], exclusions: [addRow]
+            point: CGPoint(x: 310, y: 174), blocks: [block], exclusions: [footRow]
         )
 
         XCTAssertEqual(hit, .grip(Self.id(1)))
