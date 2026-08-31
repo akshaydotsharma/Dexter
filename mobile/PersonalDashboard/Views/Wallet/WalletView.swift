@@ -74,9 +74,12 @@ struct WalletView: View {
     /// Guards the seeding so it happens once, not on every re-render.
     @State private var didSeedExpansion = false
 
-    /// Card queued for deletion, driving the confirmation dialog. Holds the UUID
-    /// rather than the model so a re-render can't hand the dialog a deleted row.
-    @State private var pendingDeleteID: UUID?
+    /// Card queued for deletion, driving the confirmation dialog. Holds the SOURCE
+    /// rather than the model so a re-render can't hand the dialog a deleted row —
+    /// and rather than a bare UUID, because what deleting removes and what the
+    /// confirmation has to promise both depend on which surface made the card
+    /// (#503).
+    @State private var pendingDelete: WalletEntry.Source?
 
     /// Ticket queued for re-reading (#485). Confirmed rather than immediate: a
     /// re-read re-derives the whole card from the document, so it can overwrite a
@@ -177,20 +180,20 @@ struct WalletView: View {
             handleTicketData(data, isPDF: true)
         }
         .confirmationDialog(
-            "Delete this card?",
+            pendingDelete?.deletionTitle ?? "Delete this card?",
             isPresented: Binding(
-                get: { pendingDeleteID != nil },
-                set: { if !$0 { pendingDeleteID = nil } }
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) {
-                if let id = pendingDeleteID { delete(cardID: id) }
-                pendingDeleteID = nil
+            Button(pendingDelete?.deletionConfirmLabel ?? "Delete", role: .destructive) {
+                if let source = pendingDelete { delete(source) }
+                pendingDelete = nil
             }
-            Button("Cancel", role: .cancel) { pendingDeleteID = nil }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: {
-            Text("The card and its stored ticket file are removed from this device.")
+            Text(pendingDelete?.deletionMessage ?? "")
         }
         .confirmationDialog(
             "Read this ticket again?",
@@ -299,7 +302,9 @@ struct WalletView: View {
                             onToggle: { toggle(entry) },
                             onPresent: { present(entry) },
                             onEdit: ownID.map { id in { editorTarget = .existing(id) } },
-                            onDelete: ownID.map { id in { pendingDeleteID = id } },
+                            // Delete is offered for EVERY card, whatever made it
+                            // (#503). Edit still is not: a record has one editor.
+                            onDelete: { pendingDelete = entry.source },
                             onOpenSource: ownID == nil ? { openSource(of: entry) } : nil,
                             onReread: rereadableTicketID(of: entry).map { id in
                                 { pendingRereadID = id }
@@ -607,6 +612,23 @@ struct WalletView: View {
     /// failed row delete would otherwise leave an orphan the user can never
     /// reach, whereas a deleted file with a surviving row degrades to a card
     /// that reports no ticket.
+    /// Delete whatever this card actually is (#503).
+    ///
+    /// `WalletEntry.Source.deletion` decides what that means; this only carries it
+    /// out. A card the Wallet owns and a document attached elsewhere both have a row
+    /// to remove; a stop's inline ticket has fields to clear and a stop to leave
+    /// standing.
+    private func delete(_ source: WalletEntry.Source) {
+        switch source.deletion {
+        case .walletCard(let cardID):
+            delete(cardID: cardID)
+        case .document(let ticketID):
+            deleteDocument(ticketID: ticketID)
+        case .stopTicket(let itemID):
+            clearStopTicket(itemID: itemID)
+        }
+    }
+
     private func delete(cardID: UUID) {
         guard let card = fetchCard(cardID) else { return }
         if !card.attachmentPath.isEmpty {
@@ -614,6 +636,43 @@ struct WalletView: View {
         }
         modelContext.delete(card)
         try? modelContext.save()
+        Haptics.destructive()
+    }
+
+    /// Detach a document attached to a task or a trip stop.
+    ///
+    /// Through `TaskTicketService` rather than by touching the row here, because the
+    /// service tombstones instead of hard-deleting (so the removal reaches the other
+    /// device), removes the file, and announces to the owning surface so the task or
+    /// the stop stops showing an attachment that is gone.
+    private func deleteDocument(ticketID: UUID) {
+        let descriptor = FetchDescriptor<LocalTaskTicket>(
+            predicate: #Predicate { $0.clientUUID == ticketID && $0.deletedAt == nil }
+        )
+        guard let row = try? modelContext.fetch(descriptor).first else { return }
+        do {
+            try TaskTicketService().delete(row.toDTO())
+            Haptics.destructive()
+        } catch {
+            ticketError = "We couldn't remove that card. Please try again."
+        }
+    }
+
+    /// Clear the pass off a trip stop, keeping the stop.
+    ///
+    /// The field clearing lives on the model (`clearTicketFields`) so this and the
+    /// trip editor's own Remove ticket action cannot drift apart.
+    private func clearStopTicket(itemID: UUID) {
+        let descriptor = FetchDescriptor<LocalItineraryItem>(
+            predicate: #Predicate { $0.clientUUID == itemID }
+        )
+        guard let item = try? modelContext.fetch(descriptor).first else { return }
+        let path = item.attachmentPath
+        item.clearTicketFields()
+        try? modelContext.save()
+        if !path.trimmingCharacters(in: .whitespaces).isEmpty {
+            try? TicketStorage.shared.delete(relativePath: path)
+        }
         Haptics.destructive()
     }
 }

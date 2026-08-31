@@ -2507,14 +2507,7 @@ struct ItineraryItemEditorSheet: View {
         if !existing.attachmentPath.isEmpty {
             try? TicketStorage.shared.delete(relativePath: existing.attachmentPath)
         }
-        existing.attachmentPath = ""
-        existing.barcodePayload = ""
-        existing.barcodeSymbology = ""
-        existing.seat = ""
-        existing.gate = ""
-        existing.venue = ""
-        existing.ticketMetaJSON = ""
-        existing.updatedAt = Date()
+        existing.clearTicketFields()
         try? modelContext.save()
         Haptics.destructive()
         ticketAttachmentPath = ""

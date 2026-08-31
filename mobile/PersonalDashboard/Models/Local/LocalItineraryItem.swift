@@ -378,6 +378,29 @@ final class LocalItineraryItem {
         return !sourceConfirmation.trimmingCharacters(in: .whitespaces).isEmpty || hasTicket
     }
 
+    /// Strip the ticket off this stop, leaving the stop itself untouched (#503).
+    ///
+    /// A stop's inline ticket is not a separate row, so "delete this card" cannot
+    /// mean deleting the record: the stop is a place on an itinerary that happens to
+    /// carry a pass, and removing the pass must leave the plan. Title, day, time,
+    /// notes, address and map link are all deliberately kept.
+    ///
+    /// It exists as one method because there are now two callers — the trip editor's
+    /// Remove ticket action and the Wallet's long-press delete — and a second copy of
+    /// a seven-field clear is exactly the drift that produced #500. Does NOT delete
+    /// the file or save the context: the caller owns both, because one of them has a
+    /// `TicketStorage` to reach for and the other does not.
+    func clearTicketFields() {
+        attachmentPath = ""
+        barcodePayload = ""
+        barcodeSymbology = ""
+        seat = ""
+        gate = ""
+        venue = ""
+        ticketMetaJSON = ""
+        updatedAt = Date()
+    }
+
 }
 
 // MARK: - Wallet eligibility (#432)
