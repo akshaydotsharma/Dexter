@@ -75,6 +75,11 @@ struct TicketCardFields {
                 ("Section", meta?.section),
                 ("Row", meta?.row),
                 ("Seat", card.seat),
+                // A boarding pass attached to a trip stop is stored as a document
+                // and drawn with this layout, not the boarding-pass one, so the
+                // group needs a slot here too (#501). Straight after the seat,
+                // because the two are read together in the queue.
+                ("Group", TicketField.group(meta?.boardingGroup)),
                 // Most events outside a stadium have no seating at all, and a
                 // pass fills that row with the holder's name instead. It is last
                 // so it only claims a column the seat facts left empty.
@@ -83,13 +88,23 @@ struct TicketCardFields {
 
         case .boardingPass:
             secondary = Self.row("Flight", Self.operatorLabel(meta))
-            // Kept whether or not they are filled. On a pass a blank gate reads
-            // as "not assigned yet", which is worth a slot; dropping the row
-            // would say the flight has no gate at all.
+            // Seat and Gate are kept whether or not they are filled. On a pass a
+            // blank gate reads as "not assigned yet", which is worth a slot;
+            // dropping the row would say the flight has no gate at all.
+            //
+            // The third slot is the boarding group when the pass prints one, and
+            // the terminal otherwise (#501). Both are real facts and there is
+            // room for one, so the tie goes to the group: it is the thing you
+            // read in the last ten minutes before you queue, and the terminal is
+            // one you read once, on the way in. The loser is not dropped — it is
+            // appended to the typed facts on the back below.
+            let group = TicketField.group(meta?.boardingGroup)
             auxiliary = Self.dashedRows([
                 ("Seat", card.seat),
                 ("Gate", TicketField.code(card.gate)),
-                ("Terminal", TicketField.code(meta?.terminal))
+                group == nil
+                    ? ("Terminal", TicketField.code(meta?.terminal))
+                    : ("Group", group)
             ])
 
         case .stay:
@@ -159,8 +174,19 @@ struct TicketCardFields {
         // `onFace` check below.
         case .event:
             typed.append(("Gate", TicketField.code(card.gate)))
+            // A seated event ticket can fill all three face slots with Section,
+            // Row and Seat, and a pass drawn with this layout would then have
+            // nowhere to print its group. Filtered out by `onFace` below whenever
+            // the face did find room for it.
+            typed.append(("Group", TicketField.group(meta?.boardingGroup)))
         case .boardingPass:
+            // Terminal and Group both appear here. Whichever one took the face's
+            // third slot is filtered out by the `onFace` check below, so the pair
+            // is listed unconditionally and the one left over is still readable
+            // rather than lost to a slot it did not win (#501).
             typed.append(contentsOf: [
+                ("Terminal", TicketField.code(meta?.terminal)),
+                ("Group", TicketField.group(meta?.boardingGroup)),
                 ("Cabin", meta?.cabin),
                 ("Passenger", meta?.passengerName),
                 ("Boarding", meta?.boardingTime)

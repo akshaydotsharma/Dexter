@@ -632,20 +632,30 @@ struct TaskTicketSection: View {
                 // 1. Read the ticket FIRST. This step needs no task at all, which
                 //    is exactly why it is separate: the ticket is what tells us
                 //    what the task should be called.
-                let read = try await service.read(
+                //
+                //    One file can hold several tickets (#500): a multi-leg boarding
+                //    pass prints one pass per leg. So this comes back as a set.
+                let set = try await service.read(
                     data: data,
                     isPDF: isPDF,
                     context: context
                 )
 
                 // The editor can be dismissed while this is in flight, and Cancel is
-                // the way out of a read that has stalled. The file is already on disk
-                // by now, so leaving here without deleting it strands the bytes for a
-                // task that will never exist.
+                // the way out of a read that has stalled. The files are already on
+                // disk by now, so leaving here without deleting them strands the
+                // bytes for a task that will never exist — every copy of them, since
+                // a multi-leg read stored one per leg.
                 if Task.isCancelled {
-                    service.discardStoredFile(at: read.attachmentPath)
+                    for path in set.attachmentPaths { service.discardStoredFile(at: path) }
                     return
                 }
+
+                // Which of the tickets is THIS record's, which is the one whose
+                // details fill the editor's own fields and whose card opens on a
+                // failed read. A stop naming a flight takes the pass for that
+                // flight; anything else takes the leading pass.
+                let read = set.matching(flight: context.title) ?? set.first
 
                 // The other half of the duplicate check (#408), and it can only run
                 // here: the barcode is not known until Vision has decoded it. This is
@@ -654,6 +664,9 @@ struct TaskTicketSection: View {
                 // fingerprints existed. The bytes go back out, since nothing is going
                 // to reference them.
                 if let existing = service.duplicate(ofBarcode: read.barcodePayload, among: tickets) {
+                    // Abandoning the upload takes every stored copy with it, not just
+                    // the one being refused.
+                    let others = set.attachmentPaths.filter { $0 != read.attachmentPath }
                     // Unless the new copy is BETTER than the one already here (#420).
                     //
                     // A `.pkpass` carries fields no photograph of the same ticket can
@@ -665,11 +678,12 @@ struct TaskTicketSection: View {
                     // overwritten. Any other repeat is still just a repeat.
                     if TicketStorage.isPass(read.attachmentPath),
                        try service.enrich(existing, from: read) {
+                        for path in others { service.discardStoredFile(at: path) }
                         reload()
                         statusMessage = Self.enrichedMessage(existing, fallback: ownerTitle)
                         return
                     }
-                    service.discardStoredFile(at: read.attachmentPath)
+                    for path in set.attachmentPaths { service.discardStoredFile(at: path) }
                     errorMessage = Self.duplicateMessage(existing, fallback: ownerTitle, noun: ownerNoun)
                     return
                 }
@@ -679,26 +693,48 @@ struct TaskTicketSection: View {
                 //    and then being asked to type what it says is the bug.
                 onExtracted(read)
 
-                // 3. Write it if the task exists; otherwise hold it until the
+                // 3. Write them if the record exists; otherwise hold them until the
                 //    editor is committed, so Cancel really cancels.
+                //
+                //    Every ticket the file held is written, and a pass for another leg
+                //    of the same trip is dealt out to the stop that leg belongs to
+                //    (#500) — attach the download to either leg and both are covered.
                 let addedId: UUID
+                var routedElsewhere = 0
                 if let resolved = owner.owner {
-                    let ticket = read.ticket(owner: resolved, position: stored.count)
-                    addedId = try service.attach(ticket, owner: resolved)
+                    var ownID: UUID?
+                    for (entry, target) in service.route(set, attachedTo: resolved) {
+                        let isOwn = target == resolved
+                        let ticket = entry.ticket(
+                            owner: target,
+                            position: isOwn ? stored.count : 0
+                        )
+                        let id = try service.attach(ticket, owner: target)
+                        if isOwn, entry.attachmentPath == read.attachmentPath { ownID = id }
+                        if !isOwn { routedElsewhere += 1 }
+                    }
                     reload()
+                    addedId = ownID ?? UUID()
                 } else {
                     // A placeholder owner: the id is not known yet and is substituted
                     // when the pending document is flushed, but the KIND is known, and
-                    // the card on screen takes its accent from it.
-                    let ticket = read.ticket(
-                        owner: owner.unsavedPlaceholder,
-                        position: pending.count
-                    )
-                    pending.append(ticket)
-                    addedId = ticket.id
+                    // the card on screen takes its accent from it. Nothing can be
+                    // routed to a sibling stop from here, because the stop being
+                    // composed has no trip behind it yet — every ticket the file held
+                    // is held on this one, which is still better than dropping any.
+                    for entry in set.reads {
+                        pending.append(entry.ticket(
+                            owner: owner.unsavedPlaceholder,
+                            position: pending.count
+                        ))
+                    }
+                    addedId = pending.last?.id ?? UUID()
                 }
 
-                statusMessage = read.degradeMessage
+                statusMessage = Self.multiTicketMessage(
+                    set: set,
+                    routedElsewhere: routedElsewhere
+                ) ?? read.degradeMessage
                 // A read that yielded nothing opens its form, since a card blank
                 // apart from a barcode has nothing to look at. A good read does
                 // not: its card is already on screen and a sheet over it would just
@@ -739,6 +775,25 @@ struct TaskTicketSection: View {
     /// What to say when the file is already on this record. Names the card it matched
     /// so the claim is checkable rather than something the person has to take on
     /// trust while looking at a list of similar cards.
+    /// What to say when one file turned out to hold several tickets (#500).
+    ///
+    /// Worth saying out loud, because the person attached one document and got more
+    /// than one card, and where the extra cards WENT is not visible from the editor
+    /// they are standing in. Nil for an ordinary single-ticket upload, which needs no
+    /// commentary.
+    private static func multiTicketMessage(
+        set: TaskTicketReadSet,
+        routedElsewhere: Int
+    ) -> String? {
+        guard set.isMultiple else { return nil }
+        let total = set.reads.count
+        if routedElsewhere > 0 {
+            let others = routedElsewhere == 1 ? "the other leg" : "the other legs"
+            return "Read \(total) passes from that file. \(routedElsewhere) went to \(others) of this trip."
+        }
+        return "Read \(total) passes from that file, all kept here."
+    }
+
     private static func duplicateMessage(_ existing: TaskTicket, fallback: String, noun: String) -> String {
         let name = existing.displayTitle(fallback: fallback)
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

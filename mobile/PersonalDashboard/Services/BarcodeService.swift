@@ -95,6 +95,28 @@ enum BarcodeService {
         return nil
     }
 
+    /// Decode EVERY leading page of a PDF, one entry per page in page order,
+    /// `nil` where a page carries no barcode.
+    ///
+    /// `decode(pdfData:)` returns the first hit and stops, which is right when a
+    /// document has one code on it and wrong the moment it has several. A
+    /// multi-leg boarding pass prints one pass per page, each with its OWN
+    /// PDF417, and the first-hit answer hands every leg the first leg's payload
+    /// (#500) — a card that would be refused at the gate it is held up to.
+    ///
+    /// The page cap matches `renderPages` and `decode(pdfData:maxPages:)` so all
+    /// three readers see the same slice of a document.
+    static func decodePages(pdfData: Data, maxPages: Int = 3) -> [DecodedBarcode?] {
+        guard let doc = PDFDocument(data: pdfData) else { return [] }
+        let pages = min(doc.pageCount, maxPages)
+        guard pages > 0 else { return [] }
+        return (0..<pages).map { index in
+            guard let page = doc.page(at: index),
+                  let cg = render(pdfPage: page, targetLongEdge: 2400)?.cgImageCompat else { return nil }
+            return decode(cgImage: cg, orientation: .up)
+        }
+    }
+
     private static func decode(cgImage: CGImage, orientation: CGImagePropertyOrientation) -> DecodedBarcode? {
         let request = VNDetectBarcodesRequest()
         // Restrict to the symbologies we actually surface, when available —

@@ -58,13 +58,88 @@ struct WalletEntry: Identifiable {
             }
         }
 
-        /// Whether the wallet can edit and delete this card itself. False for
-        /// borrowed cards, which route back to the surface that owns them so
-        /// there is exactly one place each record is edited.
+        /// Whether the wallet can EDIT this card itself. False for borrowed cards,
+        /// which route back to the surface that owns them so there is exactly one
+        /// place each record is edited.
+        ///
+        /// Editing only. Deleting is a separate question with a separate answer —
+        /// see `deletion` (#503).
         var isEditableInWallet: Bool {
             switch self {
             case .wallet:                          return true
             case .trip, .task, .tripDocument:      return false
+            }
+        }
+
+        /// What deleting this card actually removes (#503).
+        ///
+        /// Every card in the Wallet can be deleted from the Wallet. Editing routes
+        /// back to the owning surface because a record should have one editor, but
+        /// deleting does not need one: the card in front of you IS the thing you want
+        /// gone, and sending someone off to find the stop that owns it to do it there
+        /// is a detour, not a safeguard.
+        ///
+        /// What differs between the sources is not WHETHER, it is WHAT. Two of them
+        /// have a row of their own to remove. The third does not: a stop's inline
+        /// ticket is a set of fields ON the stop, so deleting the card clears the
+        /// pass and keeps the stop. Deleting a row off someone's itinerary because
+        /// they removed a boarding pass from it would destroy something they never
+        /// asked about.
+        enum Deletion: Equatable {
+            /// Remove the `LocalWalletCard` outright, with its file.
+            case walletCard(UUID)
+            /// Tombstone the `LocalTaskTicket`, with its file. Its task or stop lives on.
+            case document(ticketID: UUID)
+            /// Clear the ticket fields off the `LocalItineraryItem`, keeping the stop.
+            case stopTicket(itemID: UUID)
+        }
+
+        var deletion: Deletion {
+            switch self {
+            case .wallet(let cardID):                   return .walletCard(cardID)
+            case .task(let ticketID, _, _):             return .document(ticketID: ticketID)
+            case .tripDocument(let ticketID, _, _, _):  return .document(ticketID: ticketID)
+            case .trip(let itemID, _, _):               return .stopTicket(itemID: itemID)
+            }
+        }
+
+        /// The confirmation's title. A stop's inline ticket is not a card being
+        /// thrown away, so it does not claim to be one.
+        var deletionTitle: String {
+            switch deletion {
+            case .walletCard, .document: return "Delete this card?"
+            case .stopTicket:            return "Remove this pass?"
+            }
+        }
+
+        /// The destructive button's word. "Remove" for a pass being taken off a stop
+        /// that stays, because "Delete" over an itinerary row reads like the row.
+        var deletionConfirmLabel: String {
+            switch deletion {
+            case .walletCard, .document: return "Delete"
+            case .stopTicket:            return "Remove"
+            }
+        }
+
+        /// The confirmation's body: what is lost, and what survives.
+        ///
+        /// The second half matters more than the first. Someone deleting a boarding
+        /// pass off a trip stop needs to know the flight is still on their itinerary
+        /// before they tap Delete, not after.
+        var deletionMessage: String {
+            switch self {
+            case .wallet:
+                return "The card and its stored ticket file are removed from this device."
+            case .task(_, _, let taskTitle):
+                let owner = taskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                let named = owner.isEmpty ? "its task" : "\u{201C}\(owner)\u{201D}"
+                return "The card and its file are removed from \(named). The task itself stays."
+            case .tripDocument(_, _, _, let tripName):
+                let trip = tripName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let named = trip.isEmpty ? "its trip" : "\u{201C}\(trip)\u{201D}"
+                return "The card and its file are removed from \(named). The stop it was attached to stays."
+            case .trip:
+                return "The pass and its file are removed from this stop. The stop stays on your itinerary, with its day and time."
             }
         }
     }

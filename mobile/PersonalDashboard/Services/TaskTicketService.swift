@@ -114,9 +114,69 @@ struct TaskTicketService {
         isPDF: Bool,
         context: TaskTicketContext,
         extraction: TaskTicketExtraction? = nil
-    ) async throws -> TaskTicketRead {
+    ) async throws -> TaskTicketReadSet {
         let extraction = extraction ?? TaskTicketExtraction()
         return try await extraction.read(data: data, isPDF: isPDF, context: context)
+    }
+
+    // MARK: - Placing a multi-ticket upload (#500)
+
+    /// Where each ticket of one upload belongs, given the record the file was
+    /// dropped on.
+    ///
+    /// A multi-leg boarding pass is one document describing several flights, and a
+    /// trip already has a stop for each of them. So the legs are dealt out: each
+    /// read goes to the stop whose title names its flight, and a read matching no
+    /// stop stays on the record the person actually attached it to. Attach the
+    /// Emirates SIN→DXB→MXP download to either leg and both legs end up with their
+    /// own pass, their own seat and their own barcode.
+    ///
+    /// Only ever routes WITHIN the trip the attached stop belongs to. A flight
+    /// number is not unique across a library of trips — EK091 flies every day — and
+    /// a pass landing on last year's Milan trip because the number matched is worse
+    /// than it landing on the wrong leg of the right one.
+    ///
+    /// A task keeps everything: there is nothing to deal out to.
+    func route(
+        _ set: TaskTicketReadSet,
+        attachedTo owner: TicketOwner
+    ) -> [(read: TaskTicketRead, owner: TicketOwner)] {
+        guard set.isMultiple, case .tripStop(let stopID) = owner else {
+            return set.reads.map { ($0, owner) }
+        }
+
+        let siblings = tripStops(besides: stopID)
+        var claimed = Set<UUID>()
+        return set.reads.map { read in
+            guard let flight = read.flightDesignator,
+                  let match = siblings.first(where: {
+                      !claimed.contains($0.uuid)
+                          && TaskTicketReadSet.flightDesignator($0.title) == flight
+                  }) else {
+                return (read, owner)
+            }
+            claimed.insert(match.uuid)
+            return (read, .tripStop(match.uuid))
+        }
+    }
+
+    /// The other stops on the same trip as `stopID`, in timeline order.
+    ///
+    /// Returns nothing when the stop itself cannot be found, which collapses routing
+    /// back to "everything stays where it was dropped" — the safe answer.
+    private func tripStops(besides stopID: UUID) -> [(uuid: UUID, title: String)] {
+        var own = FetchDescriptor<LocalItineraryItem>(
+            predicate: #Predicate { $0.clientUUID == stopID }
+        )
+        own.fetchLimit = 1
+        guard let stop = try? store.context.fetch(own).first else { return [] }
+        let tripUUID = stop.tripUUID
+        let descriptor = FetchDescriptor<LocalItineraryItem>(
+            predicate: #Predicate { $0.tripUUID == tripUUID && $0.clientUUID != stopID },
+            sortBy: [SortDescriptor(\.dayDate, order: .forward),
+                     SortDescriptor(\.sortOrder, order: .forward)]
+        )
+        return ((try? store.context.fetch(descriptor)) ?? []).map { ($0.clientUUID, $0.title) }
     }
 
     // MARK: - Duplicate detection (#408)
@@ -239,8 +299,16 @@ struct TaskTicketService {
         isPDF: Bool,
         extraction: TaskTicketExtraction? = nil
     ) async throws -> UUID {
-        let read = try await read(data: data, isPDF: isPDF, context: context, extraction: extraction)
-        return try attach(read.ticket(owner: owner), owner: owner, extraction: extraction)
+        let set = try await read(data: data, isPDF: isPDF, context: context, extraction: extraction)
+        // Every ticket the file held is attached; the id returned is the leading
+        // one's, which is the row a caller wants to open.
+        var first: UUID?
+        for (read, target) in route(set, attachedTo: owner) {
+            let id = try attach(read.ticket(owner: target), owner: target, extraction: extraction)
+            if first == nil { first = id }
+        }
+        guard let first else { throw TaskTicketExtractionError.ownerGone(owner) }
+        return first
     }
 
     /// Overwrite the user-editable fields on a ticket. Every extracted value is

@@ -25,6 +25,18 @@ struct TicketMeta: Codable, Equatable, Sendable {
     var passengerName: String?
     var boardingTime: String?       // Free-form display string as printed
 
+    /// The boarding group / zone the holder queues in, as printed ("5", "B",
+    /// "Zone 3") (#501).
+    ///
+    /// A first-class field rather than a generic one because the extractor kept
+    /// losing it. On the Emirates pass it sits in the same grey block as the
+    /// boarding time, and the model spent that block's six generic slots on the
+    /// sequence number and on the route it had already returned — so the one
+    /// fact that says when to stand up was the one crowded out. A rule the model
+    /// keeps dropping belongs in the schema, restated per item, not in more prose
+    /// about what matters.
+    var boardingGroup: String?
+
     // Event / seated ticket
     var eventType: String?          // "Concert", "Match", "Theatre", …
     var section: String?
@@ -243,6 +255,22 @@ enum TicketField {
         guard !trimmed.isEmpty else { return nil }
         if placeholders.contains(trimmed.uppercased()) { return nil }
         if trimmed.count == 1, let only = trimmed.first, only.isLetter { return nil }
+        return trimmed
+    }
+
+    /// A boarding group / zone, which `code` is the wrong sanitizer for (#501).
+    ///
+    /// `code` rejects a lone letter, and it is right to: a single "T" read off a
+    /// pass is the word Terminal, not a terminal. A boarding group is the opposite
+    /// case — plenty of airlines board by zone letter, so "B" is the real value and
+    /// dropping it loses the fact entirely. Placeholders are still refused, and the
+    /// value is still capped: a group is a token, and anything long is a sentence
+    /// the model has mistaken for one.
+    static func group(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 12 else { return nil }
+        if placeholders.contains(trimmed.uppercased()) { return nil }
         return trimmed
     }
 
