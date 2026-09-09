@@ -226,13 +226,21 @@ struct TripDetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .blur(radius: uploadBlurRadius)
 
             // FAB sits above the bottom tab bar AND the home indicator. The
             // 96pt bumper at the end of the scroll content guarantees the
             // last card is not hidden by this overlay. Its action is
             // contextual: add a stop on the itinerary tab, add an expense on
             // the expenses tab.
+            //
+            // Blurred along with the tab content while a read is in flight
+            // (#510) — it is a tappable control sitting on the same screen,
+            // and leaving it sharp while everything under it recedes would
+            // make it read as still-live when `isProcessingTicket` /
+            // `isProcessingExpenseUpload` already disable it.
             fabOverlay
+                .blur(radius: uploadBlurRadius)
 
             if isProcessingTicket {
                 ticketProcessingOverlay
@@ -397,42 +405,29 @@ struct TripDetailView: View {
 
     // MARK: - Ticket processing overlay
 
-    private var ticketProcessingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.12).ignoresSafeArea()
-            VStack(spacing: Space.md) {
-                ProgressView()
-                    .tint(Tokens.accent(for: .itineraries))
-                Text("Reading ticket…")
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.inkSoft)
-            }
-            .padding(Space.xl)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.lg)
-            .shadowMd()
-        }
-        .transition(.opacity)
+    /// How much to soften the tab content and FAB while a ticket or expense read is
+    /// over them (#510). Either upload blocks the same screen, so one radius covers
+    /// both — the two never run at once, since the FAB itself is disabled mid-read.
+    private var uploadBlurRadius: CGFloat {
+        (isProcessingTicket || isProcessingExpenseUpload) ? 4 : 0
     }
 
-    /// Expense-upload processing overlay (#258). Same treatment as the ticket
+    private var ticketProcessingOverlay: some View {
+        ReadingOverlay(
+            tint: Tokens.accent(for: .itineraries),
+            title: "Reading ticket…",
+            subtitle: "Filling in the stop's details."
+        )
+    }
+
+    /// Expense-upload processing overlay (#258). Same component as the ticket
     /// overlay but finance-tinted and labelled for receipt / statement reads.
     private var expenseProcessingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.12).ignoresSafeArea()
-            VStack(spacing: Space.md) {
-                ProgressView()
-                    .tint(Tokens.accentFinance)
-                Text("Reading receipt…")
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.inkSoft)
-            }
-            .padding(Space.xl)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.lg)
-            .shadowMd()
-        }
-        .transition(.opacity)
+        ReadingOverlay(
+            tint: Tokens.accentFinance,
+            title: "Reading receipt…",
+            subtitle: "Filling in the amount and category."
+        )
     }
 
     // MARK: - Timeline

@@ -21,40 +21,51 @@ struct TaskDocumentUpload: Identifiable, Equatable {
     }
 }
 
-/// Blocking notice shown over the task editor's form while a file picked from the
-/// plus menu is being read (#402).
+/// Blocking notice shown over a screen while a file is being read into it — a
+/// task, a trip stop's ticket, a trip expense, or a Wallet card (#402, generalised
+/// to every other "Reading…" surface in #510).
 ///
-/// The inline spinner in the attachments section is not enough for this case. The
-/// editor opens on its own with every field empty, and the one thing saying why is
-/// a small spinner next to a section heading — on the Mac's 360-point popover that
-/// section can be below the fold, so it is somewhere you cannot even see. What the
-/// person is looking at reads as a form that failed to load.
+/// The inline spinner a section heading can carry is not enough for any of these:
+/// the task editor opens with every field empty and the one thing saying why can be
+/// below the fold on the Mac's 360-point popover; a trip or Wallet upload takes you
+/// away to Photos or Finder and back, so a small spinner tucked into a card stack
+/// reads as nothing having happened while you were gone.
 ///
-/// Deliberately scoped to the form and NOT the toolbar, so Cancel stays reachable.
-/// The read has no timeout of its own and a stalled network would otherwise trap
-/// someone behind a spinner with no way out.
+/// The `0.45` scrim plus the caller's 4pt blur on the content behind is what makes
+/// the notice read as a layer sitting ABOVE the screen, not a tint competing with
+/// it for the same depth. Trip and Wallet uploads used a `0.12` scrim with no blur
+/// before #510 — on Wallet's card-dense list or a colourful itinerary day, the
+/// "Reading…" card and the content behind it sat at the same visual depth and the
+/// card read as a toast, not a modal. The scrim alone does not carry it: these
+/// screens are stacks of rounded cards in a similar tone, so the layer behind has
+/// to lose its edges, and the blur is what actually stops it from competing.
 ///
-/// Takes the card-and-spinner shape from `TripDetailView`'s ticket-processing
-/// overlay, so the two reads look like the same operation — which they are — but
-/// dims harder than that one does. At the 0.12 scrim the trip overlays use, this
-/// card and the form behind it read as competing for the same space: the editor is
-/// dense with rounded cards in a similar tone, so a floating card needs the form to
-/// visibly recede rather than merely tint. The caller pairs this with a blur, which
-/// is what actually stops the text behind from competing.
-struct TaskDocumentReadingOverlay: View {
-    let isPDF: Bool
+/// Deliberately scoped to the content and NOT the toolbar/FAB-adjacent chrome that
+/// still needs a way out (Cancel, or a trip's tab bar), so blurring is the caller's
+/// job — see each presenter for exactly what it dims.
+struct ReadingOverlay: View {
+    /// The surface's own accent, so the spinner reads as this record's read rather
+    /// than a generic system colour — `.tasks` for the task editor, `.itineraries`
+    /// for a trip stop's ticket, `accentFinance` for an expense receipt, `.wallet`
+    /// for a Wallet card.
+    let tint: Color
+    let title: String
+    let subtitle: String
+    /// Read together as one announcement. Defaults to "<title>. <subtitle>" — pass
+    /// an explicit value only when that concatenation would not read naturally.
+    var accessibilityLabel: String?
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.45).ignoresSafeArea()
             VStack(spacing: Space.md) {
                 ProgressView()
-                    .tint(Tokens.accent(for: .tasks))
+                    .tint(tint)
                 VStack(spacing: Space.xs) {
-                    Text(isPDF ? "Reading from file…" : "Reading from image…")
+                    Text(title)
                         .font(.edBodyMedium)
                         .foregroundStyle(Tokens.ink)
-                    Text("Filling in what it says.")
+                    Text(subtitle)
                         .font(.edCaption)
                         .foregroundStyle(Tokens.muted)
                 }
@@ -67,8 +78,22 @@ struct TaskDocumentReadingOverlay: View {
         }
         .transition(.opacity)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            isPDF
+        .accessibilityLabel(accessibilityLabel ?? "\(title) \(subtitle)")
+    }
+}
+
+/// The task editor's own reading notice (#402) — a thin wrapper over `ReadingOverlay`
+/// so its appearance and copy stay pinned exactly as they were before #510
+/// generalised the shape to the other three "Reading…" surfaces.
+struct TaskDocumentReadingOverlay: View {
+    let isPDF: Bool
+
+    var body: some View {
+        ReadingOverlay(
+            tint: Tokens.accent(for: .tasks),
+            title: isPDF ? "Reading from file…" : "Reading from image…",
+            subtitle: "Filling in what it says.",
+            accessibilityLabel: isPDF
                 ? "Reading the file and filling in the task."
                 : "Reading the image and filling in the task."
         )

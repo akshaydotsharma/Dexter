@@ -130,8 +130,13 @@ struct WalletView: View {
                     })
                     #endif
             }
+            .blur(radius: isProcessingTicket ? 4 : 0)
 
+            // Blurred along with the card list while a read is in flight (#510) —
+            // it is already disabled below, and leaving it sharp while the cards
+            // under it recede would make it look like the one live thing on screen.
             addMenu
+                .blur(radius: isProcessingTicket ? 4 : 0)
 
             if isProcessingTicket {
                 processingOverlay
@@ -420,19 +425,11 @@ struct WalletView: View {
     }
 
     private var processingOverlay: some View {
-        ZStack {
-            Tokens.paper.opacity(0.72).ignoresSafeArea()
-            VStack(spacing: Space.md) {
-                ProgressView()
-                Text("Reading ticket…")
-                    .font(.edSubheadline)
-                    .foregroundStyle(Tokens.inkSoft)
-            }
-            .padding(Space.xl)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.lg)
-        }
-        .transition(.opacity)
+        ReadingOverlay(
+            tint: Tokens.accent(for: .wallet),
+            title: "Reading ticket…",
+            subtitle: "Turning it into a card."
+        )
     }
 
     // MARK: - Detail
