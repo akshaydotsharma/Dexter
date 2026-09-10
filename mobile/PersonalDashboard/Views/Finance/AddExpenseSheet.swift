@@ -183,6 +183,17 @@ struct AddExpenseSheet: View {
 
     @State private var loaded: Bool = false
     @State private var saving: Bool = false
+
+    /// The identity of the row this sheet creates, minted once per
+    /// presentation (#514).
+    ///
+    /// `save()` used to let `ExpenseService` mint an id per CALL, so a submit
+    /// that ran twice left two rows 290 ms apart. Naming the row up front makes
+    /// a repeated create converge on it: the second save rewrites the first
+    /// one's fields instead of adding a twin. Rotated after a create succeeds,
+    /// so a sheet that somehow lives on to add a second expense cannot
+    /// overwrite the one it just made.
+    @State private var draftRowUUID: String = UUID().uuidString.lowercased()
     @State private var errorMessage: String?
 
     @FocusState private var amountFocused: Bool
@@ -1192,6 +1203,13 @@ struct AddExpenseSheet: View {
     }
 
     private func save() async {
+        // The button's `.disabled(!canSave)` reads `saving`, but that is a
+        // render-time gate: two invocations enqueued before SwiftUI re-renders
+        // both got through, and each created a row (#514). This is the actual
+        // mutual exclusion. `save()` is main-actor isolated and nothing
+        // suspends between the check and the assignment, so a second call
+        // cannot observe `saving` as false while the first is in flight.
+        guard !saving else { return }
         guard amountValue > 0 else {
             errorMessage = "Enter an amount greater than zero."
             return
@@ -1241,7 +1259,8 @@ struct AddExpenseSheet: View {
                     personName: selectedPerson?.name,
                     eventUUID: selectedEvent?.uuid,
                     eventName: selectedEvent?.name,
-                    numberOfShares: shares
+                    numberOfShares: shares,
+                    clientUUID: draftRowUUID
                 )
                 // ExpenseService.addExpense doesn't take receiptImagePath
                 // (Phase A signature). Set it directly and save again — the
@@ -1263,6 +1282,11 @@ struct AddExpenseSheet: View {
                     applyTripSplit(to: row)
                     try modelContext.save()
                 }
+                // The create landed, so this identity is spent. Anything this
+                // sheet creates after it is a DIFFERENT expense and must not
+                // rewrite the row above. A throw above skips this on purpose:
+                // a retry has to reuse the id so it converges on one row.
+                draftRowUUID = UUID().uuidString.lowercased()
 
             case .existing(let uuid):
                 let descriptor = FetchDescriptor<LocalExpense>(

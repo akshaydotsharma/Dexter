@@ -129,8 +129,21 @@ struct ExpenseService {
 
     // MARK: - CRUD
 
-    /// Insert a new expense. Caller is responsible for computing `sgdAmount`
+    /// Insert a new expense, or rewrite the one an explicit `clientUUID`
+    /// already names. Caller is responsible for computing `sgdAmount`
     /// + `fxRate` via `FXService.convert` before invoking this.
+    ///
+    /// A supplied `clientUUID` is an IDENTITY, so a repeat call carrying one is
+    /// a retry of a single create rather than a second expense (#514). Minting
+    /// a twin was how one submit of the Add Expense sheet could leave two rows
+    /// 290 ms apart, and how a chat draft replaying the model's `id` could put
+    /// two rows behind one sync record. `createdAt` stays at the first attempt,
+    /// which is when the user made the expense; every other field takes the
+    /// latest call's value, because the latest call is the one they submitted.
+    ///
+    /// Callers that pass NO id keep insert-only behaviour: the statement
+    /// importer and the recurring materialiser both add rows that are
+    /// legitimately identical to rows already in the store.
     @discardableResult
     func addExpense(
         date: Date,
@@ -154,6 +167,27 @@ struct ExpenseService {
         // Amount is always the positive magnitude, even for a refund — the
         // direction is carried by `isRefund`, so this guard stays valid (#206).
         guard originalAmount > 0 else { throw ExpenseServiceError.invalidAmount }
+
+        if let clientUUID, let existing = try existingExpense(clientUUID: clientUUID) {
+            existing.date              = Calendar.current.startOfDay(for: date)
+            existing.category          = category.rawValue
+            existing.merchant          = merchant?.trimmedNonEmpty
+            existing.expenseDescription = expenseDescription?.trimmedNonEmpty
+            existing.originalAmount    = originalAmount
+            existing.originalCurrency  = originalCurrency.uppercased()
+            existing.sgdAmount         = sgdAmount
+            existing.fxRate            = fxRate
+            existing.paymentMethod     = paymentMethod?.trimmedNonEmpty
+            existing.source            = source.rawValue
+            existing.personUUID        = personUUID
+            existing.personName        = personName?.trimmedNonEmpty
+            existing.eventUUID         = eventUUID
+            existing.eventName         = eventName?.trimmedNonEmpty
+            existing.numberOfShares    = max(numberOfShares, 1)
+            existing.isRefund          = isRefund
+            try save()
+            return existing
+        }
 
         let row = LocalExpense(
             clientUUID: clientUUID ?? UUID().uuidString.lowercased(),
@@ -179,6 +213,15 @@ struct ExpenseService {
         store.context.insert(row)
         try save()
         return row
+    }
+
+    /// The row a `clientUUID` names, or nil. Kept next to `addExpense` because
+    /// that is the only caller: it is what makes a supplied id an identity.
+    private func existingExpense(clientUUID: String) throws -> LocalExpense? {
+        let descriptor = FetchDescriptor<LocalExpense>(
+            predicate: #Predicate { $0.clientUUID == clientUUID }
+        )
+        return try store.context.fetch(descriptor).first
     }
 
     /// Update an existing expense in place. All fields are nullable — pass
