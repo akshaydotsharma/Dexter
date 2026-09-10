@@ -54,8 +54,8 @@ struct SplitAvatarRoster: Equatable {
     let payer: SplitAvatarParty
 
     /// Parties holding a positive share, payer first, deduped. Never empty: an
-    /// expense with no recorded split was consumed by whoever paid it, so the
-    /// payer stands as the sole sharer.
+    /// expense with no recorded split is the user's in full, so the user
+    /// stands as the sole sharer even when someone else fronted the money.
     let sharers: [SplitAvatarParty]
 
     /// The avatars that render, capped.
@@ -73,6 +73,9 @@ struct SplitAvatarRoster: Equatable {
     /// with nobody reads "Y paid · Y", not a blank badge line. A row that says
     /// nothing can't be told apart from a row with nothing recorded, and on the
     /// trip surface every row has a payer even when no split was entered.
+    ///
+    /// An expense with no recorded split belongs to the user alone, however it
+    /// was paid: the same reading `myShareSGD` and `TripSettlement` take.
     ///
     /// - Parameters:
     ///   - payerPersonUUID: `LocalExpense.paidByPersonUUID`; nil = the user.
@@ -122,9 +125,14 @@ struct SplitAvatarRoster: Equatable {
             sharers.insert(sharers.remove(at: index), at: 0)
         }
 
-        // No recorded split means the payer consumed the bill alone.
+        // No recorded split means the cost is the USER's in full, whoever
+        // fronted the money (#512). `LocalExpense.myShareSGD` and
+        // `TripSettlement.totals` both already read an empty split that way,
+        // so a badge crediting the payer contradicted the settle-up card and
+        // the Finance amount on the same row: an unsplit bill another
+        // participant paid reads "P paid · Y", not "P paid · P".
         if sharers.isEmpty {
-            sharers = [payer]
+            sharers = [party(for: nil)]
         }
         return SplitAvatarRoster(payer: payer, sharers: sharers)
     }
