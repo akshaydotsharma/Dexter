@@ -22,7 +22,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     /// A blank badge line can't be told apart from a row with nothing
     /// recorded, so the coincidence cases render like any other.
-    func testNoRecordedSplitMakesThePayerTheSoleSharer() throws {
+    func testNoRecordedSplitOnAnExpenseTheUserPaidReadsYPaidY() throws {
         let roster = SplitAvatarRoster.make(
             payerPersonUUID: nil,
             splits: [],
@@ -75,7 +75,12 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     // MARK: - Payer
 
-    func testParticipantPayerShowsWithoutASplit() throws {
+    /// The bug behind #512: the badge used to hand the sharer slot to the
+    /// payer, so an expense Priya fronted for the user read "P paid · P" while
+    /// the settle-up card on the same screen booked the whole debt to the
+    /// user. An unsplit expense is the user's in full, which is what
+    /// `LocalExpense.myShareSGD` and `TripSettlement.totals` both already say.
+    func testParticipantPayerWithoutASplitLeavesTheShareWithTheUser() throws {
         let roster = SplitAvatarRoster.make(
             payerPersonUUID: priya,
             splits: [],
@@ -84,7 +89,24 @@ final class SplitAvatarRosterTests: XCTestCase {
         )
         XCTAssertEqual(roster.payer.initial, "P")
         XCTAssertEqual(roster.payer.colorHex, "6366F1")
-        XCTAssertEqual(roster.sharers.map(\.initial), ["P"], "Priya paid it and consumed it")
+        XCTAssertEqual(
+            roster.sharers.map(\.party), [.me],
+            "Priya fronted the money; the cost is the user's"
+        )
+        XCTAssertEqual(roster.sharers.map(\.initial), ["Y"])
+        XCTAssertEqual(roster.spokenLabel, "Priya paid, split between you")
+    }
+
+    /// The other half of the same rule: a split naming only the payer is a
+    /// RECORDED split, so it keeps saying what it records.
+    func testParticipantPayerWhoRecordedThemselfAsTheOnlySharerKeepsTheShare() throws {
+        let roster = SplitAvatarRoster.make(
+            payerPersonUUID: priya,
+            splits: [ExpenseSplitEntry(person: priya, shares: 1)],
+            name: names([priya: "Priya"]),
+            colorHex: colors([priya: "6366F1"])
+        )
+        XCTAssertEqual(roster.sharers.map(\.initial), ["P"])
         XCTAssertEqual(roster.spokenLabel, "Priya paid")
     }
 
@@ -146,7 +168,7 @@ final class SplitAvatarRosterTests: XCTestCase {
     func testDeletedPersonReadsAsSomeone() throws {
         let roster = SplitAvatarRoster.make(
             payerPersonUUID: priya,
-            splits: [],
+            splits: [ExpenseSplitEntry(person: priya, shares: 1)],
             name: names([:]),
             colorHex: colors([:])
         )
