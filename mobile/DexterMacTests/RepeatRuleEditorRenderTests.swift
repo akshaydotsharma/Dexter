@@ -80,6 +80,36 @@ final class RepeatRuleEditorRenderTests: XCTestCase {
         XCTAssertNotNil(draft.firstDate)
     }
 
+    /// A yearly rule set in September fires the following September, so the
+    /// preview line has to say WHICH September. Without the year it read as this
+    /// one, which is the opposite of what the rule does.
+    func testTheFirstDateCarriesItsYearOnlyWhenItIsNotThisYear() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Singapore")!
+        calendar.locale = Locale(identifier: "en_GB")
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 12))!
+        let thisYear = calendar.date(from: DateComponents(year: 2026, month: 12, day: 25))!
+        let nextYear = calendar.date(from: DateComponents(year: 2027, month: 9, day: 1))!
+
+        XCTAssertFalse(
+            RepeatRuleEditor.firstDateLabel(thisYear, now: now, calendar: calendar).contains("2026"),
+            "a date in the current year does not need to spell it out"
+        )
+        XCTAssertTrue(
+            RepeatRuleEditor.firstDateLabel(nextYear, now: now, calendar: calendar).contains("2027"),
+            "a date in another year must say which"
+        )
+    }
+
+    /// The collapsed month label is the SHORT name. The full one hyphenated across
+    /// two lines in the narrow trailing slot the yearly row gives it.
+    func testTheMonthDropdownLabelIsShortEnoughNotToWrap() {
+        XCTAssertEqual(RecurrenceRule.shortMonthNames.count, 12)
+        for name in RecurrenceRule.shortMonthNames {
+            XCTAssertLessThanOrEqual(name.count, 5, "\(name) is long enough to wrap the row")
+        }
+    }
+
     // MARK: - The views lay out
 
     func testTheRepeatEditorLaysOut() throws {
@@ -97,6 +127,45 @@ final class RepeatRuleEditorRenderTests: XCTestCase {
             )
         )
         XCTAssertGreaterThan(rep.pixelsWide, 0)
+        XCTAssertGreaterThan(rep.pixelsHigh, 0)
+    }
+
+    /// The yearly row is the narrow one: two dropdowns share the trailing slot,
+    /// which is where the month name wrapped.
+    func testTheYearlyRowLaysOut() throws {
+        var draft = RecurrenceDraft.seeded(from: Date(timeIntervalSince1970: 1_789_000_000))
+        draft.frequency = .yearly
+        draft.monthOfYear = 9
+        draft.dayOfMonth = 1
+        draft.leadDays = 0
+
+        let rep = try XCTUnwrap(
+            render(
+                RepeatRuleEditor(draft: .constant(draft), showsStartDate: true)
+                    .padding(16)
+                    .background(Tokens.paper),
+                width: 400, height: 560, named: "repeat-rule-yearly"
+            )
+        )
+        XCTAssertGreaterThan(rep.pixelsHigh, 0)
+    }
+
+    /// A monthly rule past the 28th shows a note about short months. It used to be
+    /// an overlay, drawn outside the row's own height, so it sat on top of the row
+    /// below instead of making room for itself.
+    func testTheMonthlyRowWithAClampNoteLaysOut() throws {
+        var draft = RecurrenceDraft.seeded()
+        draft.frequency = .monthly
+        draft.dayOfMonth = 31
+
+        let rep = try XCTUnwrap(
+            render(
+                RepeatRuleEditor(draft: .constant(draft), showsStartDate: true)
+                    .padding(16)
+                    .background(Tokens.paper),
+                width: 400, height: 560, named: "repeat-rule-monthly-clamp"
+            )
+        )
         XCTAssertGreaterThan(rep.pixelsHigh, 0)
     }
 

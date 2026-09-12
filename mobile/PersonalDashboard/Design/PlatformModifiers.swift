@@ -21,6 +21,26 @@ extension View {
         #endif
     }
 
+    /// A `Menu` with no button chrome of its own, so it renders as the bare label
+    /// it was given.
+    ///
+    /// macOS draws a bordered pop-up button by default, which fights a row that
+    /// already supplies its own styling; iOS draws nothing extra, so there is
+    /// nothing to switch off there.
+    ///
+    /// The indicator is hidden on macOS as well. `.borderlessButton` supplies its
+    /// own chevron on the LEADING side, so a label that draws one of its own came
+    /// out with two — a caller that wants the arrow should put it in the label,
+    /// where it can be positioned, and get exactly one.
+    @ViewBuilder
+    func menuStyleCompat() -> some View {
+        #if os(macOS)
+        self.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        #else
+        self.menuStyle(.automatic)
+        #endif
+    }
+
     /// URL keyboard on iOS; no-op on macOS (hardware keyboard, no keyboard type).
     @ViewBuilder
     func urlKeyboard() -> some View {

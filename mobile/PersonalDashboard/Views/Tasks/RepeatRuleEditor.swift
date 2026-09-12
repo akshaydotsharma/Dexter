@@ -166,14 +166,13 @@ struct RepeatRuleEditor: View {
                 .font(.edBody)
                 .foregroundStyle(Tokens.inkSoft)
             Spacer()
-            Picker("Repeats", selection: $draft.frequency.animation()) {
+            dropdown(label: draft.frequency.label, accessibilityLabel: "Repeats") {
                 ForEach(RecurrenceFrequency.allCases, id: \.self) { option in
-                    Text(option.label).tag(option)
+                    Button(option.label) {
+                        withAnimation { draft.frequency = option }
+                    }
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .tint(Tokens.accentTasks)
         }
         .padding(Space.md)
     }
@@ -249,30 +248,32 @@ struct RepeatRuleEditor: View {
     }
 
     private var dayOfMonthRow: some View {
-        HStack {
-            Text("On the")
-                .font(.edBody)
-                .foregroundStyle(Tokens.inkSoft)
-            Spacer()
-            Picker("Day of month", selection: $draft.dayOfMonth) {
-                ForEach(1...31, id: \.self) { day in
-                    Text(RecurrenceRule.ordinal(day)).tag(day)
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack {
+                Text("On the")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.inkSoft)
+                Spacer()
+                dropdown(
+                    label: RecurrenceRule.ordinal(draft.dayOfMonth),
+                    accessibilityLabel: "Day of the month"
+                ) {
+                    ForEach(1...31, id: \.self) { day in
+                        Button(RecurrenceRule.ordinal(day)) { draft.dayOfMonth = day }
+                    }
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .tint(Tokens.accentTasks)
-        }
-        .padding(Space.md)
-        .overlay(alignment: .bottomLeading) {
+            // A note, not an overlay. As an overlay it was drawn OUTSIDE the row's
+            // own height, so it sat on top of whatever followed instead of pushing
+            // it down.
             if draft.dayOfMonth > 28 {
                 Text("Short months use their last day.")
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
-                    .padding(.horizontal, Space.md)
-                    .padding(.bottom, 2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(Space.md)
     }
 
     private var monthAndDayRow: some View {
@@ -280,25 +281,67 @@ struct RepeatRuleEditor: View {
             Text("On")
                 .font(.edBody)
                 .foregroundStyle(Tokens.inkSoft)
-            Spacer()
-            Picker("Month", selection: $draft.monthOfYear) {
+            Spacer(minLength: Space.sm)
+            // The SHORT month in the collapsed label, the full one in the menu.
+            // "September" has a narrow slot here and hyphenated across two lines
+            // when it was spelled out.
+            dropdown(
+                label: RecurrenceRule.shortMonthNames[draft.monthOfYear - 1],
+                accessibilityLabel: "Month"
+            ) {
                 ForEach(1...12, id: \.self) { month in
-                    Text(RecurrenceRule.monthNames[month - 1]).tag(month)
+                    Button(RecurrenceRule.monthNames[month - 1]) { draft.monthOfYear = month }
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .tint(Tokens.accentTasks)
-            Picker("Day", selection: $draft.dayOfMonth) {
+            dropdown(
+                label: "\(draft.dayOfMonth)",
+                accessibilityLabel: "Day of the month"
+            ) {
                 ForEach(1...31, id: \.self) { day in
-                    Text("\(day)").tag(day)
+                    Button("\(day)") { draft.dayOfMonth = day }
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .tint(Tokens.accentTasks)
         }
         .padding(Space.md)
+    }
+
+    /// One dropdown control, shared by every list-of-values row here.
+    ///
+    /// A `Menu`, NOT `Picker(.menu)`. A Picker's menu opens SCROLLED TO THE
+    /// SELECTION, so with September chosen the month list opened partway down and
+    /// January was above the fold — you had to scroll up to reach the start of the
+    /// year. A `Menu` opens from its first item, which is what a list of months or
+    /// days should do.
+    ///
+    /// The label is pinned to one line: these sit in a narrow trailing slot, and a
+    /// value that wraps breaks the row's height rather than truncating.
+    @ViewBuilder
+    private func dropdown<Content: View>(
+        label: String,
+        accessibilityLabel: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        Menu {
+            content()
+        } label: {
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.edBodyMedium)
+                    .lineLimit(1)
+                    .foregroundStyle(Tokens.accentTasks)
+                // The ONLY indicator on either platform: `menuStyleCompat` hides the
+                // system one on macOS, because a borderless menu that also had this
+                // came out with two arrows. macOS lays this one out leading rather
+                // than trailing; that is the style's doing, and one arrow on the
+                // wrong side beats two or none.
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Tokens.muted)
+            }
+            .fixedSize()
+        }
+        .menuStyleCompat()
+        .accessibilityLabel("\(accessibilityLabel), \(label)")
     }
 
     private var timeRow: some View {
@@ -400,7 +443,7 @@ struct RepeatRuleEditor: View {
                 .foregroundStyle(Tokens.ink)
                 .fixedSize(horizontal: false, vertical: true)
             if let first = draft.firstDate {
-                Text("First one: \(first.formatted(.dateTime.weekday(.wide).day().month(.wide)))")
+                Text("First one: \(Self.firstDateLabel(first))")
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
             } else {
@@ -412,5 +455,17 @@ struct RepeatRuleEditor: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Space.md)
         .background(Tokens.paper2)
+    }
+
+    /// The first date, carrying its YEAR whenever that is not the current one.
+    ///
+    /// A yearly rule routinely lands next year: "on September 1" set in September
+    /// fires in September twelve months out. Without the year that line read as
+    /// this year, which is the opposite of what the rule does.
+    static func firstDateLabel(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        return sameYear
+            ? date.formatted(.dateTime.weekday(.wide).day().month(.wide))
+            : date.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
     }
 }
