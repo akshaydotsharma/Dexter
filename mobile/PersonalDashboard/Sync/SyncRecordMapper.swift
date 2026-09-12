@@ -100,11 +100,18 @@ enum SyncRecordMapper {
         let encoder = DataArchive.makeEncoder()
         return try items.map { item in
             let data = try encoder.encode(item)
+            // Explicit nulls for the optionals `encodeIfPresent` dropped, so a field
+            // this build CLEARED reads differently from one it has never heard of
+            // (#516). The hash covers the filled payload, not the encoder's output:
+            // `SyncApplier.verify` rehashes the payload it receives and rejects any op
+            // whose bytes disagree with its own `contentHash`, so the hash has to be
+            // taken over what is actually shipped.
+            let filled = JSONValue.fillingNulls(of: item, into: try JSONValue.from(encoded: data))
             return SyncRecord(
                 entity: entity,
                 recordID: id(item),
-                json: try JSONValue.from(encoded: data),
-                contentHash: SyncHash.hex(data)
+                json: filled,
+                contentHash: SyncHash.hex(try filled.encodedData())
             )
         }
     }

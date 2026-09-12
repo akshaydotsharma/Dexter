@@ -76,6 +76,75 @@ indirect enum JSONValue: Codable, Equatable {
         try DataArchive.makeEncoder().encode(self)
     }
 
+    /// Restore the keys Swift's `Codable` dropped, as explicit nulls (#516).
+    ///
+    /// Synthesized `Codable` encodes optionals with `encodeIfPresent`, so a nil field
+    /// simply is not on the wire. `preservingFieldsAbsentHere` below then keeps the
+    /// receiver's old value, which is right for a peer that has never HEARD of the
+    /// field and wrong for a peer that deliberately CLEARED it. The two were
+    /// indistinguishable, so clearing anything stopped propagating: three trip
+    /// expenses kept a split on the Mac that the phone had removed, and the devices
+    /// disagreed about the user's share by 95 euro.
+    ///
+    /// Absence is the signal, so the sender has to stop being absent about fields it
+    /// knows. This walks the value's own `Mirror` and writes `.null` for every
+    /// property the encoder omitted, which makes "I know this field and it is empty"
+    /// say something different from "I have never heard of this field". The receiver
+    /// already reads the difference correctly and needs no change.
+    ///
+    /// The key set is DERIVED, never restated. A hand-kept list per entity is the
+    /// failure #449 recorded, where a field missing from a second list was invisible
+    /// until the data was gone; here a new DTO property is filled the moment it
+    /// exists.
+    ///
+    /// Recursion matters for the composite records: a list ships with its checklist
+    /// items and a vision block with its members, so nulls have to reach inside the
+    /// nested objects and arrays too.
+    ///
+    /// ## Where it deliberately does nothing
+    ///
+    /// A DTO that renamed keys with custom `CodingKeys` would encode keys that are not
+    /// property labels. Filling from labels there would invent keys the decoder
+    /// ignores and change the hash for nothing, so a mismatch between the encoded keys
+    /// and the labels leaves the object exactly as encoded. No DTO does this today;
+    /// the guard is what keeps that from becoming a silent trap later.
+    static func fillingNulls(of value: Any, into json: JSONValue) -> JSONValue {
+        let mirror = Mirror(reflecting: unwrappingOptional(value))
+        switch json {
+        case .object(var fields):
+            guard mirror.displayStyle == .struct || mirror.displayStyle == .class else { return json }
+            var byLabel: [String: Any] = [:]
+            for child in mirror.children {
+                guard let label = child.label else { return json }
+                byLabel[label] = child.value
+            }
+            guard fields.keys.allSatisfy({ byLabel[$0] != nil }) else { return json }
+            for (label, child) in byLabel {
+                if let existing = fields[label] {
+                    fields[label] = fillingNulls(of: child, into: existing)
+                } else {
+                    fields[label] = .null
+                }
+            }
+            return .object(fields)
+        case .array(let elements):
+            let children = Array(mirror.children)
+            guard children.count == elements.count else { return json }
+            return .array(zip(children, elements).map { fillingNulls(of: $0.value, into: $1) })
+        default:
+            return json
+        }
+    }
+
+    /// The value inside an `Optional`, so a present optional is walked as the struct
+    /// it wraps rather than as a one-child container. A nil optional is returned as
+    /// itself and stops the walk, which is correct: it has no keys to fill.
+    private static func unwrappingOptional(_ value: Any) -> Any {
+        let mirror = Mirror(reflecting: value)
+        guard mirror.displayStyle == .optional else { return value }
+        return mirror.children.first.map { unwrappingOptional($0.value) } ?? value
+    }
+
     /// Overlay this payload onto `local`, keeping any local key this payload does not
     /// mention at all.
     ///
