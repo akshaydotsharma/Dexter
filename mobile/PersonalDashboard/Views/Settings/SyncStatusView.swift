@@ -448,10 +448,9 @@ struct SyncStatusView: View {
             }
         }
         .disabled(coordinator.isSyncing || isReplaying || !snapshot.health.isUsable || !applyEnabled)
-        .confirmationDialog(
+        .alert(
             "Re-apply everything from other devices?",
-            isPresented: $showReplayConfirm,
-            titleVisibility: .visible
+            isPresented: $showReplayConfirm
         ) {
             Button("Re-apply everything", role: .destructive) {
                 Task { await runReplay() }

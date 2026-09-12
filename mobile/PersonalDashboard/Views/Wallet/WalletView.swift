@@ -186,13 +186,12 @@ struct WalletView: View {
         .pdfPicker(isPresented: $showingPDFPicker) { data, _ in
             handleTicketData(data, isPDF: true)
         }
-        .confirmationDialog(
+        .alert(
             pendingDelete?.deletionTitle ?? "Delete this card?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button(pendingDelete?.deletionConfirmLabel ?? "Delete", role: .destructive) {
                 if let source = pendingDelete { delete(source) }
@@ -202,13 +201,12 @@ struct WalletView: View {
         } message: {
             Text(pendingDelete?.deletionMessage ?? "")
         }
-        .confirmationDialog(
+        .alert(
             "Read this ticket again?",
             isPresented: Binding(
                 get: { pendingRereadID != nil },
                 set: { if !$0 { pendingRereadID = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button("Read again") {
                 if let id = pendingRereadID { reread(ticketID: id) }

@@ -126,10 +126,9 @@ struct TaskTicketDetailSheet: View {
         .sheet(isPresented: $showingOriginal) {
             TicketOriginalViewer(attachmentPath: ticket.attachmentPath)
         }
-        .confirmationDialog(
+        .alert(
             "Remove this attachment?",
-            isPresented: $showingDeleteConfirm,
-            titleVisibility: .visible
+            isPresented: $showingDeleteConfirm
         ) {
             Button("Remove attachment", role: .destructive) { delete() }
             Button("Keep it", role: .cancel) {}

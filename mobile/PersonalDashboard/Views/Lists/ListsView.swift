@@ -1236,10 +1236,9 @@ private struct ItemDetailsSheet: View {
                     .disabled(!canSave)
                 }
             }
-            .confirmationDialog(
+            .alert(
                 "Delete this item?",
-                isPresented: $showingDeleteConfirmation,
-                titleVisibility: .visible
+                isPresented: $showingDeleteConfirmation
             ) {
                 Button("Delete", role: .destructive) {
                     onDelete()

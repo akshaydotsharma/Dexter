@@ -240,10 +240,9 @@ struct FinanceView: View {
         } message: { message in
             Text(message)
         }
-        .confirmationDialog(
+        .alert(
             "Delete this expense?",
-            isPresented: deleteDialogBinding,
-            titleVisibility: .visible
+            isPresented: deleteDialogBinding
         ) {
             Button("Delete", role: .destructive) {
                 if let row = pendingDelete {
