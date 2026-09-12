@@ -80,4 +80,49 @@ final class LiveMembershipCardReadTests: XCTestCase {
         print("guest=\(meta.guestName ?? "-") fields=\(values)")
         print("barcode=\(card.barcodeSymbology) conf=\(card.sourceConfirmation)")
     }
+
+    /// The card already in the Wallet is the one that matters: it was scanned
+    /// before the schema could describe it, and re-scanning would throw away the
+    /// title and date its owner typed to make it usable. "Read again" is the path
+    /// that fixes it in place (#522).
+    func testReadingAnAlreadyScannedCardAgainFillsItIn() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let path = env["DEXTER_LIVE_PASS_IMAGE"] else {
+            throw XCTSkip("set DEXTER_LIVE_PASS_IMAGE to the membership card image to run this")
+        }
+        try XCTSkipIf(env["ANTHROPIC_API_KEY"] == nil, "no API key in the environment")
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+
+        let stored = try TicketStorage.shared.saveCompressedJpeg(
+            try TicketStorage.shared.compress(imageData: data)
+        )
+        addTeardownBlock { try? TicketStorage.shared.delete(relativePath: stored) }
+
+        // Exactly the row the shipped bug produced, plus the two values its owner
+        // typed afterwards. Both must survive.
+        let store = SwiftDataStore(container: SwiftDataStore.makeInMemory())
+        let card = LocalWalletCard(
+            kind: .pass,
+            title: "Priority Pass",
+            dayDate: WallClock.todayAnchor(),
+            notes: "mine",
+            attachmentPath: stored
+        )
+        store.context.insert(card)
+        try store.context.save()
+        let id = card.clientUUID
+
+        try await TicketExtraction().rereadWalletCard(cardUUID: id, context: store.context)
+
+        let fresh = try XCTUnwrap(
+            try store.context.fetch(FetchDescriptor<LocalWalletCard>()).first(where: { $0.clientUUID == id })
+        )
+        XCTAssertFalse(fresh.sourceConfirmation.isEmpty, "the card number must arrive on a re-read")
+        XCTAssertFalse(fresh.barcodePayload.isEmpty, "the QR must arrive on a re-read")
+        XCTAssertNotNil(fresh.endDate, "the expiry must arrive on a re-read")
+        XCTAssertEqual(fresh.kindEnum, .pass)
+        XCTAssertEqual(fresh.attachmentPath, stored, "the stored file is not replaced")
+        XCTAssertEqual(fresh.notes, "mine", "a re-read never touches what the person wrote")
+        print("reread: conf=\(fresh.sourceConfirmation) end=\(String(describing: fresh.endDate)) barcode=\(fresh.barcodeSymbology)")
+    }
 }

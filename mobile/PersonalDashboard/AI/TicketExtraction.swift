@@ -159,6 +159,103 @@ struct TicketExtraction {
         )
     }
 
+    /// Read a standalone Wallet card's stored file again, against the current
+    /// extractor, and update the card in place (#522).
+    ///
+    /// The counterpart of `TaskTicketExtraction.reread` (#484), which the Wallet
+    /// already offers for a document attached to a task or a stop. A card the
+    /// Wallet owns was excluded on the reasoning that it "is edited directly", and
+    /// that holds for one typed by hand and not for one that came off a scan: the
+    /// file is still on disk and the extraction that read it can be run again.
+    ///
+    /// It is the only way a card already in the Wallet benefits when the prompt
+    /// improves. A membership card scanned before the schema could describe one is
+    /// sitting there with a fallback title and no number, and the alternative to
+    /// this is deleting it and scanning again, which throws away whatever the
+    /// person typed to make it usable in the meantime.
+    ///
+    /// A re-read is a second opinion, not a reset: a field the new read cannot
+    /// see keeps what the card already had. The generic fields are the documented
+    /// exception and are replaced outright, because clearing what an older prompt
+    /// kept is a reason someone runs this.
+    func rereadWalletCard(cardUUID: UUID, context modelContext: ModelContext) async throws {
+        let descriptor = FetchDescriptor<LocalWalletCard>(
+            predicate: #Predicate { $0.clientUUID == cardUUID }
+        )
+        guard let card = try? modelContext.fetch(descriptor).first else {
+            throw TaskTicketExtractionError.ticketVanished
+        }
+        let path = card.attachmentPath
+        guard !path.trimmingCharacters(in: .whitespaces).isEmpty,
+              let url = TicketStorage.shared.load(relativePath: path),
+              let data = try? Data(contentsOf: url),
+              // A .pkpass carries the issuer's own fields and was never guessed at,
+              // so there is nothing to re-guess.
+              !TicketStorage.isPass(path) else {
+            throw TaskTicketExtractionError.rereadUnavailable
+        }
+
+        let isPDF = path.lowercased().hasSuffix(".pdf")
+        let images: [Data] = isPDF
+            ? BarcodeService
+                .renderPages(pdfData: data, maxPages: Self.extractionPageCap, targetLongEdge: 2200)
+                .compactMap { $0.jpegDataCompat(quality: 0.85) }
+            // Already the compressed JPEG that was sent the first time.
+            : [data]
+        guard !images.isEmpty else { throw TaskTicketExtractionError.rereadUnavailable }
+
+        let read = await self.read(
+            bytes: data, isPDF: isPDF, images: images, dateContext: Self.walletDateContext()
+        )
+        guard let extracted = read.segments.first else {
+            throw TaskTicketExtractionError.rereadUnavailable
+        }
+
+        // Re-fetch after the suspension rather than holding the @Model across it.
+        guard let fresh = try? modelContext.fetch(descriptor).first else {
+            throw TaskTicketExtractionError.ticketVanished
+        }
+
+        let rebuilt = buildWalletCard(
+            extracted: extracted,
+            bcbp: read.bcbp,
+            decoded: read.decoded,
+            attachmentPath: path
+        )
+        Self.apply(rebuilt, onto: fresh)
+        fresh.updatedAt = Date()
+        try? modelContext.save()
+    }
+
+    /// Copy a freshly built card's extracted values onto the row that already
+    /// exists, keeping its identity, its file and anything the new read could not
+    /// see. `notes` is never touched: it is the one field that is purely the
+    /// person's.
+    private static func apply(_ rebuilt: LocalWalletCard, onto card: LocalWalletCard) {
+        func keep(_ new: String, _ existing: String) -> String {
+            new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? existing : new
+        }
+        // "Ticket" is the builder's own last resort, so it is an absence dressed as
+        // a value and must not overwrite a title someone typed.
+        if rebuilt.title != "Ticket" { card.title = keep(rebuilt.title, card.title) }
+        card.kind             = rebuilt.kind
+        card.dayDate          = rebuilt.dayDate
+        card.startTime        = rebuilt.startTime ?? card.startTime
+        card.arrivalTime      = rebuilt.arrivalTime ?? card.arrivalTime
+        card.endDate          = rebuilt.endDate ?? card.endDate
+        card.endTime          = rebuilt.endTime ?? card.endTime
+        card.venue            = keep(rebuilt.venue, card.venue)
+        card.address          = keep(rebuilt.address, card.address)
+        card.googleMapsLink   = keep(rebuilt.googleMapsLink, card.googleMapsLink)
+        card.seat             = keep(rebuilt.seat, card.seat)
+        card.gate             = keep(rebuilt.gate, card.gate)
+        card.sourceConfirmation = keep(rebuilt.sourceConfirmation, card.sourceConfirmation)
+        card.barcodePayload   = keep(rebuilt.barcodePayload, card.barcodePayload)
+        card.barcodeSymbology = keep(rebuilt.barcodeSymbology, card.barcodeSymbology)
+        // Replaced outright, empty included: see the note on the method above.
+        card.ticketMetaJSON   = rebuilt.ticketMetaJSON
+    }
+
     // MARK: - Shared ingest
 
     /// Everything both entry points do before they diverge on which record to
@@ -230,33 +327,13 @@ struct TicketExtraction {
             extractionImages = [compressed]
         }
 
-        // 2. Decode the barcode on-device.
-        let decoded: DecodedBarcode?
-        if isPDF {
-            decoded = BarcodeService.decode(pdfData: data)
-        } else if let image = extractionImages.first.flatMap({ PlatformImage(data: $0) }) {
-            decoded = BarcodeService.decode(image: image)
-        } else {
-            decoded = nil
-        }
-
-        // 3. Deterministic BCBP parse (boarding passes only).
-        let bcbp: BCBPTicket? = decoded.flatMap { BCBPParser.parse($0.payload) }
-
-        // 4. ONE Claude extraction call. On any failure we degrade rather than
-        //    lose the upload.
-        var segments: [ExtractedTicket] = []
-        var degradeMessage: String?
-        if !extractionImages.isEmpty {
-            do {
-                segments = try await extract(images: extractionImages, dateContext: dateContext, bcbp: bcbp)
-            } catch {
-                NSLog("TicketExtraction: extraction failed: %@", error.localizedDescription)
-                degradeMessage = "Saved your ticket, but couldn't read all the details. Tap the card to add them."
-            }
-        } else {
-            degradeMessage = "Saved your ticket, but couldn't render it for reading. Tap the card to add details."
-        }
+        // 2-4. Decode, parse and read. Shared with the re-read path (#522), which
+        //      starts from the file already on disk and so skips step 1 entirely.
+        let read = await self.read(bytes: storedBytes, isPDF: isPDF, images: extractionImages, dateContext: dateContext)
+        let decoded = read.decoded
+        let bcbp = read.bcbp
+        let segments = read.segments
+        let degradeMessage = read.degradeMessage
 
         // 5. One stored copy per extra segment, so each leg owns its attachment.
         var extraPaths: [String] = []
@@ -281,6 +358,56 @@ struct TicketExtraction {
             segments: segments,
             degradeMessage: degradeMessage
         )
+    }
+
+    /// What reading a stored document yielded, with nothing persisted.
+    ///
+    /// Split out of `ingest` so the re-read path can run the identical decode and
+    /// the identical prompt against the file already on disk (#522). A second copy
+    /// of these three steps is how the two extractors drifted in the first place.
+    struct DocumentRead {
+        let decoded: DecodedBarcode?
+        let bcbp: BCBPTicket?
+        let segments: [ExtractedTicket]
+        let degradeMessage: String?
+    }
+
+    /// Decode the barcode on-device, parse BCBP deterministically, and make the one
+    /// Claude call. Never throws: a failed read degrades so the upload is not lost.
+    func read(
+        bytes: Data,
+        isPDF: Bool,
+        images: [Data],
+        dateContext: String
+    ) async -> DocumentRead {
+        let decoded: DecodedBarcode?
+        if isPDF {
+            decoded = BarcodeService.decode(pdfData: bytes)
+        } else if let image = images.first.flatMap({ PlatformImage(data: $0) }) {
+            decoded = BarcodeService.decode(image: image)
+        } else {
+            decoded = nil
+        }
+
+        // Deterministic BCBP parse (boarding passes only).
+        let bcbp: BCBPTicket? = decoded.flatMap { BCBPParser.parse($0.payload) }
+
+        guard !images.isEmpty else {
+            return DocumentRead(
+                decoded: decoded, bcbp: bcbp, segments: [],
+                degradeMessage: "Saved your ticket, but couldn't render it for reading. Tap the card to add details."
+            )
+        }
+        do {
+            let segments = try await extract(images: images, dateContext: dateContext, bcbp: bcbp)
+            return DocumentRead(decoded: decoded, bcbp: bcbp, segments: segments, degradeMessage: nil)
+        } catch {
+            NSLog("TicketExtraction: extraction failed: %@", error.localizedDescription)
+            return DocumentRead(
+                decoded: decoded, bcbp: bcbp, segments: [],
+                degradeMessage: "Saved your ticket, but couldn't read all the details. Tap the card to add them."
+            )
+        }
     }
 
     /// Pages of a PDF sent to the extraction call. Matches
