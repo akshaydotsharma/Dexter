@@ -338,6 +338,18 @@ extension RecurrenceRule {
         return symbols.count == 7 ? symbols : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     }()
 
+    /// Abbreviated month names, indexed 0 = January. Used for the collapsed
+    /// dropdown label, which has a narrow slot to sit in: "September" hyphenated
+    /// across two lines there, which is how it shipped in the first cut of #524.
+    /// The menu itself still lists the full names, where there is room.
+    static let shortMonthNames: [String] = {
+        let symbols = Calendar.current.shortMonthSymbols
+        return symbols.count == 12 ? symbols : [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        ]
+    }()
+
     static let monthNames: [String] = {
         let symbols = Calendar.current.monthSymbols
         return symbols.count == 12 ? symbols : [
