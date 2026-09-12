@@ -305,13 +305,12 @@ struct TaskTicketSection: View {
         .onChange(of: isBusyNow) { _, busy in
             isBusy?.wrappedValue = busy
         }
-        .confirmationDialog(
+        .alert(
             "Remove this attachment?",
             isPresented: Binding(
                 get: { pendingRemoval != nil },
                 set: { if !$0 { pendingRemoval = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             Button("Remove attachment", role: .destructive) {
                 if let ticket = pendingRemoval { remove(ticket) }

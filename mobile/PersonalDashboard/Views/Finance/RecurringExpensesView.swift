@@ -67,10 +67,9 @@ struct RecurringExpensesView: View {
                     .presentationDragIndicator(.visible)
             }
         }
-        .confirmationDialog(
+        .alert(
             "Delete this recurring expense?",
-            isPresented: deleteDialogBinding,
-            titleVisibility: .visible
+            isPresented: deleteDialogBinding
         ) {
             Button("Delete", role: .destructive) {
                 if let row = pendingDelete { delete(row) }

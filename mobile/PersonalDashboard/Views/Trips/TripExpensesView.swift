@@ -69,10 +69,9 @@ struct TripExpensesView: View {
                 populated
             }
         }
-        .confirmationDialog(
+        .alert(
             "Remove this expense?",
-            isPresented: deleteDialogBinding,
-            titleVisibility: .visible
+            isPresented: deleteDialogBinding
         ) {
             Button("Remove", role: .destructive) {
                 if let row = pendingDelete {
