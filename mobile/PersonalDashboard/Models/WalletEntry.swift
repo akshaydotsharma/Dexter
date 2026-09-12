@@ -373,10 +373,12 @@ extension WalletEntry {
                             tripName: tripNames[stop.tripUUID] ?? "Trip"
                         ),
                         card: data,
-                        // Always an event, for the reason a task's document is: this
-                        // model carries no travel grammar to colour it by, even when
-                        // the stop it hangs off is a flight.
-                        kind: .event,
+                        // Whatever the card turned out to be. A document is an
+                        // event ticket until its barcode says otherwise, and a
+                        // boarding pass dropped on a flight stop now says so
+                        // (#520) — this used to force `.event` even then, so the
+                        // pass took the event colour and the ticket glyph.
+                        kind: Self.kind(for: data.layout),
                         // The document's own printed day when it read one, and the
                         // stop's day when it did not. A boarding pass uploaded in
                         // March for a flight in June belongs in June.
@@ -407,9 +409,10 @@ extension WalletEntry {
                         taskTitle: taskTitle
                     ),
                     card: data,
-                    // Always an event: the model carries no travel grammar, so
-                    // there is nothing else it could honestly be.
-                    kind: .event,
+                    // Whatever the card turned out to be — see the trip-stop
+                    // branch above. A boarding pass attached to a task is still a
+                    // boarding pass (#520).
+                    kind: Self.kind(for: data.layout),
                     day: data.primaryDate,
                     // An undated ticket never falls into Past. Its day is only a
                     // sorting fallback (the row's creation date), so ageing it
@@ -435,7 +438,11 @@ extension WalletEntry {
     }
 
     /// Map a borrowed card's layout back to a kind, for colour only.
-    private static func kind(for layout: TicketCardLayout) -> WalletCardKind {
+    ///
+    /// Internal rather than private so `WalletBoardingPassLayoutTests` can assert
+    /// that the Wallet's colour and label agree with the card the projection
+    /// built, instead of the two deciding separately and drifting (#520).
+    static func kind(for layout: TicketCardLayout) -> WalletCardKind {
         switch layout {
         case .stay:         return .stay
         case .boardingPass: return .boardingPass

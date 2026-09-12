@@ -20,6 +20,20 @@ struct BCBPTicket: Equatable {
         guard let carrier, let flightNumber else { return flightNumber }
         return "\(carrier)\(flightNumber)"
     }
+
+    /// The flight as a person reads it: "EK091", not "EK91".
+    ///
+    /// `flightLabel` strips the barcode's leading zeros, which is right for
+    /// matching two records to each other and wrong on a card. The pass in the
+    /// hand and the board at the gate both print three digits, and a card is for
+    /// reading against a sign. Separate from `flightLabel` on purpose: that value
+    /// feeds matching and itinerary rows written long before this, and padding it
+    /// there would change comparisons underneath them.
+    var displayFlightLabel: String? {
+        guard let carrier, let flightNumber else { return flightLabel }
+        let padded = String(repeating: "0", count: max(0, 3 - flightNumber.count)) + flightNumber
+        return carrier + padded
+    }
 }
 
 /// Deterministic IATA BCBP parser. The BCBP mandatory section is fixed-width;
