@@ -65,6 +65,11 @@ enum DataArchive {
         /// rather than failing the whole restore.
         var walletCards: [WalletCardDTO]? = nil
 
+        // MARK: Added in #524 — recurring-task templates.
+        // Optional with a nil default, following the #319 precedent, so archives
+        // written before tasks could repeat still decode.
+        var recurringTasks: [RecurringTaskDTO]? = nil
+
         // MARK: Added in #395 — note image attachments.
         // Optional with a nil default, following the #319 precedent, so archives
         // written before notes could hold images still decode.
@@ -129,6 +134,48 @@ enum DataArchive {
         /// and this is the only way a peer that learns about an overdue reminder can
         /// tell "not seen yet" from "already swiped away on the phone".
         var reminderClearedAt: Date? = nil
+
+        // MARK: Added in #524 — which recurring template made this task.
+        //
+        // Optional with a nil default, the same shape every field added after v1
+        // uses. Carried here so an occurrence keeps its identity across a restore
+        // and across devices: without it a restored task would be indistinguishable
+        // from a one-off, and the materialiser would make the same date again on the
+        // next pass because `occurrenceKey` is its dedupe guard.
+        //
+        // ⚠️ Same #428 trap as `remindMe` above: a peer on a build from before this
+        // decodes the task without these and writes them back as nil, turning an
+        // occurrence into an ordinary task. Both apps have to be on this build.
+        var recurringTaskUUID: String? = nil
+        var occurrenceKey: String? = nil
+    }
+
+    /// A recurring-task template (#524). The task equivalent of
+    /// `RecurringExpenseDTO`, and carried for the same reason: without it, every
+    /// repeat rule the person set up vanishes on a restore, and only the tasks it
+    /// happened to have made already come back.
+    struct RecurringTaskDTO: Codable {
+        let clientUUID: String
+        let title: String
+        let taskDescription: String?
+        let tag: String?
+        let priority: Int
+        let address: String
+        let googleMapsLink: String
+        let remindMe: Bool
+        let frequency: String
+        let interval: Int
+        let weekdayMask: Int
+        let dayOfMonth: Int
+        let monthOfYear: Int
+        let timeOfDayMinutes: Int
+        let leadDays: Int
+        let isActive: Bool
+        let startDate: Date
+        let endDate: Date?
+        let lastOccurrenceKey: String?
+        let createdAt: Date
+        let updatedAt: Date
     }
 
     /// A task's wallet-style ticket attachment (#399).
@@ -629,6 +676,7 @@ enum DataArchive {
         "LocalStatementImport", "LocalProcessedEmail",
         "LocalWalletCard",
         "LocalVisionBlock",
+        "RecurringTask",
     ]
 
     static func makeEncoder() -> JSONEncoder {

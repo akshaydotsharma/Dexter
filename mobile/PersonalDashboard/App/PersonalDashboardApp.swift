@@ -34,6 +34,11 @@ struct PersonalDashboardApp: App {
                     // launch value, so the launch pass lives here (the coordinator
                     // guards against overlapping cycles).
                     await RecurringExpenseCoordinator.shared.runForegroundMaterialize()
+                    // Create any recurring task whose date has come into range (#524).
+                    // Same reasoning as the line above: scenePhase .active does not
+                    // reliably fire for the initial launch value, and the coordinator
+                    // single-flights against the Tasks list's own pass.
+                    await RecurringTaskCoordinator.shared.runPass()
                     // Cross-device sync pass on launch (#348). Off by default
                     // and no-ops instantly when disabled or unconfigured. In
                     // phase 1 this cannot write to the store at all: it records
@@ -73,6 +78,9 @@ struct PersonalDashboardApp: App {
                 Task { await AppMaintenance.runTripCoverForegroundSweep() }
                 // Materialise due / missed recurring expenses on foreground (#236).
                 Task { await RecurringExpenseCoordinator.shared.runForegroundMaterialize() }
+                // Same for recurring tasks (#524): a day can turn over while the app
+                // is in the background, which is exactly when a lead window opens.
+                Task { await RecurringTaskCoordinator.shared.runPass() }
                 // Top the armed reminders back up (#444): earlier ones have fired
                 // and freed room under the pending cap, and permission may have
                 // just been granted in Settings while the app was away.
