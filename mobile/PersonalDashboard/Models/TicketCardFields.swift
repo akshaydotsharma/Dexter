@@ -75,9 +75,11 @@ struct TicketCardFields {
                 ("Section", meta?.section),
                 ("Row", meta?.row),
                 ("Seat", card.seat),
-                // A boarding pass attached to a trip stop is stored as a document
-                // and drawn with this layout, not the boarding-pass one, so the
-                // group needs a slot here too (#501). Straight after the seat,
+                // A pass drawn with this layout still needs somewhere to print
+                // its boarding group (#501). Since #520 a document whose barcode
+                // decodes as BCBP takes the boarding-pass layout instead, but one
+                // whose barcode does not — a rail day pass, a stadium ticket that
+                // prints a zone — still lands here. Straight after the seat,
                 // because the two are read together in the queue.
                 ("Group", TicketField.group(meta?.boardingGroup)),
                 // Most events outside a stadium have no seating at all, and a

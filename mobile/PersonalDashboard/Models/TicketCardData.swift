@@ -176,9 +176,19 @@ extension TicketCardData {
     }
 
     /// Project a document attached to a task (#399, surfaced in the wallet by
-    /// #398) or to a trip stop (#432). Always the event layout: the model was
-    /// built for event tickets and deliberately carries no route, airline or BCBP
-    /// grammar.
+    /// #398) or to a trip stop (#432).
+    ///
+    /// The event layout unless the document's barcode is an IATA boarding pass,
+    /// in which case it draws the boarding-pass card like any other pass (#520).
+    /// This model used to be described as carrying no travel grammar, and that
+    /// was true when the Wallet first surfaced task attachments. It is not true
+    /// now: a boarding pass stored here arrives with a full BCBP payload, and
+    /// four Emirates passes on one trip were being drawn as concert tickets
+    /// while the route hero the layout exists for went unused.
+    ///
+    /// The barcode decides it, never `TicketMeta.eventType`. The barcode is
+    /// machine-read; `eventType` is the extractor's judgement, and a judgement
+    /// must not choose the layout (#481).
     ///
     /// - Parameters:
     ///   - ownerTitle: the owning record's title, used when the extractor could
@@ -192,13 +202,16 @@ extension TicketCardData {
         ownerAddress: String = "",
         ownerMapsLink: String = ""
     ) {
-        let meta = ticket.ticketMeta
         let event = ticket.eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedTitle = event.isEmpty ? ownerTitle : event
 
-        self.layout = .event
-        self.eyebrow = Self.eyebrow(for: .event, eventType: meta?.eventType)
-        self.heroGlyph = "ticket"
+        let pass = Self.routedBoardingPass(payload: ticket.barcodePayload)
+        let meta = Self.merging(pass, into: ticket.ticketMeta)
+        let layout: TicketCardLayout = pass == nil ? .event : .boardingPass
+
+        self.layout = layout
+        self.eyebrow = Self.eyebrow(for: layout, eventType: meta?.eventType)
+        self.heroGlyph = layout == .boardingPass ? "airplane" : "ticket"
         self.title = resolvedTitle
         // Undated tickets fall back to the day the row was created, purely so
         // the card has somewhere to sort. `WalletEntry` keeps them out of Past
@@ -252,6 +265,49 @@ extension TicketCardData {
             if let url = URL(string: "https://\(stored)") { return url }
         }
         return LocalItineraryItem.googleMapsSearchURL(name: name, address: address)
+    }
+
+    /// The document's barcode as a boarding pass, but ONLY when it names both
+    /// ends of the flight.
+    ///
+    /// The boarding-pass layout is built around a route hero: two big IATA codes
+    /// with a plane on a dashed path between them. One endpoint missing draws
+    /// "DXB ✈ —", which is worse than the event card it replaced, so a partial
+    /// parse keeps the event card and loses nothing. Same guard, and the same
+    /// reason, as the hand-typed wallet card at `init(_ card: LocalWalletCard)`.
+    private static func routedBoardingPass(payload: String) -> BCBPTicket? {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let pass = BCBPParser.parse(trimmed) else { return nil }
+        guard let origin = pass.originCode, !origin.isEmpty,
+              let destination = pass.destinationCode, !destination.isEmpty
+        else { return nil }
+        return pass
+    }
+
+    /// Fill the travel slots the route hero and the face read from, without
+    /// disturbing anything the extractor already wrote.
+    ///
+    /// A stored value always wins. The extractor read the printed document and
+    /// can name the airline and the cities, which BCBP does not carry at all; the
+    /// barcode only supplies what the document's own reader left empty. Returns
+    /// the meta unchanged when there is no pass, so the event path is untouched.
+    private static func merging(_ pass: BCBPTicket?, into stored: TicketMeta?) -> TicketMeta? {
+        guard let pass else { return stored }
+        var meta = stored ?? TicketMeta()
+        func fill(_ slot: inout String?, _ value: String?) {
+            guard (slot ?? "").trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            slot = value
+        }
+        fill(&meta.originCode, pass.originCode)
+        fill(&meta.destinationCode, pass.destinationCode)
+        fill(&meta.flightNumber, pass.displayFlightLabel)
+        fill(&meta.passengerName, pass.passengerName)
+        fill(&meta.cabin, pass.cabin)
+        // Says outright what the barcode already proved, so every other reader of
+        // this meta (`isTransport`, the scan surface) agrees with the card.
+        meta.isBoardingPass = true
+        return meta
     }
 
     private static func eyebrow(for layout: TicketCardLayout, eventType: String?) -> String {
