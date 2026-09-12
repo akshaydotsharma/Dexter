@@ -345,6 +345,9 @@ targets:
       # TicketScanView.swift does.
       - path: PersonalDashboard/Services/TaskTicketService.swift
       - path: PersonalDashboard/AI/TaskTicketExtraction.swift
+      # The other_fields schema + parser both extractors share (#522). A copy in
+      # each is what let the Wallet path miss a membership card's number entirely.
+      - path: PersonalDashboard/AI/PassFieldSchema.swift
       # Wallet surface (issue #398). Present-to-scan (TicketScanView) stays iOS-
       # only for the same brightness / idle-timer reason as the trip path, so the
       # wallet's tap routes every card to the detail sheet on macOS and its

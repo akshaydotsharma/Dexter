@@ -82,6 +82,13 @@ enum WalletCardKind: String, CaseIterable, Identifiable, Hashable {
             return resolved == .flight || (resolved == nil && hasFlightNumber) ? .boardingPass : .transit
         case "activity":
             return .event
+        case "pass":
+            // A card the holder keeps and shows again and again, rather than one
+            // spent on a single journey or event (#522). Reached the default arm
+            // before the extractor could say it, which happened to give the right
+            // answer for a card with no flight number and the wrong one for a
+            // lounge card that mentioned an airline.
+            return .pass
         default:
             return hasFlightNumber ? .boardingPass : .pass
         }

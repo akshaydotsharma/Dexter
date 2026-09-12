@@ -305,7 +305,19 @@ extension WalletEntry {
                     card: data,
                     kind: card.kindEnum,
                     day: card.dayDate,
-                    validThrough: card.endDate ?? card.dayDate,
+                    // A pass is good until it expires, and most print no expiry at
+                    // all (#522). Ageing one out on `dayDate` retired a membership
+                    // card into Past the day after it was scanned, because its
+                    // `dayDate` is only the day it was filed. The task-document
+                    // branch below already reasoned this out and named a membership
+                    // card while doing it; the Wallet's own cards never got it.
+                    //
+                    // Every other kind keeps the old rule exactly: a boarding pass
+                    // and an event ticket ARE spent on their day, and a card that
+                    // never left Upcoming would be the opposite defect.
+                    validThrough: card.kindEnum == .pass
+                        ? (card.endDate ?? .distantFuture)
+                        : (card.endDate ?? card.dayDate),
                     timeText: timeLine(for: data)
                 )
             )
