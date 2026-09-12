@@ -234,9 +234,13 @@ private struct RecurringTaskRow: View {
         return pieces.joined(separator: " · ")
     }
 
+    /// "1 Jan 27". The year is always shown, not only when it differs from this
+    /// one: a yearly rule's next date is routinely a year out, and this list puts
+    /// templates of every cadence next to each other, so a row without a year
+    /// reads as "soon" beside a row that means it.
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "d MMM"
+        formatter.dateFormat = "d MMM yy"
         return formatter
     }()
 }
