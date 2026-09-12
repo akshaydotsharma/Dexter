@@ -346,6 +346,7 @@ final class SwiftDataStore {
         LocalItineraryItem.self,
         LocalExpense.self,
         RecurringExpense.self,
+        RecurringTask.self,
         LocalPerson.self,
         LocalEvent.self,
         LocalFXRate.self,

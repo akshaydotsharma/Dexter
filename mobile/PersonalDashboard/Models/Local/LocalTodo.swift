@@ -58,6 +58,25 @@ final class LocalTodo {
     /// but the task itself was left alone".
     var reminderClearedAt: Date? = nil
 
+    /// The `RecurringTask` that generated this task, or "" for an ordinary one
+    /// (#524). Stored with a default so adding it to an existing install is a safe
+    /// lightweight migration.
+    ///
+    /// A plain `String` UUID rather than a SwiftData relationship: the template is
+    /// allowed to be deleted while the tasks it made live on, so this is a record of
+    /// where the task CAME FROM, not a link that has to keep resolving. A row whose
+    /// template is gone is just an ordinary task.
+    var recurringTaskUUID: String = ""
+
+    /// Which date of the template this task is, as `recurring:<uuid>:<yyyy-MM-dd>`
+    /// (#524). "" for an ordinary task.
+    ///
+    /// The materialiser's per-date idempotency guard, matching the `dedupeKey` on a
+    /// recurring expense (#236). Checked against SOFT-DELETED rows too, which is what
+    /// makes deleting one occurrence mean "skip this date" rather than "make it again
+    /// on the next pass".
+    var occurrenceKey: String = ""
+
     var version: Int64
 
     var createdAt: Date
@@ -79,6 +98,8 @@ final class LocalTodo {
         priority: Int = 0,
         remindMe: Bool = false,
         reminderClearedAt: Date? = nil,
+        recurringTaskUUID: String = "",
+        occurrenceKey: String = "",
         version: Int64 = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -97,6 +118,8 @@ final class LocalTodo {
         self.priority = priority
         self.remindMe = remindMe
         self.reminderClearedAt = reminderClearedAt
+        self.recurringTaskUUID = recurringTaskUUID
+        self.occurrenceKey = occurrenceKey
         self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -124,7 +147,9 @@ final class LocalTodo {
             googleMapsLink: googleMapsLink,
             priority: priority,
             remindMe: remindMe,
-            reminderClearedAt: reminderClearedAt
+            reminderClearedAt: reminderClearedAt,
+            recurringTaskUUID: recurringTaskUUID,
+            occurrenceKey: occurrenceKey
         )
     }
 }

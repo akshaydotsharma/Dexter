@@ -41,6 +41,21 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     /// device (#444). Local-only, same handling as `remindMe`.
     var reminderClearedAt: Date? = nil
 
+    /// The `RecurringTask` that generated this task, or "" for an ordinary one
+    /// (#524). Local-only, same handling as `priority`: defaulted and omitted from
+    /// `CodingKeys` so the server sync contract is untouched.
+    var recurringTaskUUID: String = ""
+
+    /// This task's per-date dedupe key (#524). Local-only, same handling.
+    var occurrenceKey: String = ""
+
+    /// Whether this task was made by a recurring template (#524).
+    ///
+    /// Drives the repeat glyph on the row and the read-only rule line in the editor.
+    /// Reads the stored UUID rather than the key, because the UUID is what the
+    /// editor needs to open the template behind it.
+    var isRecurringOccurrence: Bool { !recurringTaskUUID.isEmpty }
+
     /// Typed view of `priority` for the UI. Unknown raw values fall back to
     /// `.none` so a bad stored value never renders a blank/missing bar.
     var taskPriority: TaskPriority { TaskPriority(rawValue: priority) ?? .none }
@@ -199,6 +214,11 @@ struct TodoCreateRequest: Encodable {
     var priority: Int = 0
     /// Arm a reminder for `dueDate` (#444). Ignored when `dueDate` is nil.
     var remindMe: Bool = false
+    /// The `RecurringTask` this task is an occurrence of (#524). "" for an
+    /// ordinary task, which is every caller but the materialiser.
+    var recurringTaskUUID: String = ""
+    /// The occurrence's per-date dedupe key (#524). "" for an ordinary task.
+    var occurrenceKey: String = ""
 }
 
 struct TodoUpdateRequest: Encodable {

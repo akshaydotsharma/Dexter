@@ -25,6 +25,8 @@ struct TasksView: View {
     /// Drives the read-only month calendar popover (#385). Anchored to the
     /// top-bar button on iOS and to the window-toolbar button on macOS.
     @State private var showingCalendar = false
+    /// Drives the Recurring sheet (#524), where repeat templates are managed.
+    @State private var showingRecurring = false
     /// Ticket count per task (#399), driving the pass chip. Counted in one fetch
     /// for the whole visible list rather than per row, and refreshed on the same
     /// signals that reload the tasks themselves.
@@ -45,16 +47,24 @@ struct TasksView: View {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
                     },
                     trailing: {
-                        // Month calendar across tasks AND trips (#385). Same
-                        // top-bar slot Notes/Lists use for Archive, so the
-                        // section-level affordances share one home.
-                        TopBarIconButton(
-                            systemName: "calendar",
-                            accessibilityLabel: "View calendar",
-                            action: { showingCalendar = true }
-                        )
-                        .popover(isPresented: $showingCalendar) {
-                            TaskCalendarPopover()
+                        // Two section-level affordances share this slot: the month
+                        // calendar (#385) and the repeat templates (#524). Both act on
+                        // Tasks as a whole rather than on any one row, which is what
+                        // the top bar is for.
+                        HStack(spacing: Space.xs) {
+                            TopBarIconButton(
+                                systemName: "repeat",
+                                accessibilityLabel: "Recurring tasks",
+                                action: { showingRecurring = true }
+                            )
+                            TopBarIconButton(
+                                systemName: "calendar",
+                                accessibilityLabel: "View calendar",
+                                action: { showingCalendar = true }
+                            )
+                            .popover(isPresented: $showingCalendar) {
+                                TaskCalendarPopover()
+                            }
                         }
                     }
                 )
@@ -118,13 +128,25 @@ struct TasksView: View {
         .macSectionChrome("Tasks") {
             // macOS home for the calendar (#385): the native window toolbar,
             // where the popover gets a proper anchor and hover works.
-            Button { showingCalendar = true } label: {
-                Image(systemName: "calendar")
-            }
-            .help("View calendar")
-            .accessibilityLabel("View calendar")
-            .popover(isPresented: $showingCalendar) {
-                TaskCalendarPopover()
+            // An HStack, NOT two bare buttons. `macSectionChrome` puts the whole
+            // trailing closure inside ONE `ToolbarItem`, which renders a single
+            // control — so a second button beside the first does not appear next to
+            // it, it REPLACES it. Tasks is the first section to want two (#524), and
+            // the calendar (#385) silently vanished until this was grouped.
+            HStack(spacing: Space.xs) {
+                Button { showingRecurring = true } label: {
+                    Image(systemName: "repeat")
+                }
+                .help("Recurring tasks")
+                .accessibilityLabel("Recurring tasks")
+                Button { showingCalendar = true } label: {
+                    Image(systemName: "calendar")
+                }
+                .help("View calendar")
+                .accessibilityLabel("View calendar")
+                .popover(isPresented: $showingCalendar) {
+                    TaskCalendarPopover()
+                }
             }
         }
         // Publish this section's create action so File > New Task and ⌘N reach
@@ -142,7 +164,17 @@ struct TasksView: View {
                 reloadTicketCounts()
             }
         }
+        .sheet(isPresented: $showingRecurring) {
+            RecurringTasksView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
         .task {
+            // Materialise before the first read, so a task that came due while the
+            // app was closed is in the list this paint rather than the next one.
+            // The coordinator single-flights, so overlapping with the launch pass
+            // costs nothing (#524).
+            await RecurringTaskCoordinator.shared.runPass()
             await viewModel.load()
             reloadTicketCounts()
         }
@@ -1036,6 +1068,16 @@ private struct TaskRow: View {
                                         .font(.system(size: 9))
                                         .accessibilityLabel("Reminder set")
                                 }
+                                // #524. A repeating task is otherwise
+                                // indistinguishable from a one-off, which matters
+                                // most right before you delete one. Set beside the
+                                // due date rather than as a pill, so the row's
+                                // two-pill budget (#403) is untouched.
+                                if todo.isRecurringOccurrence {
+                                    Image(systemName: "repeat")
+                                        .font(.system(size: 9))
+                                        .accessibilityLabel("Repeats")
+                                }
                             }
                             .font(.edCaption)
                             .foregroundStyle(dueColor(for: due))
@@ -1336,6 +1378,28 @@ struct TaskEditorSheet: View {
     @State private var googleMapsLink: String = ""
     @State private var isResolvingAddress = false
     @State private var addressResolveTask: Task<Void, Never>?
+    /// Turn this new task into a recurring one (#524). Offered on a NEW task only:
+    /// saving with it on creates a `RecurringTask` template instead of a one-off,
+    /// and the template's first occurrence lands in the list on the same pass.
+    ///
+    /// Deliberately not offered while editing. Converting a task that already exists
+    /// into a template raises questions this form cannot answer (is the open one the
+    /// first occurrence, does its history belong to the template), and the ask was
+    /// for the choice at task ADDITION. An existing occurrence instead shows a
+    /// read-only line naming its rule, which opens the template behind it.
+    @State private var repeatEnabled: Bool = false
+    @State private var repeatDraft: RecurrenceDraft = .seeded()
+    /// Presents the template behind an occurrence, from that read-only line.
+    @State private var editingTemplate: RecurringTask?
+    /// The template behind the task being edited, resolved once in `prefill`.
+    ///
+    /// Held in state rather than fetched in `body`: the body re-runs on every
+    /// keystroke in the title field, and a store fetch per keystroke is exactly the
+    /// shape of the per-row query #442 was about.
+    @State private var occurrenceTemplate: RecurringTask?
+    /// Set when a template could not be saved, so the form says why.
+    @State private var repeatError: String?
+
     /// Tickets attached while composing a task that does not exist yet (#399).
     /// Written by `save()`, thrown away by Cancel. Held here rather than in the
     /// ticket section because this view owns that lifecycle.
@@ -1366,8 +1430,19 @@ struct TaskEditorSheet: View {
         return URL(string: "https://\(stored)")
     }
 
+    /// Whether the repeat block has anything to say: an offer on a new task, or the
+    /// rule behind one a template made. An ordinary task being edited gets neither.
+    private var showsRepeatBlock: Bool {
+        !isEditing || todo?.isRecurringOccurrence == true
+    }
+
     var body: some View {
         platformBody
+            .sheet(item: $editingTemplate) { template in
+                RecurringTaskEditorSheet(template: template)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
             // #444. Both editors share these, so they hang off the outer body
             // rather than being repeated per platform.
             .onChange(of: hasDueDate) { _, hasDate in
@@ -1378,6 +1453,18 @@ struct TaskEditorSheet: View {
                     remindMe = false
                     remindersBlocked = false
                 }
+            }
+            // #524. Someone who set a due time and then switched Repeat on means that
+            // time, so the rule starts from it rather than from a default 09:00 they
+            // would have to set a second time.
+            .onChange(of: repeatEnabled) { _, enabled in
+                guard enabled, hasDueDate else { return }
+                repeatDraft.timeOfDay = dueDate
+                repeatDraft.startDate = dueDate
+                let calendar = Calendar.current
+                repeatDraft.weekdayMask = 1 << (calendar.component(.weekday, from: dueDate) - 1)
+                repeatDraft.dayOfMonth = calendar.component(.day, from: dueDate)
+                repeatDraft.monthOfYear = calendar.component(.month, from: dueDate)
             }
             .onChange(of: remindMe) { _, armed in
                 guard armed else {
@@ -1456,6 +1543,81 @@ struct TaskEditorSheet: View {
         return nil
     }
 
+    // MARK: - Repeat (#524)
+
+    /// The repeat block, shared by both editors.
+    ///
+    /// Two different things depending on what is open: an offer on a new task, and
+    /// a statement of fact on one a template already made.
+    @ViewBuilder
+    private var repeatBlock: some View {
+        if let todo, todo.isRecurringOccurrence {
+            occurrenceRuleRow(todo)
+        } else if !isEditing {
+            VStack(spacing: 0) {
+                HStack(spacing: Space.md) {
+                    Image(systemName: "repeat")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Tokens.accentTasks)
+                    Text("Repeat this task")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.inkSoft)
+                    Spacer()
+                    Toggle("", isOn: $repeatEnabled.animation())
+                        .labelsHidden()
+                        .tint(Tokens.accentTasks)
+                }
+                .padding(Space.md)
+
+                if repeatEnabled {
+                    RepeatRuleEditor(draft: $repeatDraft, showsStartDate: false)
+                    if let repeatError {
+                        Text(repeatError)
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.danger)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(Space.md)
+                    }
+                }
+            }
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
+
+    /// The read-only line on a task a template made. Names the rule and opens the
+    /// template, so the one place to change a repeat is the template itself.
+    @ViewBuilder
+    private func occurrenceRuleRow(_ todo: Todo) -> some View {
+        let template = occurrenceTemplate
+        HStack(spacing: Space.md) {
+            Image(systemName: "repeat")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Tokens.accentTasks)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(template?.ruleSummary ?? "Part of a repeat that has since been removed")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(template == nil
+                     ? "This one is now an ordinary task."
+                     : "Changes here apply to this one only.")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+            }
+            Spacer(minLength: 0)
+            if let template {
+                Button("Edit repeat") { editingTemplate = template }
+                    .buttonStyle(.plain)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.accentTasks)
+            }
+        }
+        .padding(Space.md)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+        .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
     // MARK: - iOS editor (full sheet, unchanged)
 
     #if os(iOS)
@@ -1519,6 +1681,11 @@ struct TaskEditorSheet: View {
                             }
                             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                             .paperBorder(Tokens.border, radius: Radius.md)
+                        }
+                        // #524. Directly under the due date: a repeat is a rule about
+                        // WHEN, so it belongs with the other answer to that question.
+                        if showsRepeatBlock {
+                            labeled("Repeat") { repeatBlock }
                         }
                         labeled("Tag") {
                             TagChipPicker(selection: $tag, tags: availableTags)
@@ -1807,6 +1974,13 @@ struct TaskEditorSheet: View {
                         }
                     }
 
+                    // #524. Its own group under Date & Time, for the same reason the
+                    // iOS sheet puts it there: a repeat answers "when".
+                    if showsRepeatBlock {
+                        macSectionHeader("Repeat")
+                        repeatBlock
+                    }
+
                     // Organization (Tag)
                     macSectionHeader("Organization")
                     macGroup {
@@ -1981,6 +2155,10 @@ struct TaskEditorSheet: View {
         priority = todo.taskPriority
         address = todo.address
         googleMapsLink = todo.googleMapsLink
+        // #524. One fetch per open, for the read-only rule line.
+        if todo.isRecurringOccurrence {
+            occurrenceTemplate = RecurringTaskService.default().template(uuid: todo.recurringTaskUUID)
+        }
     }
 
     /// Auto-fill the Address field from a pasted Google Maps link (debounced).
@@ -2038,11 +2216,59 @@ struct TaskEditorSheet: View {
         if let existing = todo {
             await viewModel.update(existing, title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue, remindMe: finalRemindMe, clearsDueDate: !hasDueDate)
             flushPendingTickets(to: existing.id)
+        } else if repeatEnabled {
+            // #524. A new task with Repeat on is a TEMPLATE, not a one-off. The
+            // template makes the tasks; making one here as well would leave an
+            // unexplained duplicate the moment the first occurrence landed.
+            //
+            // The due date the form collected is not carried over: a repeat states
+            // its own time of day, and its first date comes from the rule.
+            guard await saveAsTemplate(title: trimmed, description: finalDescription, tag: finalTag, address: finalAddress, mapsLink: finalMapsLink) else {
+                return   // stays open with `repeatError` showing why
+            }
         } else {
             let created = await viewModel.create(title: trimmed, description: finalDescription, dueDate: finalDue, tag: finalTag, address: finalAddress, googleMapsLink: finalMapsLink, priority: priority.rawValue, remindMe: finalRemindMe)
             if let created { flushPendingTickets(to: created.id) }
         }
         closeEditor()
+    }
+
+    /// Create the recurring template this form describes, then run a pass so its
+    /// first occurrence appears now if it is already inside its lead window (#524).
+    ///
+    /// Returns false when the service refuses the rule, leaving the editor open with
+    /// the reason on screen rather than closing on a silent failure.
+    ///
+    /// Tickets attached while composing are NOT carried onto the template: an
+    /// attachment belongs to one dated event, and copying a boarding pass onto every
+    /// future occurrence would be wrong. They are discarded with the editor.
+    private func saveAsTemplate(title: String, description: String?, tag: String?, address: String, mapsLink: String) async -> Bool {
+        do {
+            try RecurringTaskService.default().create(
+                title: title,
+                taskDescription: description,
+                tag: tag,
+                priority: priority.rawValue,
+                address: address,
+                googleMapsLink: mapsLink,
+                remindMe: remindMe,
+                frequency: repeatDraft.frequency,
+                interval: repeatDraft.interval,
+                weekdayMask: repeatDraft.weekdayMask,
+                dayOfMonth: repeatDraft.dayOfMonth,
+                monthOfYear: repeatDraft.monthOfYear,
+                timeOfDayMinutes: repeatDraft.timeOfDayMinutes,
+                leadDays: repeatDraft.leadDays,
+                startDate: repeatDraft.startDate,
+                endDate: repeatDraft.resolvedEndDate
+            )
+            await RecurringTaskCoordinator.shared.runPass()
+            await viewModel.load()
+            return true
+        } catch {
+            repeatError = error.localizedDescription
+            return false
+        }
     }
 
     /// Write the tickets attached while composing, now that the task exists (#399).
