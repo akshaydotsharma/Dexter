@@ -282,7 +282,20 @@ private extension UIImage {
         let newSize = CGSize(width: floor(width * scale), height: floor(height * scale))
         guard newSize.width > 0, newSize.height > 0 else { return nil }
 
-        let renderer = UIGraphicsImageRenderer(size: newSize)
+        // `scale = 1` is the whole point of this helper (#522). A renderer with no
+        // format uses the DEVICE's display scale, so on a 3x phone "downsize to a
+        // 2000 point long edge" wrote a 6000 pixel JPEG — nine times the pixels
+        // asked for, and the image every later step reads: the on-device barcode
+        // decode, the bytes sent to the model, and the file kept on disk. The
+        // stored Priority Pass was 3816x6000, which is 1272x2000 at 3x.
+        //
+        // `BarcodeService` already pins this on its own renderers for the same
+        // reason. Points and pixels are the same thing here because the caller
+        // measures the source in points off a `UIImage(data:)`, whose scale is 1.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
         return renderer.image { _ in
             draw(in: CGRect(origin: .zero, size: newSize))
         }

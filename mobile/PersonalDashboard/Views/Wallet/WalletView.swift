@@ -84,7 +84,7 @@ struct WalletView: View {
     /// Ticket queued for re-reading (#485). Confirmed rather than immediate: a
     /// re-read re-derives the whole card from the document, so it can overwrite a
     /// detail someone typed by hand.
-    @State private var pendingRereadID: UUID?
+    @State private var pendingReread: RereadTarget?
 
     #if os(iOS)
     /// Full-screen present-to-scan target (iOS only — the surface depends on
@@ -204,15 +204,15 @@ struct WalletView: View {
         .alert(
             "Read this ticket again?",
             isPresented: Binding(
-                get: { pendingRereadID != nil },
-                set: { if !$0 { pendingRereadID = nil } }
+                get: { pendingReread != nil },
+                set: { if !$0 { pendingReread = nil } }
             )
         ) {
             Button("Read again") {
-                if let id = pendingRereadID { reread(ticketID: id) }
-                pendingRereadID = nil
+                if let target = pendingReread { reread(target) }
+                pendingReread = nil
             }
-            Button("Cancel", role: .cancel) { pendingRereadID = nil }
+            Button("Cancel", role: .cancel) { pendingReread = nil }
         } message: {
             Text("The stored file is read again and the card's details are replaced with what it says. Anything you typed by hand is overwritten. The file and its code are untouched.")
         }
@@ -311,8 +311,8 @@ struct WalletView: View {
                             // (#503). Edit still is not: a record has one editor.
                             onDelete: { pendingDelete = entry.source },
                             onOpenSource: ownID == nil ? { openSource(of: entry) } : nil,
-                            onReread: rereadableTicketID(of: entry).map { id in
-                                { pendingRereadID = id }
+                            onReread: rereadTarget(of: entry).map { target in
+                                { pendingReread = target }
                             }
                         )
                         .id(entry.id)
@@ -509,23 +509,30 @@ struct WalletView: View {
         }
     }
 
-    /// The `LocalTaskTicket.clientUUID` behind an entry, when that card can be read
-    /// again (#484).
+    /// What an entry would re-read, when it can be read again (#484, widened in
+    /// #522).
     ///
-    /// Only the extracted cards qualify. A `.pkpass` was never guessed at, and a
-    /// standalone wallet card or a trip's inline ticket is edited directly, so
-    /// neither has an extraction to re-run.
-    private func rereadableTicketID(of entry: WalletEntry) -> UUID? {
-        let ticketID: UUID
+    /// Only the extracted cards qualify, and what qualifies is having a stored file
+    /// that an extractor guessed at. A `.pkpass` was never guessed at, and a trip's
+    /// inline ticket is edited on the stop itself.
+    ///
+    /// A card the Wallet owns was excluded here on the reasoning that it "is edited
+    /// directly". That is true of one typed by hand and false of one that came off
+    /// a scan, which has a file on disk and an extraction worth running again — and
+    /// a scan is how most of them arrive. Without it, the only way a card already in
+    /// the Wallet benefits from a better prompt is deleting it and scanning again.
+    private func rereadTarget(of entry: WalletEntry) -> RereadTarget? {
+        let target: RereadTarget
         switch entry.source {
-        case .task(let id, _, _):               ticketID = id
-        case .tripDocument(let id, _, _, _):    ticketID = id
-        case .wallet, .trip:                    return nil
+        case .task(let id, _, _):               target = .document(id)
+        case .tripDocument(let id, _, _, _):    target = .document(id)
+        case .wallet(let id):                   target = .walletCard(id)
+        case .trip:                             return nil
         }
         let path = entry.card.attachmentPath
         guard !path.trimmingCharacters(in: .whitespaces).isEmpty,
               !TicketStorage.isPass(path) else { return nil }
-        return ticketID
+        return target
     }
 
     /// Read a stored ticket again against the current extractor.
@@ -534,12 +541,17 @@ struct WalletView: View {
     /// the day the file was uploaded. When that prompt gets better — English labels,
     /// or no longer keeping the issuer's fiscal codes — this is how a card already in
     /// the wallet catches up, without re-uploading a file that dedupe would refuse.
-    private func reread(ticketID: UUID) {
+    private func reread(_ target: RereadTarget) {
         Task {
             withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = true }
             defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = false } }
             do {
-                try await TaskTicketExtraction().reread(ticketUUID: ticketID, context: modelContext)
+                switch target {
+                case .document(let ticketID):
+                    try await TaskTicketExtraction().reread(ticketUUID: ticketID, context: modelContext)
+                case .walletCard(let cardID):
+                    try await TicketExtraction().rereadWalletCard(cardUUID: cardID, context: modelContext)
+                }
                 Haptics.light()
             } catch {
                 ticketError = (error as? LocalizedError)?.errorDescription
@@ -680,6 +692,19 @@ struct WalletView: View {
 struct WalletDetailTarget: Identifiable {
     let entry: WalletEntry
     var id: String { entry.id }
+}
+
+/// What a "Read again" runs against: a document attached to a task or a stop, or
+/// a card the Wallet owns outright (#522). Two models, two extractors, one action.
+enum RereadTarget: Identifiable, Hashable {
+    case document(UUID)
+    case walletCard(UUID)
+
+    var id: UUID {
+        switch self {
+        case .document(let id), .walletCard(let id): return id
+        }
+    }
 }
 
 #if os(iOS)
