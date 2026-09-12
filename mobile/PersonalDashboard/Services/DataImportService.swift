@@ -247,6 +247,9 @@ final class DataImportService {
         /// #449. The board joins the archive here as well as in `commit`, or an
         /// archive carrying only blocks would report "nothing to import".
         case visionBlocks
+        /// #524. Same reason as the two above: an archive carrying only repeat
+        /// templates would otherwise report "nothing to import".
+        case recurringTasks
 
         var id: String { rawValue }
 
@@ -269,6 +272,7 @@ final class DataImportService {
             case .processedEmails:   return "Processed emails"
             case .walletCards:       return "Wallet cards"
             case .visionBlocks:      return "Vision blocks"
+            case .recurringTasks:    return "Recurring tasks"
             }
         }
 
@@ -291,6 +295,7 @@ final class DataImportService {
             case .processedEmails:   return "envelope"
             case .walletCards:       return "wallet.pass"
             case .visionBlocks:      return "square.grid.2x2"
+            case .recurringTasks:    return "repeat"
             }
         }
     }
@@ -417,6 +422,7 @@ final class DataImportService {
         let existingNoteImageUUIDs = try existingUUIDs(LocalNoteImage.self,          keyPath: \.clientUUID)
         let existingWalletCardIDs  = try existingUUIDs(LocalWalletCard.self,        keyPath: \.clientUUID)
         let existingVisionBlockIDs = try existingUUIDs(LocalVisionBlock.self,       keyPath: \.clientUUID)
+        let existingRecurringTaskIDs = try existingStringUUIDs(RecurringTask.self,  keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -447,6 +453,7 @@ final class DataImportService {
         record(.processedEmails,   (payload.processedEmails ?? []).map(\.messageKey),  existing: existingMessageKeys)
         record(.walletCards,       (payload.walletCards ?? []).map(\.clientUUID),      existing: existingWalletCardIDs)
         record(.visionBlocks,      (payload.visionBlocks ?? []).map(\.clientUUID),     existing: existingVisionBlockIDs)
+        record(.recurringTasks,    (payload.recurringTasks ?? []).map(\.clientUUID),   existing: existingRecurringTaskIDs)
 
         return (skip, repair)
     }
@@ -544,6 +551,11 @@ final class DataImportService {
                     priority: dto.priority ?? 0,
                     remindMe: dto.remindMe ?? false,
                     reminderClearedAt: dto.reminderClearedAt,
+                    // #524. Kept so a restored occurrence stays an occurrence: the
+                    // key is the materialiser's dedupe guard, and without it the next
+                    // pass would make the same date over again.
+                    recurringTaskUUID: dto.recurringTaskUUID ?? "",
+                    occurrenceKey: dto.occurrenceKey ?? "",
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt,
                     deletedAt: dto.deletedAt,
@@ -909,6 +921,37 @@ final class DataImportService {
                 modelContext.insert(template)
             }
 
+            let existingRecurringTaskIDs = mode == .replaceMatching ? [] : try existingStringUUIDs(RecurringTask.self, keyPath: \.clientUUID)
+            for dto in (payload.recurringTasks ?? []) where !existingRecurringTaskIDs.contains(dto.clientUUID) {
+                let template = RecurringTask(
+                    clientUUID: dto.clientUUID,
+                    title: dto.title,
+                    taskDescription: dto.taskDescription,
+                    tag: dto.tag,
+                    priority: dto.priority,
+                    address: dto.address,
+                    googleMapsLink: dto.googleMapsLink,
+                    remindMe: dto.remindMe,
+                    frequency: dto.frequency,
+                    interval: dto.interval,
+                    weekdayMask: dto.weekdayMask,
+                    dayOfMonth: dto.dayOfMonth,
+                    monthOfYear: dto.monthOfYear,
+                    timeOfDayMinutes: dto.timeOfDayMinutes,
+                    leadDays: dto.leadDays,
+                    isActive: dto.isActive,
+                    startDate: dto.startDate,
+                    endDate: dto.endDate,
+                    // Carried for the same reason the expense template's month key is:
+                    // a restored template must not re-make a date it already made,
+                    // which would put a duplicate task in the list.
+                    lastOccurrenceKey: dto.lastOccurrenceKey,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt
+                )
+                modelContext.insert(template)
+            }
+
             let existingStatementUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalStatementImport.self, keyPath: \.clientUUID)
             for dto in (payload.statementImports ?? []) where !existingStatementUUIDs.contains(dto.clientUUID) {
                 let record = LocalStatementImport(
@@ -1045,6 +1088,7 @@ final class DataImportService {
         // String-keyed models.
         try deleteMatching(LocalExpense.self,   ids: Set(payload.expenses.map(\.clientUUID)), key: \.clientUUID)
         try deleteMatching(RecurringExpense.self, ids: Set((payload.recurringExpenses ?? []).map(\.clientUUID)), key: \.clientUUID)
+        try deleteMatching(RecurringTask.self,    ids: Set((payload.recurringTasks ?? []).map(\.clientUUID)),    key: \.clientUUID)
         try deleteMatching(LocalProcessedEmail.self, ids: Set((payload.processedEmails ?? []).map(\.messageKey)), key: \.messageKey)
     }
 
@@ -1137,6 +1181,7 @@ final class DataImportService {
             "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
             "LocalWalletCard":      payload.walletCards?.count ?? 0,
             "LocalVisionBlock":     payload.visionBlocks?.count ?? 0,
+            "RecurringTask":        payload.recurringTasks?.count ?? 0,
         ]
     }
 

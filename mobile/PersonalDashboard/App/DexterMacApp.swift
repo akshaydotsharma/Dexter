@@ -85,6 +85,12 @@ struct DexterMacApp: App {
                     TaskReminderScheduler.startObservingStoreChanges()
                     await TaskReminderScheduler.reconcile()
                 }
+                // Recurring tasks (#524). The Mac needs its own call: the expense
+                // materialiser rides `RecurringExpenseCoordinator`, which imports
+                // `BackgroundTasks` and is iOS-only, and `AppMaintenance.runPasses`
+                // has been dead since #309. Safe in a per-WINDOW `.task` because the
+                // coordinator single-flights.
+                .task { await RecurringTaskCoordinator.shared.runPass() }
                 // Same in-session recovery as iOS (#428). macOS `.active` fires on window
                 // focus, which the service's throttle is there to absorb.
                 .onChange(of: scenePhase) { _, phase in
@@ -92,6 +98,9 @@ struct DexterMacApp: App {
                         Task { await AppMaintenance.runTripCoverForegroundSweep() }
                         // Top the armed reminders up, as on iOS (#444).
                         Task { await TaskReminderScheduler.reconcile() }
+                        // And create any recurring task that has come into range
+                        // while the window was in the background (#524).
+                        Task { await RecurringTaskCoordinator.shared.runPass() }
                     }
                 }
         }
