@@ -48,11 +48,13 @@ struct TripDetailView: View {
     /// `.existing(_)` carries the item UUID for edit.
     @State private var editingItem: ItineraryItemEditorTarget?
 
-    // MARK: Itinerary report export (#532)
+    // MARK: Trip report export (#532, both tabs since #536)
     /// The download control itself lives in the trip's chrome, which the parent
-    /// owns; this is the wire between the two. See
-    /// `TripItineraryExportControl`.
-    var exportControl: TripItineraryExportControl
+    /// owns; this is the wire between the two. See `TripExportControl`. This
+    /// view owns the ITINERARY half of it — the kind (because it owns `tab`)
+    /// and the itinerary's availability — and hands the same control down to
+    /// `TripExpensesView`, which owns the expenses half.
+    var exportControl: TripExportControl
     /// Drives the options sheet. Its choices are held here so they survive the
     /// sheet closing and reaching the export that runs after it.
     @State private var showingItineraryExportOptions: Bool = false
@@ -112,7 +114,7 @@ struct TripDetailView: View {
         case expense
     }
 
-    init(trip: LocalTrip, exportControl: TripItineraryExportControl) {
+    init(trip: LocalTrip, exportControl: TripExportControl) {
         self.trip = trip
         self.exportControl = exportControl
         let tripID = trip.clientUUID
@@ -238,7 +240,7 @@ struct TripDetailView: View {
                         timelineScroll
                     }
                 case .expenses:
-                    TripExpensesView(trip: trip) { uuid in
+                    TripExpensesView(trip: trip, exportControl: exportControl) { uuid in
                         expenseEditorTarget = .existing(uuid)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -276,8 +278,16 @@ struct TripDetailView: View {
         .onAppear(perform: syncExportAvailability)
         .onChange(of: tab) { _, _ in syncExportAvailability() }
         .onChange(of: items.count) { _, _ in syncExportAvailability() }
-        .onDisappear { exportControl.isAvailable = false }
+        .onDisappear {
+            // Only the itinerary's slot: the expenses slot belongs to
+            // `TripExpensesView`, which clears its own on the way out.
+            exportControl.setAvailable(false, for: .itinerary)
+        }
         .onChange(of: exportControl.request) { _, _ in
+            // Both tabs observe the same counter, so each answers only for the
+            // document it is showing. Without this guard a download asked for
+            // on the Expenses tab would ALSO open the itinerary's options sheet.
+            guard tab == .itinerary else { return }
             itineraryExportError = nil
             showingItineraryExportOptions = true
         }
@@ -991,8 +1001,16 @@ struct TripDetailView: View {
     /// A trip with no stops has no plan to hand anyone, and the Expenses tab
     /// carries its own download beside its filter (#528), so the control is
     /// only live on the itinerary.
+    /// Publish which document the chrome's download exports, and whether the
+    /// itinerary has anything to write.
+    ///
+    /// `kind` is set here because this view is the only owner of `tab`. The
+    /// expenses slot is deliberately NOT touched: `TripExpensesView` publishes
+    /// it from its own query, and a write from here would be this view guessing
+    /// at a ledger it does not read (see `TripExportControl`).
     private func syncExportAvailability() {
-        exportControl.isAvailable = tab == .itinerary && !grouped.isEmpty
+        exportControl.kind = tab == .itinerary ? .itinerary : .expenses
+        exportControl.setAvailable(!grouped.isEmpty, for: .itinerary)
     }
 
     private func runPendingItineraryExport() {
@@ -1143,27 +1161,72 @@ enum ItineraryDocumentCleanup {
     }
 }
 
-// MARK: - Itinerary export control (#532)
+// MARK: - Trip export control (#532, generalised in #536)
 
-/// The Itinerary tab's download control, hoisted into the trip's chrome.
+/// The trip's download control, hoisted into the trip's chrome.
 ///
 /// The button belongs beside the trip's other actions — the calendar and the
 /// editor — and those live in the window toolbar on macOS and in
-/// `TripDetailHeader` on iOS, both owned by `TripsView`. Everything the export
-/// needs (the day grouping, the options, the render) lives in
-/// `TripDetailView`. This carries one across the other rather than lifting the
-/// timeline's state up a level to reach a button: the detail view publishes
-/// whether an export is possible and whether one is running, and the chrome
-/// asks for one.
+/// `TripDetailHeader` on iOS, both owned by `TripsView`. Everything either
+/// export needs (the day grouping and the render for the itinerary, the
+/// ledger and the currency options for the expenses) lives further down, in
+/// `TripDetailView` and `TripExpensesView`. This carries one across the other
+/// rather than lifting that state up a level to reach a button: the tab that
+/// is showing publishes whether an export is possible and whether one is
+/// running, and the chrome asks for one.
+///
+/// One control serves both tabs (#536). Before that the Expenses tab had its
+/// own download inside the summary card, so the same action moved position
+/// when the tab changed, and the place a person had learned to look went empty.
 @Observable
-final class TripItineraryExportControl {
-    /// The itinerary tab is showing and the trip has at least one stop.
-    var isAvailable: Bool = false
+final class TripExportControl {
+    /// Which document the open tab exports. Set by `TripDetailView`, which is
+    /// the single owner of `tab`, so the chrome's label and the request both
+    /// follow the tab without either tab having to know about the other.
+    enum Kind {
+        case itinerary
+        case expenses
+    }
+
+    var kind: Kind = .itinerary
+
+    /// Availability is stored PER DOCUMENT, not as one shared flag.
+    ///
+    /// The ownership rule: a tab may only ever write its own slot, and the
+    /// chrome reads the slot for `kind`. This is what makes the tab-switch
+    /// seam safe. SwiftUI gives no ordering guarantee between the parent's
+    /// `.onChange(of: tab)` and the incoming child's `.onAppear`, so with a
+    /// single flag the tab being LEFT could clear the availability the tab
+    /// being ENTERED had just published (or vice versa) and the button would
+    /// vanish on a tab that has plenty to export. Keyed on the document, a
+    /// late write from the old tab lands in a slot nobody is reading.
+    private var itineraryIsAvailable: Bool = false
+    private var expensesAreAvailable: Bool = false
+
+    /// The open tab has something to export.
+    var isAvailable: Bool {
+        switch kind {
+        case .itinerary: return itineraryIsAvailable
+        case .expenses:  return expensesAreAvailable
+        }
+    }
+
+    func setAvailable(_ value: Bool, for kind: Kind) {
+        switch kind {
+        case .itinerary: itineraryIsAvailable = value
+        case .expenses:  expensesAreAvailable = value
+        }
+    }
+
     /// Rendering the PDF runs on the main actor, so the control shows a spinner
-    /// rather than pretending the click did nothing.
+    /// rather than pretending the click did nothing. One flag, not one per
+    /// document: only one tab is on screen, so only one export can be in
+    /// flight, and the spinner is drawn by a single button either way.
     var isRunning: Bool = false
-    /// Bumped by the chrome button. The detail view watches it rather than
-    /// holding a closure, so a rebuilt chrome can never call into a stale view.
+
+    /// Bumped by the chrome button. The tab watches it rather than holding a
+    /// closure, so a rebuilt chrome can never call into a stale view. Both
+    /// tabs observe it, so each guards on being the one that is showing.
     private(set) var request: Int = 0
 
     func requestExport() { request += 1 }

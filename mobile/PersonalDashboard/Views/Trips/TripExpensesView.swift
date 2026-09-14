@@ -19,6 +19,13 @@ import UniformTypeIdentifiers
 struct TripExpensesView: View {
     let trip: LocalTrip
 
+    /// The trip chrome's download, shared with the Itinerary tab (#536). This
+    /// view owns the EXPENSES half of it: it publishes whether the ledger has
+    /// anything to export, mirrors its own render into the chrome's spinner,
+    /// and answers a request by opening the currency options sheet. See
+    /// `TripExportControl` for why availability is kept per document.
+    let exportControl: TripExportControl
+
     /// Tapping a row bubbles the expense's clientUUID up so the parent opens
     /// the editor (the parent owns the sheet + trip context).
     let onEditExpense: (String) -> Void
@@ -48,7 +55,9 @@ struct TripExpensesView: View {
 
     /// Report export in flight (#528). Rendering the PDF runs on the main
     /// actor (`ImageRenderer` is main-actor only), so the control reports
-    /// itself busy rather than looking dead for the render.
+    /// itself busy rather than looking dead for the render. Mirrored into
+    /// `exportControl.isRunning` so the spinner is drawn by the chrome button
+    /// that asked for it (#536).
     @State private var isExporting: Bool = false
     /// The currency the NEXT export is written in. Seeded from what the tab is
     /// showing when the options sheet opens, then owned by the sheet.
@@ -67,8 +76,9 @@ struct TripExpensesView: View {
 
     @Environment(\.modelContext) private var modelContext
 
-    init(trip: LocalTrip, onEditExpense: @escaping (String) -> Void) {
+    init(trip: LocalTrip, exportControl: TripExportControl, onEditExpense: @escaping (String) -> Void) {
         self.trip = trip
+        self.exportControl = exportControl
         self.onEditExpense = onEditExpense
         let tripID = trip.clientUUID
         // Rows removed from the trip (#264) stay in the store to keep backing
@@ -90,6 +100,32 @@ struct TripExpensesView: View {
             } else {
                 populated
             }
+        }
+        // The chrome's download (#536). Published from this view's own query
+        // and into this view's own slot, so nothing the Itinerary tab does on
+        // the way out can clear it, and nothing here can clear the Itinerary's.
+        .onAppear { publishExportAvailability() }
+        .onChange(of: expenses.count) { _, _ in publishExportAvailability() }
+        .onDisappear {
+            exportControl.setAvailable(false, for: .expenses)
+            // A render cannot outlive this view (the save panel / share sheet
+            // holds the screen until it ends), but if the tab ever did change
+            // under one, a spinner left true would sit on the Itinerary tab's
+            // button with nothing behind it.
+            if isExporting { exportControl.isRunning = false }
+        }
+        .onChange(of: isExporting) { _, running in
+            exportControl.isRunning = running
+        }
+        .onChange(of: exportControl.request) { _, _ in
+            // The Itinerary tab watches the same counter, so answer only when
+            // this is the document the chrome is offering.
+            guard exportControl.kind == .expenses, !expenses.isEmpty else { return }
+            // Seed the picker with what the tab is showing, so the obvious
+            // path is one extra tap.
+            exportCurrency = filterCurrency
+            exportError = nil
+            activeSheet = .exportOptions
         }
         .alert(
             "Remove this expense?",
@@ -318,7 +354,6 @@ struct TripExpensesView: View {
             HStack(spacing: Space.md) {
                 Text(summaryTitle).eyebrow()
                 Spacer()
-                exportButton
                 filterButton
             }
 
@@ -354,33 +389,14 @@ struct TripExpensesView: View {
         .paperBorder(Tokens.border, radius: Radius.lg)
     }
 
-    /// Download the trip's expenses as a PDF report (#528). Sits beside the
-    /// filter control because the two are read together: the filter decides
-    /// what the ledger lists, and this exports exactly that.
-    private var exportButton: some View {
-        Button {
-            // Seed the picker with what the tab is showing, so the obvious
-            // path is one extra tap.
-            exportCurrency = filterCurrency
-            exportError = nil
-            activeSheet = .exportOptions
-        } label: {
-            Group {
-                if isExporting {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "square.and.arrow.down")
-                        .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(Tokens.accentFinance)
-                }
-            }
-            .frame(width: 22, height: 22)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(isExporting || expenses.isEmpty)
-        .accessibilityLabel("Download these expenses as a PDF report")
+    /// Tell the chrome whether this ledger has anything to export (#536).
+    ///
+    /// The download used to live in the summary card's header, beside the
+    /// filter. It moved into the trip's top-right actions so the same action
+    /// keeps one position across both tabs; the filter stays here, because it
+    /// decides what THIS card reports and is read with the numbers under it.
+    private func publishExportAvailability() {
+        exportControl.setAvailable(!expenses.isEmpty, for: .expenses)
     }
 
     private var filterButton: some View {
