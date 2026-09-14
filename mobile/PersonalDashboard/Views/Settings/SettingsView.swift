@@ -22,6 +22,15 @@ struct SettingsView: View {
     @AppStorage(FinanceSettings.Key.displayCurrencyCode)
     private var displayCurrencyCode: String = "SGD"
 
+    /// What the user is called wherever their own label sits beside other
+    /// people's (#530). Same UserDefaults key `FinanceSettings.userDisplayName`
+    /// reads, so the field and every render site agree with no plumbing.
+    ///
+    /// The stored empty string is the "not set" state and every reader maps it
+    /// back to "You", so clearing the field is how you go back to the pronoun.
+    @AppStorage(FinanceSettings.Key.userDisplayName)
+    private var userDisplayName: String = ""
+
     var body: some View {
         ZStack {
             Tokens.paper.canvasIgnoresSafeArea()
@@ -112,6 +121,30 @@ struct SettingsView: View {
 
     private var financeSection: some View {
         SettingsSection(title: "Finance") {
+            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your name")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                    Text("Shown wherever your own name sits beside other people's. Leave empty for \"You\"")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                }
+
+                Spacer(minLength: Space.md)
+
+                TextField("You", text: $userDisplayName)
+                    .paperFieldOnMac()
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 160)
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+
+            Divider().background(Tokens.divider)
+
             HStack(alignment: .firstTextBaseline, spacing: Space.md) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Default currency")

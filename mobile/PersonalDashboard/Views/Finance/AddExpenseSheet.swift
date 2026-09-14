@@ -774,7 +774,9 @@ struct AddExpenseSheet: View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Paid by").eyebrow()
             Menu {
-                Button { payerParty = .me } label: { Label("You", systemImage: "person.fill") }
+                Button { payerParty = .me } label: {
+                    Label(FinanceSettings.userDisplayName, systemImage: "person.fill")
+                }
                 ForEach(tripContext?.participants ?? [], id: \.clientUUID) { person in
                     Button { payerParty = .person(person.clientUUID) } label: { Text(person.name) }
                 }
@@ -931,9 +933,10 @@ struct AddExpenseSheet: View {
 
     private var payerName: String {
         switch payerParty {
-        case .me: return "You"
+        case .me: return FinanceSettings.userDisplayName
         case .person(let id):
-            return tripContext?.participants.first { $0.clientUUID == id }?.name ?? "You"
+            return tripContext?.participants.first { $0.clientUUID == id }?.name
+                ?? FinanceSettings.userDisplayName
         }
     }
 
@@ -998,7 +1001,9 @@ struct AddExpenseSheet: View {
             return SplitDraft(party: party, name: name, colorHex: colorHex, included: included, shares: shares)
         }
 
-        var drafts: [SplitDraft] = [makeDraft(party: .me, name: "You", colorHex: nil)]
+        var drafts: [SplitDraft] = [
+            makeDraft(party: .me, name: FinanceSettings.userDisplayName, colorHex: nil)
+        ]
         for person in ctx.participants {
             drafts.append(makeDraft(party: .person(person.clientUUID), name: person.name, colorHex: person.colorHex))
         }

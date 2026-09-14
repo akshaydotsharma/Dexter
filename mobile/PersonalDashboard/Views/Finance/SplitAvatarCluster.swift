@@ -90,7 +90,13 @@ struct SplitAvatarRoster: Equatable {
     ) -> SplitAvatarRoster {
         func party(for id: UUID?) -> SplitAvatarParty {
             guard let id else {
-                return SplitAvatarParty(party: .me, name: "You", colorHex: nil, initial: "Y")
+                // "You" until the user names themselves in Settings (#530).
+                return SplitAvatarParty(
+                    party: .me,
+                    name: FinanceSettings.userDisplayName,
+                    colorHex: nil,
+                    initial: FinanceSettings.userDisplayInitial
+                )
             }
             let resolved = name(id)?.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let resolved, !resolved.isEmpty else {
@@ -171,11 +177,16 @@ struct SplitAvatarRoster: Equatable {
     /// What VoiceOver reads: names, never letters. "Priya paid, split between
     /// Priya and you".
     var spokenLabel: String {
-        let paid = payer.party == .me ? "You paid" : "\(payer.name) paid"
+        // Third person once the user has a name: "Akshay paid", not "You paid".
+        let paid = payer.party == .me && FinanceSettings.userIsAddressedInSecondPerson
+            ? "You paid"
+            : "\(payer.name) paid"
         // The cluster repeats the payer when nobody else was in on the bill.
         // The avatars show that; saying "split between you" would not.
         guard sharers != [payer] else { return paid }
-        let spoken = sharers.map { $0.party == .me ? "you" : $0.name }
+        let spoken = sharers.map {
+            $0.party == .me && FinanceSettings.userIsAddressedInSecondPerson ? "you" : $0.name
+        }
         return "\(paid), split between \(spoken.formatted(.list(type: .and)))"
     }
 

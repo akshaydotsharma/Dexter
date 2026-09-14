@@ -255,18 +255,27 @@ struct TripExpensesView: View {
     /// order.
     private var selectedPartyNames: [String] {
         var names: [String] = []
-        if filterParties.contains(.me) { names.append("You") }
+        if filterParties.contains(.me) { names.append(FinanceSettings.userDisplayName) }
         for person in participantPeople where filterParties.contains(.person(person.clientUUID)) {
             names.append(person.name)
         }
         return names
     }
 
-    /// "Your spend" / "Rohan's spend" / "You + Rohan" / "3 people".
+    /// "Your spend" / "Rohan's spend" / "Akshay + Rohan" / "3 people".
+    ///
+    /// The me-only card keeps saying "Your spend" whatever the user calls
+    /// themselves: that heading addresses the reader, it is not a label sitting
+    /// beside other people's names (#530). The combined forms ARE such a list,
+    /// so they take the name.
     private var summaryTitle: String {
         let names = selectedPartyNames
         if filterParties == [.me] { return "Your spend" }
-        if names.count == 1 { return names[0] == "You" ? "Your spend" : "\(names[0])'s spend" }
+        if names.count == 1 {
+            return names[0] == FinanceSettings.defaultUserDisplayName
+                ? "Your spend"
+                : "\(names[0])'s spend"
+        }
         if names.count == 2 { return "\(names[0]) + \(names[1])" }
         return "\(names.count) people"
     }
@@ -580,20 +589,20 @@ struct TripExpensesView: View {
     private func phrase(for balance: TripSettlement.Balance) -> String {
         let name: String
         switch balance.party {
-        case .me:             name = "You"
+        case .me:             name = FinanceSettings.userDisplayName
         case .person(let id): name = personName(id)
         }
         return "\(name) \(suffix(for: balance))"
     }
 
-    /// The verb half of the line. "You" takes the second person, a named
-    /// person the third.
+    /// The verb half of the line. The pronoun "You" takes the second person;
+    /// any NAME takes the third, the user's own included — "Akshay owes", not
+    /// "Akshay owe" (#530). So this branches on the word, not on the party.
     private func suffix(for balance: TripSettlement.Balance) -> String {
         let owed = balance.net > 0
-        switch balance.party {
-        case .me:      return owed ? "are owed" : "owe"
-        case .person:  return owed ? "is owed" : "owes"
-        }
+        let secondPerson = balance.party == .me && FinanceSettings.userIsAddressedInSecondPerson
+        if secondPerson { return owed ? "are owed" : "owe" }
+        return owed ? "is owed" : "owes"
     }
 
     /// The name half. A button for a person whose record still exists, plain
@@ -614,7 +623,7 @@ struct TripExpensesView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Rename \(personName(id))")
         case .me, .person:
-            Text(party == .me ? "You" : "Someone")
+            Text(party == .me ? FinanceSettings.userDisplayName : "Someone")
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.inkSoft)
                 .lineLimit(1)
@@ -710,7 +719,7 @@ struct TripExpensesView: View {
             exportDate: Date(),
             displayName: { party in
                 switch party {
-                case .me:             return "You"
+                case .me:             return FinanceSettings.userDisplayName
                 case .person(let id): return personName(id)
                 }
             },
@@ -918,7 +927,7 @@ private struct TripExpenseFilterSheet: View {
                     VStack(alignment: .leading, spacing: Space.sm) {
                         Text("Show spend for").eyebrow()
                         VStack(spacing: 0) {
-                            partyRow(.me, name: "You", colorHex: nil)
+                            partyRow(.me, name: FinanceSettings.userDisplayName, colorHex: nil)
                             ForEach(participants, id: \.clientUUID) { person in
                                 Divider().background(Tokens.divider)
                                 partyRow(.person(person.clientUUID), name: person.name, colorHex: person.colorHex)

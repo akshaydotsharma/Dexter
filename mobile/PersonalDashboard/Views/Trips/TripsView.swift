@@ -831,14 +831,14 @@ private struct TripEditorSheet: View {
             Circle()
                 .fill(Tokens.accentFinance)
                 .frame(width: 8, height: 8)
-            Text("You")
+            Text(FinanceSettings.userDisplayName)
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.ink)
         }
         .padding(.horizontal, Space.sm)
         .padding(.vertical, 6)
         .background(Tokens.surface2, in: Capsule())
-        .accessibilityLabel("You are going")
+        .accessibilityLabel("\(FinanceSettings.userDisplayName) is going")
     }
 
     /// The dot and the name rename; the `×` removes (#530).
