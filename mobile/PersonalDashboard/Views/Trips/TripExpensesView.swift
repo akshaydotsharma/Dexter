@@ -180,6 +180,15 @@ struct TripExpensesView: View {
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+            case .renamePerson(let id):
+                // A second `.sheet` on this view would be silently dropped, so
+                // the rename goes through the same item-driven presentation as
+                // the other two (see `activeSheet`).
+                if let person = people.first(where: { $0.clientUUID == id }) {
+                    RenamePersonSheet(person: person)
+                        .presentationDetents([.medium])
+                        .presentationDragIndicator(.visible)
+                }
             case .exportOptions:
                 TripExportOptionsSheet(
                     currencyOptions: filterCurrencyOptions,
@@ -524,6 +533,17 @@ struct TripExpensesView: View {
         .paperBorder(Tokens.border, radius: Radius.lg)
     }
 
+    /// One settle-up line. The NAME is a rename control; the rest of the line
+    /// is not (#530).
+    ///
+    /// This is where a participant's name is actually met — the trip sheet's
+    /// participant row is where the list is managed, which is a different
+    /// errand and not where anyone looks to correct a name. The split mirrors
+    /// the participant chip: the name renames, everything around it is inert,
+    /// so no gesture on this row can swallow another.
+    ///
+    /// "You" is never a control. The user is not a `LocalPerson` and has no
+    /// name to edit.
     private func settleRow(_ balance: TripSettlement.Balance) -> some View {
         // Positive net = owed money (green); negative = owes (ink). The amount
         // is shown as a magnitude; the phrasing carries the direction.
@@ -532,10 +552,16 @@ struct TripExpensesView: View {
             Circle()
                 .fill(partyColor(balance.party))
                 .frame(width: 10, height: 10)
-            Text(phrase(for: balance))
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.inkSoft)
-                .lineLimit(1)
+            // Nested in their own HStack at a word's spacing: the row's own
+            // `Space.sm` between the two Texts reads as a double space and
+            // breaks the line into two phrases.
+            HStack(spacing: 4) {
+                settleName(balance.party)
+                Text(suffix(for: balance))
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .lineLimit(1)
+            }
             Spacer(minLength: Space.sm)
             Text(settleAmount(abs(balance.net)))
                 .font(.edFootnoteStrong)
@@ -547,14 +573,51 @@ struct TripExpensesView: View {
     }
 
     /// "You are owed" / "You owe" / "Rohan is owed" / "Sam owes".
+    ///
+    /// Still built whole for the accessibility label, which reads the line as
+    /// one sentence. The rendered line composes it from `settleName` and
+    /// `suffix` so the name alone can be a control (#530).
     private func phrase(for balance: TripSettlement.Balance) -> String {
+        let name: String
+        switch balance.party {
+        case .me:             name = "You"
+        case .person(let id): name = personName(id)
+        }
+        return "\(name) \(suffix(for: balance))"
+    }
+
+    /// The verb half of the line. "You" takes the second person, a named
+    /// person the third.
+    private func suffix(for balance: TripSettlement.Balance) -> String {
         let owed = balance.net > 0
         switch balance.party {
-        case .me:
-            return owed ? "You are owed" : "You owe"
-        case .person(let id):
-            let name = personName(id)
-            return owed ? "\(name) is owed" : "\(name) owes"
+        case .me:      return owed ? "are owed" : "owe"
+        case .person:  return owed ? "is owed" : "owes"
+        }
+    }
+
+    /// The name half. A button for a person whose record still exists, plain
+    /// text for the user and for a person deleted out from under a split.
+    @ViewBuilder
+    private func settleName(_ party: SplitPartyID) -> some View {
+        switch party {
+        case .person(let id) where people.contains(where: { $0.clientUUID == id }):
+            Button {
+                activeSheet = .renamePerson(id)
+            } label: {
+                Text(personName(id))
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .lineLimit(1)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Rename \(personName(id))")
+        case .me, .person:
+            Text(party == .me ? "You" : "Someone")
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.inkSoft)
+                .lineLimit(1)
         }
     }
 
@@ -721,11 +784,21 @@ struct TripExpensesView: View {
 /// `isPresented` flag per sheet: SwiftUI honours a single presentation of a
 /// kind per view, so a second `.sheet(isPresented:)` on the same view would
 /// silently never appear.
-private enum TripExpenseSheet: Int, Identifiable {
+private enum TripExpenseSheet: Identifiable, Hashable {
     case filter
     case exportOptions
+    /// Rename the person behind a settle-up line (#530). Carries the id, not
+    /// the record: an enum case has to be `Hashable` for `Identifiable`, and
+    /// the view resolves the id back to a live `LocalPerson` anyway.
+    case renamePerson(UUID)
 
-    var id: Int { rawValue }
+    var id: String {
+        switch self {
+        case .filter:                return "filter"
+        case .exportOptions:         return "exportOptions"
+        case .renamePerson(let id):  return "renamePerson-\(id.uuidString)"
+        }
+    }
 }
 
 // MARK: - Export options sheet

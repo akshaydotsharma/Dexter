@@ -858,6 +858,11 @@ private struct TripEditorSheet: View {
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
+                    // Without this the target is the glyph outlines, so a click
+                    // in the gap between letters or just past the last one does
+                    // nothing and the chip reads as dead.
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Rename \(person.name)")
