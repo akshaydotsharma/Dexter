@@ -330,6 +330,37 @@ final class TripItineraryReportTests: XCTestCase {
         XCTAssertEqual(leg?.detail.contains("Singapore to Rome"), true)
     }
 
+    /// An imported flight is titled after its own number and route, and the
+    /// row used to print both twice.
+    func testALegNeverRepeatsWhatItsTitleAlreadySays() {
+        var meta = TicketMeta()
+        meta.airline = "Scoot"
+        meta.flightNumber = "TR 280"
+        meta.originCode = "SIN"
+        meta.destinationCode = "DPS"
+        let imported = item(
+            "TR 280 · SIN→DPS",
+            day: 3,
+            kind: .transport,
+            mode: .flight,
+            start: time(3, 7, 30),
+            confirmation: "VBKTRZ",
+            meta: meta
+        )
+        let leg = report(items: [imported]).travel.first
+        XCTAssertEqual(leg?.route, "SIN → DPS")
+        // The title is gone, and the flight number appears once.
+        XCTAssertFalse(leg?.detail.contains("SIN→DPS") ?? true, leg?.detail ?? "")
+        XCTAssertEqual(leg?.detail.components(separatedBy: "TR 280").count, 1, leg?.detail ?? "")
+        XCTAssertEqual(leg?.detail.contains("Ref VBKTRZ"), true, leg?.detail ?? "")
+
+        // And the same on its day-by-day row, where the title IS printed.
+        let row = report(items: [imported]).days.flatMap(\.rows).first
+        let joined = row?.details.joined(separator: " ") ?? ""
+        XCTAssertFalse(joined.contains("TR 280"), joined)
+        XCTAssertTrue(joined.contains("Ref VBKTRZ"), joined)
+    }
+
     func testALegWithoutCodesFallsBackToItsTitle() {
         let leg = report().travel.first { $0.mode == "Train" }
         XCTAssertEqual(leg?.route, "Train home")

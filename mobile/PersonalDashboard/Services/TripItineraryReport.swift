@@ -246,7 +246,7 @@ extension TripItineraryReport {
         }
 
         if input.includeReferences {
-            let booking = bookingLine(item)
+            let booking = bookingLine(item, avoiding: item.title)
             if !booking.isEmpty { details.append(contentsOf: wrap(booking, lines: 2)) }
         }
 
@@ -268,12 +268,26 @@ extension TripItineraryReport {
 
     /// The booking facts a person standing at a counter needs: what it is
     /// booked under, where they sit, which gate. Nothing here is money.
-    private static func bookingLine(_ item: LocalItineraryItem) -> String {
+    ///
+    /// `avoiding` is the text already printed above this line. An imported
+    /// flight is titled after its own flight number ("TR 280 · SIN→DPS"), so
+    /// without this the row reads "TR 280 · SIN→DPS / Scoot · TR 280 · …" and
+    /// the reader checks twice whether those are two different flights.
+    private static func bookingLine(_ item: LocalItineraryItem, avoiding printed: String = "") -> String {
         let meta = item.ticketMeta
         var parts: [String] = []
 
-        if let airline = meta?.airline?.trimmed, !airline.isEmpty { parts.append(airline) }
-        if let number = meta?.flightNumber?.trimmed, !number.isEmpty { parts.append(number) }
+        // Compared without spaces, because a title says "TR280" as often as
+        // the ticket says "TR 280".
+        let alreadyPrinted = printed.replacingOccurrences(of: " ", with: "").lowercased()
+        func isEchoed(_ value: String) -> Bool {
+            guard !alreadyPrinted.isEmpty else { return false }
+            let needle = value.replacingOccurrences(of: " ", with: "").lowercased()
+            return !needle.isEmpty && alreadyPrinted.contains(needle)
+        }
+
+        if let airline = meta?.airline?.trimmed, !airline.isEmpty, !isEchoed(airline) { parts.append(airline) }
+        if let number = meta?.flightNumber?.trimmed, !number.isEmpty, !isEchoed(number) { parts.append(number) }
         if !item.seat.isEmpty { parts.append("Seat \(item.seat)") }
         if !item.gate.isEmpty { parts.append("Gate \(item.gate)") }
         if let terminal = meta?.terminal?.trimmed, !terminal.isEmpty { parts.append("Terminal \(terminal)") }
@@ -352,12 +366,18 @@ extension TripItineraryReport {
                     ? "\(origin) → \(destination)"
                     : item.title
 
+                // The title only earns its place when it says something the
+                // route column does not. A stop titled "TR 280 · SIN→DPS" says
+                // nothing new next to "SIN → DPS".
                 var detail: [String] = []
-                if !origin.isEmpty || !destination.isEmpty, route != item.title {
+                let titleEchoesRoute = !origin.isEmpty && !destination.isEmpty
+                    && item.title.localizedCaseInsensitiveContains(origin)
+                    && item.title.localizedCaseInsensitiveContains(destination)
+                if route != item.title, !titleEchoesRoute {
                     detail.append(item.title)
                 }
                 if includeReferences {
-                    let booking = bookingLine(item)
+                    let booking = bookingLine(item, avoiding: item.title)
                     if !booking.isEmpty { detail.append(booking) }
                 }
 
