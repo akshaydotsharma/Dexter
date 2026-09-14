@@ -342,7 +342,14 @@ extension TripExpenseReport {
             ? "−" + captureMoney(-value, code)
             : captureMoney(value, code)
 
-        let payer: SplitPartyID = expense.paidByPersonUUID.map { .person($0) } ?? .me
+        // Several people can front one bill (#540), so the payer cell names
+        // each of them with what they put in rather than crediting one.
+        let payers = expense.paidBreakdown(basis: value)
+        let payerText: String = payers.count > 1
+            ? payers
+                .map { "\(displayName($0.party)) \(captureMoney(abs($0.amount), code))" }
+                .joined(separator: ", ") + " paid"
+            : "\(displayName(payers[0].party)) paid"
 
         return LedgerRow(
             id: expense.clientUUID,
@@ -351,8 +358,8 @@ extension TripExpenseReport {
             category: expense.categoryEnum.displayName,
             amount: amount,
             isRefund: expense.isRefund,
-            payer: "\(displayName(payer)) paid",
-            split: splitText(for: expense, displayName: displayName)
+            payer: payerText,
+            split: splitText(for: expense, captureMoney: captureMoney, displayName: displayName)
         )
     }
 
@@ -373,8 +380,23 @@ extension TripExpenseReport {
     /// so.
     private static func splitText(
         for expense: LocalExpense,
+        captureMoney: (Double, String) -> String,
         displayName: (SplitPartyID) -> String
     ) -> String {
+        // A bill entered as exact amounts prints the amounts (#540). A weight
+        // would be a paraphrase of what the user typed, and on an uneven bill
+        // it is not even an accurate one.
+        if expense.splitsByExactAmount {
+            let code = expense.originalCurrency.uppercased()
+            let sharers = expense.splits.filter { ($0.owedAmount ?? 0) > 0 }
+            if sharers.count == 1 {
+                return costInFull(displayName(sharers[0].party))
+            }
+            return "Split: " + sharers
+                .map { "\(displayName($0.party)) \(captureMoney($0.owedAmount ?? 0, code))" }
+                .joined(separator: ", ")
+        }
+
         let entries = expense.splits.filter { $0.shares > 0 }
         let totalShares = entries.reduce(0) { $0 + $1.shares }
         guard !entries.isEmpty, totalShares > 0 else {
@@ -383,10 +405,7 @@ extension TripExpenseReport {
             return costInFull(displayName(.me))
         }
 
-        let parts: [(name: String, shares: Int)] = entries.map { entry in
-            let party: SplitPartyID = entry.personID.map { .person($0) } ?? .me
-            return (displayName(party), entry.shares)
-        }
+        let parts: [(name: String, shares: Int)] = entries.map { (displayName($0.party), $0.shares) }
 
         if parts.count == 1 {
             return costInFull(parts[0].name)

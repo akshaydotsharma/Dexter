@@ -327,27 +327,28 @@ final class LocalExpense {
 
     /// Whether this expense is split across people via the full settle-up model
     /// (#258). Distinct from the #188 `isSplit` (equal N-way per-share model).
+    ///
+    /// An entry that only carries a `paidAmount` does NOT make a bill split
+    /// (#540): a co-paid expense nobody divided is still the user's cost in
+    /// full, so it has to keep reading as unsplit everywhere the amount is
+    /// displayed.
     var isGroupSplit: Bool {
-        !splits.isEmpty
+        splits.contains { max($0.shares, 0) > 0 || ($0.owedAmount ?? 0) > 0 }
     }
 
     /// The user's own signed home-currency contribution to personal totals.
     ///
     /// - Unsplit expense: the whole signed amount (identical to `signedSGD`),
     ///   so existing data and non-trip expenses count exactly as before.
-    /// - Group split: `signedSGD * (myShares / totalShares)`, where "me" is the
-    ///   nil-personUUID entry. Zero when the user isn't in the split. Falls back
-    ///   to the full amount if the shares are degenerate (total <= 0), so a
-    ///   malformed split never silently drops a real expense from totals.
+    /// - Split: the user's slice, whether that slice was entered as an exact
+    ///   amount or derived from share weights (#540). Zero when the user isn't
+    ///   in the split. A degenerate split (no shares, no amounts) falls back to
+    ///   the full amount, so a malformed payload never silently drops a real
+    ///   expense from totals.
     var myShareSGD: Double {
-        let entries = splits
-        guard !entries.isEmpty else { return signedSGD }
-        let totalShares = entries.reduce(0) { $0 + max($1.shares, 0) }
-        guard totalShares > 0 else { return signedSGD }
-        let myShares = entries
-            .filter { $0.personUUID == nil }
-            .reduce(0) { $0 + max($1.shares, 0) }
-        return signedSGD * (Double(myShares) / Double(totalShares))
+        owedBreakdown(basis: signedSGD)
+            .filter { $0.party == .me }
+            .reduce(0) { $0 + $1.amount }
     }
 
     /// Signed amount in the currency the expense was captured in: negative for
@@ -357,15 +358,10 @@ final class LocalExpense {
     }
 
     /// `myShareSGD`'s twin in the captured currency, for surfaces that display
-    /// amounts as-added rather than converted (#258). Same shares math.
+    /// amounts as-added rather than converted (#258). Same breakdown.
     var myShareOriginal: Double {
-        let entries = splits
-        guard !entries.isEmpty else { return signedOriginal }
-        let totalShares = entries.reduce(0) { $0 + max($1.shares, 0) }
-        guard totalShares > 0 else { return signedOriginal }
-        let myShares = entries
-            .filter { $0.personUUID == nil }
-            .reduce(0) { $0 + max($1.shares, 0) }
-        return signedOriginal * (Double(myShares) / Double(totalShares))
+        owedBreakdown(basis: signedOriginal)
+            .filter { $0.party == .me }
+            .reduce(0) { $0 + $1.amount }
     }
 }
