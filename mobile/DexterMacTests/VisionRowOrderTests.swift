@@ -144,9 +144,12 @@ final class VisionRowOrderTests: XCTestCase {
         )
     }
 
-    /// And the sunken group is ordered by the same rule, so a finished block
-    /// reads as the list that was worked through rather than as a pile.
-    func testTheCompletedGroupIsOrderedToo() {
+    /// The sunken group is ordered too, but the other way round (#534): latest
+    /// first. A row that is done has nothing left to be due, so the only thing
+    /// its date still says is how recently it was finished, and the row you just
+    /// finished is the one you want to see. Dated rows still lead undated ones —
+    /// the flip is about direction within each half, not about which half wins.
+    func testTheCompletedGroupIsOrderedLatestFirst() {
         let rows = [
             task("Done late", due: epoch.addingTimeInterval(9 * day), done: true),
             item("Done item", done: true),
@@ -155,7 +158,36 @@ final class VisionRowOrderTests: XCTestCase {
 
         XCTAssertEqual(
             titles(VisionRowOrder.arrange(rows)),
-            ["Done early", "Done late", "Done item"]
+            ["Done late", "Done early", "Done item"]
+        )
+    }
+
+    /// Undated completed rows flip with the rest of the group: the one added
+    /// last leads, so the block does not read forwards in one half and backwards
+    /// in the other.
+    func testUndatedCompletedRowsReadLatestAddedFirst() {
+        let rows = [item("Ticked first", done: true), item("Ticked later", done: true)]
+
+        XCTAssertEqual(
+            titles(VisionRowOrder.arrange(rows)),
+            ["Ticked later", "Ticked first"]
+        )
+    }
+
+    /// The open half is NOT flipped. A row that has not happened yet is read
+    /// forwards, and this is the assertion that catches a fix applied one level
+    /// too high.
+    func testOpenRowsStillReadSoonestFirstAlongsideCompletedOnes() {
+        let rows = [
+            task("Open later", due: epoch.addingTimeInterval(5 * day)),
+            task("Open sooner", due: epoch.addingTimeInterval(day)),
+            task("Done later", due: epoch.addingTimeInterval(6 * day), done: true),
+            task("Done sooner", due: epoch.addingTimeInterval(2 * day), done: true),
+        ]
+
+        XCTAssertEqual(
+            titles(VisionRowOrder.arrange(rows)),
+            ["Open sooner", "Open later", "Done later", "Done sooner"]
         )
     }
 

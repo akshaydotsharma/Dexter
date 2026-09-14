@@ -519,7 +519,8 @@ struct TasksView: View {
         let window = TaskBucketWindow()
 
         var b = TaskBuckets()
-        b.completed = viewModel.todos.filter { $0.completed }
+        // Most recently completed first (#534); the rule lives in `CompletedTaskOrder`.
+        b.completed = CompletedTaskOrder.latestFirst(viewModel.todos.filter { $0.completed })
         let open = viewModel.todos.filter { !$0.completed }
         for todo in open {
             guard let due = todo.dueDate else { b.noDate.append(todo); continue }

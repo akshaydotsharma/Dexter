@@ -171,41 +171,14 @@ struct TripsView: View {
         .padding(.horizontal, Space.lg)
     }
 
-    /// Trips split into the three travel states, each ordered ascending by
-    /// start date so the earliest sits at the top of its group.
+    /// Trips split into the three travel states.
     ///
-    /// The boundaries are day-granular (start/end dates are stored normalised to
-    /// `startOfDay`), so a trip spanning today is Active for the whole of today
-    /// and only drops to Past once its end date is behind us.
-    private struct TripGroups {
-        var active: [LocalTrip] = []
-        var upcoming: [LocalTrip] = []
-        var past: [LocalTrip] = []
-    }
-
-    private var tripGroups: TripGroups {
-        // Trip days are UTC anchors, so "today" is anchored before comparing
-        // against them (#506).
-        let today = WallClock.todayAnchor()
-        var groups = TripGroups()
-        for trip in trips {
-            if WallClock.startOfStoredDay(trip.endDate) < today {
-                groups.past.append(trip)
-            } else if WallClock.startOfStoredDay(trip.startDate) > today {
-                groups.upcoming.append(trip)
-            } else {
-                groups.active.append(trip)
-            }
-        }
-        // End date breaks ties so two trips starting the same day order by the
-        // one that wraps up first.
-        let ascending: (LocalTrip, LocalTrip) -> Bool = {
-            ($0.startDate, $0.endDate) < ($1.startDate, $1.endDate)
-        }
-        groups.active.sort(by: ascending)
-        groups.upcoming.sort(by: ascending)
-        groups.past.sort(by: ascending)
-        return groups
+    /// The rule itself lives in `TripIndexOrder` so it can be asserted: Active
+    /// and Upcoming read soonest-first, Past reads latest-first (#534). Trip days
+    /// are UTC anchors, so "today" is anchored before comparing against them
+    /// (#506).
+    private var tripGroups: (active: [LocalTrip], upcoming: [LocalTrip], past: [LocalTrip]) {
+        TripIndexOrder.grouped(trips, today: WallClock.todayAnchor())
     }
 
     private var tripList: some View {

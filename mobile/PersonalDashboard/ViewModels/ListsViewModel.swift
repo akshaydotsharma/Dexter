@@ -204,24 +204,13 @@ final class ListsViewModel {
     func toggleItem(in list: Checklist, at index: Int) async {
         guard var snapshot = self[id: list.id],
               index < snapshot.items.count else { return }
-        snapshot.items[index].checked.toggle()
 
-        // Auto-reorder: completed items sink to the bottom in the order they were
-        // completed; un-completing pops back to the bottom of the active section.
-        // Manual drag-to-reorder still wins for the next toggle: after a drag,
-        // the next time the user toggles an item, this reasserts the grouping.
-        let nowChecked = snapshot.items[index].checked
-        var item = snapshot.items.remove(at: index)
-        if nowChecked {
-            // Append to the end so it lands below items completed earlier.
-            snapshot.items.append(item)
-        } else {
-            // Drop just before the first checked item, or at the end if none.
-            let insertAt = snapshot.items.firstIndex(where: { $0.checked }) ?? snapshot.items.count
-            // Defensive: ensure the item's flag truly reflects the new state.
-            item.checked = false
-            snapshot.items.insert(item, at: insertAt)
-        }
+        // Auto-reorder: a ticked item goes to the TOP of the completed block, so
+        // the block reads latest-first (#534); un-ticking pops back to the bottom
+        // of the active block. Manual drag-to-reorder still wins for the next
+        // toggle: after a drag, the next toggle reasserts the grouping. The rule
+        // itself lives in `ChecklistItemOrder` so it can be asserted.
+        snapshot.items = ChecklistItemOrder.afterToggle(snapshot.items, at: index)
 
         // Animate the visible mutation. The setter on the collection is what
         // SwiftUI observes; wrapping the assignment in withAnimation makes the
@@ -245,8 +234,11 @@ final class ListsViewModel {
               var snapshot = self[id: list.id] else { return nil }
         // First completed item marks the boundary; fall back to the end when
         // nothing is completed.
-        let insertAt = snapshot.items.firstIndex(where: { $0.checked }) ?? snapshot.items.count
-        snapshot.items.insert(ChecklistItem(text: text, checked: false), at: insertAt)
+        let insertAt = ChecklistItemOrder.boundary(snapshot.items)
+        snapshot.items = ChecklistItemOrder.afterAdding(
+            ChecklistItem(text: text, checked: false),
+            to: snapshot.items
+        )
         self[id: list.id] = snapshot
         await update(snapshot)
         return insertAt
@@ -256,10 +248,8 @@ final class ListsViewModel {
         guard var snapshot = self[id: list.id] else { return }
         snapshot.items.move(fromOffsets: source, toOffset: destination)
         // Re-assert completed-at-bottom after a drag: keep completed items pinned
-        // below the active ones, preserving relative order within each group
-        // (filter is stable). This lets the user freely reorder active items but
-        // never leaves a completed item interleaved above an active one.
-        snapshot.items = snapshot.items.filter { !$0.checked } + snapshot.items.filter { $0.checked }
+        // below the active ones, preserving relative order within each group.
+        snapshot.items = ChecklistItemOrder.afterReorder(snapshot.items)
         self[id: list.id] = snapshot
         await update(snapshot)
     }
