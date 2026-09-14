@@ -325,6 +325,18 @@ targets:
       - path: PersonalDashboard/Views/Trips/TripsView.swift
       - path: PersonalDashboard/Views/Trips/TripDetailView.swift
       - path: PersonalDashboard/Views/Trips/TripExpensesView.swift
+      # Trip expense report (#528). Fully portable: the report model, the
+      # transfer solver and the paginator are Foundation/CoreGraphics, the page
+      # views are plain SwiftUI, and the PDF renderer is ImageRenderer into a
+      # CGContext (both available on macOS 13+). The delivery helper carries the
+      # only platform fork — share sheet on iOS, NSSavePanel on macOS — and is
+      # shared with the Settings export that used to own both halves privately.
+      - path: PersonalDashboard/Services/ExportDelivery.swift
+      - path: PersonalDashboard/Services/TripTransferSolver.swift
+      - path: PersonalDashboard/Services/TripExpenseReport.swift
+      - path: PersonalDashboard/Services/TripExpenseReportLayout.swift
+      - path: PersonalDashboard/Services/TripExpenseReportPDF.swift
+      - path: PersonalDashboard/Views/Trips/TripExpenseReportPages.swift
       - path: PersonalDashboard/Views/Trips/TripCalendarPopover.swift
       - path: PersonalDashboard/Views/Trips/TicketCardView.swift
       - path: PersonalDashboard/Views/Trips/TicketViewers.swift

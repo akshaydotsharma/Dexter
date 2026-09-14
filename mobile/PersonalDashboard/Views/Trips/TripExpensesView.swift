@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// The expenses tab of a trip's detail screen (#258).
 ///
@@ -39,6 +40,14 @@ struct TripExpensesView: View {
     /// (converted through the trip's own frozen FX observations).
     @State private var filterCurrency: String? = nil
     @State private var showingFilter: Bool = false
+
+    /// Report export in flight (#528). Rendering the PDF runs on the main
+    /// actor (`ImageRenderer` is main-actor only), so the control reports
+    /// itself busy rather than looking dead for the render.
+    @State private var isExporting: Bool = false
+    /// Surfaced under the summary card when an export fails. Cancelling the
+    /// share sheet or the save panel is not a failure and sets nothing.
+    @State private var exportError: String?
 
     /// Expense the user has swiped-to-delete and we're confirming (#264).
     @State private var pendingDelete: LocalExpense?
@@ -245,9 +254,10 @@ struct TripExpensesView: View {
             return net >= 0 ? "Owed" : "Owe"
         }()
         return VStack(alignment: .leading, spacing: Space.md) {
-            HStack {
+            HStack(spacing: Space.md) {
                 Text(summaryTitle).eyebrow()
                 Spacer()
+                exportButton
                 filterButton
             }
 
@@ -269,11 +279,43 @@ struct TripExpensesView: View {
                 statTile(label: owedLabel, value: formatFiltered(abs(net)))
             }
             .padding(.top, Space.xs)
+
+            if let exportError {
+                Text(exportError)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Space.lg)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
+    }
+
+    /// Download the trip's expenses as a PDF report (#528). Sits beside the
+    /// filter control because the two are read together: the filter decides
+    /// what the ledger lists, and this exports exactly that.
+    private var exportButton: some View {
+        Button {
+            Task { await exportReport() }
+        } label: {
+            Group {
+                if isExporting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(Tokens.accentFinance)
+                }
+            }
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isExporting || expenses.isEmpty)
+        .accessibilityLabel("Download these expenses as a PDF report")
     }
 
     private var filterButton: some View {
@@ -543,6 +585,57 @@ struct TripExpensesView: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
             }
+        }
+    }
+
+    // MARK: - Report export (#528)
+
+    /// The tab's own state, handed to the report builder.
+    ///
+    /// Nothing here is recomputed: `visibleExpenses` is the list on screen,
+    /// `formatFiltered` is the money the cards are written in, and
+    /// `tripRateToSGD` is the conversion the tab already converts with. The
+    /// report can only say what the tab says.
+    private var reportInput: TripExpenseReportInput {
+        let order: [SplitPartyID] = [.me] + participantPeople.map { .person($0.clientUUID) }
+        return TripExpenseReportInput(
+            tripName: trip.name,
+            startDate: trip.startDate,
+            endDate: trip.endDate,
+            allExpenses: Array(expenses),
+            ledgerExpenses: visibleExpenses,
+            participantOrder: order,
+            selectedParties: order.filter { filterParties.contains($0) },
+            reportCurrencyCode: filterCurrency ?? displayCurrencyCode,
+            exportDate: Date(),
+            displayName: { party in
+                switch party {
+                case .me:             return "You"
+                case .person(let id): return personName(id)
+                }
+            },
+            displayMoney: { formatFiltered($0) },
+            captureMoney: { value, code in Self.formatOriginal(value, code: code) },
+            tripRateToSGD: { tripRateToSGD(for: $0) }
+        )
+    }
+
+    private func exportReport() async {
+        guard !expenses.isEmpty, !isExporting else { return }
+        exportError = nil
+        isExporting = true
+        defer { isExporting = false }
+
+        do {
+            let report = TripExpenseReport.make(reportInput)
+            let url = try TripExpenseReportPDF.write(report)
+            try await ExportDelivery.deliver(
+                fileAt: url,
+                contentTypes: [.pdf],
+                panelTitle: "Save trip expense report"
+            )
+        } catch {
+            exportError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
