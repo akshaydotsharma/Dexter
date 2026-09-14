@@ -1,12 +1,6 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
-#if canImport(UIKit)
-import UIKit
-#endif
-#if canImport(AppKit)
-import AppKit
-#endif
 
 /// Sheet that hosts export + import in a single surface. Two rows on the
 /// landing page; tapping one drives the corresponding flow.
@@ -439,17 +433,22 @@ struct DataExportImportView: View {
             let url = try await service.export()
             #if os(iOS)
             phase = .shareReady(url)
-            await presentShareSheet(for: url)
+            #else
+            // macOS has no share sheet; the panel is modal, so the row goes
+            // back to idle before it opens (issue #281).
+            phase = .idle
+            #endif
+            // Share sheet on iOS, NSSavePanel on macOS — one helper, shared
+            // with the trip expense report export (#528).
+            try await ExportDelivery.deliver(
+                fileAt: url,
+                contentTypes: [.zip],
+                panelTitle: "Save Dexter export"
+            )
             // Hand back to idle once the share sheet dismisses. The tmp
             // file stays on disk for the OS to clean up (sharing copies
             // it into Files / Mail / etc).
             phase = .idle
-            #else
-            // macOS has no share sheet; let the user pick a save location and
-            // copy the exported archive there (issue #281).
-            phase = .idle
-            saveExportedArchive(at: url)
-            #endif
         } catch {
             phase = .idle
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -502,69 +501,6 @@ struct DataExportImportView: View {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
-
-    #if os(iOS)
-    @MainActor
-    private func presentShareSheet(for url: URL) async {
-        guard let topController = topMostViewController() else { return }
-        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        // The iOS Share sheet doesn't surface a "did dismiss" callback we
-        // can await; use a continuation tied to the completion handler.
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            activity.completionWithItemsHandler = { _, _, _, _ in
-                continuation.resume()
-            }
-            // iPad popover anchor — anchored to the topmost view's center
-            // so the popover has somewhere to attach.
-            if let popover = activity.popoverPresentationController {
-                popover.sourceView = topController.view
-                popover.sourceRect = CGRect(
-                    x: topController.view.bounds.midX,
-                    y: topController.view.bounds.midY,
-                    width: 0,
-                    height: 0
-                )
-                popover.permittedArrowDirections = []
-            }
-            topController.present(activity, animated: true)
-        }
-    }
-
-    private func topMostViewController() -> UIViewController? {
-        let scene = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive }
-        guard let root = scene?.keyWindow?.rootViewController else { return nil }
-        var top = root
-        while let presented = top.presentedViewController { top = presented }
-        return top
-    }
-    #endif
-
-    #if os(macOS)
-    /// macOS export: present an `NSSavePanel` and copy the freshly built
-    /// archive to the chosen location. There is no share sheet on macOS, so the
-    /// user saves the `.zip` directly (issue #281).
-    @MainActor
-    private func saveExportedArchive(at url: URL) {
-        let panel = NSSavePanel()
-        panel.title = "Save Dexter export"
-        panel.nameFieldStringValue = url.lastPathComponent
-        panel.allowedContentTypes = [.zip]
-        panel.canCreateDirectories = true
-        panel.isExtensionHidden = false
-
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
-        do {
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.copyItem(at: url, to: destination)
-        } catch {
-            errorMessage = "Couldn't save export: \(error.localizedDescription)"
-        }
-    }
-    #endif
 
     // MARK: - Helpers
 

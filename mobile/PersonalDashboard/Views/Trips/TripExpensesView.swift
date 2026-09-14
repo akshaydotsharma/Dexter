@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 /// The expenses tab of a trip's detail screen (#258).
 ///
@@ -38,7 +39,28 @@ struct TripExpensesView: View {
     /// currency; otherwise one of the currencies captured on this trip
     /// (converted through the trip's own frozen FX observations).
     @State private var filterCurrency: String? = nil
-    @State private var showingFilter: Bool = false
+
+    /// Which sheet this tab is showing. ONE `.sheet` modifier driven by an
+    /// item, not two `.sheet(isPresented:)` stacked on the same view — SwiftUI
+    /// honours only one presentation of a kind per view, the same trap that
+    /// silently broke a second `.fileImporter` here in #261.
+    @State private var activeSheet: TripExpenseSheet?
+
+    /// Report export in flight (#528). Rendering the PDF runs on the main
+    /// actor (`ImageRenderer` is main-actor only), so the control reports
+    /// itself busy rather than looking dead for the render.
+    @State private var isExporting: Bool = false
+    /// The currency the NEXT export is written in. Seeded from what the tab is
+    /// showing when the options sheet opens, then owned by the sheet.
+    @State private var exportCurrency: String? = nil
+    /// Set by the sheet's Export button so the run starts AFTER the sheet is
+    /// gone. On macOS the export ends in an `NSSavePanel`, and a modal panel
+    /// raised from under a sheet that is still dismissing is the popover trap
+    /// from #416 in a different costume. Waiting for `onDismiss` avoids it.
+    @State private var pendingExport: Bool = false
+    /// Surfaced under the summary card when an export fails. Cancelling the
+    /// share sheet or the save panel is not a failure and sets nothing.
+    @State private var exportError: String?
 
     /// Expense the user has swiped-to-delete and we're confirming (#264).
     @State private var pendingDelete: LocalExpense?
@@ -146,16 +168,28 @@ struct TripExpensesView: View {
             .padding(.top, Space.lg)
         }
         .scrollDismissesKeyboard(.interactively)
-        .sheet(isPresented: $showingFilter) {
-            TripExpenseFilterSheet(
-                participants: participantPeople,
-                currencyOptions: filterCurrencyOptions,
-                displayCode: displayCurrencyCode,
-                parties: $filterParties,
-                currency: $filterCurrency
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+        .sheet(item: $activeSheet, onDismiss: runPendingExport) { sheet in
+            switch sheet {
+            case .filter:
+                TripExpenseFilterSheet(
+                    participants: participantPeople,
+                    currencyOptions: filterCurrencyOptions,
+                    displayCode: displayCurrencyCode,
+                    parties: $filterParties,
+                    currency: $filterCurrency
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            case .exportOptions:
+                TripExportOptionsSheet(
+                    currencyOptions: filterCurrencyOptions,
+                    displayCode: displayCurrencyCode,
+                    currency: $exportCurrency,
+                    onExport: { pendingExport = true }
+                )
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+            }
         }
     }
 
@@ -189,7 +223,14 @@ struct TripExpensesView: View {
 
     /// Format a home-currency (SGD) value in the summary's selected currency.
     private func formatFiltered(_ sgdValue: Double) -> String {
-        guard let code = filterCurrency, code != displayCurrencyCode else {
+        formatMoney(sgdValue, in: filterCurrency)
+    }
+
+    /// The same conversion against an EXPLICIT currency, so the report can be
+    /// written in one the tab is not currently showing (#528). `nil` means the
+    /// Settings display currency.
+    private func formatMoney(_ sgdValue: Double, in currencyCode: String?) -> String {
+        guard let code = currencyCode, code != displayCurrencyCode else {
             return FinanceDashboardBand.formatMoney(sgdValue)
         }
         if code == "SGD" {
@@ -245,9 +286,10 @@ struct TripExpensesView: View {
             return net >= 0 ? "Owed" : "Owe"
         }()
         return VStack(alignment: .leading, spacing: Space.md) {
-            HStack {
+            HStack(spacing: Space.md) {
                 Text(summaryTitle).eyebrow()
                 Spacer()
+                exportButton
                 filterButton
             }
 
@@ -269,6 +311,13 @@ struct TripExpensesView: View {
                 statTile(label: owedLabel, value: formatFiltered(abs(net)))
             }
             .padding(.top, Space.xs)
+
+            if let exportError {
+                Text(exportError)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Space.lg)
@@ -276,9 +325,38 @@ struct TripExpensesView: View {
         .paperBorder(Tokens.border, radius: Radius.lg)
     }
 
+    /// Download the trip's expenses as a PDF report (#528). Sits beside the
+    /// filter control because the two are read together: the filter decides
+    /// what the ledger lists, and this exports exactly that.
+    private var exportButton: some View {
+        Button {
+            // Seed the picker with what the tab is showing, so the obvious
+            // path is one extra tap.
+            exportCurrency = filterCurrency
+            exportError = nil
+            activeSheet = .exportOptions
+        } label: {
+            Group {
+                if isExporting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(Tokens.accentFinance)
+                }
+            }
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isExporting || expenses.isEmpty)
+        .accessibilityLabel("Download these expenses as a PDF report")
+    }
+
     private var filterButton: some View {
         Button {
-            showingFilter = true
+            activeSheet = .filter
         } label: {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .font(.system(size: 18, weight: .regular))
@@ -546,6 +624,67 @@ struct TripExpensesView: View {
         }
     }
 
+    // MARK: - Report export (#528)
+
+    /// The trip's own state, handed to the report builder.
+    ///
+    /// Nothing here is recomputed: the money formatters are the tab's, and
+    /// `tripRateToSGD` is the conversion the tab already converts with, so the
+    /// report can only say what the tab says.
+    ///
+    /// `expenses` — the whole trip — is what goes in, NOT `visibleExpenses`.
+    /// The people filter is a reading aid for the tab; the report is the
+    /// group's record of the trip and every section of it covers everyone.
+    private func reportInput(currency: String?) -> TripExpenseReportInput {
+        let order: [SplitPartyID] = [.me] + participantPeople.map { .person($0.clientUUID) }
+        return TripExpenseReportInput(
+            tripName: trip.name,
+            startDate: trip.startDate,
+            endDate: trip.endDate,
+            allExpenses: Array(expenses),
+            participantOrder: order,
+            reportCurrencyCode: currency ?? displayCurrencyCode,
+            exportDate: Date(),
+            displayName: { party in
+                switch party {
+                case .me:             return "You"
+                case .person(let id): return personName(id)
+                }
+            },
+            displayMoney: { formatMoney($0, in: currency) },
+            captureMoney: { value, code in Self.formatOriginal(value, code: code) },
+            tripRateToSGD: { tripRateToSGD(for: $0) }
+        )
+    }
+
+    /// Runs after the options sheet has fully dismissed, so the macOS save
+    /// panel is raised from the window rather than from under a closing sheet.
+    private func runPendingExport() {
+        guard pendingExport else { return }
+        pendingExport = false
+        let currency = exportCurrency
+        Task { await exportReport(currency: currency) }
+    }
+
+    private func exportReport(currency: String?) async {
+        guard !expenses.isEmpty, !isExporting else { return }
+        exportError = nil
+        isExporting = true
+        defer { isExporting = false }
+
+        do {
+            let report = TripExpenseReport.make(reportInput(currency: currency))
+            let url = try TripExpenseReportPDF.write(report)
+            try await ExportDelivery.deliver(
+                fileAt: url,
+                contentTypes: [.pdf],
+                panelTitle: "Save trip expense report"
+            )
+        } catch {
+            exportError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     // MARK: - Empty state
 
     private var emptyState: some View {
@@ -573,6 +712,112 @@ struct TripExpensesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, Space.lg)
+    }
+}
+
+// MARK: - Sheet routing
+
+/// The sheets this tab can show. An item-driven `.sheet` rather than one
+/// `isPresented` flag per sheet: SwiftUI honours a single presentation of a
+/// kind per view, so a second `.sheet(isPresented:)` on the same view would
+/// silently never appear.
+private enum TripExpenseSheet: Int, Identifiable {
+    case filter
+    case exportOptions
+
+    var id: Int { rawValue }
+}
+
+// MARK: - Export options sheet
+
+/// Chooses what the exported report is written in (#528).
+///
+/// The currency is asked for at export time rather than inherited from the
+/// tab's own currency toggle, because the two answer different questions: the
+/// toggle is how the person reading the screen wants to read it, and this is
+/// what the group being sent the PDF should read. Seeded from the tab's
+/// current choice, so agreeing with it is one tap.
+private struct TripExportOptionsSheet: View {
+    /// Trip capture currencies, excluding the display currency. The same set
+    /// the filter sheet offers.
+    let currencyOptions: [String]
+    let displayCode: String
+    @Binding var currency: String?
+    /// Called before dismissing. The caller starts the export from the
+    /// sheet's `onDismiss`, never from here.
+    let onExport: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.xl) {
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        Text("Report currency").eyebrow()
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: Space.sm) {
+                                currencyChip(nil, label: displayCode)
+                                ForEach(currencyOptions, id: \.self) { code in
+                                    currencyChip(code, label: code)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        Text("Totals, the settle-up table and the transfers are all written in this currency, converted with the rates frozen on this trip's expenses. Each expense in the ledger keeps the currency it was captured in.")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.mutedSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Button {
+                        onExport()
+                        dismiss()
+                    } label: {
+                        Text("Export PDF")
+                            .font(.edBodyMedium)
+                            .foregroundStyle(Tokens.accentFg)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Space.md)
+                            .background(Tokens.accentFinance, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(Space.lg)
+            }
+            .background(Tokens.paper)
+            .navigationTitle("Export report")
+            .inlineNavigationTitle()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        #if os(macOS)
+        // A macOS sheet with no intrinsic height collapses to its toolbar
+        // (#474). The content here is short, so it gets an explicit frame.
+        .frame(width: 420, height: 300)
+        #endif
+    }
+
+    private func currencyChip(_ code: String?, label: String) -> some View {
+        let selected = currency == code
+        return Button {
+            currency = code
+        } label: {
+            Text(label)
+                .font(.edFootnote)
+                .foregroundStyle(selected ? Tokens.accentFg : Tokens.ink)
+                .padding(.horizontal, Space.md)
+                .padding(.vertical, 6)
+                .background(
+                    selected ? Tokens.accentFinance : Tokens.surface2,
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(selected ? "\(label), selected" : label)
     }
 }
 
