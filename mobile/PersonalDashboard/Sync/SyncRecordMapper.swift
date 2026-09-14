@@ -60,6 +60,11 @@ enum SyncRecordMapper {
         out += try map("LocalExpense",    payload.expenses)     { $0.clientUUID }
         out += try map("LocalKeyword",    payload.vocab)        { $0.clientUUID.uuidString }
         out += try map("RecurringExpense", payload.recurringExpenses ?? []) { $0.clientUUID }
+        // #524. Already a String on the model, like the expense template above.
+        // The TASKS a template makes travel as ordinary `LocalTodo` records and
+        // carry their own `occurrenceKey`, so a peer that has already made the same
+        // date recognises it rather than duplicating it.
+        out += try map("RecurringTask", payload.recurringTasks ?? []) { $0.clientUUID }
         out += try map("LocalPerson",     payload.persons ?? []) { $0.clientUUID.uuidString }
         out += try map("LocalEvent",      payload.events ?? [])  { $0.clientUUID.uuidString }
         out += try map("LocalStatementImport", payload.statementImports ?? []) { $0.clientUUID.uuidString }

@@ -40,6 +40,8 @@ struct TodoService {
             googleMapsLink: request.googleMapsLink,
             priority: request.priority,
             remindMe: request.remindMe,
+            recurringTaskUUID: request.recurringTaskUUID,
+            occurrenceKey: request.occurrenceKey,
             createdAt: now,
             updatedAt: now
         )

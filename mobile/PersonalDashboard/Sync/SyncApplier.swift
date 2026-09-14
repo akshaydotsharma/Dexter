@@ -278,6 +278,9 @@ struct SyncApplier {
             case "RecurringExpense":
                 payload.recurringExpenses = (payload.recurringExpenses ?? [])
                     + [try decoder.decode(DataArchive.RecurringExpenseDTO.self, from: data)]
+            case "RecurringTask":
+                payload.recurringTasks = (payload.recurringTasks ?? [])
+                    + [try decoder.decode(DataArchive.RecurringTaskDTO.self, from: data)]
             case "LocalPerson":
                 payload.persons = (payload.persons ?? [])
                     + [try decoder.decode(DataArchive.PersonDTO.self, from: data)]
@@ -476,6 +479,9 @@ struct SyncApplier {
         case "LocalVisionBlock":     return try delete(LocalVisionBlock.self, uuid: recordID, key: \.clientUUID)
         case "LocalExpense":         return try deleteString(LocalExpense.self, id: recordID, key: \.clientUUID)
         case "RecurringExpense":     return try deleteString(RecurringExpense.self, id: recordID, key: \.clientUUID)
+        // Deleting a template deletes the template only. The tasks it made are
+        // ordinary `LocalTodo` rows and one may be open in front of the user (#524).
+        case "RecurringTask":        return try deleteString(RecurringTask.self, id: recordID, key: \.clientUUID)
         case "LocalProcessedEmail":  return try deleteString(LocalProcessedEmail.self, id: recordID, key: \.messageKey)
         default:
             SyncLog.line("SyncApplier: cannot delete unknown entity \(entity)")

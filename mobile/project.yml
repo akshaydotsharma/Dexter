@@ -225,6 +225,12 @@ targets:
       - path: PersonalDashboard/Services/EventService.swift
       - path: PersonalDashboard/Services/RecurringExpenseService.swift
       - path: PersonalDashboard/Services/RecurringExpenseNotifications.swift
+      # Recurring tasks (#524). The coordinator is NOT the expense one's
+      # counterpart by accident: that one imports BackgroundTasks and is iOS-only,
+      # so the Mac would otherwise never materialise a repeat at all. This one is
+      # platform-neutral and is called from DexterMacApp's own launch/activate hooks.
+      - path: PersonalDashboard/Services/RecurringTaskService.swift
+      - path: PersonalDashboard/Services/RecurringTaskCoordinator.swift
       # Settings (issue #281). The email-inbox surface (EmailInboxView) and its
       # BackgroundTasks/IMAP ingest stack (EmailIngestService, IMAPClient,
       # EmailIngestCoordinator) stay OUT of this target — iOS-only. The email

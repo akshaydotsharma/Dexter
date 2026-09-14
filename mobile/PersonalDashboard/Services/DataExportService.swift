@@ -225,6 +225,9 @@ final class DataExportService {
         // back — and a build without the model could destroy it with no copy
         // anywhere.
         let visionBlocks = try modelContext.fetch(FetchDescriptor<LocalVisionBlock>())
+        // #524: recurring-task templates. Without these a restore brings back the
+        // tasks a repeat happened to have made and loses the repeat itself.
+        let recurringTasks = try modelContext.fetch(FetchDescriptor<RecurringTask>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -264,6 +267,7 @@ final class DataExportService {
         let taskTicketDTOs: [DataArchive.TaskTicketDTO] = taskTickets.map(Self.dto)
         let walletCardDTOs: [DataArchive.WalletCardDTO] = walletCards.map(Self.dto)
         let visionBlockDTOs: [DataArchive.VisionBlockDTO] = visionBlocks.map(Self.dto)
+        let recurringTaskDTOs: [DataArchive.RecurringTaskDTO] = recurringTasks.map(Self.dto)
 
         return DataArchive.Payload(
             tasks: taskDTOs,
@@ -284,6 +288,7 @@ final class DataExportService {
             // is why wallet cards sit between the processed emails and the note
             // images rather than at the end.
             walletCards: walletCardDTOs,
+            recurringTasks: recurringTaskDTOs,
             noteImages: noteImageDTOs,
             taskTickets: taskTicketDTOs,
             visionBlocks: visionBlockDTOs
@@ -316,6 +321,7 @@ final class DataExportService {
             "LocalProcessedEmail":  payload.processedEmails?.count ?? 0,
             "LocalWalletCard":      payload.walletCards?.count ?? 0,
             "LocalVisionBlock":     payload.visionBlocks?.count ?? 0,
+            "RecurringTask":        payload.recurringTasks?.count ?? 0,
         ]
     }
 
@@ -481,7 +487,35 @@ final class DataExportService {
             address: todo.address,
             googleMapsLink: todo.googleMapsLink,
             remindMe: todo.remindMe,
-            reminderClearedAt: todo.reminderClearedAt
+            reminderClearedAt: todo.reminderClearedAt,
+            recurringTaskUUID: todo.recurringTaskUUID,
+            occurrenceKey: todo.occurrenceKey
+        )
+    }
+
+    private static func dto(_ template: RecurringTask) -> DataArchive.RecurringTaskDTO {
+        DataArchive.RecurringTaskDTO(
+            clientUUID: template.clientUUID,
+            title: template.title,
+            taskDescription: template.taskDescription,
+            tag: template.tag,
+            priority: template.priority,
+            address: template.address,
+            googleMapsLink: template.googleMapsLink,
+            remindMe: template.remindMe,
+            frequency: template.frequency,
+            interval: template.interval,
+            weekdayMask: template.weekdayMask,
+            dayOfMonth: template.dayOfMonth,
+            monthOfYear: template.monthOfYear,
+            timeOfDayMinutes: template.timeOfDayMinutes,
+            leadDays: template.leadDays,
+            isActive: template.isActive,
+            startDate: template.startDate,
+            endDate: template.endDate,
+            lastOccurrenceKey: template.lastOccurrenceKey,
+            createdAt: template.createdAt,
+            updatedAt: template.updatedAt
         )
     }
 
