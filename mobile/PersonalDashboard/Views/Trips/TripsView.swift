@@ -31,6 +31,10 @@ struct TripsView: View {
     /// (issue #291). On iOS the popover state lives inside `TripDetailHeader`.
     @State private var showingCalendar = false
 
+    /// The Itinerary tab's download, wired between this chrome and the detail
+    /// view that owns the export (#532).
+    @State private var itineraryExport = TripItineraryExportControl()
+
     var body: some View {
         ZStack {
             Tokens.paper.canvasIgnoresSafeArea()
@@ -44,13 +48,14 @@ struct TripsView: View {
                     #if os(iOS)
                     TripDetailHeader(
                         trip: trip,
+                        export: itineraryExport,
                         onBack: {
                             withAnimation(.easeOut(duration: 0.2)) { selectedTripUUID = nil }
                         },
                         onEdit: { editingTrip = .existing(id) }
                     )
                     #endif
-                    TripDetailView(trip: trip)
+                    TripDetailView(trip: trip, exportControl: itineraryExport)
                         .macDetailChrome(
                             title: trip.name,
                             subtitle: TripRow.formatRange(start: trip.startDate, end: trip.endDate),
@@ -58,6 +63,11 @@ struct TripsView: View {
                                 withAnimation(.easeOut(duration: 0.2)) { selectedTripUUID = nil }
                             },
                             actions: {
+                                // Leftmost in the group: it is the only action
+                                // that takes the trip OUT of the app, and it
+                                // reads as the first step of "and now send it
+                                // to someone" rather than as another edit.
+                                TripItineraryExportButton(export: itineraryExport)
                                 Button { showingCalendar = true } label: {
                                     Image(systemName: "calendar")
                                 }
@@ -585,6 +595,8 @@ private struct TripRow: View {
 /// span name + dates + notes and warrant the full sheet).
 private struct TripDetailHeader: View {
     let trip: LocalTrip
+    /// The Itinerary tab's download (#532), leftmost of the trailing actions.
+    let export: TripItineraryExportControl
     let onBack: () -> Void
     let onEdit: () -> Void
 
@@ -619,6 +631,7 @@ private struct TripDetailHeader: View {
                     .lineLimit(1)
             }
             Spacer()
+            TripItineraryExportButton(export: export)
             Button {
                 showingCalendar = true
             } label: {
@@ -648,6 +661,52 @@ private struct TripDetailHeader: View {
         .background(Tokens.paper.overlay(alignment: .bottom) {
             Rectangle().fill(Tokens.divider).frame(height: 0.5)
         })
+    }
+}
+
+// MARK: - Itinerary download (#532)
+
+/// Download the open trip's itinerary as a PDF.
+///
+/// One button for both chromes — the macOS toolbar group and the iOS header —
+/// because the only thing that differs between them is the frame the icon sits
+/// in, and two copies of a control that appears and disappears with the tab is
+/// how the two platforms drift apart.
+///
+/// Absent rather than disabled when the Expenses tab is showing: that tab has
+/// its own download beside its filter (#528), and a second one in the chrome
+/// would be the same word for two different documents.
+private struct TripItineraryExportButton: View {
+    let export: TripItineraryExportControl
+
+    var body: some View {
+        if export.isAvailable || export.isRunning {
+            Button {
+                export.requestExport()
+            } label: {
+                if export.isRunning {
+                    ProgressView()
+                        .controlSize(.small)
+                        #if os(iOS)
+                        .frame(width: 44, height: 44)
+                        #endif
+                } else {
+                    Image(systemName: "square.and.arrow.down")
+                        #if os(iOS)
+                        .frame(width: 44, height: 44)
+                        .foregroundStyle(Tokens.muted)
+                        #endif
+                }
+            }
+            .disabled(export.isRunning)
+            .accessibilityLabel("Download this itinerary as a PDF")
+            #if os(macOS)
+            .help("Download this itinerary as a PDF")
+            #else
+            .macPlainButtonStyle()
+            .macHeaderIconChrome()
+            #endif
+        }
     }
 }
 
