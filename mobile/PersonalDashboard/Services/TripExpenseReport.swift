@@ -378,7 +378,9 @@ extension TripExpenseReport {
         let entries = expense.splits.filter { $0.shares > 0 }
         let totalShares = entries.reduce(0) { $0 + $1.shares }
         guard !entries.isEmpty, totalShares > 0 else {
-            return "Your cost in full"
+            // Unsplit: the bill is the user's in full. Same wording as the
+            // single-sharer case below, so the two read alike in one table.
+            return costInFull(displayName(.me))
         }
 
         let parts: [(name: String, shares: Int)] = entries.map { entry in
@@ -387,13 +389,18 @@ extension TripExpenseReport {
         }
 
         if parts.count == 1 {
-            let only = parts[0].name
-            return only == "You" ? "Your cost in full" : "\(only)'s cost in full"
+            return costInFull(parts[0].name)
         }
         if Set(parts.map(\.shares)).count == 1 {
             return "Split evenly: " + parts.map(\.name).joined(separator: ", ")
         }
         return "Split: " + parts.map { "\($0.name) ×\($0.shares)" }.joined(separator: ", ")
+    }
+
+    /// "Your cost in full" for the pronoun, "Akshay's cost in full" for a
+    /// name — the user's own included, once they have named themselves (#530).
+    private static func costInFull(_ name: String) -> String {
+        "\(FinanceSettings.possessive(name)) cost in full"
     }
 
     // MARK: - Participants
@@ -450,8 +457,9 @@ extension TripExpenseReport {
         return TripTransferSolver.transfers(balances: balances).enumerated().map { index, transfer in
             let from = names[transfer.from.stableKey] ?? displayName(transfer.from)
             let to = names[transfer.to.stableKey] ?? displayName(transfer.to)
-            // "You pay Priya" reads better than "You pays Priya".
-            let verb = from == "You" ? "pay" : "pays"
+            // "You pay Priya" reads better than "You pays Priya". Any NAME
+            // takes the third person, the user's own included (#530).
+            let verb = from == FinanceSettings.defaultUserDisplayName ? "pay" : "pays"
             return TransferRow(
                 id: "\(index)-\(transfer.from.stableKey)-\(transfer.to.stableKey)",
                 from: transfer.from,

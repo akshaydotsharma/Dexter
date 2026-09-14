@@ -23,6 +23,9 @@ enum FinanceSettings {
         /// "1 display unit = N SGD" (same orientation as `LocalFXRate.rateToSGD`).
         /// Default 1.0 (SGD passthrough). `displayValue = sgdValue / factor`.
         static let displayRateToSGD = "finance.displayRateToSGD"
+        /// What the user is called wherever their own name sits beside other
+        /// people's (#530). Default "You".
+        static let userDisplayName = "finance.userDisplayName"
     }
 
     private static var defaults: UserDefaults { .standard }
@@ -48,6 +51,56 @@ enum FinanceSettings {
             return stored > 0 ? stored : 1.0
         }
         set { defaults.set(newValue, forKey: Key.displayRateToSGD) }
+    }
+
+    /// What to call the user wherever their own label sits beside other
+    /// people's: the split avatars, a settle-up line, the payer picker, the
+    /// trip participant row, the exported report (#530).
+    ///
+    /// DISPLAY ONLY. The user is not a `LocalPerson` and must never become
+    /// one: `nil` is the person id that means "the user" in every
+    /// `ExpenseSplitEntry`, in `paidByPersonUUID`, in `LocalExpense.myShareSGD`
+    /// and in `TripSettlement`. This renames the label and touches no row.
+    ///
+    /// Empty or whitespace reads as "You", so clearing the Settings field is
+    /// how you go back rather than a state with no name at all.
+    static var userDisplayName: String {
+        get {
+            let stored = (defaults.string(forKey: Key.userDisplayName) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return stored.isEmpty ? defaultUserDisplayName : stored
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed, forKey: Key.userDisplayName)
+        }
+    }
+
+    /// The second-person default. Compared against by the grammar helpers, so
+    /// it is a constant rather than a literal repeated at each call site.
+    static let defaultUserDisplayName = "You"
+
+    /// True while the user has not named themselves, i.e. the label is still
+    /// the pronoun "You". The surfaces that pick between second and third
+    /// person ("You owe" vs "Akshay owes") branch on this, NOT on the party:
+    /// the party is always the user, it is the WORD that changes the grammar.
+    static var userIsAddressedInSecondPerson: Bool {
+        userDisplayName == defaultUserDisplayName
+    }
+
+    /// The possessive form of a party's label: "Your" for the pronoun, and
+    /// "<name>'s" for any name, the user's own included once they have one.
+    ///
+    /// One place, because the rule is easy to get subtly wrong in each of the
+    /// three call sites that need it, and because "You's spend" is the exact
+    /// sentence this exists to prevent (#530).
+    static func possessive(_ name: String) -> String {
+        name == defaultUserDisplayName ? "Your" : "\(name)'s"
+    }
+
+    /// Avatar initial for the user. "Y" until they name themselves.
+    static var userDisplayInitial: String {
+        String(userDisplayName.prefix(1)).uppercased()
     }
 
     // MARK: - Derived

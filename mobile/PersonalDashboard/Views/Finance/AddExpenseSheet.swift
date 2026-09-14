@@ -774,7 +774,9 @@ struct AddExpenseSheet: View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Paid by").eyebrow()
             Menu {
-                Button { payerParty = .me } label: { Label("You", systemImage: "person.fill") }
+                Button { payerParty = .me } label: {
+                    Label(FinanceSettings.userDisplayName, systemImage: "person.fill")
+                }
                 ForEach(tripContext?.participants ?? [], id: \.clientUUID) { person in
                     Button { payerParty = .person(person.clientUUID) } label: { Text(person.name) }
                 }
@@ -931,9 +933,10 @@ struct AddExpenseSheet: View {
 
     private var payerName: String {
         switch payerParty {
-        case .me: return "You"
+        case .me: return FinanceSettings.userDisplayName
         case .person(let id):
-            return tripContext?.participants.first { $0.clientUUID == id }?.name ?? "You"
+            return tripContext?.participants.first { $0.clientUUID == id }?.name
+                ?? FinanceSettings.userDisplayName
         }
     }
 
@@ -998,7 +1001,9 @@ struct AddExpenseSheet: View {
             return SplitDraft(party: party, name: name, colorHex: colorHex, included: included, shares: shares)
         }
 
-        var drafts: [SplitDraft] = [makeDraft(party: .me, name: "You", colorHex: nil)]
+        var drafts: [SplitDraft] = [
+            makeDraft(party: .me, name: FinanceSettings.userDisplayName, colorHex: nil)
+        ]
         for person in ctx.participants {
             drafts.append(makeDraft(party: .person(person.clientUUID), name: person.name, colorHex: person.colorHex))
         }
@@ -1149,8 +1154,15 @@ struct AddExpenseSheet: View {
                 receiptImagePath = existing.receiptImagePath
                 source = existing.sourceEnum
                 statementLabel = existing.statementLabel
-                if let uuid = existing.personUUID, let name = existing.personName?.trimmedNonEmpty {
-                    selectedPerson = ExpenseTag(uuid: uuid, name: name)
+                // Live name first, stored name only as the fallback (#530). The
+                // stored copy can predate a rename, and this field is written
+                // straight back out on save, so seeding it from the stale copy
+                // would undo the rename on the next edit of the row.
+                if let uuid = existing.personUUID {
+                    let live = allPeople.first { $0.clientUUID == uuid }?.name.trimmedNonEmpty
+                    if let name = live ?? existing.personName?.trimmedNonEmpty {
+                        selectedPerson = ExpenseTag(uuid: uuid, name: name)
+                    }
                 }
                 if let uuid = existing.eventUUID, let name = existing.eventName?.trimmedNonEmpty {
                     selectedEvent = ExpenseTag(uuid: uuid, name: name)
@@ -1380,6 +1392,10 @@ struct PersonPickerSheet: View {
     @State private var newName: String = ""
     @State private var errorMessage: String?
 
+    /// The person being renamed (#530). The row body already selects on tap, so
+    /// the rename gets its own control rather than stealing that gesture.
+    @State private var renamingPerson: LocalPerson?
+
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -1403,24 +1419,39 @@ struct PersonPickerSheet: View {
                     // In create mode the caller already listed these in its own
                     // dropdown, so repeating them here is noise (#463).
                     ForEach(startsInCreateMode ? [] : people, id: \.clientUUID) { person in
-                        Button {
-                            selection = ExpenseTag(uuid: person.clientUUID, name: person.name)
-                            dismiss()
-                        } label: {
-                            HStack(spacing: Space.sm) {
-                                Circle()
-                                    .fill(Color(personHex: person.colorHex))
-                                    .frame(width: 12, height: 12)
-                                Text(person.name)
-                                    .foregroundStyle(Tokens.ink)
-                                Spacer()
-                                if selection?.uuid == person.clientUUID {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Tokens.accentFinance)
+                        HStack(spacing: Space.sm) {
+                            Button {
+                                selection = ExpenseTag(uuid: person.clientUUID, name: person.name)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: Space.sm) {
+                                    Circle()
+                                        .fill(Color(personHex: person.colorHex))
+                                        .frame(width: 12, height: 12)
+                                    Text(person.name)
+                                        .foregroundStyle(Tokens.ink)
+                                    Spacer()
+                                    if selection?.uuid == person.clientUUID {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(Tokens.accentFinance)
+                                    }
                                 }
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+
+                            // A visible control, not a swipe action: macOS has no
+                            // swipe-to-reveal, so the rename has to be on screen
+                            // for both platforms to reach it (#530).
+                            Button {
+                                renamingPerson = person
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .foregroundStyle(Tokens.muted)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Rename \(person.name)")
                         }
-                        .buttonStyle(.plain)
                         .listRowBackground(Tokens.surface)
                     }
                 }
@@ -1440,6 +1471,17 @@ struct PersonPickerSheet: View {
                 guard startsInCreateMode, !addingNew else { return }
                 addingNew = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { nameFocused = true }
+            }
+            .sheet(item: $renamingPerson) { person in
+                RenamePersonSheet(person: person) { newName in
+                    // The caller holds a name, not a reference, so a rename of the
+                    // person it has already picked has to be handed back (#530).
+                    if selection?.uuid == person.clientUUID {
+                        selection = ExpenseTag(uuid: person.clientUUID, name: newName)
+                    }
+                }
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
             }
         }
         // iOS sizes this sheet with presentation detents, which macOS ignores. A

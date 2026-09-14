@@ -91,8 +91,20 @@ struct ExpenseRow: View {
 
     // MARK: - Person / Event badges (#183)
 
+    /// The person tag's name. LIVE from the roster first, and only then the
+    /// denormalised `expense.personName` (#530).
+    ///
+    /// The order matters both ways round. Live-first means a rename shows up on
+    /// this badge without every tagged row having to be rewritten, including on
+    /// a row that reached this device from a peer still on an older build.
+    /// Falling back to the stored copy keeps the badge readable after the person
+    /// is DELETED, which is the reason that copy exists at all.
     private var personLabel: String? {
-        expense.personName?.trimmedNonEmpty
+        if let uuid = expense.personUUID,
+           let live = lookup.personName(uuid: uuid)?.trimmedNonEmpty {
+            return live
+        }
+        return expense.personName?.trimmedNonEmpty
     }
 
     private var eventLabel: String? {

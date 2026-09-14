@@ -291,6 +291,7 @@ targets:
       # Finance chain (Trips-only) so they stay out.
       - path: PersonalDashboard/Views/Finance/FinanceView.swift
       - path: PersonalDashboard/Views/Finance/AddExpenseSheet.swift
+      - path: PersonalDashboard/Views/Finance/RenamePersonSheet.swift
       - path: PersonalDashboard/Views/Finance/FinanceFilterBar.swift
       - path: PersonalDashboard/Views/Finance/FinanceProcessingRow.swift
       - path: PersonalDashboard/Views/Finance/PrefilledExpense.swift

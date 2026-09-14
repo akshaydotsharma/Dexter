@@ -180,6 +180,15 @@ struct TripExpensesView: View {
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+            case .renamePerson(let id):
+                // A second `.sheet` on this view would be silently dropped, so
+                // the rename goes through the same item-driven presentation as
+                // the other two (see `activeSheet`).
+                if let person = people.first(where: { $0.clientUUID == id }) {
+                    RenamePersonSheet(person: person)
+                        .presentationDetents([.medium])
+                        .presentationDragIndicator(.visible)
+                }
             case .exportOptions:
                 TripExportOptionsSheet(
                     currencyOptions: filterCurrencyOptions,
@@ -246,20 +255,35 @@ struct TripExpensesView: View {
     /// order.
     private var selectedPartyNames: [String] {
         var names: [String] = []
-        if filterParties.contains(.me) { names.append("You") }
+        if filterParties.contains(.me) { names.append(FinanceSettings.userDisplayName) }
         for person in participantPeople where filterParties.contains(.person(person.clientUUID)) {
             names.append(person.name)
         }
         return names
     }
 
-    /// "Your spend" / "Rohan's spend" / "You + Rohan" / "3 people".
+    /// "Your spend" / "Akshay's spend" / "Rohan's spend" / "Akshay + Rohan" /
+    /// "3 people".
+    ///
+    /// The rule this heading follows (#530): wherever the card would say
+    /// "Rohan's spend" for a participant, it says "Akshay's spend" for a named
+    /// user. Only the unnamed pronoun keeps the possessive form "Your spend" —
+    /// "You's spend" is not a sentence, which is the whole reason that branch
+    /// exists.
+    ///
+    /// So the me-only case is no longer special-cased. It resolves through the
+    /// SAME single-party branch as a participant, and the one test is the word.
     private var summaryTitle: String {
         let names = selectedPartyNames
-        if filterParties == [.me] { return "Your spend" }
-        if names.count == 1 { return names[0] == "You" ? "Your spend" : "\(names[0])'s spend" }
+        if names.count == 1 { return possessiveSpend(names[0]) }
         if names.count == 2 { return "\(names[0]) + \(names[1])" }
+        if names.isEmpty { return possessiveSpend(FinanceSettings.userDisplayName) }
         return "\(names.count) people"
+    }
+
+    /// "Your spend" for the pronoun, "<name>'s spend" for any name.
+    private func possessiveSpend(_ name: String) -> String {
+        "\(FinanceSettings.possessive(name)) spend"
     }
 
     /// Short list-header suffix for the active selection.
@@ -278,10 +302,15 @@ struct TripExpensesView: View {
         let paid = filterParties.reduce(0) { $0 + (allTotals[$1]?.paid ?? 0) }
         let owed = filterParties.reduce(0) { $0 + (allTotals[$1]?.owed ?? 0) }
         let net = paid - owed
-        let meOnly = filterParties == [.me]
         let single = filterParties.count == 1
+        // Second person only while the user is still the pronoun. Once they are
+        // named, the card title carries the name ("Akshay's spend") and this
+        // line drops to the same subjectless form a participant's card uses,
+        // rather than mixing "Akshay's spend" with "You owe" (#530).
+        let meOnlyPronoun = filterParties == [.me]
+            && FinanceSettings.userIsAddressedInSecondPerson
         let owedLabel: String = {
-            if meOnly { return net >= 0 ? "You are owed" : "You owe" }
+            if meOnlyPronoun { return net >= 0 ? "You are owed" : "You owe" }
             if single { return net >= 0 ? "Is owed" : "Owes" }
             return net >= 0 ? "Owed" : "Owe"
         }()
@@ -524,6 +553,17 @@ struct TripExpensesView: View {
         .paperBorder(Tokens.border, radius: Radius.lg)
     }
 
+    /// One settle-up line. The NAME is a rename control; the rest of the line
+    /// is not (#530).
+    ///
+    /// This is where a participant's name is actually met — the trip sheet's
+    /// participant row is where the list is managed, which is a different
+    /// errand and not where anyone looks to correct a name. The split mirrors
+    /// the participant chip: the name renames, everything around it is inert,
+    /// so no gesture on this row can swallow another.
+    ///
+    /// "You" is never a control. The user is not a `LocalPerson` and has no
+    /// name to edit.
     private func settleRow(_ balance: TripSettlement.Balance) -> some View {
         // Positive net = owed money (green); negative = owes (ink). The amount
         // is shown as a magnitude; the phrasing carries the direction.
@@ -532,10 +572,16 @@ struct TripExpensesView: View {
             Circle()
                 .fill(partyColor(balance.party))
                 .frame(width: 10, height: 10)
-            Text(phrase(for: balance))
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.inkSoft)
-                .lineLimit(1)
+            // Nested in their own HStack at a word's spacing: the row's own
+            // `Space.sm` between the two Texts reads as a double space and
+            // breaks the line into two phrases.
+            HStack(spacing: 4) {
+                settleName(balance.party)
+                Text(suffix(for: balance))
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .lineLimit(1)
+            }
             Spacer(minLength: Space.sm)
             Text(settleAmount(abs(balance.net)))
                 .font(.edFootnoteStrong)
@@ -547,14 +593,51 @@ struct TripExpensesView: View {
     }
 
     /// "You are owed" / "You owe" / "Rohan is owed" / "Sam owes".
+    ///
+    /// Still built whole for the accessibility label, which reads the line as
+    /// one sentence. The rendered line composes it from `settleName` and
+    /// `suffix` so the name alone can be a control (#530).
     private func phrase(for balance: TripSettlement.Balance) -> String {
-        let owed = balance.net > 0
+        let name: String
         switch balance.party {
-        case .me:
-            return owed ? "You are owed" : "You owe"
-        case .person(let id):
-            let name = personName(id)
-            return owed ? "\(name) is owed" : "\(name) owes"
+        case .me:             name = FinanceSettings.userDisplayName
+        case .person(let id): name = personName(id)
+        }
+        return "\(name) \(suffix(for: balance))"
+    }
+
+    /// The verb half of the line. The pronoun "You" takes the second person;
+    /// any NAME takes the third, the user's own included — "Akshay owes", not
+    /// "Akshay owe" (#530). So this branches on the word, not on the party.
+    private func suffix(for balance: TripSettlement.Balance) -> String {
+        let owed = balance.net > 0
+        let secondPerson = balance.party == .me && FinanceSettings.userIsAddressedInSecondPerson
+        if secondPerson { return owed ? "are owed" : "owe" }
+        return owed ? "is owed" : "owes"
+    }
+
+    /// The name half. A button for a person whose record still exists, plain
+    /// text for the user and for a person deleted out from under a split.
+    @ViewBuilder
+    private func settleName(_ party: SplitPartyID) -> some View {
+        switch party {
+        case .person(let id) where people.contains(where: { $0.clientUUID == id }):
+            Button {
+                activeSheet = .renamePerson(id)
+            } label: {
+                Text(personName(id))
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .lineLimit(1)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Rename \(personName(id))")
+        case .me, .person:
+            Text(party == .me ? FinanceSettings.userDisplayName : "Someone")
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.inkSoft)
+                .lineLimit(1)
         }
     }
 
@@ -647,7 +730,7 @@ struct TripExpensesView: View {
             exportDate: Date(),
             displayName: { party in
                 switch party {
-                case .me:             return "You"
+                case .me:             return FinanceSettings.userDisplayName
                 case .person(let id): return personName(id)
                 }
             },
@@ -721,11 +804,21 @@ struct TripExpensesView: View {
 /// `isPresented` flag per sheet: SwiftUI honours a single presentation of a
 /// kind per view, so a second `.sheet(isPresented:)` on the same view would
 /// silently never appear.
-private enum TripExpenseSheet: Int, Identifiable {
+private enum TripExpenseSheet: Identifiable, Hashable {
     case filter
     case exportOptions
+    /// Rename the person behind a settle-up line (#530). Carries the id, not
+    /// the record: an enum case has to be `Hashable` for `Identifiable`, and
+    /// the view resolves the id back to a live `LocalPerson` anyway.
+    case renamePerson(UUID)
 
-    var id: Int { rawValue }
+    var id: String {
+        switch self {
+        case .filter:                return "filter"
+        case .exportOptions:         return "exportOptions"
+        case .renamePerson(let id):  return "renamePerson-\(id.uuidString)"
+        }
+    }
 }
 
 // MARK: - Export options sheet
@@ -845,7 +938,7 @@ private struct TripExpenseFilterSheet: View {
                     VStack(alignment: .leading, spacing: Space.sm) {
                         Text("Show spend for").eyebrow()
                         VStack(spacing: 0) {
-                            partyRow(.me, name: "You", colorHex: nil)
+                            partyRow(.me, name: FinanceSettings.userDisplayName, colorHex: nil)
                             ForEach(participants, id: \.clientUUID) { person in
                                 Divider().background(Tokens.divider)
                                 partyRow(.person(person.clientUUID), name: person.name, colorHex: person.colorHex)
