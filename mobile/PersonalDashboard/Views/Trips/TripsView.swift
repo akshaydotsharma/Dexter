@@ -31,9 +31,9 @@ struct TripsView: View {
     /// (issue #291). On iOS the popover state lives inside `TripDetailHeader`.
     @State private var showingCalendar = false
 
-    /// The Itinerary tab's download, wired between this chrome and the detail
-    /// view that owns the export (#532).
-    @State private var itineraryExport = TripItineraryExportControl()
+    /// The trip's download, wired between this chrome and the tab that owns
+    /// the export (#532, both tabs since #536).
+    @State private var tripExport = TripExportControl()
 
     var body: some View {
         ZStack {
@@ -48,14 +48,14 @@ struct TripsView: View {
                     #if os(iOS)
                     TripDetailHeader(
                         trip: trip,
-                        export: itineraryExport,
+                        export: tripExport,
                         onBack: {
                             withAnimation(.easeOut(duration: 0.2)) { selectedTripUUID = nil }
                         },
                         onEdit: { editingTrip = .existing(id) }
                     )
                     #endif
-                    TripDetailView(trip: trip, exportControl: itineraryExport)
+                    TripDetailView(trip: trip, exportControl: tripExport)
                         .macDetailChrome(
                             title: trip.name,
                             subtitle: TripRow.formatRange(start: trip.startDate, end: trip.endDate),
@@ -67,7 +67,7 @@ struct TripsView: View {
                                 // that takes the trip OUT of the app, and it
                                 // reads as the first step of "and now send it
                                 // to someone" rather than as another edit.
-                                TripItineraryExportButton(export: itineraryExport)
+                                TripExportButton(export: tripExport)
                                 Button { showingCalendar = true } label: {
                                     Image(systemName: "calendar")
                                 }
@@ -568,8 +568,9 @@ private struct TripRow: View {
 /// span name + dates + notes and warrant the full sheet).
 private struct TripDetailHeader: View {
     let trip: LocalTrip
-    /// The Itinerary tab's download (#532), leftmost of the trailing actions.
-    let export: TripItineraryExportControl
+    /// The open tab's download (#532, both tabs since #536), leftmost of the
+    /// trailing actions.
+    let export: TripExportControl
     let onBack: () -> Void
     let onEdit: () -> Void
 
@@ -604,7 +605,7 @@ private struct TripDetailHeader: View {
                     .lineLimit(1)
             }
             Spacer()
-            TripItineraryExportButton(export: export)
+            TripExportButton(export: export)
             Button {
                 showingCalendar = true
             } label: {
@@ -637,20 +638,34 @@ private struct TripDetailHeader: View {
     }
 }
 
-// MARK: - Itinerary download (#532)
+// MARK: - Trip download (#532, both tabs since #536)
 
-/// Download the open trip's itinerary as a PDF.
+/// Download whichever document the open tab is showing: the itinerary as a
+/// PDF, or the expense report.
 ///
 /// One button for both chromes — the macOS toolbar group and the iOS header —
 /// because the only thing that differs between them is the frame the icon sits
 /// in, and two copies of a control that appears and disappears with the tab is
 /// how the two platforms drift apart.
 ///
-/// Absent rather than disabled when the Expenses tab is showing: that tab has
-/// its own download beside its filter (#528), and a second one in the chrome
-/// would be the same word for two different documents.
-private struct TripItineraryExportButton: View {
-    let export: TripItineraryExportControl
+/// One button for both TABS for the same reason on the other axis (#536). The
+/// Expenses tab used to carry its own download inside the summary card, so the
+/// same action moved when the tab changed and the position a person had learned
+/// went empty. The summary card was also the wrong host: it reports what the
+/// trip cost, and taking a document off the device is not a reading of spend.
+///
+/// Absent rather than disabled when the open tab has nothing to write — an
+/// itinerary with no stops, a ledger with no expenses. The label follows the
+/// document, so a reader is never told "itinerary" over a ledger.
+private struct TripExportButton: View {
+    let export: TripExportControl
+
+    private var label: String {
+        switch export.kind {
+        case .itinerary: return "Download this itinerary as a PDF"
+        case .expenses:  return "Download these expenses as a PDF report"
+        }
+    }
 
     var body: some View {
         if export.isAvailable || export.isRunning {
@@ -672,9 +687,9 @@ private struct TripItineraryExportButton: View {
                 }
             }
             .disabled(export.isRunning)
-            .accessibilityLabel("Download this itinerary as a PDF")
+            .accessibilityLabel(label)
             #if os(macOS)
-            .help("Download this itinerary as a PDF")
+            .help(label)
             #else
             .macPlainButtonStyle()
             .macHeaderIconChrome()
