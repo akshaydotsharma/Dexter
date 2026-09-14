@@ -5,10 +5,12 @@ import Foundation
 /// must never be logged. Streaming variant is Phase 2.
 struct AnthropicClient: Sendable {
     static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
-    static let model = "claude-sonnet-4-5"
+    static let model = "claude-sonnet-5"
     static let anthropicVersion = "2023-06-01"
     static let maxTokens = 1024
-    static let temperature = 0.3
+    // No `temperature`: Sonnet 5 rejects the field with
+    // "`temperature` is deprecated for this model" (400). Any extraction rule
+    // that relied on low-temperature determinism belongs in code, not sampling.
 
     let session: URLSession
 
@@ -28,7 +30,6 @@ struct AnthropicClient: Sendable {
         let body = AnthropicRequest(
             model: Self.model,
             max_tokens: Self.maxTokens,
-            temperature: Self.temperature,
             system: systemPrompt,
             messages: messages,
             tools: tools
@@ -134,7 +135,6 @@ struct AnthropicClient: Sendable {
                     let body = AnthropicStreamingRequest(
                         model: Self.model,
                         max_tokens: Self.maxTokens,
-                        temperature: Self.temperature,
                         system: systemPrompt,
                         messages: messages,
                         tools: tools,
@@ -360,7 +360,6 @@ enum AnthropicError: LocalizedError {
 struct AnthropicRequest: Encodable {
     let model: String
     let max_tokens: Int
-    let temperature: Double
     let system: String
     let messages: [AnthropicMessage]
     let tools: [AnthropicTool]
@@ -372,7 +371,6 @@ struct AnthropicRequest: Encodable {
 struct AnthropicStreamingRequest: Encodable {
     let model: String
     let max_tokens: Int
-    let temperature: Double
     let system: String
     let messages: [AnthropicMessage]
     let tools: [AnthropicTool]
@@ -495,6 +493,32 @@ enum AnthropicContentBlock: Codable {
             // the whole message decode.
             self = .text("")
         }
+    }
+}
+
+extension AnthropicMessage {
+    /// An assistant turn replayed into the next request, with empty text
+    /// blocks removed.
+    ///
+    /// Sonnet 5 thinks by default, so a response can open with a `thinking`
+    /// block. The decoder maps any block it does not model to `.text("")`
+    /// rather than failing the whole message, which is right for reading a
+    /// response but wrong for sending one back: the API rejects the replay
+    /// with `messages: text content blocks must be non-empty` (400), and the
+    /// tool loop dies on its second iteration. Both live verified 2026-09-14.
+    ///
+    /// The thinking text itself is not recoverable here (the decoder never
+    /// kept it), so the block is dropped rather than echoed. That is accepted
+    /// on this model; a model that binds tool calls to their thinking blocks
+    /// would need the decoder to carry them instead.
+    static func assistantReplay(_ content: [AnthropicContentBlock]) -> AnthropicMessage {
+        let kept = content.filter { block in
+            if case .text(let value) = block {
+                return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            return true
+        }
+        return AnthropicMessage(role: "assistant", content: kept)
     }
 }
 

@@ -330,7 +330,7 @@ struct EmailToItinerary {
                 }
             }
 
-            messages.append(AnthropicMessage(role: "assistant", content: response.content))
+            messages.append(.assistantReplay(response.content))
             messages.append(AnthropicMessage(role: "user", content: toolResultBlocks))
 
             if response.stop_reason == "end_turn" || response.stop_reason == "stop_sequence" {

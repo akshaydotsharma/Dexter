@@ -458,8 +458,8 @@ struct TaskTicketRead {
     /// A card prints a label above every value, so a value carrying one too says the
     /// same word twice — and on a foreign ticket it says it in the wrong language:
     /// "ROW / fila D", "SEAT / posto 313", "STARTS / Ore: 08:00". The prompt asks for
-    /// the value alone, and mostly gets it, but "mostly" is not a rule: at
-    /// temperature 0.3 the same ticket came back both ways across two runs. So the
+    /// the value alone, and mostly gets it, but "mostly" is not a rule: the
+    /// same ticket came back both ways across two runs. So the
     /// guarantee lives here instead, where it cannot vary.
     ///
     /// Two shapes only, both unambiguous:
