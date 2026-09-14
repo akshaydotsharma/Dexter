@@ -148,7 +148,7 @@ struct ChatToDrafts {
             // Append the assistant's full content (so the model sees its own
             // tool calls) followed by the user-role tool_result message that
             // carries the outcomes.
-            messages.append(AnthropicMessage(role: "assistant", content: response.content))
+            messages.append(.assistantReplay(response.content))
             messages.append(AnthropicMessage(role: "user", content: toolResultBlocks))
 
             // If the LLM signalled it's done, exit early.

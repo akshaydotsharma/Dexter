@@ -154,7 +154,6 @@ extension AnthropicClient {
         let body: AnthropicJSONValue = .object([
             "model": .string(Self.model),
             "max_tokens": .int(Self.maxTokens),
-            "temperature": .double(Self.temperature),
             "messages": .array([
                 .object([
                     "role": .string("user"),
