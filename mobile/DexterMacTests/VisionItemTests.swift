@@ -306,8 +306,11 @@ final class VisionItemTests: XCTestCase {
     // MARK: - One list
 
     /// Tasks and items render as one list, so the order has to come from one
-    /// place. Tasks lead, then items, and everything completed sinks — whichever
-    /// kind it is.
+    /// place. In the open half, tasks lead and items follow. Everything
+    /// completed sinks below the open half, whichever kind it is, but the
+    /// sunken half is not in that same tasks-then-items order: per #534, it
+    /// reads latest-finished first, so "Done item" (ticked after "Done task")
+    /// leads "Done task" even though a task would lead it in the open half.
     func testRowsPutTasksFirstThenItemsAndSinkTheCompleted() async throws {
         let todos = TodoService(store: store)
         let viewModel = VisionBoardViewModel(board: service, todos: todos)
@@ -332,7 +335,7 @@ final class VisionItemTests: XCTestCase {
 
         XCTAssertEqual(
             viewModel.rows(for: held).map(\.title),
-            ["Open task", "Open item", "Done task", "Done item"]
+            ["Open task", "Open item", "Done item", "Done task"]
         )
     }
 
