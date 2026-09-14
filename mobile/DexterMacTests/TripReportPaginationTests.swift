@@ -27,7 +27,7 @@ final class TripReportPaginationTests: XCTestCase {
     /// One heading, one day, and enough rows to run well past a page.
     private func longDay(rows: Int) -> [ReportBlock] {
         var blocks: [ReportBlock] = [
-            .sectionHeader(title: "Daily ledger", note: "All \(rows) expenses on this trip."),
+            .sectionHeader(title: "Daily ledger", note: "Every expense on this trip, newest first."),
             .dayHeader(title: "Wed 3 Jun 2026", total: "SGD 240.00", continued: false)
         ]
         blocks.append(contentsOf: (0..<rows).map(ledgerRow))

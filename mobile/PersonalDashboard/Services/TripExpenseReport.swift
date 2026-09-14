@@ -25,23 +25,28 @@ struct TripExpenseReport {
     struct Cover {
         let tripName: String
         let dateRange: String
-        /// "You" first, then the trip's participants in their stored order.
-        let participants: [String]
-        /// Every expense on the trip (never the filtered count).
+        /// Every expense on the trip.
         let expenseCount: Int
-        /// How many of them the ledger lists.
-        let ledgerCount: Int
-        /// How many the filter left out. Zero for the default selection.
-        let excludedCount: Int
         let groupTotal: String
-        /// "Your share" / "You + Priya" / "3 people".
-        let selectionTitle: String
-        /// What the selected parties consumed, over every expense.
-        let selectionShare: String
-        let filterSentence: String
+        /// What each party consumed, user first. The same number the
+        /// participant table calls Spent, repeated here deliberately: the
+        /// question "what do I owe for this trip" has to be answerable from
+        /// page one, without turning to the breakdown.
+        let shares: [ShareRow]
+        let scopeSentence: String
         let currencySentence: String
-        let settlementSentence: String
+        /// Present only when some ledger row is written in a currency the
+        /// report is not; nil when there is nothing to warn about.
+        let ledgerCurrencyNote: String?
         let exportedOn: String
+    }
+
+    /// One party's consumed share, for the cover.
+    struct ShareRow: Identifiable {
+        let id: String
+        let name: String
+        let share: Double
+        let shareText: String
     }
 
     struct LedgerRow: Identifiable {
@@ -124,12 +129,11 @@ struct TripExpenseReport {
 
     let cover: Cover
     let ledger: [LedgerDay]
-    /// Restates the filter above the ledger, so a page that does not carry the
-    /// cover still says what it is a list of.
+    /// Says what the ledger is a list of, so a page that does not carry the
+    /// cover still stands on its own.
     let ledgerNote: String
     let participants: [ParticipantRow]
     let transfers: [TransferRow]
-    /// Restates that the settlement ignores the filter.
     let settlementNote: String
     /// "Settled in SGD · mixed currencies", or nil on a single-currency trip.
     let settlementCaveat: String?
@@ -159,20 +163,18 @@ struct TripExpenseReportInput {
     /// Every expense on the trip, in the tab's order (newest first). Rows
     /// hidden from the trip are dropped again here, defensively: the tab's
     /// `@Query` predicate already excludes them, and they must appear nowhere.
+    ///
+    /// The report is the WHOLE trip. The tab's people filter narrows what is on
+    /// screen and deliberately does not reach this: a ledger listing one
+    /// person's bills beside a settlement computed over everyone's would be two
+    /// documents stapled together, and the thing being sent to the group is the
+    /// group's record.
     let allExpenses: [LocalExpense]
-
-    /// The tab's `visibleExpenses` — what the people filter left. Equal to
-    /// `allExpenses` for the default You-only selection.
-    let ledgerExpenses: [LocalExpense]
 
     /// [.me, .person(a), .person(b)] — the user then the trip's participants.
     let participantOrder: [SplitPartyID]
 
-    /// The tab's `filterParties`, in `participantOrder` order.
-    let selectedParties: [SplitPartyID]
-
-    /// The currency the whole report is written in: the tab's `filterCurrency`,
-    /// or the Settings display currency.
+    /// The currency the whole report is written in, chosen at export time.
     let reportCurrencyCode: String
 
     let exportDate: Date
@@ -180,8 +182,8 @@ struct TripExpenseReportInput {
     /// "You" / a person's name / "Someone" for a person deleted from People.
     let displayName: (SplitPartyID) -> String
 
-    /// Renders a home-currency (SGD) value in the report's currency. This is
-    /// the tab's own `formatFiltered`.
+    /// Renders a home-currency (SGD) value in the report's currency. The tab's
+    /// own `formatFiltered`, bound to the currency chosen for the export.
     let displayMoney: (Double) -> String
 
     /// Renders a value in a named capture currency. The tab's `formatOriginal`.
@@ -200,13 +202,12 @@ extension TripExpenseReport {
         // Belt and braces on #264: a row removed from the trip has no trip
         // surface, and the report is a trip surface.
         let all = input.allExpenses.filter { !$0.hiddenFromTrip }
-        let ledgerRows = input.ledgerExpenses.filter { !$0.hiddenFromTrip }
 
         let code = input.reportCurrencyCode.uppercased()
         let captureCodes = Set(all.map { $0.originalCurrency.uppercased() })
 
         // The report settles in ONE currency throughout, and that currency is
-        // the one the tab is showing. When the trip was captured entirely in
+        // the one chosen at export time. When the trip was captured entirely in
         // that currency there is nothing to convert, so the frozen capture
         // amounts are used directly and no rounding is introduced. Otherwise
         // the SGD basis converts, exactly as the settle-up card does on a
@@ -222,12 +223,8 @@ extension TripExpenseReport {
         let groupTotal = all.reduce(0) { $0 + basis($1) }
         let totals = TripSettlement.totals(expenses: all, amount: basis)
 
-        let excluded = max(all.count - ledgerRows.count, 0)
-        let selectedNames = input.selectedParties.map(input.displayName)
-        let selectionShare = input.selectedParties.reduce(0) { $0 + (totals[$1]?.owed ?? 0) }
-
         let ledger = buildLedger(
-            rows: ledgerRows,
+            rows: all,
             basis: basis,
             money: money,
             captureMoney: input.captureMoney,
@@ -255,39 +252,31 @@ extension TripExpenseReport {
             tripRateToSGD: input.tripRateToSGD
         )
 
+        // Built straight off the participant rows rather than re-read from
+        // `totals`, so the cover cannot disagree with the table it repeats.
+        let shares = participants.map { row in
+            ShareRow(id: row.id, name: row.name, share: row.spent, shareText: row.spentText)
+        }
+
         let cover = Cover(
             tripName: input.tripName,
             dateRange: Self.dateRange(input.startDate, input.endDate),
-            participants: input.participantOrder.map(input.displayName),
             expenseCount: all.count,
-            ledgerCount: ledgerRows.count,
-            excludedCount: excluded,
             groupTotal: money(groupTotal),
-            selectionTitle: Self.selectionTitle(selectedNames),
-            selectionShare: money(selectionShare),
-            filterSentence: Self.filterSentence(
-                names: selectedNames,
-                shown: ledgerRows.count,
-                total: all.count,
-                excluded: excluded
-            ),
+            shares: shares,
+            scopeSentence: Self.scopeSentence(total: all.count),
             currencySentence: Self.currencySentence(code: code, settlesNatively: settlesNatively),
-            settlementSentence: Self.settlementSentence(total: all.count),
+            ledgerCurrencyNote: settlesNatively ? nil : Self.ledgerCurrencyNote,
             exportedOn: Self.longDate(input.exportDate)
         )
 
         return TripExpenseReport(
             cover: cover,
             ledger: ledger,
-            ledgerNote: Self.ledgerNote(
-                names: selectedNames,
-                shown: ledgerRows.count,
-                total: all.count,
-                excluded: excluded
-            ),
+            ledgerNote: Self.ledgerNote,
             participants: participants,
             transfers: transfers,
-            settlementNote: Self.settlementSentence(total: all.count),
+            settlementNote: Self.settlementNote,
             settlementCaveat: captureCodes.count > 1 ? "Settled in \(code) · mixed currencies" : nil,
             categories: categories,
             currencies: currencies,
@@ -551,47 +540,29 @@ extension TripExpenseReport {
 
     // MARK: - Wording
 
-    private static func selectionTitle(_ names: [String]) -> String {
-        if names == ["You"] { return "Your share" }
-        if names.count == 1 { return "\(names[0])'s share" }
-        if names.count == 2 { return "\(names[0]) + \(names[1])" }
-        return "\(names.count) people"
+    /// The report is the whole trip, every section of it. Nothing here
+    /// contrasts a filter, because nothing in the report is filtered.
+    private static func scopeSentence(total: Int) -> String {
+        "This report covers all \(total) \(expenseWord(total)) on this trip, for everyone on it."
     }
 
-    private static func filterSentence(names: [String], shown: Int, total: Int, excluded: Int) -> String {
-        guard excluded > 0 else {
-            return "The ledger lists all \(total) \(expenseWord(total)) on this trip."
-        }
-        return "The ledger is filtered to \(list(names)): \(shown) of \(total) \(expenseWord(total)) listed, \(excluded) left out."
-    }
+    private static let ledgerNote = "Every expense on this trip, newest first."
 
-    private static func ledgerNote(names: [String], shown: Int, total: Int, excluded: Int) -> String {
-        guard excluded > 0 else { return "All \(total) \(expenseWord(total)) on this trip." }
-        return "Filtered to \(list(names)) · \(shown) of \(total), \(excluded) left out."
-    }
+    private static let settlementNote =
+        "Paid is what each person fronted. Spent is their share of the bills. Net is the difference."
+
+    static let ledgerCurrencyNote =
+        "Ledger rows keep the currency they were captured in."
 
     private static func currencySentence(code: String, settlesNatively: Bool) -> String {
         if settlesNatively {
             return "Every amount is in \(code), the currency the trip was captured in."
         }
-        return "Every amount is in \(code), converted with the rates frozen on this trip's expenses. Ledger rows keep the currency they were captured in."
-    }
-
-    private static func settlementSentence(total: Int) -> String {
-        "Settle up, the participant table and the transfers cover all \(total) \(expenseWord(total)) on this trip, whatever the ledger filter shows."
+        return "Every amount is in \(code), the currency chosen for this export, converted with the rates frozen on this trip's expenses."
     }
 
     private static func expenseWord(_ count: Int) -> String {
         count == 1 ? "expense" : "expenses"
-    }
-
-    private static func list(_ names: [String]) -> String {
-        switch names.count {
-        case 0:  return "nobody"
-        case 1:  return names[0]
-        case 2:  return "\(names[0]) and \(names[1])"
-        default: return names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
-        }
     }
 
     // MARK: - Dates

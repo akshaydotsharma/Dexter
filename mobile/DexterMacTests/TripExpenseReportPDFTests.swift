@@ -79,9 +79,7 @@ final class TripExpenseReportPDFTests: XCTestCase {
                 startDate: day(3),
                 endDate: day(12),
                 allExpenses: rows,
-                ledgerExpenses: rows,
                 participantOrder: order,
-                selectedParties: [.me],
                 reportCurrencyCode: "SGD",
                 exportDate: day(14),
                 displayName: { party in
@@ -105,6 +103,8 @@ final class TripExpenseReportPDFTests: XCTestCase {
         let cover = try XCTUnwrap(document.page(at: 0)).string ?? ""
         XCTAssertTrue(cover.contains("Italy"))
         XCTAssertTrue(cover.uppercased().contains("GROUP TOTAL"))
+        XCTAssertTrue(cover.uppercased().contains("SHARE PER PERSON"), "The cover answers each person's share")
+        XCTAssertTrue(cover.contains("Priya"), "Every participant is named on the cover")
         XCTAssertFalse(cover.uppercased().contains("DAILY LEDGER"), "The ledger starts on its own page")
     }
 

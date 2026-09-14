@@ -74,27 +74,27 @@ struct TripReportCoverPage: View {
 
             Spacer().frame(height: Space.xl)
 
-            // The three numbers someone opens this document for.
+            // What the trip cost, and how many bills that was.
             HStack(alignment: .top, spacing: Space.lg) {
                 headline(label: "Group total", value: cover.groupTotal, emphasis: true)
-                headline(label: cover.selectionTitle, value: cover.selectionShare, emphasis: false)
-                headline(
-                    label: "Expenses",
-                    value: "\(cover.expenseCount)",
-                    emphasis: false
-                )
+                headline(label: "Expenses", value: "\(cover.expenseCount)", emphasis: false)
             }
 
             Spacer().frame(height: Space.xl)
 
-            panel(title: "Who was on this trip", body: cover.participants.joined(separator: " · "))
+            // Everyone's share, not only the reader's. The document is sent to
+            // the group, and the first question each of them has is their own
+            // number — so page one answers it for all of them at once.
+            shareTable
 
-            Spacer().frame(height: Space.md)
+            Spacer().frame(height: Space.lg)
 
             VStack(alignment: .leading, spacing: Space.sm) {
-                sentence(cover.filterSentence)
+                sentence(cover.scopeSentence)
                 sentence(cover.currencySentence)
-                sentence(cover.settlementSentence)
+                if let note = cover.ledgerCurrencyNote {
+                    sentence(note)
+                }
             }
             .padding(Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -121,6 +121,37 @@ struct TripReportCoverPage: View {
         .background(ReportInk.paper)
     }
 
+    private var shareTable: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text("Share per person")
+                .font(.edEyebrow)
+                .textCase(.uppercase)
+                .tracking(1.2)
+                .foregroundStyle(ReportInk.muted)
+
+            VStack(spacing: 0) {
+                ForEach(cover.shares) { row in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(row.name)
+                            .font(.edBody)
+                            .foregroundStyle(ReportInk.ink)
+                            .lineLimit(1)
+                        Spacer(minLength: Space.lg)
+                        Text(row.shareText)
+                            .font(.edBodyMedium)
+                            .foregroundStyle(ReportInk.inkSoft)
+                            .lineLimit(1)
+                    }
+                    .padding(.vertical, 5)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(ReportInk.divider).frame(height: 1)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func headline(label: String, value: String, emphasis: Bool) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Text(label)
@@ -135,21 +166,6 @@ struct TripReportCoverPage: View {
                 .tracking(-0.4)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func panel(title: String, body: String) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            Text(title)
-                .font(.edEyebrow)
-                .textCase(.uppercase)
-                .tracking(1.2)
-                .foregroundStyle(ReportInk.muted)
-            Text(body)
-                .font(.edBody)
-                .foregroundStyle(ReportInk.ink)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

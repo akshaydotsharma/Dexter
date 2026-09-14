@@ -5,13 +5,14 @@ import XCTest
 ///
 /// The report's whole value is that it agrees with the tab it was exported
 /// from. So the tests are mostly agreement tests: the participant table against
-/// `TripSettlement.totals`, the category totals against the group total, the
-/// transfers against the balances they claim to clear.
+/// `TripSettlement.totals`, the cover shares against the participant table, the
+/// category totals against the group total, the transfers against the balances
+/// they claim to clear.
 ///
 /// One fixture trip carries every case the feature has to survive: two
-/// currencies, a refund, an unsplit bill another participant fronted, a
-/// participant holding a zero share, a person deleted from People, an empty
-/// split, and a row removed from the trip.
+/// currencies, a refund, an unsplit bill another participant fronted, a bill
+/// the user has no part in at all, a participant holding a zero share, a person
+/// deleted from People, an empty split, and a row removed from the trip.
 final class TripExpenseReportTests: XCTestCase {
 
     private let priya = UUID()
@@ -114,6 +115,21 @@ final class TripExpenseReportTests: XCTestCase {
         expense("gelato", day: 5, merchant: "Gelato", category: "food_and_dining", amount: 30, currency: "EUR")
     }
 
+    /// A bill the user has NO part in: Priya paid, Priya and the deleted person
+    /// shared it. Under the old behaviour, a ledger following the tab's
+    /// You-only reading had no reason to carry this row. The report is the
+    /// group's record of the trip, so it does.
+    private var dinnerWithoutMe: LocalExpense {
+        expense(
+            "dinner", day: 5, merchant: "Osteria", category: "food_and_dining",
+            amount: 90, currency: "EUR", paidBy: priya,
+            splits: [
+                ExpenseSplitEntry(person: priya, shares: 1),
+                ExpenseSplitEntry(person: ghost, shares: 1)
+            ]
+        )
+    }
+
     /// Removed from the trip (#264). Must appear nowhere and count nowhere.
     private var removed: LocalExpense {
         expense(
@@ -124,27 +140,25 @@ final class TripExpenseReportTests: XCTestCase {
 
     /// Newest first, matching the tab's sort.
     private func allExpenses() -> [LocalExpense] {
-        [gelato, removed, museumRefund, hotel, taxi, trattoria]
+        [dinnerWithoutMe, gelato, removed, museumRefund, hotel, taxi, trattoria]
     }
 
     private var order: [SplitPartyID] { [.me, .person(priya), .person(sam)] }
 
     private func input(
-        ledger: [LocalExpense]? = nil,
         all: [LocalExpense]? = nil,
-        selected: [SplitPartyID] = [.me],
         currency: String = "SGD"
     ) -> TripExpenseReportInput {
         let rows = all ?? allExpenses()
+        let code = currency.uppercased()
+        let rate = code == "EUR" ? eurRate : 1.0
         return TripExpenseReportInput(
             tripName: "Italy",
             startDate: day(3),
             endDate: day(5),
             allExpenses: rows,
-            ledgerExpenses: ledger ?? rows,
             participantOrder: order,
-            selectedParties: selected,
-            reportCurrencyCode: currency,
+            reportCurrencyCode: code,
             exportDate: day(14),
             displayName: { party in
                 switch party {
@@ -154,19 +168,19 @@ final class TripExpenseReportTests: XCTestCase {
                 case .person:                   return "Someone"
                 }
             },
-            displayMoney: { String(format: "SGD %.2f", $0) },
+            // Mirrors the tab's `formatMoney(_:in:)`: an SGD-basis value
+            // converted with the trip's own frozen rate.
+            displayMoney: { String(format: "%@ %.2f", code, $0 / rate) },
             captureMoney: { value, code in String(format: "%@ %.2f", code, value) },
             tripRateToSGD: { code in code == "EUR" ? self.eurRate : 1.0 }
         )
     }
 
     private func report(
-        ledger: [LocalExpense]? = nil,
         all: [LocalExpense]? = nil,
-        selected: [SplitPartyID] = [.me],
         currency: String = "SGD"
     ) -> TripExpenseReport {
-        TripExpenseReport.make(input(ledger: ledger, all: all, selected: selected, currency: currency))
+        TripExpenseReport.make(input(all: all, currency: currency))
     }
 
     private func participant(_ named: String, in report: TripExpenseReport) throws -> TripExpenseReport.ParticipantRow {
@@ -180,6 +194,48 @@ final class TripExpenseReportTests: XCTestCase {
         )
     }
 
+    /// 120 + 60 + 30 + 90 EUR at 1.473, less the EUR 40 refund, plus SGD 200.
+    private var expectedGroupTotalSGD: Double {
+        (120 + 60 + 30 + 90 - 40) * eurRate + 200
+    }
+
+    // MARK: - The report is the whole trip
+
+    /// The point of the reversal: the report lists a bill the user has no part
+    /// in. A ledger showing only the reader's share beside a settlement
+    /// computed over everyone's would be two documents stapled together.
+    func testTheLedgerCarriesABillTheUserHasNoPartIn() throws {
+        let made = report()
+        let row = try ledgerRow("Osteria", in: made)
+
+        XCTAssertEqual(row.payer, "Priya paid")
+        XCTAssertEqual(row.split, "Split evenly: Priya, Someone")
+        XCTAssertEqual(made.ledger.flatMap(\.rows).count, 6, "Every expense on the trip is listed")
+    }
+
+    /// Nothing the report says is scoped to a person. Every section counts the
+    /// same six expenses.
+    func testEverySectionCoversTheWholeTrip() {
+        let made = report()
+
+        XCTAssertEqual(made.cover.expenseCount, 6)
+        XCTAssertEqual(made.ledger.flatMap(\.rows).count, 6)
+        XCTAssertEqual(made.categories.reduce(0) { $0 + $1.count }, 6)
+        XCTAssertEqual(made.groupTotal, expectedGroupTotalSGD, accuracy: 0.001)
+    }
+
+    /// A bill the user is not part of still lands in its category and its day.
+    func testABillTheUserHasNoPartInStillCountsInTheTotals() throws {
+        let food = try XCTUnwrap(made(in: report(), category: "Food & Dining"))
+        // Trattoria 120 + Gelato 30 + Osteria 90, all EUR.
+        XCTAssertEqual(food.total, 240 * eurRate, accuracy: 0.001)
+        XCTAssertEqual(food.count, 3)
+    }
+
+    private func made(in report: TripExpenseReport, category: String) -> TripExpenseReport.CategoryRow? {
+        report.categories.first { $0.name == category }
+    }
+
     // MARK: - Rows hidden from the trip
 
     /// #264: a row removed from the trip has no trip surface, and the report is
@@ -188,14 +244,9 @@ final class TripExpenseReportTests: XCTestCase {
         let made = report()
 
         XCTAssertFalse(made.ledger.flatMap(\.rows).contains { $0.title == "Removed From Trip" })
-        XCTAssertEqual(made.cover.expenseCount, 5, "The hidden row must not be counted")
+        XCTAssertEqual(made.cover.expenseCount, 6, "The hidden row must not be counted")
         XCTAssertFalse(made.categories.contains { $0.name == "Shopping" })
         XCTAssertEqual(made.groupTotal, expectedGroupTotalSGD, accuracy: 0.001)
-    }
-
-    /// 120 + 60 + 30 EUR at 1.473, plus SGD 200, less the EUR 40 refund.
-    private var expectedGroupTotalSGD: Double {
-        (120 + 60 + 30 - 40) * eurRate + 200
     }
 
     // MARK: - The participant table IS TripSettlement
@@ -234,8 +285,48 @@ final class TripExpenseReportTests: XCTestCase {
     /// their stored slice as "Someone" — the way the tab already degrades.
     func testADeletedPersonStillRendersByTheirStoredSlice() throws {
         let row = try participant("Someone", in: report())
-        XCTAssertEqual(row.spent, 100, accuracy: 0.001, "Half the SGD 200 hotel")
+        // Half the SGD 200 hotel, plus half the EUR 90 dinner.
+        XCTAssertEqual(row.spent, 100 + 45 * eurRate, accuracy: 0.001)
         XCTAssertEqual(row.paid, 0, accuracy: 0.001)
+    }
+
+    // MARK: - Cover: every participant's share
+
+    /// The cover repeats a column the participant table shows later, on
+    /// purpose: "what do I owe for this trip" has to be answerable from page
+    /// one. Repeating it is only safe if the two can never disagree.
+    func testTheCoverShareOfEachPersonMatchesTheirParticipantRow() throws {
+        let made = report()
+        XCTAssertEqual(made.cover.shares.map(\.name), made.participants.map(\.name))
+
+        for share in made.cover.shares {
+            let row = try participant(share.name, in: made)
+            XCTAssertEqual(share.share, row.spent, accuracy: 0.0001, "\(share.name)")
+            XCTAssertEqual(share.shareText, row.spentText, "\(share.name)")
+        }
+    }
+
+    /// The claim the cover makes by putting the shares under the group total:
+    /// these add up to it. Every expense's value is distributed across the
+    /// parties that consumed it, so the sum is exact, not approximate.
+    func testTheCoverSharesSumToTheGroupTotal() {
+        let made = report()
+        let sum = made.cover.shares.reduce(0) { $0 + $1.share }
+
+        XCTAssertEqual(sum, made.groupTotal, accuracy: 0.001)
+        XCTAssertEqual(sum, expectedGroupTotalSGD, accuracy: 0.001)
+    }
+
+    /// The user first, then the trip's roster, then anyone left holding a slice.
+    func testTheCoverSharesListTheUserFirst() {
+        XCTAssertEqual(report().cover.shares.map(\.name), ["You", "Priya", "Sam", "Someone"])
+    }
+
+    /// A zero-share participant is still named on the cover. Leaving them off
+    /// would read as "they were not on the trip".
+    func testAZeroShareParticipantIsStillNamedOnTheCover() throws {
+        let sam = try XCTUnwrap(report().cover.shares.first { $0.name == "Sam" })
+        XCTAssertEqual(sam.share, 0, accuracy: 0.0001)
     }
 
     // MARK: - The unsplit bill someone else paid
@@ -252,8 +343,8 @@ final class TripExpenseReportTests: XCTestCase {
 
         // And the settlement on the same document agrees.
         let priyaRow = try participant("Priya", in: made)
-        XCTAssertEqual(priyaRow.paid, 60 * eurRate, accuracy: 0.001)
-        XCTAssertEqual(priyaRow.spent, 60 * eurRate, accuracy: 0.001, "Priya's half of the trattoria only")
+        XCTAssertEqual(priyaRow.paid, (60 + 90) * eurRate, accuracy: 0.001, "The taxi and the dinner")
+        XCTAssertEqual(priyaRow.spent, (60 + 45) * eurRate, accuracy: 0.001, "Half the trattoria, half the dinner")
     }
 
     /// An empty split the user paid reads the same way, which is the point:
@@ -300,8 +391,8 @@ final class TripExpenseReportTests: XCTestCase {
     func testDaysGroupNewestFirstOnTheDeviceCalendar() {
         let made = report()
         XCTAssertEqual(made.ledger.count, 3)
-        XCTAssertEqual(made.ledger.map { $0.rows.count }, [1, 2, 2], "5 June, 4 June, 3 June")
-        XCTAssertEqual(made.ledger.first?.rows.first?.title, "Gelato")
+        XCTAssertEqual(made.ledger.map { $0.rows.count }, [2, 2, 2], "5 June, 4 June, 3 June")
+        XCTAssertEqual(made.ledger.first?.rows.map(\.title), ["Osteria", "Gelato"])
     }
 
     // MARK: - Transfers
@@ -355,28 +446,71 @@ final class TripExpenseReportTests: XCTestCase {
         XCTAssertEqual(totals, totals.sorted(by: >))
     }
 
-    /// The report's ledger narrows with the filter. Its totals do not, so the
-    /// categories still describe the whole trip.
-    func testCategoriesIgnoreTheLedgerFilter() {
-        let filtered = report(ledger: [taxi], selected: [.me, .person(priya)])
-        XCTAssertEqual(filtered.ledger.flatMap(\.rows).count, 1)
-        XCTAssertEqual(filtered.categories.reduce(0) { $0 + $1.count }, 5)
-        XCTAssertEqual(filtered.groupTotal, expectedGroupTotalSGD, accuracy: 0.001)
+    // MARK: - The currency chosen at export time
+
+    /// The whole report is written in the chosen currency: cover figures, day
+    /// totals, the participant table, the transfers and the categories. Only
+    /// the ledger rows keep what they were captured in.
+    func testTheChosenCurrencyReachesEverySection() throws {
+        let made = report(currency: "EUR")
+
+        XCTAssertEqual(made.reportCurrencyCode, "EUR")
+        XCTAssertTrue(made.cover.groupTotal.hasPrefix("EUR "), made.cover.groupTotal)
+        for share in made.cover.shares {
+            XCTAssertTrue(share.shareText.hasPrefix("EUR "), "\(share.name): \(share.shareText)")
+        }
+        for day in made.ledger {
+            XCTAssertTrue(day.total.hasPrefix("EUR "), day.total)
+        }
+        for row in made.participants {
+            XCTAssertTrue(row.paidText.hasPrefix("EUR "), row.paidText)
+            XCTAssertTrue(row.spentText.hasPrefix("EUR "), row.spentText)
+            XCTAssertTrue(row.netText.hasPrefix("EUR ") || row.netText.hasPrefix("−EUR "), row.netText)
+        }
+        for transfer in made.transfers {
+            XCTAssertTrue(transfer.amountText.hasPrefix("EUR "), transfer.amountText)
+        }
+        for category in made.categories {
+            XCTAssertTrue(category.totalText.hasPrefix("EUR "), category.totalText)
+        }
     }
 
-    // MARK: - Currencies
+    /// The exception, and an explicit requirement of the ticket: a ledger row
+    /// shows what was actually handed over, in the currency it was handed over
+    /// in, whatever the report is written in.
+    func testLedgerRowsKeepTheirCaptureCurrencyWhicheverCurrencyIsChosen() throws {
+        for currency in ["SGD", "EUR"] {
+            let made = report(currency: currency)
+            XCTAssertEqual(try ledgerRow("Hotel Rialto", in: made).amount, "SGD 200.00", currency)
+            XCTAssertEqual(try ledgerRow("Trattoria", in: made).amount, "EUR 120.00", currency)
+        }
+    }
+
+    /// Changing the currency changes how the trip is written, never what it
+    /// cost: the same money, divided by the trip's own frozen rate.
+    func testTheChosenCurrencyChangesTheWordingNotTheArithmetic() throws {
+        let sgd = report(currency: "SGD")
+        let eur = report(currency: "EUR")
+
+        XCTAssertEqual(sgd.groupTotal, eur.groupTotal, accuracy: 0.001, "Both bases are SGD on a mixed trip")
+        XCTAssertEqual(eur.cover.groupTotal, String(format: "EUR %.2f", expectedGroupTotalSGD / eurRate))
+        XCTAssertEqual(try participant("You", in: eur).spent, try participant("You", in: sgd).spent, accuracy: 0.001)
+    }
+
+    // MARK: - Currencies section
 
     func testAMixedCurrencyTripListsEveryCaptureCurrencyWithItsRate() throws {
         let made = report()
         XCTAssertEqual(Set(made.currencies.map(\.code)), ["EUR", "SGD"])
 
         let eur = try XCTUnwrap(made.currencies.first { $0.code == "EUR" })
-        XCTAssertEqual(eur.total, 120 + 60 + 30 - 40, accuracy: 0.001)
+        XCTAssertEqual(eur.total, 120 + 60 + 30 + 90 - 40, accuracy: 0.001)
         XCTAssertEqual(eur.rateText, "1 EUR = SGD 1.4730")
     }
 
     func testAMixedCurrencyTripCarriesTheDisplayCurrencyCaveat() {
         XCTAssertEqual(report().settlementCaveat, "Settled in SGD · mixed currencies")
+        XCTAssertEqual(report(currency: "EUR").settlementCaveat, "Settled in EUR · mixed currencies")
     }
 
     /// Matches the tab's `showsCurrencyBreakdown`: a single currency that is
@@ -405,41 +539,46 @@ final class TripExpenseReportTests: XCTestCase {
         XCTAssertEqual(you.spent, 100, accuracy: 0.001)
     }
 
-    // MARK: - Cover
+    // MARK: - Cover wording
 
-    func testTheCoverNamesTheFilterAndWhatItLeftOut() {
-        let filtered = report(ledger: [taxi, trattoria], selected: [.me, .person(priya)])
-
-        XCTAssertEqual(filtered.cover.expenseCount, 5)
-        XCTAssertEqual(filtered.cover.ledgerCount, 2)
-        XCTAssertEqual(filtered.cover.excludedCount, 3)
-        XCTAssertTrue(filtered.cover.filterSentence.contains("You and Priya"), filtered.cover.filterSentence)
-        XCTAssertTrue(filtered.cover.filterSentence.contains("3 left out"), filtered.cover.filterSentence)
-        XCTAssertTrue(filtered.ledgerNote.contains("3 left out"), filtered.ledgerNote)
+    /// The cover states the scope plainly. It must not contrast a filter: the
+    /// report no longer has one, and a sentence about what was left out would
+    /// send the reader looking for missing rows.
+    func testTheCoverStatesTheScopeWithoutMentioningAFilter() {
+        let sentence = report().cover.scopeSentence
+        XCTAssertEqual(sentence, "This report covers all 6 expenses on this trip, for everyone on it.")
+        XCTAssertFalse(sentence.lowercased().contains("filter"))
+        XCTAssertFalse(sentence.lowercased().contains("left out"))
     }
 
-    func testTheCoverSaysNothingWasLeftOutOnTheDefaultSelection() {
+    func testNoSectionNoteMentionsAFilter() {
         let made = report()
-        XCTAssertEqual(made.cover.excludedCount, 0)
-        XCTAssertTrue(made.cover.filterSentence.contains("all 5 expenses"), made.cover.filterSentence)
+        for note in [made.ledgerNote, made.settlementNote, made.cover.scopeSentence, made.cover.currencySentence] {
+            XCTAssertFalse(note.lowercased().contains("filter"), note)
+        }
     }
 
-    func testTheCoverNamesTheCurrencyAndTheSettlementScope() {
+    func testTheCoverNamesTheChosenCurrency() {
+        let made = report(currency: "EUR")
+        XCTAssertEqual(
+            made.cover.currencySentence,
+            "Every amount is in EUR, the currency chosen for this export, converted with the rates frozen on this trip's expenses."
+        )
+        XCTAssertEqual(made.cover.ledgerCurrencyNote, "Ledger rows keep the currency they were captured in.")
+    }
+
+    /// Nothing to convert and nothing to warn about, so the note is dropped
+    /// rather than printed as a truism.
+    func testASingleCurrencyReportDropsTheCaptureCurrencyNote() {
+        let sgdOnly = report(all: [hotel], currency: "SGD")
+        XCTAssertEqual(sgdOnly.cover.currencySentence, "Every amount is in SGD, the currency the trip was captured in.")
+        XCTAssertNil(sgdOnly.cover.ledgerCurrencyNote)
+    }
+
+    func testTheCoverCarriesTheGroupTotalAndTheCount() {
         let made = report()
-        XCTAssertTrue(made.cover.currencySentence.contains("in SGD"), made.cover.currencySentence)
-        XCTAssertTrue(made.cover.settlementSentence.contains("all 5 expenses"), made.cover.settlementSentence)
         XCTAssertEqual(made.cover.groupTotal, String(format: "SGD %.2f", expectedGroupTotalSGD))
-        XCTAssertEqual(made.cover.participants, ["You", "Priya", "Sam"])
-    }
-
-    /// The selected parties' share is what they CONSUMED across the whole trip,
-    /// matching the tab's summary card, which is also not narrowed by the list
-    /// filter.
-    func testTheCoverShareMatchesTheSummaryCard() throws {
-        let made = report(selected: [.me])
-        let you = try participant("You", in: made)
-        XCTAssertEqual(made.cover.selectionShare, String(format: "SGD %.2f", you.spent))
-        XCTAssertEqual(made.cover.selectionTitle, "Your share")
+        XCTAssertEqual(made.cover.expenseCount, 6)
     }
 
     // MARK: - File name
