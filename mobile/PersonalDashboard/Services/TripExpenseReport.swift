@@ -604,21 +604,9 @@ extension TripExpenseReport {
         formatter("dMMM").string(from: date)
     }
 
-    /// "Italy expenses 2026-09-14.pdf". Anything a file system would object to
-    /// is collapsed, so a trip called "Rome / Milan" still saves.
+    /// "Italy expenses 2026-09-14.pdf". The sanitising lives in
+    /// `ReportFileName` since the itinerary report needed the same rule (#532).
     static func fileName(tripName: String, on date: Date) -> String {
-        let stamp = DateFormatter()
-        stamp.locale = Locale(identifier: "en_US_POSIX")
-        stamp.dateFormat = "yyyy-MM-dd"
-
-        let illegal = CharacterSet(charactersIn: "/\\:?%*|\"<>")
-        let cleaned = tripName
-            .components(separatedBy: illegal)
-            .joined(separator: " ")
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        let name = cleaned.isEmpty ? "Trip" : cleaned
-        return "\(name) expenses \(stamp.string(from: date)).pdf"
+        ReportFileName.make(tripName: tripName, subject: "expenses", on: date)
     }
 }

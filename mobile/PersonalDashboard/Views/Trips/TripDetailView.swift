@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -46,6 +47,21 @@ struct TripDetailView: View {
     /// Drives the item editor. `.new(day:)` carries the pre-filled day;
     /// `.existing(_)` carries the item UUID for edit.
     @State private var editingItem: ItineraryItemEditorTarget?
+
+    // MARK: Itinerary report export (#532)
+    /// Rendering the PDF runs on the main actor, so the control shows a spinner
+    /// rather than pretending the tap did nothing.
+    @State private var isExportingItinerary: Bool = false
+    /// Drives the options sheet. Its choices are held here so they survive the
+    /// sheet closing and reaching the export that runs after it.
+    @State private var showingItineraryExportOptions: Bool = false
+    @State private var exportIncludesNotes: Bool = true
+    @State private var exportIncludesReferences: Bool = true
+    /// Set by the sheet's Export button so the run starts AFTER the sheet is
+    /// gone. On macOS the export ends in an `NSSavePanel`, and a modal panel
+    /// raised from under a dismissing sheet has no window to attach to (#528).
+    @State private var pendingItineraryExport: Bool = false
+    @State private var itineraryExportError: String?
 
     // MARK: Ticket upload / scan state (#222)
     @State private var showingTicketCamera: Bool = false
@@ -255,6 +271,25 @@ struct TripDetailView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showingItineraryExportOptions, onDismiss: runPendingItineraryExport) {
+            TripItineraryExportOptionsSheet(
+                includesNotes: $exportIncludesNotes,
+                includesReferences: $exportIncludesReferences,
+                onExport: { pendingItineraryExport = true }
+            )
+        }
+        .alert(
+            "Couldn't export the itinerary",
+            isPresented: Binding(
+                get: { itineraryExportError != nil },
+                set: { if !$0 { itineraryExportError = nil } }
+            ),
+            presenting: itineraryExportError
+        ) { _ in
+            Button("OK", role: .cancel) { itineraryExportError = nil }
+        } message: { message in
+            Text(message)
+        }
         .sheet(item: $editingItem) { target in
             ItineraryItemEditorSheet(trip: trip, target: target)
                 .presentationDetents([.large])
@@ -393,14 +428,55 @@ struct TripDetailView: View {
     /// (#258). Native segmented picker keeps it lightweight and familiar; the
     /// itinerary is the default so opening a trip is unchanged.
     private var tripTabBar: some View {
-        Picker("", selection: $tab) {
-            Text("Itinerary").tag(TripDetailTab.itinerary)
-            Text("Expenses").tag(TripDetailTab.expenses)
+        HStack(spacing: Space.md) {
+            Picker("", selection: $tab) {
+                Text("Itinerary").tag(TripDetailTab.itinerary)
+                Text("Expenses").tag(TripDetailTab.expenses)
+            }
+            .pickerStyle(.segmented)
+
+            // The download slot is always reserved, so the picker keeps its
+            // width when you switch tabs. It is filled on the itinerary only:
+            // the Expenses tab carries its own download beside its filter
+            // (#528), and two of them stacked at the same corner would be one
+            // control too many.
+            itineraryExportSlot
         }
-        .pickerStyle(.segmented)
         .padding(.horizontal, Space.lg)
         .padding(.top, Space.md)
         .padding(.bottom, Space.sm)
+    }
+
+    /// Download the trip's itinerary as a PDF (#532).
+    @ViewBuilder
+    private var itineraryExportSlot: some View {
+        if tab == .itinerary {
+            Button {
+                itineraryExportError = nil
+                showingItineraryExportOptions = true
+            } label: {
+                Group {
+                    if isExportingItinerary {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(Tokens.accent(for: .itineraries))
+                    }
+                }
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isExportingItinerary || grouped.isEmpty)
+            .accessibilityLabel("Download this itinerary as a PDF")
+            #if os(macOS)
+            .help("Download this itinerary as a PDF")
+            #endif
+        } else {
+            Color.clear.frame(width: 22, height: 22)
+        }
     }
 
     // MARK: - Ticket processing overlay
@@ -937,6 +1013,49 @@ struct TripDetailView: View {
     /// landed on this trip (#258).
     private func tripImportSummary(_ base: String) -> String {
         "\(base) · Added to \(trip.name)"
+    }
+
+    // MARK: - Itinerary report export (#532)
+
+    /// Runs after the options sheet has fully dismissed, so the macOS save
+    /// panel is raised from the window rather than from under a closing sheet.
+    private func runPendingItineraryExport() {
+        guard pendingItineraryExport else { return }
+        pendingItineraryExport = false
+        Task { await exportItinerary() }
+    }
+
+    private func exportItinerary() async {
+        guard !grouped.isEmpty, !isExportingItinerary else { return }
+        itineraryExportError = nil
+        isExportingItinerary = true
+        defer { isExportingItinerary = false }
+
+        do {
+            // `grouped` is what the timeline renders: the same day buckets, the
+            // same order, the same stay split into a check-in and a check-out.
+            // Handing it over rather than re-deriving it is what keeps the
+            // document and the screen from disagreeing.
+            let report = TripItineraryReport.make(
+                TripItineraryReportInput(
+                    tripName: trip.name,
+                    startDate: trip.startDate,
+                    endDate: trip.endDate,
+                    days: grouped,
+                    includeNotes: exportIncludesNotes,
+                    includeReferences: exportIncludesReferences,
+                    exportDate: Date()
+                )
+            )
+            let url = try TripItineraryReportPDF.write(report)
+            try await ExportDelivery.deliver(
+                fileAt: url,
+                contentTypes: [.pdf],
+                panelTitle: "Save trip itinerary"
+            )
+        } catch {
+            itineraryExportError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     // MARK: - Grouping

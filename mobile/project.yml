@@ -333,11 +333,21 @@ targets:
       # only platform fork — share sheet on iOS, NSSavePanel on macOS — and is
       # shared with the Settings export that used to own both halves privately.
       - path: PersonalDashboard/Services/ExportDelivery.swift
+      - path: PersonalDashboard/Services/ReportPager.swift
       - path: PersonalDashboard/Services/TripTransferSolver.swift
       - path: PersonalDashboard/Services/TripExpenseReport.swift
       - path: PersonalDashboard/Services/TripExpenseReportLayout.swift
       - path: PersonalDashboard/Services/TripExpenseReportPDF.swift
       - path: PersonalDashboard/Views/Trips/TripExpenseReportPages.swift
+      # Trip itinerary report (#532). Same shape as the expense report and
+      # equally portable: the model and the paginator are Foundation, the pages
+      # are plain SwiftUI, and both reports now share `ReportPager` for the page
+      # geometry, the packing and the file name.
+      - path: PersonalDashboard/Services/TripItineraryReport.swift
+      - path: PersonalDashboard/Services/TripItineraryReportLayout.swift
+      - path: PersonalDashboard/Services/TripItineraryReportPDF.swift
+      - path: PersonalDashboard/Views/Trips/TripItineraryReportPages.swift
+      - path: PersonalDashboard/Views/Trips/TripItineraryExportOptionsSheet.swift
       - path: PersonalDashboard/Views/Trips/TripCalendarPopover.swift
       - path: PersonalDashboard/Views/Trips/TicketCardView.swift
       - path: PersonalDashboard/Views/Trips/TicketViewers.swift
