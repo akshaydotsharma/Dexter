@@ -673,6 +673,11 @@ private struct TripEditorSheet: View {
     @State private var pickedParticipant: ExpenseTag?
     @State private var showingParticipantPicker: Bool = false
 
+    /// The participant whose name is being edited (#530). Non-nil presents the
+    /// rename sheet. Held as the record itself, not an id, so the sheet needs no
+    /// second fetch.
+    @State private var renamingParticipant: LocalPerson?
+
     /// All people, so the stored participant UUIDs resolve to names + colours.
     @Query(sort: [SortDescriptor(\LocalPerson.name, order: .forward)])
     private var allPeople: [LocalPerson]
@@ -800,6 +805,11 @@ private struct TripEditorSheet: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(item: $renamingParticipant) { person in
+            RenamePersonSheet(person: person)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
         .onChange(of: pickedParticipant) { _, newValue in
             if let tag = newValue, !participantUUIDs.contains(tag.uuid) {
                 participantUUIDs.append(tag.uuid)
@@ -831,15 +841,26 @@ private struct TripEditorSheet: View {
         .accessibilityLabel("You are going")
     }
 
+    /// The dot and the name rename; the `×` removes (#530).
+    ///
+    /// Two intentions in one chip, so the tap lives on the NAME rather than on
+    /// the chip: a gesture on the container would swallow the remove button's
+    /// own tap, and a rename is not what a user reaching for `×` is asking for.
     private func participantChip(_ person: LocalPerson) -> some View {
         HStack(spacing: 6) {
             Circle()
                 .fill(Color(personHex: person.colorHex))
                 .frame(width: 8, height: 8)
-            Text(person.name)
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.ink)
-                .lineLimit(1)
+            Button {
+                renamingParticipant = person
+            } label: {
+                Text(person.name)
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Rename \(person.name)")
             Button {
                 participantUUIDs.removeAll { $0 == person.clientUUID }
             } label: {
