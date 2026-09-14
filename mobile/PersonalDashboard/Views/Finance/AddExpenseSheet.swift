@@ -141,6 +141,9 @@ struct AddExpenseSheet: View {
     /// Whether the bill was paid into by more than one party (#540).
     @State private var multiplePayers: Bool = false
 
+    /// Whether the single-payer picker is showing its options (#540).
+    @State private var payerExpanded: Bool = false
+
     /// How the slices are expressed (#540).
     @State private var splitMode: SplitMode = .equally
 
@@ -993,41 +996,57 @@ struct AddExpenseSheet: View {
     }
 
     /// "Paid by" picker — who fronted the money. Defaults to You.
+    ///
+    /// Opens in place rather than in a `Menu` (#540). A system menu panel was
+    /// the one surface in this sheet the design system did not reach, and it
+    /// sat directly above a list of the same people drawn in the app's own
+    /// box. Now the two read as one control: pick a payer here, or open the
+    /// several-payer list below with the last row.
     private var payerField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Paid by").eyebrow()
-            Menu {
-                Button { payerParty = .me } label: {
-                    Label(FinanceSettings.userDisplayName, systemImage: "person.fill")
-                }
+            InlineDropdown(isExpanded: $payerExpanded) {
+                Circle()
+                    .fill(payerColor)
+                    .frame(width: 10, height: 10)
+                    .frame(width: 24, alignment: .leading)
+                Text(payerName)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+            } options: {
+                InlineDropdownRow(
+                    glyph: .dot(Tokens.accentFinance),
+                    label: FinanceSettings.userDisplayName,
+                    isSelected: payerParty == .me
+                ) { selectPayer(.me) }
+
                 ForEach(tripContext?.participants ?? [], id: \.clientUUID) { person in
-                    Button { payerParty = .person(person.clientUUID) } label: { Text(person.name) }
+                    InlineDropdownRow(
+                        glyph: .dot(Color(personHex: person.colorHex)),
+                        label: person.name,
+                        isSelected: payerParty == .person(person.clientUUID)
+                    ) { selectPayer(.person(person.clientUUID)) }
                 }
-                Divider()
-                Button { enableMultiplePayers() } label: {
-                    Label("Multiple people…", systemImage: "person.2.fill")
+
+                InlineDropdownDivider()
+
+                InlineDropdownRow(
+                    glyph: .symbol("person.2.fill"),
+                    label: "Multiple people…",
+                    isAction: true
+                ) {
+                    payerExpanded = false
+                    enableMultiplePayers()
                 }
-            } label: {
-                HStack(spacing: Space.sm) {
-                    Circle()
-                        .fill(payerColor)
-                        .frame(width: 12, height: 12)
-                        .frame(width: 24)
-                    Text(payerName)
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.ink)
-                    Spacer()
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Tokens.muted)
-                }
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
             }
-            .paperMenuOnMac()
-            .dropdownFieldSurface()
             .accessibilityLabel("Paid by \(payerName)")
         }
+    }
+
+    private func selectPayer(_ party: SplitPartyID) {
+        payerParty = party
+        withAnimation(.easeInOut(duration: 0.18)) { payerExpanded = false }
     }
 
     /// "Split between" editor: a tappable include circle, a colour dot + name,
