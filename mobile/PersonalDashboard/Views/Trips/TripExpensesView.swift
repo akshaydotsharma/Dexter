@@ -262,22 +262,28 @@ struct TripExpensesView: View {
         return names
     }
 
-    /// "Your spend" / "Rohan's spend" / "Akshay + Rohan" / "3 people".
+    /// "Your spend" / "Akshay's spend" / "Rohan's spend" / "Akshay + Rohan" /
+    /// "3 people".
     ///
-    /// The me-only card keeps saying "Your spend" whatever the user calls
-    /// themselves: that heading addresses the reader, it is not a label sitting
-    /// beside other people's names (#530). The combined forms ARE such a list,
-    /// so they take the name.
+    /// The rule this heading follows (#530): wherever the card would say
+    /// "Rohan's spend" for a participant, it says "Akshay's spend" for a named
+    /// user. Only the unnamed pronoun keeps the possessive form "Your spend" —
+    /// "You's spend" is not a sentence, which is the whole reason that branch
+    /// exists.
+    ///
+    /// So the me-only case is no longer special-cased. It resolves through the
+    /// SAME single-party branch as a participant, and the one test is the word.
     private var summaryTitle: String {
         let names = selectedPartyNames
-        if filterParties == [.me] { return "Your spend" }
-        if names.count == 1 {
-            return names[0] == FinanceSettings.defaultUserDisplayName
-                ? "Your spend"
-                : "\(names[0])'s spend"
-        }
+        if names.count == 1 { return possessiveSpend(names[0]) }
         if names.count == 2 { return "\(names[0]) + \(names[1])" }
+        if names.isEmpty { return possessiveSpend(FinanceSettings.userDisplayName) }
         return "\(names.count) people"
+    }
+
+    /// "Your spend" for the pronoun, "<name>'s spend" for any name.
+    private func possessiveSpend(_ name: String) -> String {
+        "\(FinanceSettings.possessive(name)) spend"
     }
 
     /// Short list-header suffix for the active selection.
@@ -296,10 +302,15 @@ struct TripExpensesView: View {
         let paid = filterParties.reduce(0) { $0 + (allTotals[$1]?.paid ?? 0) }
         let owed = filterParties.reduce(0) { $0 + (allTotals[$1]?.owed ?? 0) }
         let net = paid - owed
-        let meOnly = filterParties == [.me]
         let single = filterParties.count == 1
+        // Second person only while the user is still the pronoun. Once they are
+        // named, the card title carries the name ("Akshay's spend") and this
+        // line drops to the same subjectless form a participant's card uses,
+        // rather than mixing "Akshay's spend" with "You owe" (#530).
+        let meOnlyPronoun = filterParties == [.me]
+            && FinanceSettings.userIsAddressedInSecondPerson
         let owedLabel: String = {
-            if meOnly { return net >= 0 ? "You are owed" : "You owe" }
+            if meOnlyPronoun { return net >= 0 ? "You are owed" : "You owe" }
             if single { return net >= 0 ? "Is owed" : "Owes" }
             return net >= 0 ? "Owed" : "Owe"
         }()

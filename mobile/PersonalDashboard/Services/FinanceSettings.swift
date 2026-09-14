@@ -88,6 +88,16 @@ enum FinanceSettings {
         userDisplayName == defaultUserDisplayName
     }
 
+    /// The possessive form of a party's label: "Your" for the pronoun, and
+    /// "<name>'s" for any name, the user's own included once they have one.
+    ///
+    /// One place, because the rule is easy to get subtly wrong in each of the
+    /// three call sites that need it, and because "You's spend" is the exact
+    /// sentence this exists to prevent (#530).
+    static func possessive(_ name: String) -> String {
+        name == defaultUserDisplayName ? "Your" : "\(name)'s"
+    }
+
     /// Avatar initial for the user. "Y" until they name themselves.
     static var userDisplayInitial: String {
         String(userDisplayName.prefix(1)).uppercased()

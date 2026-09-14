@@ -400,9 +400,7 @@ extension TripExpenseReport {
     /// "Your cost in full" for the pronoun, "Akshay's cost in full" for a
     /// name — the user's own included, once they have named themselves (#530).
     private static func costInFull(_ name: String) -> String {
-        name == FinanceSettings.defaultUserDisplayName
-            ? "Your cost in full"
-            : "\(name)'s cost in full"
+        "\(FinanceSettings.possessive(name)) cost in full"
     }
 
     // MARK: - Participants

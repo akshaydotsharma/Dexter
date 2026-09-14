@@ -73,6 +73,27 @@ final class UserDisplayNameTests: XCTestCase {
         XCTAssertEqual(FinanceSettings.userDisplayInitial, "🙂")
     }
 
+    // MARK: - Possessive grammar
+
+    /// The rule behind "AKSHAY'S SPEND" and "Akshay's cost in full": a name
+    /// takes the apostrophe, the pronoun takes "Your". Written once because
+    /// "You's spend" is the exact sentence it exists to prevent.
+    func testPossessiveTakesTheApostropheOnlyForAName() {
+        XCTAssertEqual(FinanceSettings.possessive("You"), "Your")
+        XCTAssertEqual(FinanceSettings.possessive("Akshay"), "Akshay's")
+        XCTAssertEqual(FinanceSettings.possessive("Papa"), "Papa's")
+    }
+
+    /// Resolved through the live setting, which is how the summary card reads
+    /// it: unnamed keeps the heading it had before the setting existed.
+    func testSummaryHeadingFollowsTheSetting() {
+        XCTAssertEqual("\(FinanceSettings.possessive(FinanceSettings.userDisplayName)) spend",
+                       "Your spend")
+        FinanceSettings.userDisplayName = "Akshay"
+        XCTAssertEqual("\(FinanceSettings.possessive(FinanceSettings.userDisplayName)) spend",
+                       "Akshay's spend")
+    }
+
     // MARK: - The split roster follows
 
     func testSplitRosterUsesTheName() throws {
