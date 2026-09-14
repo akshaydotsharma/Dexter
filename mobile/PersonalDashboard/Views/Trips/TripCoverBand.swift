@@ -1,16 +1,5 @@
 import SwiftUI
 
-/// Which of the three travel states a trip is in (#428).
-///
-/// A named type rather than two Bools passed down from `TripsView`: the band, the
-/// type ramp and the card border all vary by state, and three call sites reading
-/// `isPast: true, isActive: false` is how one of them eventually gets it wrong.
-enum TripPhase {
-    case active
-    case upcoming
-    case past
-}
-
 // MARK: - Cover band
 
 /// The full-bleed destination photo band across the top of a trip tile (#428).

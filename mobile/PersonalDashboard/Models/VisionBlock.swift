@@ -195,11 +195,15 @@ enum VisionRowOrder {
     /// order membership records, then items in the order they were typed, which
     /// is what puts a newly added item directly above the `+` that made it.
     ///
-    /// ### Why completed rows are ordered too
+    /// ### Why completed rows are ordered too, and the other way round
     ///
     /// They sink as a group, but they are still a list, and a finished block
     /// whose bottom half is in an arbitrary order reads as a different list from
-    /// the one that was worked through.
+    /// the one that was worked through. The sunken group reads LATEST FIRST
+    /// (#534): a row that is done has nothing left to be due, so the only thing
+    /// its date still says is how recently it was finished, and the thing you
+    /// just finished is the one you want to see. Open rows keep reading
+    /// soonest-first, because a row that has not happened yet is read forwards.
     ///
     /// - Parameter sinkHold: rows just ticked, held in place for a beat so the
     ///   check is seen landing on the row that was clicked rather than on one
@@ -207,25 +211,30 @@ enum VisionRowOrder {
     static func arrange(_ rows: [VisionRow], sinkHold: Set<UUID> = []) -> [VisionRow] {
         let open = rows.filter { !$0.completed || sinkHold.contains($0.id) }
         let done = rows.filter { $0.completed && !sinkHold.contains($0.id) }
-        return byDueDate(open) + byDueDate(done)
+        return byDueDate(open) + byDueDate(done, latestFirst: true)
     }
 
-    /// Dated rows ascending, undated rows after them, both stable.
+    /// Dated rows in date order, undated rows after them, both stable.
+    ///
+    /// `latestFirst` flips both halves: dated rows come out newest-first, and
+    /// undated ones come out in the reverse of the order they were added, so the
+    /// row added last leads its half. Dated rows still precede undated ones —
+    /// the flip is about direction within each half, not about which half wins.
     ///
     /// The index tiebreak is not decoration: `sorted(by:)` is not documented to
     /// be stable, so two tasks due the same day could otherwise swap places on a
     /// re-render for no reason the user did anything to cause.
-    private static func byDueDate(_ rows: [VisionRow]) -> [VisionRow] {
+    private static func byDueDate(_ rows: [VisionRow], latestFirst: Bool = false) -> [VisionRow] {
         let dated = rows.enumerated().filter { $0.element.dueDate != nil }
         let undated = rows.filter { $0.dueDate == nil }
         let sorted = dated.sorted { left, right in
             guard let a = left.element.dueDate, let b = right.element.dueDate else {
                 return false
             }
-            if a != b { return a < b }
+            if a != b { return latestFirst ? a > b : a < b }
             return left.offset < right.offset
         }
-        return sorted.map(\.element) + undated
+        return sorted.map(\.element) + (latestFirst ? undated.reversed() : undated)
     }
 }
 
