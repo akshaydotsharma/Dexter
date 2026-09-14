@@ -49,9 +49,10 @@ struct TripDetailView: View {
     @State private var editingItem: ItineraryItemEditorTarget?
 
     // MARK: Itinerary report export (#532)
-    /// Rendering the PDF runs on the main actor, so the control shows a spinner
-    /// rather than pretending the tap did nothing.
-    @State private var isExportingItinerary: Bool = false
+    /// The download control itself lives in the trip's chrome, which the parent
+    /// owns; this is the wire between the two. See
+    /// `TripItineraryExportControl`.
+    var exportControl: TripItineraryExportControl
     /// Drives the options sheet. Its choices are held here so they survive the
     /// sheet closing and reaching the export that runs after it.
     @State private var showingItineraryExportOptions: Bool = false
@@ -111,8 +112,9 @@ struct TripDetailView: View {
         case expense
     }
 
-    init(trip: LocalTrip) {
+    init(trip: LocalTrip, exportControl: TripItineraryExportControl) {
         self.trip = trip
+        self.exportControl = exportControl
         let tripID = trip.clientUUID
         _items = Query(
             filter: #Predicate<LocalItineraryItem> { $0.tripUUID == tripID },
@@ -271,6 +273,14 @@ struct TripDetailView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        .onAppear(perform: syncExportAvailability)
+        .onChange(of: tab) { _, _ in syncExportAvailability() }
+        .onChange(of: items.count) { _, _ in syncExportAvailability() }
+        .onDisappear { exportControl.isAvailable = false }
+        .onChange(of: exportControl.request) { _, _ in
+            itineraryExportError = nil
+            showingItineraryExportOptions = true
+        }
         .sheet(isPresented: $showingItineraryExportOptions, onDismiss: runPendingItineraryExport) {
             TripItineraryExportOptionsSheet(
                 includesNotes: $exportIncludesNotes,
@@ -428,55 +438,14 @@ struct TripDetailView: View {
     /// (#258). Native segmented picker keeps it lightweight and familiar; the
     /// itinerary is the default so opening a trip is unchanged.
     private var tripTabBar: some View {
-        HStack(spacing: Space.md) {
-            Picker("", selection: $tab) {
-                Text("Itinerary").tag(TripDetailTab.itinerary)
-                Text("Expenses").tag(TripDetailTab.expenses)
-            }
-            .pickerStyle(.segmented)
-
-            // The download slot is always reserved, so the picker keeps its
-            // width when you switch tabs. It is filled on the itinerary only:
-            // the Expenses tab carries its own download beside its filter
-            // (#528), and two of them stacked at the same corner would be one
-            // control too many.
-            itineraryExportSlot
+        Picker("", selection: $tab) {
+            Text("Itinerary").tag(TripDetailTab.itinerary)
+            Text("Expenses").tag(TripDetailTab.expenses)
         }
+        .pickerStyle(.segmented)
         .padding(.horizontal, Space.lg)
         .padding(.top, Space.md)
         .padding(.bottom, Space.sm)
-    }
-
-    /// Download the trip's itinerary as a PDF (#532).
-    @ViewBuilder
-    private var itineraryExportSlot: some View {
-        if tab == .itinerary {
-            Button {
-                itineraryExportError = nil
-                showingItineraryExportOptions = true
-            } label: {
-                Group {
-                    if isExportingItinerary {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.down")
-                            .font(.system(size: 18, weight: .regular))
-                            .foregroundStyle(Tokens.accent(for: .itineraries))
-                    }
-                }
-                .frame(width: 22, height: 22)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isExportingItinerary || grouped.isEmpty)
-            .accessibilityLabel("Download this itinerary as a PDF")
-            #if os(macOS)
-            .help("Download this itinerary as a PDF")
-            #endif
-        } else {
-            Color.clear.frame(width: 22, height: 22)
-        }
     }
 
     // MARK: - Ticket processing overlay
@@ -1019,6 +988,13 @@ struct TripDetailView: View {
 
     /// Runs after the options sheet has fully dismissed, so the macOS save
     /// panel is raised from the window rather than from under a closing sheet.
+    /// A trip with no stops has no plan to hand anyone, and the Expenses tab
+    /// carries its own download beside its filter (#528), so the control is
+    /// only live on the itinerary.
+    private func syncExportAvailability() {
+        exportControl.isAvailable = tab == .itinerary && !grouped.isEmpty
+    }
+
     private func runPendingItineraryExport() {
         guard pendingItineraryExport else { return }
         pendingItineraryExport = false
@@ -1026,10 +1002,10 @@ struct TripDetailView: View {
     }
 
     private func exportItinerary() async {
-        guard !grouped.isEmpty, !isExportingItinerary else { return }
+        guard !grouped.isEmpty, !exportControl.isRunning else { return }
         itineraryExportError = nil
-        isExportingItinerary = true
-        defer { isExportingItinerary = false }
+        exportControl.isRunning = true
+        defer { exportControl.isRunning = false }
 
         do {
             // `grouped` is what the timeline renders: the same day buckets, the
@@ -1165,6 +1141,32 @@ enum ItineraryDocumentCleanup {
         }
         try? service.deleteAll(owner: .tripStop(item.clientUUID))
     }
+}
+
+// MARK: - Itinerary export control (#532)
+
+/// The Itinerary tab's download control, hoisted into the trip's chrome.
+///
+/// The button belongs beside the trip's other actions — the calendar and the
+/// editor — and those live in the window toolbar on macOS and in
+/// `TripDetailHeader` on iOS, both owned by `TripsView`. Everything the export
+/// needs (the day grouping, the options, the render) lives in
+/// `TripDetailView`. This carries one across the other rather than lifting the
+/// timeline's state up a level to reach a button: the detail view publishes
+/// whether an export is possible and whether one is running, and the chrome
+/// asks for one.
+@Observable
+final class TripItineraryExportControl {
+    /// The itinerary tab is showing and the trip has at least one stop.
+    var isAvailable: Bool = false
+    /// Rendering the PDF runs on the main actor, so the control shows a spinner
+    /// rather than pretending the click did nothing.
+    var isRunning: Bool = false
+    /// Bumped by the chrome button. The detail view watches it rather than
+    /// holding a closure, so a rebuilt chrome can never call into a stale view.
+    private(set) var request: Int = 0
+
+    func requestExport() { request += 1 }
 }
 
 // MARK: - Trip detail tabs
