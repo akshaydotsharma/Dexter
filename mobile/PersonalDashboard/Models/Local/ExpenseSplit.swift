@@ -128,12 +128,16 @@ enum SplitMath {
         let whole = cents(total)
         var parts = weights.map { whole * max($0, 0) / sum }
         var leftover = whole - parts.reduce(0, +)
-        var index = 0
+        // The odd cents go to the heaviest weights first, so a 1:2 split of
+        // 100 reads 33.33 / 66.67 the way it would be written by hand rather
+        // than 33.34 / 66.66.
+        let byWeight = weights.indices.sorted { weights[$0] > weights[$1] }
+        var cursor = 0
         while leftover != 0 && !parts.isEmpty {
             let step = leftover > 0 ? 1 : -1
-            parts[index % parts.count] += step
+            parts[byWeight[cursor % byWeight.count]] += step
             leftover -= step
-            index += 1
+            cursor += 1
         }
         return parts.map { amount(cents: $0) }
     }

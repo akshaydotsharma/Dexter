@@ -106,10 +106,14 @@ final class SplitBreakdownTests: XCTestCase {
     /// Exact amounts are stored as positive magnitudes; the direction has to
     /// come from the basis, or a refund would count as a spend.
     func testExactAmountsOnARefundStayNegative() {
-        let row = expense(amount: 50, isRefund: true, splits: [
-            ExpenseSplitEntry(person: nil, shares: 1, owedAmount: 20),
-            ExpenseSplitEntry(person: priya, shares: 1, owedAmount: 30)
-        ])
+        let row = expense(
+            amount: 50,
+            splits: [
+                ExpenseSplitEntry(person: nil, shares: 1, owedAmount: 20),
+                ExpenseSplitEntry(person: priya, shares: 1, owedAmount: 30)
+            ],
+            isRefund: true
+        )
         XCTAssertEqual(owed(row, .me), -30, accuracy: 0.0001)
         XCTAssertEqual(row.myShareSGD, -30, accuracy: 0.0001)
     }
@@ -203,10 +207,13 @@ final class SplitBreakdownTests: XCTestCase {
         XCTAssertEqual(parts.reduce(0, +), 100, accuracy: 0.0001)
     }
 
-    func testWeightedSplitSumsToTheTotal() {
+    /// Exact proportionality is impossible once an indivisible cent is in
+    /// play, so what is asserted is where that cent lands: on the heavier
+    /// weight, which is where a person doing the sum by hand would put it.
+    func testWeightedSplitSumsToTheTotalAndGivesTheOddCentToTheHeavierWeight() {
         let parts = SplitMath.weightedSplit(total: 100, weights: [1, 2])
+        XCTAssertEqual(parts, [33.33, 66.67])
         XCTAssertEqual(parts.reduce(0, +), 100, accuracy: 0.0001)
-        XCTAssertEqual(parts[1], parts[0] * 2, accuracy: 0.02)
     }
 
     /// "Spread the rest" gives the remainder to the people who have not been
