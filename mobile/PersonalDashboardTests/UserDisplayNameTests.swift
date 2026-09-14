@@ -100,7 +100,7 @@ final class UserDisplayNameTests: XCTestCase {
         FinanceSettings.userDisplayName = "Akshay"
         let other = UUID()
         let roster = try XCTUnwrap(SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [
                 ExpenseSplitEntry(person: nil, shares: 1),
                 ExpenseSplitEntry(person: other, shares: 1),
@@ -120,7 +120,7 @@ final class UserDisplayNameTests: XCTestCase {
     func testSplitRosterIsUnchangedWithoutAName() throws {
         let other = UUID()
         let roster = try XCTUnwrap(SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [
                 ExpenseSplitEntry(person: nil, shares: 1),
                 ExpenseSplitEntry(person: other, shares: 1),

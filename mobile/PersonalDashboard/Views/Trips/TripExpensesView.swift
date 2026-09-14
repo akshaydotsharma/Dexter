@@ -678,13 +678,8 @@ struct TripExpensesView: View {
     /// Whether an expense involves the given party — they paid it, or they
     /// hold a positive share of the split.
     private func involves(_ expense: LocalExpense, party: SplitPartyID) -> Bool {
-        let payer: SplitPartyID = expense.paidByPersonUUID.map { .person($0) } ?? .me
-        if payer == party { return true }
-        return expense.splits.contains { entry in
-            guard entry.shares > 0 else { return false }
-            let entryParty: SplitPartyID = entry.personID.map { .person($0) } ?? .me
-            return entryParty == party
-        }
+        if expense.payerParties.contains(party) { return true }
+        return expense.owedBreakdown(basis: 1).contains { $0.party == party }
     }
 
     /// The list narrows to expenses involving ANY selected participant; the
@@ -1089,28 +1084,15 @@ enum TripSettlement {
 
         for expense in expenses {
             let value = amount(expense)
-            let payer: SplitPartyID = expense.paidByPersonUUID.map { .person($0) } ?? .me
-            totals[payer, default: (0, 0)].paid += value
-
-            let splits = expense.splits
-            let totalShares = splits.reduce(0) { $0 + max($1.shares, 0) }
-            guard !splits.isEmpty, totalShares > 0 else {
-                // Unsplit (or degenerate): the cost is the USER's in full, which
-                // is what `LocalExpense.myShareSGD` already assumes. It used to
-                // credit the payer instead (#504). The two agreed only while an
-                // unsplit row implied the user paid; now that another person can
-                // front an unsplit bill, crediting the payer would net it to zero
-                // and hide a real debt, while Finance still counted it as the
-                // user's spend. An unsplit expense paid by someone else means the
-                // user owes them the whole amount.
-                totals[.me, default: (0, 0)].owed += value
-                continue
+            // Both sides come from the row itself (#540), so one place decides
+            // how a bill is read: multiple payers or one, exact amounts or
+            // share weights, and the unsplit fallback where the whole cost is
+            // the user's however it was fronted (#504).
+            for entry in expense.paidBreakdown(basis: value) {
+                totals[entry.party, default: (0, 0)].paid += entry.amount
             }
-            for entry in splits {
-                let shares = max(entry.shares, 0)
-                guard shares > 0 else { continue }
-                let party: SplitPartyID = entry.personID.map { .person($0) } ?? .me
-                totals[party, default: (0, 0)].owed += value * Double(shares) / Double(totalShares)
+            for entry in expense.owedBreakdown(basis: value) {
+                totals[entry.party, default: (0, 0)].owed += entry.amount
             }
         }
         return totals

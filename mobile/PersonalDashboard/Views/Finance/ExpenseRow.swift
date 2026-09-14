@@ -128,7 +128,7 @@ struct ExpenseRow: View {
     private var splitRoster: SplitAvatarRoster? {
         guard showsOriginalFirst else { return nil }
         return SplitAvatarRoster.make(
-            payerPersonUUID: expense.paidByPersonUUID,
+            payerParties: expense.payerParties,
             splits: expense.splits,
             name: { lookup.personName(uuid: $0) },
             colorHex: { lookup.personColorHex(uuid: $0) }

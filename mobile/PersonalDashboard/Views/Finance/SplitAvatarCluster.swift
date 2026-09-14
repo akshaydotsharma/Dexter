@@ -51,7 +51,12 @@ struct SplitAvatarRoster: Equatable {
     /// At most this many sharer avatars render; the rest collapse into "+n".
     static let maxSharers = 4
 
-    let payer: SplitAvatarParty
+    /// Everyone who fronted money, in stored order. Usually one party; a bill
+    /// several people paid into lists them all (#540).
+    let payers: [SplitAvatarParty]
+
+    /// The party who leads the line. The sole payer, or the first of several.
+    var payer: SplitAvatarParty { payers[0] }
 
     /// Parties holding a positive share, payer first, deduped. Never empty: an
     /// expense with no recorded split is the user's in full, so the user
@@ -78,12 +83,13 @@ struct SplitAvatarRoster: Equatable {
     /// was paid: the same reading `myShareSGD` and `TripSettlement` take.
     ///
     /// - Parameters:
-    ///   - payerPersonUUID: `LocalExpense.paidByPersonUUID`; nil = the user.
+    ///   - payerParties: `LocalExpense.payerParties`; one entry for a single
+    ///     payer, several when the bill was paid into by more than one person.
     ///   - splits: `LocalExpense.splits`.
     ///   - name: resolves a person id to a display name, nil if deleted.
     ///   - colorHex: resolves a person id to its chip colour.
     static func make(
-        payerPersonUUID: UUID?,
+        payerParties: [SplitPartyID],
         splits: [ExpenseSplitEntry],
         name: (UUID) -> String?,
         colorHex: (UUID) -> String?
@@ -115,19 +121,31 @@ struct SplitAvatarRoster: Equatable {
             )
         }
 
-        let payer = party(for: payerPersonUUID)
+        func resolve(_ id: SplitPartyID) -> SplitAvatarParty {
+            switch id {
+            case .me: return party(for: nil)
+            case .person(let uuid): return party(for: uuid)
+            }
+        }
 
-        // Positive shares only — a zero-share entry is a party who was ticked
-        // out of the bill, and the split editor leaves those behind.
+        var seenPayers: Set<SplitPartyID> = []
+        var payers = payerParties.compactMap { id -> SplitAvatarParty? in
+            guard seenPayers.insert(id).inserted else { return nil }
+            return resolve(id)
+        }
+        if payers.isEmpty { payers = [party(for: nil)] }
+
+        // A party shares the bill when they hold a positive weight or an exact
+        // amount (#540). A zero-share entry is either a party ticked out of the
+        // bill or a payer who consumed none of it; neither is a sharer.
         var seen: Set<SplitPartyID> = []
         var sharers: [SplitAvatarParty] = []
-        for entry in splits where entry.shares > 0 {
-            let candidate = party(for: entry.personID)
-            guard seen.insert(candidate.party).inserted else { continue }
-            sharers.append(candidate)
+        for entry in splits where max(entry.shares, 0) > 0 || (entry.owedAmount ?? 0) > 0 {
+            guard seen.insert(entry.party).inserted else { continue }
+            sharers.append(resolve(entry.party))
         }
         // Payer first, so the row reads left to right as "P paid, split P + Y".
-        if let index = sharers.firstIndex(where: { $0.party == payer.party }), index != 0 {
+        if let index = sharers.firstIndex(where: { $0.party == payers[0].party }), index != 0 {
             sharers.insert(sharers.remove(at: index), at: 0)
         }
 
@@ -140,7 +158,7 @@ struct SplitAvatarRoster: Equatable {
         if sharers.isEmpty {
             sharers = [party(for: nil)]
         }
-        return SplitAvatarRoster(payer: payer, sharers: sharers)
+        return SplitAvatarRoster(payers: payers, sharers: sharers)
     }
 
     /// Relative luminance of the dark lettering a filled avatar uses when
@@ -178,12 +196,17 @@ struct SplitAvatarRoster: Equatable {
     /// Priya and you".
     var spokenLabel: String {
         // Third person once the user has a name: "Akshay paid", not "You paid".
-        let paid = payer.party == .me && FinanceSettings.userIsAddressedInSecondPerson
-            ? "You paid"
-            : "\(payer.name) paid"
+        func spoken(_ candidate: SplitAvatarParty) -> String {
+            candidate.party == .me && FinanceSettings.userIsAddressedInSecondPerson
+                ? "You"
+                : candidate.name
+        }
+        let paid = payers.count > 1
+            ? "\(payers.map(spoken).formatted(.list(type: .and))) paid"
+            : "\(spoken(payers[0])) paid"
         // The cluster repeats the payer when nobody else was in on the bill.
         // The avatars show that; saying "split between you" would not.
-        guard sharers != [payer] else { return paid }
+        guard sharers != [payers[0]] || payers.count > 1 else { return paid }
         let spoken = sharers.map {
             $0.party == .me && FinanceSettings.userIsAddressedInSecondPerson ? "you" : $0.name
         }
@@ -208,7 +231,11 @@ struct SplitAvatarCluster: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            SplitAvatar(party: roster.payer, style: .payer)
+            HStack(spacing: 2) {
+                ForEach(roster.payers) { payer in
+                    SplitAvatar(party: payer, style: .payer)
+                }
+            }
             Text("paid")
                 .font(.edCaption)
                 .foregroundStyle(Tokens.muted)

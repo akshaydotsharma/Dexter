@@ -72,14 +72,33 @@ struct TripExpenseContext {
     let participants: [LocalPerson]
 }
 
-/// Identifies one party in a trip split: the user ("me") or a specific person.
-enum SplitPartyID: Hashable {
-    case me
-    case person(UUID)
+/// How the slices of a trip bill are expressed (#540).
+///
+/// `equally` and `shares` are the same weight model underneath (equally is
+/// everyone at 1), but they are separate modes in the editor because they are
+/// separate intentions: one is "we all had the same", the other is "he had
+/// two". `amounts` abandons weights for figures the user types.
+enum SplitMode: String, CaseIterable, Identifiable {
+    case equally
+    case shares
+    case amounts
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .equally: return "Equally"
+        case .shares:  return "Shares"
+        case .amounts: return "Amounts"
+        }
+    }
 }
 
 /// Editable per-party split row backing the trip split editor. `included`
 /// gates whether the party is part of this bill; `shares` is their weight.
+///
+/// The two text fields hold what the user typed rather than a parsed number,
+/// so a half-finished "12." stays on screen as typed (#540).
 struct SplitDraft: Identifiable {
     let party: SplitPartyID
     let name: String
@@ -87,6 +106,12 @@ struct SplitDraft: Identifiable {
     let colorHex: String?
     var included: Bool
     var shares: Int
+    /// Exact amount this party owes, in `amounts` mode. Empty = not entered.
+    var owedText: String = ""
+    /// Whether this party fronted money, when the bill has several payers.
+    var paying: Bool = false
+    /// Amount this party fronted. Empty = not entered.
+    var paidText: String = ""
 
     var id: SplitPartyID { party }
 }
@@ -109,8 +134,25 @@ struct AddExpenseSheet: View {
     /// `loadIfNeeded`. Order is [You, participant, participant, …].
     @State private var splitDrafts: [SplitDraft] = []
 
-    /// Who fronted the money. Defaults to the user.
+    /// Who fronted the money. Defaults to the user. Only meaningful while
+    /// `multiplePayers` is off; several payers are held per-draft instead.
     @State private var payerParty: SplitPartyID = .me
+
+    /// Whether the bill was paid into by more than one party (#540).
+    @State private var multiplePayers: Bool = false
+
+    /// How the slices are expressed (#540).
+    @State private var splitMode: SplitMode = .equally
+
+    /// Whether the payer amounts still follow the total automatically. True
+    /// until the user types one, which is what makes "turn on multiple payers
+    /// and it is already half-half" work without a second control.
+    @State private var paidAutoBalanced: Bool = true
+
+    /// Whether the user has typed in the Amount field themselves. Until they
+    /// have, the total follows whichever breakdown they are filling in, so a
+    /// bill entered as per-person figures never needs its total typed twice.
+    @State private var amountEditedManually: Bool = false
 
     @State private var amountText: String = ""
     @State private var currency: String = FinanceSettings.displayCurrencyCode
@@ -204,7 +246,27 @@ struct AddExpenseSheet: View {
     }
 
     private var amountValue: Double {
-        Double(amountText.replacingOccurrences(of: ",", with: ".")) ?? 0
+        Self.parseAmount(amountText)
+    }
+
+    /// Reads a typed money field. Accepts a comma decimal separator, because
+    /// half the keyboards that reach this sheet offer one.
+    private static func parseAmount(_ text: String) -> Double {
+        Double(text.replacingOccurrences(of: ",", with: ".")) ?? 0
+    }
+
+    /// The Amount field writes through this rather than straight to the state,
+    /// so typing in it can be told apart from the sheet filling it in (#540).
+    /// Only a keystroke marks the total as the user's own.
+    private var amountBinding: Binding<String> {
+        Binding(
+            get: { amountText },
+            set: { newValue in
+                amountText = newValue
+                amountEditedManually = true
+                rebalancePaid()
+            }
+        )
     }
 
     /// The user's per-person share of the entered receipt total (#188). This
@@ -214,7 +276,7 @@ struct AddExpenseSheet: View {
     }
 
     private var canSave: Bool {
-        amountValue > 0 && !saving
+        amountValue > 0 && !saving && splitValidationMessage == nil
     }
 
     /// Show the "Add to Finance" toggle only for trip expenses (#277): a new /
@@ -273,6 +335,15 @@ struct AddExpenseSheet: View {
                             Text(errorMessage)
                                 .font(.edFootnote)
                                 .foregroundStyle(Tokens.danger)
+                                .padding(.top, Space.sm)
+                        } else if let splitValidationMessage {
+                            // Muted, not danger: this explains why Add is
+                            // disabled while the user is still filling the
+                            // breakdown in. Nothing has gone wrong yet, and the
+                            // remainder pill above already offers the fix.
+                            Text(splitValidationMessage)
+                                .font(.edFootnote)
+                                .foregroundStyle(Tokens.muted)
                                 .padding(.top, Space.sm)
                         }
                     }
@@ -407,7 +478,7 @@ struct AddExpenseSheet: View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Amount").eyebrow()
             HStack(spacing: Space.sm) {
-                TextField("0.00", text: $amountText)
+                TextField("0.00", text: amountBinding)
                     .paperFieldOnMac()
                     .decimalKeyboard()
                     .font(.edDisplay)
@@ -742,12 +813,18 @@ struct AddExpenseSheet: View {
         splitDrafts.filter { $0.included && $0.shares > 0 }
     }
 
+    /// Parties currently fronting money, when the bill has several payers.
+    private var payingDrafts: [SplitDraft] {
+        splitDrafts.filter { $0.paying }
+    }
+
     private var totalShares: Int {
         includedDrafts.reduce(0) { $0 + $1.shares }
     }
 
     /// This party's slice of the entered amount, in the entered currency.
     private func splitAmount(for draft: SplitDraft) -> Double {
+        if splitMode == .amounts { return Self.parseAmount(draft.owedText) }
         guard totalShares > 0, draft.included, draft.shares > 0 else { return 0 }
         return amountValue * Double(draft.shares) / Double(totalShares)
     }
@@ -762,9 +839,155 @@ struct AddExpenseSheet: View {
         }
     }
 
+    // MARK: - Breakdown reconciliation (#540)
+
+    /// What is still unassigned on the owed side; nil when the mode does not
+    /// use typed amounts.
+    private var owedRemainder: Double? {
+        guard splitMode == .amounts, !includedDrafts.isEmpty else { return nil }
+        return SplitMath.remainder(includedDrafts.map { Self.parseAmount($0.owedText) }, total: amountValue)
+    }
+
+    /// What is still unassigned on the paid side; nil when there is one payer.
+    private var paidRemainder: Double? {
+        guard multiplePayers, !payingDrafts.isEmpty else { return nil }
+        return SplitMath.remainder(payingDrafts.map { Self.parseAmount($0.paidText) }, total: amountValue)
+    }
+
+    /// Why the sheet cannot be saved yet, in one sentence, or nil when it can.
+    ///
+    /// A breakdown that does not add up is the one state this editor refuses.
+    /// Reconciling it silently would mean deciding whose figure was wrong, and
+    /// the remainder pill makes agreeing with the total a single tap.
+    private var splitValidationMessage: String? {
+        guard tripSplitActive else { return nil }
+        if multiplePayers {
+            if payingDrafts.isEmpty { return "Pick who paid." }
+            if let remainder = paidRemainder, abs(remainder) >= SplitMath.epsilon {
+                return "The amounts paid need to add up to the total."
+            }
+        }
+        if splitMode == .amounts, hasOtherParticipantsInSplit {
+            if let remainder = owedRemainder, abs(remainder) >= SplitMath.epsilon {
+                return "The split amounts need to add up to the total."
+            }
+        }
+        return nil
+    }
+
+    /// Pull the total up from whichever breakdown the user is filling in, for
+    /// as long as they have not typed a total themselves.
+    private func syncTotalFromBreakdown() {
+        guard tripSplitActive, !amountEditedManually else { return }
+        let owedSum = splitMode == .amounts
+            ? includedDrafts.reduce(0) { $0 + Self.parseAmount($1.owedText) }
+            : 0
+        let paidSum = multiplePayers
+            ? payingDrafts.reduce(0) { $0 + Self.parseAmount($1.paidText) }
+            : 0
+        let sum = owedSum > 0 ? owedSum : paidSum
+        guard sum > 0 else { return }
+        amountText = formatAmountForEdit(sum)
+    }
+
+    /// Keep the payer amounts an even split of the total while the user has
+    /// not overridden one. This is what makes the two-payer case half-half
+    /// with no extra control.
+    private func rebalancePaid() {
+        guard multiplePayers, paidAutoBalanced, amountValue > 0 else { return }
+        let indices = splitDrafts.indices.filter { splitDrafts[$0].paying }
+        guard !indices.isEmpty else { return }
+        let parts = SplitMath.evenSplit(total: amountValue, count: indices.count)
+        for (offset, index) in indices.enumerated() {
+            splitDrafts[index].paidText = formatAmountForEdit(parts[offset])
+        }
+    }
+
+    /// Hand the unassigned remainder to the parties who have not been given an
+    /// amount yet, or spread it across everyone once they all have one.
+    private func spreadOwed() {
+        let indices = splitDrafts.indices.filter { splitDrafts[$0].included && splitDrafts[$0].shares > 0 }
+        guard !indices.isEmpty else { return }
+        let spread = SplitMath.spread(indices.map { Self.parseAmount(splitDrafts[$0].owedText) }, total: amountValue)
+        for (offset, index) in indices.enumerated() {
+            splitDrafts[index].owedText = formatAmountForEdit(spread[offset])
+        }
+    }
+
+    private func spreadPaid() {
+        let indices = splitDrafts.indices.filter { splitDrafts[$0].paying }
+        guard !indices.isEmpty else { return }
+        let spread = SplitMath.spread(indices.map { Self.parseAmount(splitDrafts[$0].paidText) }, total: amountValue)
+        for (offset, index) in indices.enumerated() {
+            splitDrafts[index].paidText = formatAmountForEdit(spread[offset])
+        }
+    }
+
+    /// Move the owed side to a new mode without losing where the user was.
+    /// Amounts opens on the figures the shares were already showing, so the
+    /// mode switch is a refinement rather than a blank slate.
+    private func applySplitMode(_ mode: SplitMode) {
+        switch mode {
+        case .equally:
+            for index in splitDrafts.indices {
+                splitDrafts[index].shares = 1
+                splitDrafts[index].owedText = ""
+            }
+        case .shares:
+            for index in splitDrafts.indices {
+                splitDrafts[index].owedText = ""
+                splitDrafts[index].shares = max(splitDrafts[index].shares, 1)
+            }
+        case .amounts:
+            let indices = splitDrafts.indices.filter { splitDrafts[$0].included && splitDrafts[$0].shares > 0 }
+            for index in splitDrafts.indices where !indices.contains(index) {
+                splitDrafts[index].owedText = ""
+            }
+            guard !indices.isEmpty, amountValue > 0 else { return }
+            let parts = SplitMath.weightedSplit(
+                total: amountValue,
+                weights: indices.map { max(splitDrafts[$0].shares, 1) }
+            )
+            for (offset, index) in indices.enumerated() {
+                splitDrafts[index].owedText = formatAmountForEdit(parts[offset])
+            }
+        }
+    }
+
+    /// Turn the single-payer picker into the several-payer list. The current
+    /// payer stays ticked, so the first thing the user does is add the second
+    /// one, and the amounts land half-half on their own.
+    private func enableMultiplePayers() {
+        for index in splitDrafts.indices {
+            splitDrafts[index].paying = splitDrafts[index].party == payerParty
+            splitDrafts[index].paidText = ""
+        }
+        paidAutoBalanced = true
+        multiplePayers = true
+        rebalancePaid()
+    }
+
+    /// Collapse back to one payer, keeping whoever put in the most.
+    private func disableMultiplePayers() {
+        let leader = splitDrafts
+            .filter(\.paying)
+            .max { Self.parseAmount($0.paidText) < Self.parseAmount($1.paidText) }
+        payerParty = leader?.party ?? payerParty
+        for index in splitDrafts.indices {
+            splitDrafts[index].paying = false
+            splitDrafts[index].paidText = ""
+        }
+        paidAutoBalanced = true
+        multiplePayers = false
+    }
+
     private var tripSplitSection: some View {
         VStack(alignment: .leading, spacing: Space.lg) {
-            payerField
+            if multiplePayers {
+                multiPayerField
+            } else {
+                payerField
+            }
             splitField
         }
     }
@@ -779,6 +1002,10 @@ struct AddExpenseSheet: View {
                 }
                 ForEach(tripContext?.participants ?? [], id: \.clientUUID) { person in
                     Button { payerParty = .person(person.clientUUID) } label: { Text(person.name) }
+                }
+                Divider()
+                Button { enableMultiplePayers() } label: {
+                    Label("Multiple people…", systemImage: "person.2.fill")
                 }
             } label: {
                 HStack(spacing: Space.sm) {
@@ -814,6 +1041,20 @@ struct AddExpenseSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
+            // The mode sits on its own line rather than beside the eyebrow: at
+            // phone width three segments and a count do not share a row.
+            Picker("Split mode", selection: $splitMode) {
+                ForEach(SplitMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: splitMode) { _, mode in
+                applySplitMode(mode)
+                syncTotalFromBreakdown()
+            }
+            .padding(.bottom, Space.xs)
             VStack(spacing: 0) {
                 ForEach($splitDrafts) { $draft in
                     splitRow($draft)
@@ -825,10 +1066,133 @@ struct AddExpenseSheet: View {
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
             .paperBorder(Tokens.border, radius: Radius.md)
 
+            if let remainder = owedRemainder, hasOtherParticipantsInSplit {
+                remainderPill(remainder, action: spreadOwed)
+            }
             if hasOtherParticipantsInSplit {
                 tripShareReadout
             }
         }
+    }
+
+    /// Reports what is still unassigned in a breakdown, and offers the one tap
+    /// that resolves it. Hidden entirely once the figures agree with the total,
+    /// so the common path shows no warning chrome at all.
+    @ViewBuilder
+    private func remainderPill(_ remainder: Double, action: @escaping () -> Void) -> some View {
+        if abs(remainder) >= SplitMath.epsilon {
+            let cur = currency.uppercased()
+            let over = remainder < 0
+            HStack(spacing: Space.sm) {
+                Image(systemName: over ? "exclamationmark.circle" : "circle.dashed")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(over ? Tokens.warning : Tokens.muted)
+                Text("\(cur) \(formatShare(abs(remainder))) \(over ? "over" : "left")")
+                    .font(.edCaption)
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.muted)
+                Spacer(minLength: Space.sm)
+                Button(over ? "Even it out" : "Spread the rest", action: action)
+                    .font(.edFootnoteStrong)
+                    .foregroundStyle(Tokens.accentFinance)
+                    .buttonStyle(.plain)
+            }
+            .padding(.horizontal, Space.md)
+            .padding(.vertical, Space.sm)
+            .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.sm))
+        }
+    }
+
+    /// The several-payer list. Deliberately the same shape as "Split between"
+    /// below it: one tick circle, one name, one field per row, so the screen is
+    /// learned once and read twice.
+    private var multiPayerField: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            HStack {
+                Text("Paid by").eyebrow()
+                Spacer()
+                Button("One payer") { disableMultiplePayers() }
+                    .font(.edFootnoteStrong)
+                    .foregroundStyle(Tokens.accentFinance)
+                    .buttonStyle(.plain)
+            }
+            VStack(spacing: 0) {
+                ForEach($splitDrafts) { $draft in
+                    payerRow($draft)
+                    if draft.id != splitDrafts.last?.id {
+                        Divider().background(Tokens.divider)
+                    }
+                }
+            }
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
+
+            if let remainder = paidRemainder {
+                remainderPill(remainder, action: spreadPaid)
+            }
+        }
+    }
+
+    private func payerRow(_ draft: Binding<SplitDraft>) -> some View {
+        let d = draft.wrappedValue
+        return HStack(spacing: Space.sm) {
+            Button {
+                draft.wrappedValue.paying.toggle()
+                if !draft.wrappedValue.paying { draft.wrappedValue.paidText = "" }
+                rebalancePaid()
+            } label: {
+                Image(systemName: d.paying ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(d.paying ? Tokens.accentFinance : Tokens.mutedSoft)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(d.paying ? "\(d.name) paid" : "\(d.name) did not pay")
+
+            Circle()
+                .fill(partyColor(d))
+                .frame(width: 10, height: 10)
+            Text(d.name)
+                .font(.edBody)
+                .foregroundStyle(d.paying ? Tokens.ink : Tokens.muted)
+                .lineLimit(1)
+
+            Spacer(minLength: Space.sm)
+
+            if d.paying {
+                moneyField(
+                    text: Binding(
+                        get: { draft.wrappedValue.paidText },
+                        set: { newValue in
+                            draft.wrappedValue.paidText = newValue
+                            // The first keystroke ends the automatic even
+                            // split; from here the pill governs.
+                            paidAutoBalanced = false
+                            syncTotalFromBreakdown()
+                        }
+                    ),
+                    label: "Amount \(d.name) paid"
+                )
+            }
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+    }
+
+    /// One compact money field, sized so a row can hold a name and a figure at
+    /// phone width.
+    private func moneyField(text: Binding<String>, label: String) -> some View {
+        TextField("0.00", text: text)
+            .paperFieldOnMac()
+            .decimalKeyboard()
+            .font(.edFootnoteStrong)
+            .monospacedDigit()
+            .multilineTextAlignment(.trailing)
+            .foregroundStyle(Tokens.ink)
+            .frame(width: 92)
+            .padding(.vertical, 4)
+            .padding(.horizontal, Space.sm)
+            .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.sm))
+            .accessibilityLabel(label)
     }
 
     private func splitRow(_ draft: Binding<SplitDraft>) -> some View {
@@ -836,6 +1200,10 @@ struct AddExpenseSheet: View {
         return HStack(spacing: Space.sm) {
             Button {
                 draft.wrappedValue.included.toggle()
+                if !draft.wrappedValue.included {
+                    draft.wrappedValue.owedText = ""
+                }
+                syncTotalFromBreakdown()
             } label: {
                 Image(systemName: d.included ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 18, weight: .regular))
@@ -855,11 +1223,27 @@ struct AddExpenseSheet: View {
             Spacer()
 
             if d.included {
-                Text("\(currency.uppercased()) \(formatShare(splitAmount(for: d)))")
-                    .font(.edCaption)
-                    .monospacedDigit()
-                    .foregroundStyle(Tokens.muted)
-                shareControl(draft)
+                switch splitMode {
+                case .amounts:
+                    moneyField(
+                        text: Binding(
+                            get: { draft.wrappedValue.owedText },
+                            set: { newValue in
+                                draft.wrappedValue.owedText = newValue
+                                syncTotalFromBreakdown()
+                            }
+                        ),
+                        label: "Amount \(d.name) owes"
+                    )
+                case .equally, .shares:
+                    Text("\(currency.uppercased()) \(formatShare(splitAmount(for: d)))")
+                        .font(.edCaption)
+                        .monospacedDigit()
+                        .foregroundStyle(Tokens.muted)
+                    if splitMode == .shares {
+                        shareControl(draft)
+                    }
+                }
             }
         }
         .padding(.horizontal, Space.md)
@@ -958,8 +1342,9 @@ struct AddExpenseSheet: View {
 
     /// Seed the split editor (trip context only). New expenses default to an
     /// equal split across everyone; editing a split expense reconstructs its
-    /// stored entries; editing an UNSPLIT trip expense keeps it unsplit (only
-    /// "You" ticked) so it never silently converts to a split on save.
+    /// stored entries, including exact amounts and several payers (#540);
+    /// editing an UNSPLIT trip expense keeps it unsplit (only "You" ticked) so
+    /// it never silently converts to a split on save.
     private func seedTripSplit() {
         guard let ctx = tripContext else { return }
 
@@ -978,6 +1363,8 @@ struct AddExpenseSheet: View {
             if case .existing = target { return existingSplits.isEmpty }
             return false
         }()
+        let storedPayers = existingSplits.filter { ($0.paidAmount ?? 0) > 0 }
+        let byExactAmount = existingSplits.contains { ($0.owedAmount ?? 0) > 0 }
 
         func makeDraft(party: SplitPartyID, name: String, colorHex: String?) -> SplitDraft {
             let entry: ExpenseSplitEntry? = {
@@ -989,7 +1376,9 @@ struct AddExpenseSheet: View {
             let included: Bool
             let shares: Int
             if !existingSplits.isEmpty {
-                included = entry != nil
+                // A payer-only entry (shares 0, an amount paid) is not a sharer,
+                // so it must not come back ticked into the split (#540).
+                included = (entry.map { max($0.shares, 0) > 0 || ($0.owedAmount ?? 0) > 0 }) ?? false
                 shares = max(entry?.shares ?? 1, 1)
             } else if editingUnsplit {
                 included = (party == .me)
@@ -998,7 +1387,18 @@ struct AddExpenseSheet: View {
                 included = true
                 shares = 1
             }
-            return SplitDraft(party: party, name: name, colorHex: colorHex, included: included, shares: shares)
+            let owedText = (entry?.owedAmount).map { formatAmountForEdit($0) } ?? ""
+            let paid = entry?.paidAmount ?? 0
+            return SplitDraft(
+                party: party,
+                name: name,
+                colorHex: colorHex,
+                included: included,
+                shares: shares,
+                owedText: byExactAmount ? owedText : "",
+                paying: storedPayers.count > 1 && paid > 0,
+                paidText: storedPayers.count > 1 && paid > 0 ? formatAmountForEdit(paid) : ""
+            )
         }
 
         var drafts: [SplitDraft] = [
@@ -1009,12 +1409,31 @@ struct AddExpenseSheet: View {
         }
         splitDrafts = drafts
 
+        // Several payers survive a round trip only when the entries carry the
+        // amounts; one payer keeps using `paidByPersonUUID` exactly as before.
+        multiplePayers = storedPayers.count > 1
+        // A reconstructed breakdown is the user's own, not something the editor
+        // is still deriving, so neither auto-behaviour may overwrite it.
+        paidAutoBalanced = !multiplePayers
+        if case .existing = target { amountEditedManually = true }
+
         // Payer defaults to You; fall back to You if the stored payer is no
         // longer on the trip.
         if let payer = existingPayer, ctx.participants.contains(where: { $0.clientUUID == payer }) {
             payerParty = .person(payer)
         } else {
             payerParty = .me
+        }
+
+        // How the slices were expressed. Exact amounts win; otherwise uneven
+        // weights mean the user chose Shares, and everything else is Equally.
+        let includedShares = splitDrafts.filter { $0.included }.map(\.shares)
+        if byExactAmount {
+            splitMode = .amounts
+        } else if Set(includedShares).count > 1 || includedShares.contains(where: { $0 > 1 }) {
+            splitMode = .shares
+        } else {
+            splitMode = .equally
         }
 
         // Trip splits store the FULL bill and carry the breakdown in
@@ -1032,23 +1451,72 @@ struct AddExpenseSheet: View {
     /// accepted the choice, and discarded it, and `seedTripSplit` then read the
     /// nil back as "You". An unsplit expense with another payer is a real
     /// state: the cost is the user's, someone else fronted the money.
+    ///
+    /// With several payers (#540) the amounts go into the entries and
+    /// `paidByPersonUUID` goes nil, because no single id can answer "who paid"
+    /// truthfully. A build that predates this reads such a row as "you paid",
+    /// which is wrong but harmless: it changes no stored figure, and both
+    /// clients ship together.
     private func applyTripSplit(to row: LocalExpense) {
         guard tripContext != nil else { return }
+
+        let payers = multiplePayers ? payingDrafts : []
+        let severalPayers = payers.count > 1
+
+        // One entry per party that has something to say: a slice of the bill, a
+        // contribution to it, or both. A payer who consumed none of the bill is
+        // recorded with zero shares, so the settle-up credits them without
+        // making them a sharer.
+        var entries: [SplitPartyID: ExpenseSplitEntry] = [:]
+        var order: [SplitPartyID] = []
+
         if hasOtherParticipantsInSplit {
-            row.splits = includedDrafts.map { draft in
-                switch draft.party {
-                case .me: return ExpenseSplitEntry(person: nil, shares: draft.shares)
-                case .person(let id): return ExpenseSplitEntry(person: id, shares: draft.shares)
-                }
+            for draft in includedDrafts {
+                let owed = splitMode == .amounts ? Self.parseAmount(draft.owedText) : nil
+                // A party assigned nothing owes nothing, so they get no entry
+                // at all rather than a zero an older build would misread as an
+                // equal share.
+                if let owed, owed <= 0 { continue }
+                order.append(draft.party)
+                entries[draft.party] = ExpenseSplitEntry(
+                    person: partyPersonID(draft.party),
+                    shares: splitMode == .amounts ? 1 : draft.shares,
+                    owedAmount: owed
+                )
             }
-        } else {
-            row.splits = []
         }
-        if case .person(let id) = payerParty {
+        if severalPayers {
+            for draft in payers {
+                let paid = Self.parseAmount(draft.paidText)
+                guard paid > 0 else { continue }
+                let existing = entries[draft.party]
+                if existing == nil { order.append(draft.party) }
+                entries[draft.party] = ExpenseSplitEntry(
+                    person: partyPersonID(draft.party),
+                    shares: existing?.shares ?? 0,
+                    owedAmount: existing?.owedAmount,
+                    paidAmount: paid
+                )
+            }
+        }
+
+        row.splits = order.compactMap { entries[$0] }
+
+        if severalPayers {
+            row.paidByPersonUUID = nil
+        } else if let single = payers.first {
+            row.paidByPersonUUID = partyPersonID(single.party)
+        } else if case .person(let id) = payerParty {
             row.paidByPersonUUID = id
         } else {
             row.paidByPersonUUID = nil
         }
+    }
+
+    /// The person id behind a party, or nil for the user ("me").
+    private func partyPersonID(_ party: SplitPartyID) -> UUID? {
+        if case .person(let id) = party { return id }
+        return nil
     }
 
     /// Shared "tappable field that opens a picker" row for Person / Event.

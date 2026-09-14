@@ -24,7 +24,7 @@ final class SplitAvatarRosterTests: XCTestCase {
     /// recorded, so the coincidence cases render like any other.
     func testNoRecordedSplitOnAnExpenseTheUserPaidReadsYPaidY() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [],
             name: names([:]),
             colorHex: colors([:])
@@ -35,7 +35,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testASplitHoldingOnlyTheUserStillShows() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [ExpenseSplitEntry(person: nil, shares: 1)],
             name: names([:]),
             colorHex: colors([:])
@@ -47,7 +47,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testASplitHoldingOnlyThePayingParticipantStillShows() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: priya,
+            payerParties: [.person(priya)],
             splits: [ExpenseSplitEntry(person: priya, shares: 1)],
             name: names([priya: "Priya"]),
             colorHex: colors([priya: "6366F1"])
@@ -59,7 +59,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testZeroShareEntriesAreNotSharers() {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [
                 ExpenseSplitEntry(person: nil, shares: 1),
                 ExpenseSplitEntry(person: priya, shares: 0)
@@ -82,7 +82,7 @@ final class SplitAvatarRosterTests: XCTestCase {
     /// `LocalExpense.myShareSGD` and `TripSettlement.totals` both already say.
     func testParticipantPayerWithoutASplitLeavesTheShareWithTheUser() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: priya,
+            payerParties: [.person(priya)],
             splits: [],
             name: names([priya: "Priya"]),
             colorHex: colors([priya: "6366F1"])
@@ -101,7 +101,7 @@ final class SplitAvatarRosterTests: XCTestCase {
     /// RECORDED split, so it keeps saying what it records.
     func testParticipantPayerWhoRecordedThemselfAsTheOnlySharerKeepsTheShare() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: priya,
+            payerParties: [.person(priya)],
             splits: [ExpenseSplitEntry(person: priya, shares: 1)],
             name: names([priya: "Priya"]),
             colorHex: colors([priya: "6366F1"])
@@ -112,7 +112,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testUserPayerIsTheLetterY() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [
                 ExpenseSplitEntry(person: nil, shares: 1),
                 ExpenseSplitEntry(person: priya, shares: 1)
@@ -129,7 +129,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testPayerLeadsTheSharerCluster() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: sam,
+            payerParties: [.person(sam)],
             splits: [
                 ExpenseSplitEntry(person: nil, shares: 1),
                 ExpenseSplitEntry(person: priya, shares: 1),
@@ -144,7 +144,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testOneSharerWhoIsNotThePayerStillShowsTheCluster() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [ExpenseSplitEntry(person: priya, shares: 1)],
             name: names([priya: "Priya"]),
             colorHex: colors([priya: "6366F1"])
@@ -154,7 +154,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testDuplicateEntriesForOnePersonCollapse() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: priya,
+            payerParties: [.person(priya)],
             splits: [
                 ExpenseSplitEntry(person: priya, shares: 1),
                 ExpenseSplitEntry(person: priya, shares: 2)
@@ -167,7 +167,7 @@ final class SplitAvatarRosterTests: XCTestCase {
 
     func testDeletedPersonReadsAsSomeone() throws {
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: priya,
+            payerParties: [.person(priya)],
             splits: [ExpenseSplitEntry(person: priya, shares: 1)],
             name: names([:]),
             colorHex: colors([:])
@@ -185,7 +185,7 @@ final class SplitAvatarRosterTests: XCTestCase {
         var lookup: [UUID: String] = [:]
         for (index, id) in extras.enumerated() { lookup[id] = "Person \(index)" }
         let roster = SplitAvatarRoster.make(
-            payerPersonUUID: nil,
+            payerParties: [.me],
             splits: [ExpenseSplitEntry(person: nil, shares: 1)]
                 + extras.map { ExpenseSplitEntry(person: $0, shares: 1) },
             name: names(lookup),
