@@ -237,6 +237,14 @@ targets:
       - path: PersonalDashboard/AI/AnthropicClient+EstimateMeal.swift
       - path: PersonalDashboard/AI/MealEstimateGuards.swift
       - path: PersonalDashboard/AI/MealDuplicateCheck.swift
+      # Meal logging from chat and the Shortcut (#546). The three tools live in
+      # `ToolDefinitions` (already listed) but their shared schema, their
+      # summary value type and the chat card do not, and the Mac runs the same
+      # chat surface, so all three must be here or DexterMac stops compiling
+      # `ExecuteDraftAction`. `MealChatCard.swift` needs no entry: it sits in
+      # `Views/Meals`, which goes in as one directory below.
+      - path: PersonalDashboard/AI/MealToolSchema.swift
+      - path: PersonalDashboard/AI/MealLogSummary.swift
       - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift

@@ -528,6 +528,11 @@ final class VoiceCaptureViewModel {
         case .deleted: verb = "removed"
         case .updated: verb = "updated"
         case .error:   verb = "failed"
+        // Unreachable from the voice overlay, which drives the capture
+        // pipeline and never holds a draft back (#546). Spelled out rather
+        // than defaulted so a future held-back action fails the compile here
+        // instead of quietly reading as "waiting".
+        case .pending: verb = "waiting for you"
         }
         if let title = result.title, !title.isEmpty {
             return "\(entity) \(verb): \(title)"
@@ -548,6 +553,7 @@ final class VoiceCaptureViewModel {
         case .addExpense:                                          return "expense"
         case .addRecurringExpense:                                 return "recurring expense"
         case .clearExpenses:                                       return "expenses"
+        case .logMeal, .updateMeal, .deleteMeal:                   return "meal"
         case .unknown:                                             return "action"
         }
     }

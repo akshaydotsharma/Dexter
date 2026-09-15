@@ -24,23 +24,42 @@ enum DraftExecutionError: LocalizedError {
 /// Outcome of one applied tool call. Surfaced back to the App Intent for
 /// dialog rendering and to the chat UI for confirmation banners.
 struct DraftActionOutcome {
-    let type: String          // "todo" | "note" | "list" | "folder" | "trip" | "itinerary_item"
+    let type: String          // "todo" | "note" | "list" | "folder" | "trip" | "itinerary_item" | "meal"
     let action: String        // see action constants below
     let id: String            // UUID string
     let title: String?
     let dueDate: Date?
     let addedNames: String?
+    /// Present only on `log_meal` / `update_meal` (#546). Carries the numbers,
+    /// the flags and the remaining-today figures that the chat card and the
+    /// Shortcut dialog both read, computed at the moment of the write while the
+    /// store is already open. Defaulted so the existing construction sites are
+    /// untouched.
+    var meal: MealLogSummary? = nil
 }
 
-/// Applies the 15 tool-call action types to SwiftData. Operates on
-/// `LocalTodo / LocalNote / LocalList / LocalNoteFolder`. Deletes are
-/// true deletes (no tombstones).
+/// Applies the tool-call action types to SwiftData. Operates on
+/// `LocalTodo / LocalNote / LocalList / LocalNoteFolder / LocalTrip /
+/// LocalItineraryItem / LocalExpense / LocalMeal`. Deletes are true deletes
+/// (no tombstones).
 @MainActor
 struct ExecuteDraftAction {
     let store: SwiftDataStore
 
-    init(store: SwiftDataStore) {
+    /// The `LocalMeal.source` this dispatcher stamps on a meal it writes
+    /// (#546).
+    ///
+    /// Chat and the Shortcut share every tool and this whole dispatcher, so the
+    /// only thing that can tell them apart is who constructed it. Chat is the
+    /// default because `ExecuteDraftAction.default()` is the chat wiring;
+    /// `ChatToDrafts.default()` overrides it. Getting this wrong costs nothing
+    /// but a wrong provenance badge, which is precisely why it would never be
+    /// noticed if it were left to drift.
+    let mealSource: String
+
+    init(store: SwiftDataStore, mealSource: String = MealSource.chat) {
         self.store = store
+        self.mealSource = mealSource
     }
 
     /// Same shared-store factory as `AssistantContextBuilder.default`.
@@ -77,6 +96,9 @@ struct ExecuteDraftAction {
         case .addExpense: return try await addExpense(input)
         case .addRecurringExpense: return try await addRecurringExpense(input)
         case .clearExpenses: return try clearExpenses(input)
+        case .logMeal: return try logMeal(input)
+        case .updateMeal: return try updateMeal(input)
+        case .deleteMeal: return try deleteMeal(input)
         case .unknown:
             throw DraftExecutionError.invalidArgument(field: "action", reason: "unknown action type")
         }
@@ -474,6 +496,249 @@ struct ExecuteDraftAction {
         f.dateFormat = "d MMM yyyy"
         return f
     }()
+
+    // MARK: - Meals (#546)
+
+    /// `log_meal`. Writes one row from an estimate the model already made.
+    ///
+    /// ### Why there is no second API call here
+    ///
+    /// The estimate arrives IN the tool input. The model read the description
+    /// this turn, so asking it a second time would double the cost of every log
+    /// and, worse, would need the estimation rules written out twice. Instead
+    /// the payload is rebuilt into the same `EstimatedMeal` the composer's
+    /// fenced-JSON call decodes, and from there this path and the composer's
+    /// are literally the same code: `MealEstimateGuards.check` grades it and
+    /// `MealEstimationService.save` writes it. See `MealToolSchema` for why
+    /// that matters.
+    ///
+    /// ### Why a retry is safe
+    ///
+    /// `id` is passed through to `MealService.addMeal`, which treats a supplied
+    /// `clientUUID` as an IDENTITY. A Shortcut that timed out and was re-run
+    /// rewrites the row it already made. There is no separate update path to
+    /// keep in step, because the create IS the update.
+    private func logMeal(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let now = Date()
+        guard let description = trimmedString(input["description"]) else {
+            throw DraftExecutionError.invalidArgument(
+                field: "description",
+                reason: "a meal needs the user's own words"
+            )
+        }
+
+        // Only a valid UUID is honoured as an identity. A malformed one becomes
+        // a fresh row rather than an error: losing the meal over a bad id would
+        // be the worst possible trade on a capture path.
+        let clientUUID: String = {
+            if let raw = trimmedString(input["id"]), UUID(uuidString: raw) != nil {
+                return raw.lowercased()
+            }
+            return UUID().uuidString.lowercased()
+        }()
+
+        let typeHint = MealType(rawValue: (trimmedString(input["meal_type"]) ?? "").lowercased())
+        let resolved = MealToolSchema.resolveDay(isoDate: input["date"]?.stringValue, now: now)
+
+        let checked = MealEstimateGuards.check(
+            MealToolSchema.estimatedMeal(from: input),
+            fallbackMealType: typeHint ?? MealEstimationService.inferredType(at: now)
+        )
+
+        let meals = MealService(store: store)
+        let estimation = MealEstimationService(meals: meals)
+
+        // Duplicates are read BEFORE the write, against the rows that already
+        // exist. Reading afterwards would make a retried Shortcut find the row
+        // it had just rewritten and report its own log as a near-duplicate of
+        // itself.
+        let existingOnDay = (try? meals.meals(on: resolved.day)) ?? []
+        let candidate = MealDuplicateCandidate(
+            id: clientUUID,
+            dayAnchor: WallClock.dayAnchor(from: resolved.day),
+            mealType: checked.mealType,
+            mealDescription: description,
+            loggedAt: now
+        )
+        let duplicateOf = MealDuplicateCheck.matches(
+            for: candidate,
+            among: existingOnDay.map(MealDuplicateCandidate.init)
+        ).max(by: { $0.loggedAt < $1.loggedAt })
+
+        let row: LocalMeal
+        do {
+            row = try estimation.save(
+                checked,
+                description: description,
+                day: resolved.day,
+                loggedAt: now,
+                source: mealSource,
+                clientUUID: clientUUID
+            )
+        } catch {
+            throw DraftExecutionError.persistence(error)
+        }
+        try save()
+
+        return mealOutcome(
+            row: row,
+            action: ActionString.created,
+            duplicateOfID: duplicateOf?.id,
+            wasDateClampedFromFuture: resolved.wasClampedFromFuture,
+            now: now
+        )
+    }
+
+    /// `update_meal`. Re-estimates a logged meal in place.
+    ///
+    /// Goes through the SAME `MealEstimationService.save` the log path uses,
+    /// carrying the existing row's `clientUUID`, so the upsert rewrites that row
+    /// rather than inserting a second one. `createdAt` stays where it was and
+    /// `loggedAt` is preserved, because a correction changes what the meal WAS,
+    /// never when it happened.
+    private func updateMeal(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let now = Date()
+        let existing = try fetchMeal(input["id"])
+
+        // An update with no items key at all is a model that did not
+        // re-estimate. Honouring it would run the guards over an empty array,
+        // which reads as "no food identified" and would zero a perfectly good
+        // meal — a silent data loss dressed up as a correction. An EXPLICIT
+        // empty array with no_food_identified set is a real answer and is let
+        // through.
+        guard MealToolSchema.carriesItems(input) else {
+            throw DraftExecutionError.invalidArgument(
+                field: "items",
+                reason: "a correction must carry the whole re-estimated meal"
+            )
+        }
+
+        let description = trimmedString(input["description"]) ?? existing.mealDescription
+        let typeHint = MealType(rawValue: (trimmedString(input["meal_type"]) ?? "").lowercased())
+        // An absent or empty date leaves the meal on the day it is already on.
+        let resolved = MealToolSchema.resolveDay(
+            isoDate: input["date"]?.stringValue,
+            now: now,
+            fallback: existing.deviceDay
+        )
+
+        let checked = MealEstimateGuards.check(
+            MealToolSchema.estimatedMeal(from: input),
+            fallbackMealType: typeHint ?? existing.mealTypeEnum
+        )
+
+        let estimation = MealEstimationService(meals: MealService(store: store))
+        let row: LocalMeal
+        do {
+            row = try estimation.save(
+                checked,
+                description: description,
+                day: resolved.day,
+                loggedAt: existing.loggedAt,
+                source: mealSource,
+                clientUUID: existing.clientUUID
+            )
+        } catch {
+            throw DraftExecutionError.persistence(error)
+        }
+        try save()
+
+        return mealOutcome(
+            row: row,
+            action: ActionString.updated,
+            duplicateOfID: nil,
+            wasDateClampedFromFuture: resolved.wasClampedFromFuture,
+            now: now
+        )
+    }
+
+    /// `delete_meal`. A true delete, like every other delete here.
+    ///
+    /// Not gated. The chat surface holds this action back until the user
+    /// confirms (`DraftActionType.requiresChatConfirmation`); the Shortcut path
+    /// runs it directly, which is the standing decision for every destructive
+    /// tool on that path.
+    private func deleteMeal(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+        let meal = try fetchMeal(input["id"])
+        let title = meal.mealDescription
+        let id = meal.clientUUID
+        do {
+            try MealService(store: store).deleteMeal(meal)
+        } catch {
+            throw DraftExecutionError.persistence(error)
+        }
+        try save()
+        return DraftActionOutcome(
+            type: "meal",
+            action: ActionString.deleted,
+            id: id,
+            title: title,
+            dueDate: nil,
+            addedNames: nil
+        )
+    }
+
+    /// Build the outcome for a written meal, including the summary both
+    /// surfaces render from.
+    ///
+    /// The day is re-read AFTER the write so the remaining-today figures
+    /// include the meal that was just logged. A "left today" line that ignored
+    /// the log that produced it would be answering the wrong question.
+    private func mealOutcome(
+        row: LocalMeal,
+        action: String,
+        duplicateOfID: String?,
+        wasDateClampedFromFuture: Bool,
+        now: Date
+    ) -> DraftActionOutcome {
+        let meals = MealService(store: store)
+        let dayMeals = (try? meals.meals(on: row.deviceDay)) ?? [row]
+        let duplicateOf = duplicateOfID.flatMap { id in
+            dayMeals.first { $0.clientUUID == id }
+        }
+        let summary = MealLogSummary(
+            meal: row,
+            dayMeals: dayMeals,
+            targets: try? meals.targets(on: row.deviceDay),
+            duplicateOf: duplicateOf,
+            wasDateClampedFromFuture: wasDateClampedFromFuture,
+            now: now
+        )
+        return DraftActionOutcome(
+            type: "meal",
+            action: action,
+            id: row.clientUUID,
+            // The dialog sentence, verbatim. Same convention as the bulk
+            // expense clear: when the title IS the sentence, the App Intent
+            // speaks it rather than wrapping it in a phrase that would bury the
+            // number.
+            title: summary.dialogSentence(now: now),
+            dueDate: nil,
+            addedNames: nil,
+            meal: summary
+        )
+    }
+
+    /// Fetch a meal by its `clientUUID`.
+    ///
+    /// Separate from `fetchOne` because `LocalMeal.clientUUID` is a `String`,
+    /// not a `UUID` — the AI tool surface emits and consumes UUIDs as strings,
+    /// and this model stores them that way so a retried Shortcut can name the
+    /// row it already made.
+    private func fetchMeal(_ value: AnthropicJSONValue?) throws -> LocalMeal {
+        let raw = (value?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty, UUID(uuidString: raw) != nil else {
+            throw DraftExecutionError.notFound(entityType: "meal", idString: raw.isEmpty ? "<missing>" : raw)
+        }
+        let lowered = raw.lowercased()
+        let descriptor = FetchDescriptor<LocalMeal>(
+            predicate: #Predicate { $0.clientUUID == lowered }
+        )
+        guard let row = try? store.context.fetch(descriptor).first else {
+            throw DraftExecutionError.notFound(entityType: "meal", idString: lowered)
+        }
+        return row
+    }
 
     // MARK: - Trip / group split (#258)
 

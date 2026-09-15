@@ -347,6 +347,8 @@ struct AssistantContextBuilder {
             }
         }
 
+        out += mealsBlock(now: now)
+
         // Personal vocabulary: words the user has explicitly taught the
         // assistant so the model can prefer them over close-sounding
         // mistranscriptions ("envisso" vs. "in visa", "Dexter" vs. "Dexter
@@ -367,6 +369,98 @@ struct AssistantContextBuilder {
                 return "- \(safeTerm): \(Self.safe(trimmedNotes, maxLen: 200))"
             }.joined(separator: "\n")
             out += "\n</personal_vocabulary>"
+        }
+
+        return out
+    }
+
+    // MARK: - Meals (#546)
+
+    /// Today's meals, the eight targets, and a one-line seven-day rollup.
+    ///
+    /// ### Why it is this small and not smaller, and never bigger
+    ///
+    /// This block is added to EVERY prompt in EVERY section of the app,
+    /// permanently. That is the constraint everything below follows from.
+    ///
+    /// Today's rows carry their UUIDs because `update_meal` and `delete_meal`
+    /// cannot address a meal without one, so "that latte was oat milk" fails
+    /// outright if they are missing. They are the only individual rows here.
+    ///
+    /// The targets go on ONE line because "how many calories do I have left" is
+    /// a subtraction the model can only do if it can see both sides.
+    ///
+    /// The week is a SINGLE rollup line. Injecting seven days of individual
+    /// rows would inflate every chat turn everywhere, permanently, to answer
+    /// "am I short on protein this week" — which the rollup already answers.
+    ///
+    /// The whole block is skipped when the user has never logged a meal and has
+    /// no targets, so someone who does not use Meals pays nothing for it.
+    private func mealsBlock(now: Date) -> String {
+        let meals = MealService(store: store)
+        guard let today = try? meals.meals(on: now) else { return "" }
+
+        let weekStart = WallClock.storedDay(WallClock.dayAnchor(from: now), byAdding: -6)
+        let week = (try? meals.meals(from: WallClock.deviceDay(from: weekStart), to: now)) ?? []
+        let targets = try? meals.targets(on: now)
+
+        guard !today.isEmpty || !week.isEmpty || targets != nil else { return "" }
+
+        var out = "\n\nMEALS TODAY (these UUIDs address update_meal / delete_meal; a NEW meal always needs a FRESH uuid):"
+
+        if today.isEmpty {
+            out += "\n- Nothing logged today yet."
+        } else {
+            for meal in today.sorted(by: { $0.loggedAt < $1.loggedAt }) {
+                let n = meal.nutrients
+                var line = "\n- ID:\(meal.clientUUID) \(meal.mealTypeEnum.rawValue)"
+                line += " \"\(Self.safe(meal.mealDescription, maxLen: 120))\""
+                if meal.needsDetail {
+                    line += " · no estimate yet (needs detail)"
+                } else {
+                    line += String(
+                        format: " · %.0f kcal · P %.0f C %.0f F %.0f",
+                        n.calories, n.proteinG, n.carbsG, n.fatG
+                    )
+                }
+                // A flagged meal is OUT of the totals below, so the model must
+                // see the flag or it will report a sum that does not add up
+                // from the rows it can see.
+                if meal.isSuspect { line += " · flagged, not counted" }
+                out += line
+            }
+
+            let summary = MealDaySummary(meals: today)
+            out += String(
+                format: "\n- So far today: %.0f kcal · P %.0f · C %.0f · F %.0f · fibre %.0f · sugar %.0f · sodium %.0f mg · sat fat %.0f",
+                summary.totals.calories, summary.totals.proteinG, summary.totals.carbsG,
+                summary.totals.fatG, summary.totals.fibreG, summary.totals.sugarG,
+                summary.totals.sodiumMg, summary.totals.satFatG
+            )
+        }
+
+        if let targets {
+            let t = targets.targets
+            out += String(
+                format: "\n- Daily targets: %.0f kcal · P %.0f · C %.0f · F %.0f · fibre %.0f · sugar %.0f · sodium %.0f mg · sat fat %.0f",
+                t.calories, t.proteinG, t.carbsG, t.fatG,
+                t.fibreG, t.sugarG, t.sodiumMg, t.satFatG
+            )
+        }
+
+        // One line for seven days. Averaged over the days that were LOGGED, not
+        // over seven, so a week with four entries reports what was eaten on
+        // those four rather than a number diluted by the days nobody recorded.
+        if !week.isEmpty {
+            let counted = week.filter { !$0.isSuspect && !$0.needsDetail }
+            let loggedDays = Set(week.map { WallClock.startOfStoredDay($0.date) }).count
+            let totals = counted.reduce(MealNutrients.zero) { $0 + $1.nutrients }
+            let divisor = Double(max(loggedDays, 1))
+            out += String(
+                format: "\n- Last 7 days: %.0f kcal/day · P %.0f/day, across %d logged day%@ (%d meals)",
+                totals.calories / divisor, totals.proteinG / divisor,
+                loggedDays, loggedDays == 1 ? "" : "s", week.count
+            )
         }
 
         return out

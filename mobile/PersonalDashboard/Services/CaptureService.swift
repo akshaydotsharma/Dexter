@@ -5,12 +5,17 @@ import Foundation
 /// `id` is a UUID string (the SwiftData `clientUUID`) — the on-device
 /// pipeline has no integer IDs.
 struct ExecutedDraft: Sendable {
-    let type: String        // "todo" | "note" | "list" | "folder"
+    let type: String        // "todo" | "note" | "list" | "folder" | "expense" | "meal"
     let action: String      // "created" | "completed" | "reopened" | "updated" | "deleted" | "items_added" | "item_updated" | "item_removed"
     let id: String
     let title: String?
     let dueDate: Date?
     let addedNames: String?
+    /// Present only for a logged meal (#546). The App Intent speaks
+    /// `MealLogSummary.dialogSentence()`, which always states either a number
+    /// or the reason there is no number — a silent success is how a day
+    /// quietly ends up half logged.
+    var meal: MealLogSummary? = nil
 }
 
 /// One tool call the LLM issued that we couldn't apply (bad UUID, missing
@@ -101,7 +106,8 @@ struct CaptureService: Sendable {
                     id: outcome.id,
                     title: outcome.title,
                     dueDate: outcome.dueDate,
-                    addedNames: outcome.addedNames
+                    addedNames: outcome.addedNames,
+                    meal: outcome.meal
                 )
             }
             let failed = result.failed.map { rec in

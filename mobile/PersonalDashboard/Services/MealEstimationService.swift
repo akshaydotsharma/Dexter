@@ -18,6 +18,17 @@ enum MealSource {
     /// The eight totals were typed by the user. Known beats estimated: a meal
     /// with this source is never re-estimated without a confirmation.
     static let user = "user"
+
+    /// Logged through the chat surface's `log_meal` / `update_meal` tools
+    /// (#546). Estimated, like `composer`, but by the chat turn itself rather
+    /// than by a second call.
+    static let chat = "chat"
+
+    /// Logged hands-free through the Shortcut, via `CaptureService` (#546).
+    /// Same tools and same guards as `chat`; kept apart because a meal logged
+    /// without anyone looking at the screen is the one most worth being able to
+    /// find later.
+    static let capture = "capture"
 }
 
 /// Everything between "the user described a meal" and "a row exists" (#543).

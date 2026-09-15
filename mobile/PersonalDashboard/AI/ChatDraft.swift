@@ -185,9 +185,54 @@ extension ChatDraft {
         case .clearExpenses:
             return Self.clearExpensesSummary(dict: dict)
 
+        case .logMeal, .updateMeal:
+            return Self.mealSummary(dict: dict)
+
+        case .deleteMeal:
+            return "Delete meal (ID: \(dict["id"]?.stringValue ?? "?"))"
+
         case .unknown:
             return "Unknown action"
         }
+    }
+
+    /// Preview for `log_meal` / `update_meal` (#546).
+    ///
+    /// Sums the items rather than reading a total, because the tool schema has
+    /// no total: a meal's calories ARE the sum of its dishes, and a second
+    /// stated figure would be a number that could disagree with its own parts.
+    ///
+    /// This is the pre-execution line only. Once the row exists, the card
+    /// renders `MealLogSummary` instead, which carries the CHECKED numbers —
+    /// the ones the guards may have clamped — and the remaining-today figures.
+    private static func mealSummary(dict: [String: AnthropicJSONValue]) -> String {
+        let type = (dict["meal_type"]?.stringValue ?? "").lowercased()
+        let label = MealType(rawValue: type)?.displayName ?? "Meal"
+        let description = (dict["description"]?.stringValue ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var line = description.isEmpty ? label : "\(label) · \(description)"
+
+        let items = dict["items"]?.arrayValue ?? []
+        let calories = items.reduce(0.0) { total, entry in
+            guard let value = entry.objectValue?["calories"] else { return total }
+            return total + (value.doubleValue ?? Double(value.stringValue ?? "") ?? 0)
+        }
+        if !items.isEmpty {
+            line += String(format: " · %.0f kcal", calories)
+        }
+        // The day is named only when it is NOT today. A silently misdated meal
+        // corrupts two days at once and neither one looks wrong.
+        //
+        // `parseAnyDate` reads the date in UTC, which is a day ANCHOR, so the
+        // "is it today" test goes through `deviceDay` first. Asking
+        // `isDateInToday` of the raw anchor answers "yesterday" for every meal
+        // anywhere west of UTC (#506).
+        if let anchor = (dict["date"]?.stringValue).flatMap(parseAnyDate),
+           !Calendar.current.isDateInToday(WallClock.deviceDay(from: anchor)) {
+            line += " · \(shortDayMonth.string(from: anchor))"
+        }
+        return line
     }
 
     /// Preview for `clear_expenses`. The card is rendered before the executor
