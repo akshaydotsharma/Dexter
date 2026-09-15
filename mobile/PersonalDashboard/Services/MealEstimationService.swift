@@ -122,6 +122,10 @@ struct MealEstimationService {
             // visible on a meal that is NOT suspect and therefore has no
             // `suspectReason` to show it in.
             assumptionsNote: checked.storedAssumptionsNote,
+            // #555. The model's answer is stored rather than consumed, so a
+            // later hand edit re-checks the meal against the same fact that
+            // exempted it the first time.
+            containsAlcohol: checked.containsAlcohol,
             clientUUID: clientUUID
         )
     }
@@ -150,7 +154,9 @@ struct MealEstimationService {
             needsDetail: meal.needsDetail,
             isSuspect: meal.isSuspect,
             suspectReason: meal.suspectReason,
-            assumptionsNote: meal.assumptionsNote
+            assumptionsNote: meal.assumptionsNote,
+            // #555. A repeat of a meal that held a drink still holds a drink.
+            containsAlcohol: meal.containsAlcohol
         )
     }
 
@@ -174,16 +180,19 @@ struct MealEstimationService {
 
     /// Set a meal's items and re-total from them, re-checking the result.
     ///
-    /// No API call. `MealEstimateGuards.recheckHandEdited` runs the clamps and
-    /// the hard bounds and deliberately skips the macro consistency check — see
-    /// the note there for why an estimate's self-consistency test is the wrong
-    /// question to ask of a number the user typed.
+    /// No API call. `MealEstimateGuards.recheckHandEdited` runs the clamps, the
+    /// hard bounds and, since #555, the macro consistency check. The stored
+    /// `containsAlcohol` is what makes that last one answerable here: without
+    /// it the guard could not tell a beer from a broken estimate.
     ///
     /// Re-checking at all is deliberate in the other direction: a meal that was
     /// suspect for a reason the edit has fixed must stop being suspect, or a
     /// corrected meal would stay out of the day's totals forever.
     func recomputeTotals(of meal: LocalMeal, from items: [MealItemEntry]) throws {
-        let result = MealEstimateGuards.recheckHandEdited(items: items)
+        let result = MealEstimateGuards.recheckHandEdited(
+            items: items,
+            containsAlcohol: meal.containsAlcohol
+        )
         // Only the INVALIDATING failures flag the meal. A clamp leaves the
         // numbers coherent, and excluding a repaired meal would take a real
         // lunch out of the day's total over a gram of sugar.
@@ -224,6 +233,37 @@ struct MealEstimationService {
             isSuspect: false,
             suspectReason: .some(nil)
         )
+    }
+
+    /// Correct whether a meal held a drink, and re-grade it on the new answer
+    /// (#555).
+    ///
+    /// No API call. The flag decides whether the macro consistency check fires,
+    /// so writing it without re-grading would leave a meal flagged suspect for
+    /// a miss the user has just explained, or unflagged for one they have just
+    /// withdrawn.
+    ///
+    /// ### Why the re-grade is skipped for two kinds of meal
+    ///
+    /// The re-grade re-totals from the items, which is a no-op on the numbers
+    /// whenever the totals ARE the sum of the items — true of every estimated
+    /// meal by construction. It is NOT true of the other two:
+    ///
+    /// 1. A meal whose totals the user typed. Known beats estimated, so the
+    ///    guards do not grade it, and re-totalling would throw the typed
+    ///    numbers away.
+    /// 2. A meal with no items at all, which can still carry totals (a restore
+    ///    from a peer, a needs-detail row). Re-totalling from an empty array
+    ///    would zero it.
+    ///
+    /// Both still take the flag. Only the grading is withheld.
+    ///
+    /// This lives on the service and not in the sheet on purpose: a decision
+    /// made inside a SwiftUI View is a decision no test can reach (#488).
+    func setContainsAlcohol(_ containsAlcohol: Bool, on meal: LocalMeal) throws {
+        try meals.updateMeal(meal, containsAlcohol: containsAlcohol)
+        guard !meal.totalsWereOverridden, !meal.items.isEmpty else { return }
+        try recomputeTotals(of: meal, from: meal.items)
     }
 }
 

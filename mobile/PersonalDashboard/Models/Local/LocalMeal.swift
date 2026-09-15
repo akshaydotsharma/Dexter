@@ -119,6 +119,41 @@ final class LocalMeal {
     /// argue with. Nil when nothing was assumed.
     var assumptionsNote: String?
 
+    /// The meal contained beer, wine, cider, a spirit or a mixed drink (#555).
+    ///
+    /// Additive with a default, which is the safe kind of SwiftData migration:
+    /// every existing row reads false and nothing else on the model moves.
+    ///
+    /// ⚠️ **The `= false` on the declaration is load-bearing.** A default on the
+    /// initialiser alone is not enough: SwiftData reads the DECLARATION to give
+    /// the Core Data attribute a default value, and without one a lightweight
+    /// migration of a store that already holds meals fails outright with
+    /// "Validation error missing attribute values on mandatory destination
+    /// attribute", taking the whole container down at launch. Measured on the
+    /// simulator while building #555. `LocalExpense.hiddenFromFinance` carries
+    /// the same `= false` for the same reason.
+    ///
+    /// ### Why a flag and not a nutrient
+    ///
+    /// Ethanol carries about 7 kcal per gram and is not protein, carbohydrate
+    /// or fat. It therefore appears in `calories` and in none of the three
+    /// macro columns, so `4P + 4C + 9F` under-counts an alcoholic meal by the
+    /// whole of its drink. `MealEstimateGuards.macroConsistency` exempts a meal
+    /// carrying this flag for exactly that reason.
+    ///
+    /// ### Why it is stored rather than re-derived
+    ///
+    /// The model answers it once, on the estimate. Before #555 the answer died
+    /// there, so a hand edit left the app unable to tell a legitimate alcohol
+    /// miss from an incoherent estimate, and the highest-value guard in the set
+    /// had to be switched off for every corrected meal. Guessing the flag back
+    /// from the numbers is not available: an exempt meal and a broken one look
+    /// the same from the four totals alone.
+    ///
+    /// The user can correct it from the meal detail sheet, because the flag now
+    /// decides whether a guard fires.
+    var containsAlcohol: Bool = false
+
     var createdAt: Date
     var updatedAt: Date
 
@@ -153,6 +188,7 @@ final class LocalMeal {
         isSuspect: Bool = false,
         suspectReason: String? = nil,
         assumptionsNote: String? = nil,
+        containsAlcohol: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         needsSync: Bool = false,
@@ -178,6 +214,7 @@ final class LocalMeal {
         self.isSuspect = isSuspect
         self.suspectReason = suspectReason
         self.assumptionsNote = assumptionsNote
+        self.containsAlcohol = containsAlcohol
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.needsSync = needsSync

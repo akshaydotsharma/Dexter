@@ -858,6 +858,10 @@ final class DataImportService {
                     isSuspect: dto.isSuspect,
                     suspectReason: dto.suspectReason,
                     assumptionsNote: dto.assumptionsNote,
+                    // #555. An archive or a peer that predates the field says
+                    // nothing about alcohol, which reads as "no alcohol": the
+                    // same default a row created before the field carries.
+                    containsAlcohol: dto.containsAlcohol ?? false,
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt
                 )

@@ -671,6 +671,10 @@ final class DataExportService {
             isSuspect: meal.isSuspect,
             suspectReason: meal.suspectReason,
             assumptionsNote: meal.assumptionsNote,
+            // #555. Always written, never left to the optional's nil, so a
+            // toggle from true to false changes the record's content hash and
+            // therefore reaches every peer.
+            containsAlcohol: meal.containsAlcohol,
             createdAt: meal.createdAt,
             updatedAt: meal.updatedAt
         )
