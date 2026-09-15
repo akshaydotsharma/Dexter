@@ -49,6 +49,13 @@ struct MealRow: View {
 
     let onTap: () -> Void
 
+    /// True for the ~600 ms after a deep-link lands on this row (#547). Drawn
+    /// in the section accent, not in a verdict hue: the pulse says "this is the
+    /// one you tapped", which is a fact about the navigation and not about the
+    /// meal. Declared last so the existing three-argument call sites keep
+    /// compiling.
+    var isFocused: Bool = false
+
     private var needsAttention: Bool {
         meal.isSuspect || meal.needsDetail || isDuplicate
     }
@@ -127,6 +134,16 @@ struct MealRow: View {
                 in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
             )
             .paperBorder(needsAttention ? Tokens.warning.opacity(0.35) : Tokens.border, radius: Radius.lg)
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                    .fill(Tokens.accentMeals.opacity(isFocused ? 0.12 : 0))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                            .stroke(Tokens.accentMeals.opacity(isFocused ? 0.85 : 0), lineWidth: 1.5)
+                    )
+                    .allowsHitTesting(false)
+            )
+            .animation(.easeOut(duration: 0.25), value: isFocused)
             .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         }
         .buttonStyle(.plain)

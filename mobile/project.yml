@@ -176,6 +176,10 @@ targets:
       - path: PersonalDashboard/Services/VisionBoardService.swift
       - path: PersonalDashboard/Views/Lists/ListsView.swift
       - path: PersonalDashboard/Views/Today/TodayView.swift
+      # The Today meals card (#547). Its own file because it is the only
+      # Today card backed by a live @Query rather than a view model, and
+      # because it reads the Meals section's own summary type.
+      - path: PersonalDashboard/Views/Today/TodayMealsCard.swift
       - path: PersonalDashboard/Views/Notes/NoteAutosave.swift
       - path: PersonalDashboard/Views/Notes/NotesView.swift
       - path: PersonalDashboard/Views/Components/MarkdownEditor.swift
@@ -245,6 +249,12 @@ targets:
       # `Views/Meals`, which goes in as one directory below.
       - path: PersonalDashboard/AI/MealToolSchema.swift
       - path: PersonalDashboard/AI/MealLogSummary.swift
+      # Target derivation (#544). The one API call; the six inputs, the review
+      # draft and the enums behind the form all live under Models/ and ride the
+      # glob at the top of this list. Without this entry the Mac can hold and
+      # read targets and has no way to derive them, which is the same half-a-
+      # feature #542's note warns about for the service.
+      - path: PersonalDashboard/AI/AnthropicClient+DeriveTargets.swift
       - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift
