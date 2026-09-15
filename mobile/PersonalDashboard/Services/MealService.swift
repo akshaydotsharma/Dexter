@@ -69,6 +69,7 @@ struct MealService {
         isSuspect: Bool = false,
         suspectReason: String? = nil,
         assumptionsNote: String? = nil,
+        containsAlcohol: Bool = false,
         clientUUID: String? = nil
     ) throws -> LocalMeal {
         guard !nutrients.hasNegativeValue else { throw MealServiceError.invalidNutrients }
@@ -89,6 +90,7 @@ struct MealService {
             existing.isSuspect       = isSuspect
             existing.suspectReason   = suspectReason?.trimmedNonEmptyMealField
             existing.assumptionsNote = assumptionsNote?.trimmedNonEmptyMealField
+            existing.containsAlcohol = containsAlcohol
             existing.updatedAt       = Date()
             try save()
             return existing
@@ -105,7 +107,8 @@ struct MealService {
             needsDetail: needsDetail,
             isSuspect: isSuspect,
             suspectReason: suspectReason?.trimmedNonEmptyMealField,
-            assumptionsNote: assumptionsNote?.trimmedNonEmptyMealField
+            assumptionsNote: assumptionsNote?.trimmedNonEmptyMealField,
+            containsAlcohol: containsAlcohol
         )
         row.nutrients = nutrients
         row.items = items
@@ -144,7 +147,8 @@ struct MealService {
         needsDetail: Bool? = nil,
         isSuspect: Bool? = nil,
         suspectReason: String?? = nil,
-        assumptionsNote: String?? = nil
+        assumptionsNote: String?? = nil,
+        containsAlcohol: Bool? = nil
     ) throws {
         if let date {
             meal.date = WallClock.dayAnchor(from: date)
@@ -182,6 +186,14 @@ struct MealService {
         }
         if let assumptionsNote {
             meal.assumptionsNote = assumptionsNote?.trimmedNonEmptyMealField
+        }
+        // #555. A plain `Bool?`, not a double optional, and that is safe here
+        // in a way it was not for the two text fields above. A toggle always
+        // knows its own state, so it passes `false` rather than nil: "clear it"
+        // and "leave it" stay two different requests, which is the whole of
+        // what #444 and #488 got wrong.
+        if let containsAlcohol {
+            meal.containsAlcohol = containsAlcohol
         }
         meal.updatedAt = Date()
         try save()

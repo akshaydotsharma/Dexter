@@ -146,6 +146,7 @@ struct MealDetailSheet: View {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         statusBlock
                         describeSection
+                        alcoholSection
                         if !itemDrafts.isEmpty {
                             itemsSection
                         }
@@ -297,6 +298,43 @@ struct MealDetailSheet: View {
                 .font(.edCaption)
                 .foregroundStyle(Tokens.muted)
         }
+    }
+
+    /// The one fact about a meal the user can correct that changes whether a
+    /// guard fires (#555).
+    ///
+    /// It earns a row of its own rather than a line in the items list because
+    /// it is not a number: it is the reason a set of numbers is allowed to
+    /// disagree with itself. A meal the model read as a soft drink and the user
+    /// knows was a cider has to be fixable, or the macro consistency check
+    /// flags an honest estimate forever.
+    private var alcoholSection: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Toggle(isOn: alcoholBinding) {
+                Text("Contains alcohol")
+                    .font(.edFootnote)
+            }
+            .toggleStyle(.switch)
+            .tint(Tokens.accentMeals)
+            .padding(Space.md)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.md)
+
+            Text("Alcohol carries calories that sit in no macro, so a meal with a drink is exempt from the macro consistency check.")
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Reads the stored flag and writes through the service, which re-grades
+    /// the meal on the new answer. The decision about WHAT re-grading means
+    /// lives in `MealEstimationService.setContainsAlcohol`, not here.
+    private var alcoholBinding: Binding<Bool> {
+        Binding(
+            get: { meal.containsAlcohol },
+            set: { setAlcohol($0) }
+        )
     }
 
     private var itemsSection: some View {
@@ -531,6 +569,19 @@ struct MealDetailSheet: View {
             } catch {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func setAlcohol(_ containsAlcohol: Bool) {
+        do {
+            try service.setContainsAlcohol(containsAlcohol, on: meal)
+            itemDrafts = meal.items.map(MealItemDraft.init)
+            for nutrient in Nutrient.allCases {
+                overrideValues[nutrient] = MealItemDraft.string(meal.nutrients[nutrient])
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

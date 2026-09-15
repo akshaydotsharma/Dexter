@@ -41,7 +41,8 @@ final class MealDayTotalsTests: XCTestCase {
         suspect: Bool = false,
         needsDetail: Bool = false,
         source: String = MealSource.composer,
-        items: [MealItemEntry] = []
+        items: [MealItemEntry] = [],
+        containsAlcohol: Bool = false
     ) throws -> LocalMeal {
         try meals.addMeal(
             date: day,
@@ -54,7 +55,8 @@ final class MealDayTotalsTests: XCTestCase {
             source: source,
             needsDetail: needsDetail,
             isSuspect: suspect,
-            suspectReason: suspect ? "The macros do not add up." : nil
+            suspectReason: suspect ? "The macros do not add up." : nil,
+            containsAlcohol: containsAlcohol
         )
     }
 
@@ -290,7 +292,15 @@ final class MealDayTotalsTests: XCTestCase {
         try service.replaceItem(slip, in: meal)
 
         XCTAssertTrue(meal.isSuspect)
-        XCTAssertEqual(meal.suspectReason, "3400 kcal is beyond what one meal plausibly holds.")
+        // Two reasons, in the order the guards run. Since #555 the macro
+        // consistency check runs on a hand edit as well, and 3,400 kcal of rice
+        // whose macros account for 253 fails it too — correctly: one typed
+        // number moved and the other seven did not.
+        XCTAssertEqual(
+            meal.suspectReason,
+            "3400 kcal is beyond what one meal plausibly holds. "
+                + "The macros account for 253 kcal but the meal states 3400 kcal."
+        )
         XCTAssertEqual(meal.calories, 3400, accuracy: 0.0001)
     }
 
@@ -334,27 +344,49 @@ final class MealDayTotalsTests: XCTestCase {
         XCTAssertNil(meal.suspectReason)
     }
 
-    /// The macro consistency check is deliberately NOT re-run on a hand edit.
+    /// The macro consistency check DOES run on a hand edit (#555), and the
+    /// stored alcohol flag is what decides it.
     ///
-    /// It asks whether an estimate agrees with itself, and its answer only means
-    /// anything alongside the alcohol flag, which belongs to the estimate and is
-    /// not stored. A number the user typed is not an estimate.
-    func testAHandEditIsNotJudgedByTheConsistencyCheck() throws {
+    /// Before #555 this check was skipped here, because the flag lived on the
+    /// estimate and died there: the guard could not tell a glass of wine from
+    /// an incoherent set of numbers. The flag is stored now, so the exemption
+    /// is decided by the same fact that decided it at capture time.
+    func testAHandEditedAlcoholMealIsExemptFromTheConsistencyCheck() throws {
         let item = MealItemEntry(
             name: "Wine", portionQuantity: 175, portionUnit: "ml",
             calories: 160, proteinG: 0, carbsG: 4, fatG: 0
         )
-        let meal = try log("A glass of wine", calories: 160, protein: 0, items: [item])
+        let meal = try log("A glass of wine", calories: 160, protein: 0, items: [item], containsAlcohol: true)
 
         var corrected = item
         corrected.calories = 190
         try service.replaceItem(corrected, in: meal)
 
-        // 4(0) + 4(4) + 9(0) = 16 against 190 stated. An estimate saying that
-        // would be flagged; a user saying it is taken at their word.
+        // 4(0) + 4(4) + 9(0) = 16 against 190 stated. The alcohol accounts for
+        // the whole of the difference, which is why the meal is exempt.
         XCTAssertFalse(meal.isSuspect)
         XCTAssertNil(meal.suspectReason)
         XCTAssertEqual(meal.calories, 190, accuracy: 0.0001)
+    }
+
+    /// The same edit on a meal that is NOT alcohol is flagged. Without this the
+    /// exemption above could be unconditional and nothing would notice.
+    func testTheSameHandEditWithoutTheFlagIsSuspect() throws {
+        let item = MealItemEntry(
+            name: "Grape juice", portionQuantity: 175, portionUnit: "ml",
+            calories: 160, proteinG: 0, carbsG: 4, fatG: 0
+        )
+        let meal = try log("A glass of grape juice", calories: 160, protein: 0, items: [item])
+
+        var corrected = item
+        corrected.calories = 190
+        try service.replaceItem(corrected, in: meal)
+
+        XCTAssertTrue(meal.isSuspect)
+        XCTAssertEqual(
+            meal.suspectReason,
+            "The macros account for 16 kcal but the meal states 190 kcal."
+        )
     }
 
     // MARK: - Overriding the totals
