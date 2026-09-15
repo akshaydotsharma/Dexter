@@ -26,12 +26,25 @@
 #      which would kill a teammate's or another agent's instance).
 #   3. Launches this worktree's build with LAUNCH_SECTION so it lands on the
 #      surface under review — no synthetic clicks needed.
-#   4. Raises it, asserts the window belongs to OUR pid and carries the expected
-#      title, and screenshots it as proof of what is on screen.
+#   4. Activates the app, THEN probes for its window (#577 — see below), asserts
+#      the window belongs to OUR pid and carries the expected title, and
+#      screenshots it as proof of what is on screen.
 #
 # Caveat: quitting discards the running app's in-memory state, and Chat turns are
 # NOT persisted. Don't run this while the user is mid-conversation in Chat
 # without saying so first.
+#
+# Exit codes (#577 — these are deliberately distinct so a caller, or a human
+# reading the output, never mistakes "I could not verify" for "the launch
+# failed"):
+#   0  success — window found, title matched, screenshot captured
+#   1  genuine failure — build failed, no binary, schema pre-flight refused,
+#      a running instance would not quit, no window ever appeared (and the
+#      screen is not locked), or the window title does not match. Fails loud.
+#   2  the screen is locked — verification could not be attempted, this is
+#      NOT a claim that the wrong surface is open
+#   3  the window WAS found with the right title, but the screenshot capture
+#      itself failed — the right surface is open, only the proof photo failed
 set -euo pipefail
 
 SECTION="${1:-tasks}"
@@ -113,10 +126,30 @@ echo "    $CHECK"
 # the CG window list, which honours the owner pid. On-screen first, then the full
 # list: a window that has not been raised yet (or sits on another Space) is
 # invisible to .optionOnScreenOnly and reads as "the app never opened a window".
+#
+# #577: a window opened while ANOTHER app is fullscreen lands on a different
+# Space and stays invisible to CGWindowList — even the .optionAll fallback —
+# until the owning app is activated. So this probe can activate the app by pid
+# FIRST, before listing windows; that is what four false "wrong surface"
+# failures on 15 Sep 2026 turned out to need. Pass "activate" as a second
+# argument to opt in. The quit-escalation window-count check below passes no
+# second argument and keeps the old passive behaviour — no reason to steal
+# focus from an instance we are about to terminate, and no reason to filter out
+# an untitled modal/sheet there (that untitled window is exactly what makes
+# quit_instance refuse to escalate).
+#
+# Output is left unfiltered/unsorted here (id, size, title, one per line); the
+# launch-probe caller below picks by non-empty title + largest area itself, so
+# the quit-count caller is unaffected by that convention.
 cat > "$OUT_DIR/winid.swift" <<'SWIFT'
+import AppKit
 import CoreGraphics
 import Foundation
 let pid = Int(CommandLine.arguments[1])!
+if CommandLine.arguments.count > 2, CommandLine.arguments[2] == "activate" {
+    NSRunningApplication(processIdentifier: Int32(pid))?.activate(options: [.activateAllWindows])
+    Thread.sleep(forTimeInterval: 0.3)  // let the Space switch land before listing
+}
 func list(_ o: CGWindowListOption) -> [[String: Any]] {
     ((CGWindowListCopyWindowInfo([o, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? [])
         .filter { ($0[kCGWindowOwnerPID as String] as? Int) == pid }
@@ -187,12 +220,53 @@ disown 2>/dev/null || true
 echo "==> launched pid=$PID section=$SECTION"
 
 # --- identity assertion + capture ---
+#
+# Activate BEFORE probing (#577): pass "activate" so winid.swift raises the app
+# by pid on every iteration, before it lists windows. This is what makes a
+# window on another Space (created while some other app is fullscreen) show up
+# at all — without it, CGWindowList reports zero windows for a launch that
+# actually succeeded, and the old code read that as "wrong surface".
+#
+# Selection: non-empty title + largest area (see comment on winid.swift above).
+# Doing it here in awk keeps the swift probe itself unfiltered/reusable for the
+# quit-count check, which wants every window, titled or not.
 WIN=""
 for _ in $(seq 1 30); do
     sleep 1
-    WIN="$(swift "$OUT_DIR/winid.swift" "$PID" 2>/dev/null | head -1 || true)"
+    WIN="$(swift "$OUT_DIR/winid.swift" "$PID" activate 2>/dev/null \
+        | awk -F'\t' '$3 != "" { split($2, d, "x"); area = d[1] * d[2]; print area "\t" $0 }' \
+        | sort -rn | head -1 | cut -f2-)"
     [ -n "$WIN" ] && break
 done
+
+# A locked screen is a THIRD outcome, distinct from both success and a genuine
+# failure: it produces the same empty/blank-titled symptom as the Spaces bug
+# above, but no amount of activating fixes it, and it is not the script's or the
+# build's fault. Check for it whenever the window is missing or came back with
+# no title, so it is never reported as "the wrong surface is open" (#577).
+#
+# Detection: CGSessionCopyCurrentDictionary's CGSSessionScreenIsLocked key —
+# the standard lightweight lock check, no login/AppleScript dialog involved,
+# and no new dependency: `swift -` is already used throughout this script.
+# (python3 was considered but the system python3 has no PyObjC/Quartz, so it
+# cannot see this API without adding a dependency.) The key is simply ABSENT
+# when unlocked, hence the `?? false` default.
+if [ -z "$WIN" ] || [ -z "$(echo "$WIN" | cut -f3)" ]; then
+    LOCKED="$(/usr/bin/swift - <<'SWIFT' 2>/dev/null || echo false
+import CoreGraphics
+import Foundation
+let dict = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+print((dict["CGSSessionScreenIsLocked"] as? Bool) ?? false)
+SWIFT
+)"
+    if [ "$LOCKED" = "true" ]; then
+        echo "FAIL: the screen is locked. Verification could not be completed — this is NOT a claim"
+        echo "      that the wrong surface is open, and NOT a build/launch failure. Unlock the screen"
+        echo "      and re-run this script."
+        exit 2
+    fi
+fi
+
 [ -n "$WIN" ] || { echo "FAIL: no window for pid $PID"; exit 1; }
 
 TITLE="$(echo "$WIN" | cut -f3)"
@@ -202,7 +276,8 @@ if [ "$TITLE" != "$EXPECT_TITLE" ]; then
 fi
 echo "==> window: $WIN"
 
-# Raise it, so the user is actually looking at it.
+# Raise it again, so the user is actually looking at it (harmless repeat of the
+# activation the probe above already did).
 /usr/bin/swift - "$PID" <<'SWIFT' >/dev/null 2>&1 || true
 import AppKit
 NSRunningApplication(processIdentifier: Int32(CommandLine.arguments[1])!)?
@@ -210,7 +285,17 @@ NSRunningApplication(processIdentifier: Int32(CommandLine.arguments[1])!)?
 SWIFT
 sleep 2
 
+# The window assertion above is the real verification. A screenshot is proof
+# for the report, not the check itself — so a capture failure here must NOT
+# read as "verification failed". #577: one run got exactly this far
+# (`==> window: 2797 1482x861 Meals`) and then died on `could not create image
+# from window`, under `set -e`, with no distinguishing message at all.
 SHOT="$OUT_DIR/$SECTION.png"
-screencapture -x -o -l "$(echo "$WIN" | cut -f1)" "$SHOT"
+if ! screencapture -x -o -l "$(echo "$WIN" | cut -f1)" "$SHOT"; then
+    echo "FAIL: the window assertion PASSED — DexterMac is open on '$TITLE' (pid $PID), the right"
+    echo "      surface — but capturing a screenshot of it failed. This is a capture problem, not a"
+    echo "      verification failure. Look at the window directly, or re-run to retry the capture."
+    exit 3
+fi
 echo "==> screenshot: $SHOT"
 echo "==> DexterMac is open on '$TITLE' from this worktree's build (pid $PID). Ready to verify."
