@@ -29,4 +29,25 @@ enum BottomTabBarMetrics {
         height + Space.sm
         #endif
     }
+
+    /// Bottom padding for a surface's own SCROLL CONTENT, so the last thing in a
+    /// scroll can be read instead of coming to rest under the floating bar (#559).
+    ///
+    /// Distinct from `fabBottomInset` because the two answer different questions.
+    /// A FAB is positioned AGAINST the bar and is meant to float just clear of
+    /// it. Scroll content has to stop ABOVE it, which needs the bar's full height
+    /// plus ordinary reading space, not a small gap.
+    ///
+    /// `Space.xxl` alone is not enough and never was: the bar is 74 pt and `xxl`
+    /// is 32, so a card's last line lands underneath it.
+    ///
+    /// On macOS there is no floating bar at all — the shell is a
+    /// `NavigationSplitView` — so this is only a generous bottom margin.
+    static var scrollBottomInset: CGFloat {
+        #if os(macOS)
+        Space.xxl
+        #else
+        height + Space.lg
+        #endif
+    }
 }
