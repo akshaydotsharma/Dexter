@@ -86,6 +86,13 @@ enum DataArchive {
         // the table. Optional like every field added after v1.
         var visionBlocks: [VisionBlockDTO]? = nil
 
+        // MARK: Added in #542 — meal logging.
+        // Optional like every field added after v1, so an archive written before
+        // meals existed decodes with nil and imports as "no meals" rather than
+        // failing the whole restore.
+        var meals: [MealDTO]? = nil
+        var mealTargets: [MealTargetsDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -540,6 +547,81 @@ enum DataArchive {
         let dedupeKey: String?
     }
 
+    /// One logged meal (#542).
+    ///
+    /// The eight nutrient values travel as flat fields rather than as a nested
+    /// `MealNutrients`, so the wire format matches the model's own columns one
+    /// for one and a reader of the JSON can see a meal's calories without
+    /// knowing about a value type. The per-dish breakdown travels as its RAW
+    /// blob, `itemsData`, following `ExpenseDTO.splitsData` and
+    /// `VisionBlockDTO.membersData`: the model's accessor already decodes
+    /// defensively and falls back to empty, so a byte-for-byte round trip is
+    /// both the safest shape and the one that cannot silently drop a field
+    /// `MealItemEntry` gains later.
+    ///
+    /// `date` is a UTC day anchor, not an instant (#506). `loggedAt` is the
+    /// instant. Both are carried, because a restore that kept only one of them
+    /// would either lose the ordering within a day or re-derive the day from a
+    /// moment, which is the bug the two fields exist to avoid.
+    struct MealDTO: Codable {
+        let clientUUID: String
+        let date: Date
+        let loggedAt: Date
+        let mealType: String
+        let mealDescription: String
+        let calories: Double
+        let proteinG: Double
+        let carbsG: Double
+        let fatG: Double
+        let fibreG: Double
+        let sugarG: Double
+        let sodiumMg: Double
+        let satFatG: Double
+        let itemsData: Data?
+        let confidence: Double
+        let source: String
+        let needsDetail: Bool
+        let isSuspect: Bool
+        let suspectReason: String?
+        let assumptionsNote: String?
+        let createdAt: Date
+        let updatedAt: Date
+    }
+
+    /// The daily nutrient targets and what they were derived from (#542).
+    ///
+    /// Carried by the archive rather than left to a per-device setting for the
+    /// reason `MealTargets` is a model at all: targets derived separately on two
+    /// devices disagree, and a verdict drawn against the wrong target is wrong
+    /// without looking wrong.
+    ///
+    /// The six derivation inputs travel with the eight outputs, so a restored
+    /// device can re-derive rather than re-interview. `handEditedData` travels
+    /// as its raw blob, like every other JSON-set field here, so a nutrient name
+    /// this build does not know survives the round trip.
+    struct MealTargetsDTO: Codable {
+        let clientUUID: String
+        let calories: Double
+        let proteinG: Double
+        let carbsG: Double
+        let fatG: Double
+        let fibreG: Double
+        let sugarG: Double
+        let sodiumMg: Double
+        let satFatG: Double
+        let ageYears: Int
+        let biologicalSex: String
+        let heightCm: Double
+        let weightKg: Double
+        let activityLevel: String
+        let goal: String
+        let rationale: String
+        let effectiveFrom: Date
+        let handEditedData: Data?
+        let createdAt: Date
+        let updatedAt: Date
+    }
+
     struct VocabDTO: Codable {
         let clientUUID: UUID
         let term: String
@@ -677,6 +759,12 @@ enum DataArchive {
         "LocalWalletCard",
         "LocalVisionBlock",
         "RecurringTask",
+        // #542. Both names, not just the meals: targets that are backed up
+        // without their meals restore a scoreboard with no game, and meals
+        // backed up without their targets restore numbers with nothing to judge
+        // them against.
+        "LocalMeal",
+        "MealTargets",
     ]
 
     static func makeEncoder() -> JSONEncoder {

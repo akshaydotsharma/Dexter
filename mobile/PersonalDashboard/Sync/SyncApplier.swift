@@ -302,6 +302,15 @@ struct SyncApplier {
             case "LocalVisionBlock":
                 payload.visionBlocks = (payload.visionBlocks ?? [])
                     + [try decoder.decode(DataArchive.VisionBlockDTO.self, from: data)]
+            // #542. A peer on a build that predates meal logging hits the
+            // `default` arm below and skips these ops with a log line, which is
+            // the same graceful degrade every model added after v1 gets.
+            case "LocalMeal":
+                payload.meals = (payload.meals ?? [])
+                    + [try decoder.decode(DataArchive.MealDTO.self, from: data)]
+            case "MealTargets":
+                payload.mealTargets = (payload.mealTargets ?? [])
+                    + [try decoder.decode(DataArchive.MealTargetsDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -483,6 +492,12 @@ struct SyncApplier {
         // ordinary `LocalTodo` rows and one may be open in front of the user (#524).
         case "RecurringTask":        return try deleteString(RecurringTask.self, id: recordID, key: \.clientUUID)
         case "LocalProcessedEmail":  return try deleteString(LocalProcessedEmail.self, id: recordID, key: \.messageKey)
+        // #542. Both key on a String `clientUUID`, so both delete through the
+        // string path rather than the UUID one. Deleting a meal deletes the meal
+        // only; its targets are a separate record and a day with no meals still
+        // has something to be judged against.
+        case "LocalMeal":            return try deleteString(LocalMeal.self, id: recordID, key: \.clientUUID)
+        case "MealTargets":          return try deleteString(MealTargets.self, id: recordID, key: \.clientUUID)
         default:
             SyncLog.line("SyncApplier: cannot delete unknown entity \(entity)")
             return false

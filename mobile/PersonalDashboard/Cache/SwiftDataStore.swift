@@ -363,6 +363,13 @@ final class SwiftDataStore {
         // change to anything above it. Membership lives here rather than as a
         // column on `LocalTodo`, which keeps that model untouched too.
         LocalVisionBlock.self,
+        // Meal logging (#542). Two new model types, so two new tables and no
+        // change to anything above them. `MealTargets` is a model rather than a
+        // `UserDefaults` key so the phone and the Mac cannot derive different
+        // targets from the same body figures — a target that differs between
+        // devices makes every verdict on one of them wrong.
+        LocalMeal.self,
+        MealTargets.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

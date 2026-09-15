@@ -228,6 +228,9 @@ final class DataExportService {
         // #524: recurring-task templates. Without these a restore brings back the
         // tasks a repeat happened to have made and loses the repeat itself.
         let recurringTasks = try modelContext.fetch(FetchDescriptor<RecurringTask>())
+        // #542: logged meals and the daily targets they are judged against.
+        let meals       = try modelContext.fetch(FetchDescriptor<LocalMeal>())
+        let mealTargets = try modelContext.fetch(FetchDescriptor<MealTargets>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -268,6 +271,8 @@ final class DataExportService {
         let walletCardDTOs: [DataArchive.WalletCardDTO] = walletCards.map(Self.dto)
         let visionBlockDTOs: [DataArchive.VisionBlockDTO] = visionBlocks.map(Self.dto)
         let recurringTaskDTOs: [DataArchive.RecurringTaskDTO] = recurringTasks.map(Self.dto)
+        let mealDTOs: [DataArchive.MealDTO] = meals.map(Self.dto)
+        let mealTargetsDTOs: [DataArchive.MealTargetsDTO] = mealTargets.map(Self.dto)
 
         return DataArchive.Payload(
             tasks: taskDTOs,
@@ -291,7 +296,9 @@ final class DataExportService {
             recurringTasks: recurringTaskDTOs,
             noteImages: noteImageDTOs,
             taskTickets: taskTicketDTOs,
-            visionBlocks: visionBlockDTOs
+            visionBlocks: visionBlockDTOs,
+            meals: mealDTOs,
+            mealTargets: mealTargetsDTOs
         )
     }
 
@@ -322,6 +329,8 @@ final class DataExportService {
             "LocalWalletCard":      payload.walletCards?.count ?? 0,
             "LocalVisionBlock":     payload.visionBlocks?.count ?? 0,
             "RecurringTask":        payload.recurringTasks?.count ?? 0,
+            "LocalMeal":            payload.meals?.count ?? 0,
+            "MealTargets":          payload.mealTargets?.count ?? 0,
         ]
     }
 
@@ -633,6 +642,64 @@ final class DataExportService {
             updatedAt: block.updatedAt,
             deletedAt: block.deletedAt,
             archivedAt: block.archivedAt
+        )
+    }
+
+    /// #542. `itemsData` is carried verbatim for the same reason the vision
+    /// board's blobs are: the model's accessor decodes defensively, so a
+    /// byte-for-byte round trip cannot drop a `MealItemEntry` field a later
+    /// build adds.
+    private static func dto(_ meal: LocalMeal) -> DataArchive.MealDTO {
+        DataArchive.MealDTO(
+            clientUUID: meal.clientUUID,
+            date: meal.date,
+            loggedAt: meal.loggedAt,
+            mealType: meal.mealType,
+            mealDescription: meal.mealDescription,
+            calories: meal.calories,
+            proteinG: meal.proteinG,
+            carbsG: meal.carbsG,
+            fatG: meal.fatG,
+            fibreG: meal.fibreG,
+            sugarG: meal.sugarG,
+            sodiumMg: meal.sodiumMg,
+            satFatG: meal.satFatG,
+            itemsData: meal.itemsData,
+            confidence: meal.confidence,
+            source: meal.source,
+            needsDetail: meal.needsDetail,
+            isSuspect: meal.isSuspect,
+            suspectReason: meal.suspectReason,
+            assumptionsNote: meal.assumptionsNote,
+            createdAt: meal.createdAt,
+            updatedAt: meal.updatedAt
+        )
+    }
+
+    /// #542. The six derivation inputs travel with the eight targets, so a
+    /// restored device can re-derive rather than re-interview.
+    private static func dto(_ targets: MealTargets) -> DataArchive.MealTargetsDTO {
+        DataArchive.MealTargetsDTO(
+            clientUUID: targets.clientUUID,
+            calories: targets.calories,
+            proteinG: targets.proteinG,
+            carbsG: targets.carbsG,
+            fatG: targets.fatG,
+            fibreG: targets.fibreG,
+            sugarG: targets.sugarG,
+            sodiumMg: targets.sodiumMg,
+            satFatG: targets.satFatG,
+            ageYears: targets.ageYears,
+            biologicalSex: targets.biologicalSex,
+            heightCm: targets.heightCm,
+            weightKg: targets.weightKg,
+            activityLevel: targets.activityLevel,
+            goal: targets.goal,
+            rationale: targets.rationale,
+            effectiveFrom: targets.effectiveFrom,
+            handEditedData: targets.handEditedData,
+            createdAt: targets.createdAt,
+            updatedAt: targets.updatedAt
         )
     }
 

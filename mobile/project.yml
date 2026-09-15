@@ -220,6 +220,11 @@ targets:
       - path: PersonalDashboard/Services/AIStreamingService.swift
       - path: PersonalDashboard/Services/FXService.swift
       - path: PersonalDashboard/Services/ExpenseService.swift
+      # Meal logging data layer (#542). The two @Models, the two enums and the
+      # item/nutrient value types need no entry — PersonalDashboard/Models is
+      # globbed at the top of this list. The service does, and it must be here
+      # or the Mac holds the tables and has no way to write them.
+      - path: PersonalDashboard/Services/MealService.swift
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift
       - path: PersonalDashboard/Services/EventService.swift
