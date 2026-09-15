@@ -33,13 +33,29 @@ struct MealFlagChip: View {
     }
 }
 
-/// One logged meal in the day's list (#543).
+/// One logged meal in the day's list (#543, breakdown added in #560).
 ///
-/// The row carries the description, the time, the calories, and whatever is
-/// wrong with it. Nothing else: the per-item breakdown and the other seven
-/// nutrients live in the detail sheet, because a list that showed eight numbers
-/// per row would make the day unreadable at exactly the moment there was enough
-/// in it to be worth reading.
+/// The row carries the description, the time, the calories, the full nutrient
+/// breakdown, and whatever is wrong with it.
+///
+/// ### Why the eight numbers are here now
+///
+/// They were held back because eight bare figures per row would make the day
+/// unreadable at exactly the moment there was enough in it to be worth reading.
+/// That reason holds for eight bare figures and not for the pill treatment the
+/// day card already uses: a pill reads at the size of the whole pill rather
+/// than at the size of the number inside it, so a rung of seven scans as one
+/// band. Without them, a day that lands over on sodium or short on protein
+/// names no culprit, and the only way to find one is to open every meal.
+///
+/// ### The pills are neutral, always
+///
+/// A verdict is a reading of a day against a target. A single meal has no
+/// target of its own, so no pill here may be tinted: `MealStatPill` is built
+/// with the plain `label:value:` initialiser and never with
+/// `init(nutrient:value:target:)` carrying a real target. Tinting would also
+/// put verdict hue on ten rows at once, which is the reading the day card
+/// exists to give, and one this list cannot support.
 struct MealRow: View {
     let meal: LocalMeal
 
@@ -60,7 +76,33 @@ struct MealRow: View {
         meal.isSuspect || meal.needsDetail || isDuplicate
     }
 
+    /// One accessibility element, with the numbers behind the More Content
+    /// rotor (#560).
+    ///
+    /// The pills are NOT individually addressable. Seven of them in a list of
+    /// ten meals is seventy extra stops between a reader and the next meal, to
+    /// give a figure the row's own label can give in a clause. So the row stays
+    /// the single element it has always been.
+    ///
+    /// Dropping the numbers from the spoken row instead would make them
+    /// sighted-only, so they are attached as custom content: two entries,
+    /// Macros and Watch, at default importance. VoiceOver reads the label —
+    /// meal, description, calories, flags — and speaks the breakdown only when
+    /// the reader asks for it. That is the one mechanism on the platform that
+    /// adds detail without adding either noise or a stop.
+    @ViewBuilder
     var body: some View {
+        if let macros = Self.spokenReadings(Nutrient.macrosInOrder, of: meal),
+           let ceilings = Self.spokenReadings(Nutrient.ceilingsInOrder, of: meal) {
+            rowButton
+                .accessibilityCustomContent(Text("Macros"), Text(macros))
+                .accessibilityCustomContent(Text("Watch"), Text(ceilings))
+        } else {
+            rowButton
+        }
+    }
+
+    private var rowButton: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: Space.md) {
                 Image(systemName: meal.mealTypeEnum.sfSymbol)
@@ -68,28 +110,64 @@ struct MealRow: View {
                     .foregroundStyle(needsAttention ? Tokens.warning : Tokens.accentMeals)
                     .frame(width: 22, height: 22)
 
+                // Everything but the icon hangs off one gutter, so the rungs
+                // under the description share its left edge rather than each
+                // finding its own.
                 VStack(alignment: .leading, spacing: Space.xs) {
-                    Text(meal.mealDescription)
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.ink)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Rung 1: what the meal is, and what it cost.
+                    HStack(alignment: .top, spacing: Space.md) {
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            Text(meal.mealDescription)
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.ink)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: Space.sm) {
-                        Text(Self.timeFormatter.string(from: meal.loggedAt))
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                            .monospacedDigit()
-                        // An eyebrow rather than a second caption: at the same
-                        // size and colour as the time beside it, line 2 had no
-                        // structure and read as one grey string.
-                        Text(meal.mealTypeEnum.displayName).eyebrow()
+                            HStack(spacing: Space.sm) {
+                                Text(Self.timeFormatter.string(from: meal.loggedAt))
+                                    .font(.edCaption)
+                                    .foregroundStyle(Tokens.muted)
+                                    .monospacedDigit()
+                                // An eyebrow rather than a second caption: at
+                                // the same size and colour as the time beside
+                                // it, line 2 had no structure and read as one
+                                // grey string.
+                                Text(meal.mealTypeEnum.displayName).eyebrow()
+                            }
+                        }
+
+                        Spacer(minLength: Space.sm)
+
+                        // The row's anchor, and still the only figure at
+                        // heading size. No pill here: ten accent-filled pills
+                        // down a list would be ten competing anchors, and the
+                        // breakdown under it is a second rung rather than a
+                        // replacement.
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(meal.needsDetail ? "—" : MealFormat.calories(meal.calories))
+                                .font(.edHeading)
+                                .foregroundStyle(meal.isSuspect || meal.needsDetail ? Tokens.muted : Tokens.ink)
+                                .monospacedDigit()
+                            Text("kcal").eyebrow()
+                        }
                     }
 
+                    // Rung 2: whether the numbers under it can be trusted at
+                    // all. Above the breakdown and not below it: "Needs
+                    // detail", "Check this" and "Possible duplicate" are the
+                    // conditions the figures are read under, and a condition
+                    // met after the fact is not a condition.
+                    //
+                    // Wraps rather than clipping: on a phone three chips do not
+                    // fit one line.
                     if !chips.isEmpty {
-                        // Wraps rather than clipping: on a phone three chips do
-                        // not fit one line beside the calorie column.
                         WrappingChipRow(chips: chips)
+                    }
+
+                    // Rung 3: the seven, in the fixed order. Empty on a
+                    // needs-detail meal, which has no numbers to give.
+                    if !breakdown.isEmpty {
+                        breakdownRow
                     }
 
                     if let reason = meal.suspectReason {
@@ -111,19 +189,6 @@ struct MealRow: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
-                }
-
-                Spacer(minLength: Space.sm)
-
-                // The row's anchor. No pill here: ten accent-filled pills down
-                // a list would be ten competing anchors, and the day card is
-                // where the one figure that matters lives.
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(meal.needsDetail ? "—" : MealFormat.calories(meal.calories))
-                        .font(.edHeading)
-                        .foregroundStyle(meal.isSuspect || meal.needsDetail ? Tokens.muted : Tokens.ink)
-                        .monospacedDigit()
-                    Text("kcal").eyebrow()
                 }
             }
             .padding(.vertical, Space.md)
@@ -151,6 +216,94 @@ struct MealRow: View {
         .accessibilityHint("Opens the meal to correct or repeat it")
     }
 
+    /// The breakdown itself: the four macros on one line, the three ceilings on
+    /// the next.
+    ///
+    /// ### Why two fixed lines and not a flow
+    ///
+    /// A flow breaks where the width runs out, which on a phone lands inside
+    /// the macros and puts Sugar — a ceiling — at the end of the macro line.
+    /// The macro/ceiling split is the whole structure of the day card above,
+    /// and a row that loses it is seven numbers in a heap. Two fixed `HStack`s
+    /// carry the grouping by construction, in the same
+    /// order and with the same break as the card, so the eye reads one column
+    /// down the screen. See `pillLine` for why the pills are at their natural
+    /// width rather than sharing the line evenly.
+    ///
+    /// ### And no "Macros" / "Watch" eyebrows
+    ///
+    /// On the card those labels earn their line, because the two groups sit far
+    /// apart and are drawn differently. On a row repeated ten times they are
+    /// ten pairs of redundant words. Four then three, in the fixed order, under
+    /// a card that already named the groups, says it without them.
+    ///
+    /// ### And no dimming when the meal is suspect
+    ///
+    /// A suspect meal's pills are drawn exactly like any other row's, at full
+    /// ink. The row already says the meal is held back — the warning ground,
+    /// the "Check this" chip and the reason under it — and greying the numbers
+    /// as well would read as "unavailable", when the whole point of showing a
+    /// suspect meal's numbers is that they are what the user has to read to
+    /// judge it.
+    private var breakdownRow: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            pillLine(Nutrient.macrosInOrder)
+            pillLine(Nutrient.ceilingsInOrder)
+        }
+        .padding(.top, 2)
+    }
+
+    /// One group on one line, pills at their natural width, left aligned.
+    ///
+    /// NOT the day card's even `fillsWidth` split, and the reason is measured:
+    /// an even three-across share of this column is 103 pt and the "Saturated
+    /// fat" pill wants 123 pt, so the even grid truncates its label to
+    /// "SATURATED F…" at 390 pt. At natural width the three come to 274 pt of
+    /// 324 pt and the four macros to 258 pt, so both lines have room to spare.
+    /// The grouping is carried by the two lines themselves, which is what it
+    /// was ever carried by; an even grid was only ever the tidier way to draw
+    /// it. `testEveryPillFitsItsLineAtPhoneWidth` pins both sums.
+    private func pillLine(_ group: [Nutrient]) -> some View {
+        HStack(spacing: Space.sm) {
+            ForEach(group) { nutrient in
+                MealStatPill(
+                    label: nutrient.displayName,
+                    value: Self.reading(nutrient, of: meal)
+                )
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var breakdown: [Nutrient] { Self.breakdown(for: meal) }
+
+    /// The nutrients a row prints, in the fixed order every Meals surface uses:
+    /// the four macros, then the three ceilings.
+    ///
+    /// Empty for a needs-detail meal. That meal has no numbers — its stored
+    /// eight are all zero because nothing was identified — and a rung of zero
+    /// pills would state as fact what the em dash in the calorie column exists
+    /// to say is unknown.
+    static func breakdown(for meal: LocalMeal) -> [Nutrient] {
+        guard !meal.needsDetail else { return [] }
+        return Nutrient.macrosInOrder + Nutrient.ceilingsInOrder
+    }
+
+    /// One nutrient's value with its unit, formatted the one way Meals formats
+    /// numbers.
+    static func reading(_ nutrient: Nutrient, of meal: LocalMeal) -> String {
+        MealFormat.value(meal.value(for: nutrient), for: nutrient)
+    }
+
+    /// One group of nutrients as a spoken clause, or nil when the meal has no
+    /// numbers to speak.
+    static func spokenReadings(_ group: [Nutrient], of meal: LocalMeal) -> String? {
+        guard !meal.needsDetail else { return nil }
+        return group
+            .map { "\($0.displayName) \(reading($0, of: meal))" }
+            .joined(separator: ", ")
+    }
+
     private var chips: [MealFlagChip] {
         var out: [MealFlagChip] = []
         if meal.needsDetail {
@@ -173,7 +326,11 @@ struct MealRow: View {
         return out
     }
 
-    private var accessibilityText: String {
+    /// What the row says when it is read aloud. Deliberately unchanged in shape
+    /// by #560: the meal, its description and its calories, then what is wrong
+    /// with it. The seven nutrients are custom content, not part of this
+    /// sentence — see the note on `body`.
+    var accessibilityText: String {
         var parts = [meal.mealTypeEnum.displayName, meal.mealDescription]
         if meal.needsDetail {
             parts.append("needs detail, no numbers yet")
