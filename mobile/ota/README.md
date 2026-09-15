@@ -1,106 +1,60 @@
-# OTA Install — Tailscale transport
+# Shipping to your phone — cable or LAN wifi
 
-`ship.sh` archives the app, serves the `.ipa` and `manifest.plist` over HTTPS,
-and prints an `itms-services://` URL you open in Safari on your iPhone.
+`ship-lan.sh` archives the app, signs it, and exports `app.ipa` to `/tmp/ota/`.
+It does not serve the IPA and does not open any tunnel. Install the exported
+IPA with `xcrun devicectl device install app`, over a USB cable or over the
+same wifi network as the Mac (#579).
 
-The default transport is **Tailscale Serve**, which uses the stable MagicDNS
-hostname your Mac already has. The iPhone reaches the Mac over Tailscale — works
-on any network, no same-LAN requirement.
-
----
-
-## One-time setup
-
-Do these steps once. They take about five minutes.
-
-1. **Install Tailscale on Mac**: `brew install --cask tailscale`. Start it and log
-   in with your Tailscale account.
-
-2. **Install Tailscale on iPhone**: download from the App Store, log in with the
-   same account.
-
-3. **Enable MagicDNS**: in the Tailscale admin console
-   (`login.tailscale.com/admin/dns`), turn on MagicDNS. This gives your Mac a
-   stable hostname like `my-mac.tail1234.ts.net`.
-
-4. **Enable HTTPS Certificates**: on the same DNS settings page, turn on HTTPS
-   Certificates. This lets Tailscale issue a browser-trusted TLS cert for your
-   hostname so iOS accepts it without any trust prompt. `tailscale serve`
-   provisions and renews the cert automatically the first time it runs.
-
-5. **Enable Tailscale Serve**: this is a separate per-tailnet toggle from HTTPS
-   Certificates. The first time you run `ship.sh` the script will print a
-   one-click admin URL like `https://login.tailscale.com/f/serve?node=...` if
-   Serve is disabled. Open it, click enable, and re-run the script.
-
-No auth keys or tokens are needed. `tailscale serve` uses the daemon that is
-already authenticated, and the cert is fetched automatically.
+There is no internet-facing install path any more. The earlier Tailscale and
+Cloudflare tunnel transports (`ship.sh`, `dev-tunnel.sh`) are retired and
+removed; nothing in this repo publishes the IPA on a public URL.
 
 ---
 
 ## Daily use
 
 ```bash
-bash mobile/ota/ship.sh
+bash mobile/ota/ship-lan.sh
 ```
 
-The script prints an install URL and copies it to your clipboard. Open it in
-Safari on your iPhone (Tailscale must be active on the phone) and tap **Install**.
+The script prints the path to `app.ipa` and a ready-to-run install command:
 
-The archived build is pre-configured to call the API at
-`https://<your-mac-hostname>.ts.net/api` — no manual URL setup on the device.
+```bash
+xcrun devicectl device install app --device <UDID> /tmp/ota/app.ipa
+```
 
-After the download starts on your phone, press Ctrl-C in the terminal to stop
-Tailscale Serve and the local HTTP server.
+Find `<UDID>` with `xcrun devicectl list devices` (the iPhone must show
+`available (paired)`, over USB or the same wifi network).
 
 The free personal-team provisioning profile expires every 7 days. Re-run
-`ship.sh` to install a fresh build.
+`ship-lan.sh` to sign a fresh build.
 
 ---
 
-## Daily dev loop (use the installed build with live backend)
+## Troubleshooting
 
-After the app is installed on your phone, you do not need to re-archive every
-time you change the backend. Run two terminals:
+- **`devicectl` can't find the device**: plug in a USB cable, or confirm the
+  iPhone is on the same wifi network as the Mac and has been paired with this
+  Mac at least once (Settings → General → VPN & Device Management).
+- **Install reports success but the app looks unchanged**: the phone already
+  had that exact build version installed, so iOS silently no-op'd. Force-quit
+  and relaunch the app; if that doesn't help, bump `mobile/.build_count` and
+  re-ship.
+- **`ANTHROPIC_API_KEY not set`**: `ship-lan.sh` reads it from `server/.env` or
+  the environment. Copy `server/.env` into the current worktree first if you
+  are shipping from a non-main worktree.
+- **Keychain password prompt on every ship**: run
+  `bash mobile/ota/setup-signing-noprompt.sh` once; `ship-lan.sh` then
+  re-authorizes codesign silently on every run.
+- **"Certificate expired" on archive**: usually the 7-day provisioning
+  profile, not the signing certificate. Re-run the script; `-allowProvisioningUpdates`
+  regenerates the profile automatically as long as Xcode has a signed-in
+  Apple ID.
 
-```bash
-# Terminal 1: Express dev server with hot reload
-npm start
-```
+## Files in `mobile/ota/`
 
-```bash
-# Terminal 2: Tailscale tunnel for the API only
-bash mobile/ota/dev-tunnel.sh
-```
+- `ship-lan.sh` — archive, sign, export `app.ipa`; prints the `devicectl` install command
+- `ExportOptions.plist` — tells `xcodebuild -exportArchive` to produce a development-signed IPA
+- `setup-signing-noprompt.sh` — one-time setup that stops the keychain password prompt on every ship
 
-Your phone (with Tailscale on) now hits the dev server at
-`https://<your-mac-hostname>.ts.net/api` over Tailscale. Edit `server/`,
-nodemon restarts, the phone sees the change immediately. Works on any network.
-
-Press Ctrl-C in the tunnel terminal to tear down. Re-running `dev-tunnel.sh`
-is safe; it resets and re-applies the Serve config.
-
-If you run `ship.sh` while `npm start` is already up, `ship.sh` configures the
-`/api` route automatically alongside the OTA route, so the freshly installed
-app can talk to the backend right away.
-
----
-
-## Troubleshooting / fallback
-
-**Tailscale is unavailable on this network**: fall back to a Cloudflare quick
-tunnel. The URL changes every run, so you will need to set `API_URL` manually
-on the device (or via scheme env var before archiving).
-
-```bash
-OTA_TRANSPORT=cloudflare bash mobile/ota/ship.sh
-```
-
-**`tailscale serve` fails with a TLS or cert error**: enable HTTPS Certificates
-in the Tailscale admin console (DNS settings) and re-run `ship.sh`.
-
-**`tailscale status` is empty**: make sure `tailscaled` is running
-(`open -a Tailscale`).
-
-**Install URL does not load on iPhone**: confirm Tailscale is enabled on the
-iPhone (the VPN icon in the status bar).
+`/tmp/ota/` (or `$OTA_DIR`) is staged fresh on every run; nothing there is precious, and a failed run cleans up after itself since the archive and IPA both carry the Anthropic/OpenAI keys in plaintext.
