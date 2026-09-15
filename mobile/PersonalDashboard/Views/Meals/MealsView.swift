@@ -1,17 +1,19 @@
 import SwiftUI
 import SwiftData
 
-/// The three tabs inside Meals (#543, #559, #565, #567, renamed in #569).
+/// The four tabs inside Meals (#543, #559, #565, #567, renamed in #569, Trends
+/// added in #545).
 ///
 /// ### What a tab is for here
 ///
-/// A tab is a place the content can BE. Tracking is a day, Plan is a plan,
-/// Targets is eight numbers. Each is somewhere you settle.
+/// A tab is a place the content can BE. Tracking is a day, Trends is a window,
+/// Plan is a plan, Targets is eight numbers. Each is somewhere you settle.
 ///
 /// History left because it is not that. It is a thing you look at and come back
-/// from, so #567 moved it into the section chrome. #569 removed it outright: the
-/// charts it opened are #545 and unbuilt, so the control only ever presented a
-/// placeholder, and the calendar already reaches any past day.
+/// from, so #567 moved it into the section chrome and #569 removed it outright.
+/// Trends is not History returning: History was a control that reached a past
+/// day, which the calendar already does. Trends is a different subject, the
+/// window rather than the day, and it is a place rather than a trip.
 ///
 /// ### Why the first tab is Tracking and not Today
 ///
@@ -26,6 +28,7 @@ import SwiftData
 /// rather than only when you have moved off today.
 enum MealsTab: String, CaseIterable, Identifiable {
     case tracking
+    case trends
     case plan
     case targets
 
@@ -34,6 +37,7 @@ enum MealsTab: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .tracking: return "Tracking"
+        case .trends:   return "Trends"
         case .plan:     return "Plan"
         case .targets:  return "Targets"
         }
@@ -51,19 +55,21 @@ enum MealsTab: String, CaseIterable, Identifiable {
 /// estimates, so calories round to the nearest 10 and every meal carries a
 /// confidence.
 ///
-/// ### The three tabs
+/// ### The four tabs
 ///
 /// Tracking is the day: the composer, the day card and that day's meals. It
 /// opens on today, and the date control in the section chrome names the day and
-/// reaches any earlier one. Targets holds the setup offer or the eight derived
-/// numbers. Plan has no feature behind it at all and renders a panel saying so;
-/// it is a TAB rather than a section because that reserves the slot without
-/// adding a permanently empty row to a twelve-section sidebar.
+/// reaches any earlier one. Trends is the window: a period filter, an average
+/// against target, a balance table and the callouts that come out of it (#545).
+/// Targets holds the setup offer or the eight derived numbers. Plan has no
+/// feature behind it at all and renders a panel saying so; it is a TAB rather
+/// than a section because that reserves the slot without adding a permanently
+/// empty row to a twelve-section sidebar.
 ///
-/// The historic charts are #545 and have no control here. #567 gave them a
-/// chrome button and #569 took it away again: with nothing built behind it the
-/// button only ever opened a placeholder, and the calendar already reaches the
-/// past day anyone was pressing it for.
+/// Trends makes ZERO API calls. Every number and every sentence on it is
+/// arithmetic over the rows this section already queries, against the targets
+/// record beside them, which is what lets it recompute freely and what stops two
+/// numbers on one screen disagreeing.
 ///
 /// ### Why the composer is only on today
 ///
@@ -147,6 +153,7 @@ struct MealsView: View {
 
                 switch tab {
                 case .tracking: trackingTab
+                case .trends:   trendsTab
                 case .plan:     scrolling { MealsPlanPlaceholder() }
                 case .targets:  targetsTab
                 }
@@ -309,8 +316,9 @@ struct MealsView: View {
     /// The app's own strip, not `.pickerStyle(.segmented)`. The native control
     /// draws its own greys and its own font, none of which come from `Tokens`,
     /// and it truncates rather than shrinks, which is what turned five segments
-    /// at phone width into five abbreviations. Three is easier still, so nothing
-    /// about its construction changes here. See `EdTabStrip`.
+    /// at phone width into five abbreviations. `EdTabStrip` shrinks instead, so
+    /// the fourth tab added in #545 costs a little label width and no truncation.
+    /// See `EdTabStrip`.
     private var tabBar: some View {
         EdTabStrip(
             tabs: MealsTab.allCases,
@@ -368,6 +376,22 @@ struct MealsView: View {
                 )
             }
         }
+    }
+
+    // MARK: - Trends
+
+    /// The window, not the day (#545).
+    ///
+    /// It takes the section's two `@Query` results as plain arrays rather than
+    /// declaring its own. One query serving both tabs is what stops the day card
+    /// and the balance table reading two different sets of rows, and it is what
+    /// keeps a per-row query from ever appearing inside a list here (#442).
+    private var trendsTab: some View {
+        MealTrendsView(
+            allMeals: allMeals,
+            allTargets: allTargets,
+            router: router
+        )
     }
 
     // MARK: - Targets

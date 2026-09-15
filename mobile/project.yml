@@ -616,6 +616,27 @@ schemes:
         PersonalDashboardTests: [test]
     test:
       gatherCoverageData: false
+      # Opt-in inputs for the live token-budget measurement (#554). Written as
+      # `$(NAME)` (Xcode build-setting syntax, NOT xcodegen's `${NAME}`), so the
+      # literal passes through generation and Xcode substitutes it at launch
+      # from a build setting handed to xcodebuild:
+      #
+      #   xcodebuild test -scheme PersonalDashboard \
+      #     -only-testing:PersonalDashboardTests/LiveToolLoopTokenBudgetTests \
+      #     ANTHROPIC_API_KEY=… DEXTER_MEASURE_TOKENS=1
+      #
+      # The key therefore never lands in a file. With no setting supplied both
+      # stay unexpanded: `AppConfig.resolved` rejects a `$(`-prefixed key, and
+      # the measurement skips because the flag is not "1". (The `TEST_RUNNER_`
+      # prefix does NOT reach an app-hosted simulator test here — verified
+      # 2026-09-15 — which is why the scheme carries these instead.)
+      environmentVariables:
+        - variable: ANTHROPIC_API_KEY
+          value: $(ANTHROPIC_API_KEY)
+          isEnabled: true
+        - variable: DEXTER_MEASURE_TOKENS
+          value: $(DEXTER_MEASURE_TOKENS)
+          isEnabled: true
       targets:
         - PersonalDashboardTests
         - PersonalDashboardUITests

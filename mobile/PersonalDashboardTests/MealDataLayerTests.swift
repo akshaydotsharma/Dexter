@@ -290,7 +290,7 @@ final class MealDataLayerTests: XCTestCase {
             fibreG: 3, sugarG: 18, sodiumMg: 1200, satFatG: 6,
             itemsData: itemsData, confidence: 0.7, source: "chat",
             needsDetail: true, isSuspect: false, suspectReason: nil,
-            assumptionsNote: "assumed one bowl",
+            assumptionsNote: "assumed one bowl", containsAlcohol: true,
             createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2)
         )
         var payload = DataArchive.Payload.empty
@@ -309,6 +309,7 @@ final class MealDataLayerTests: XCTestCase {
         XCTAssertEqual(back.itemsData, itemsData, "the per-dish breakdown must survive verbatim")
         XCTAssertTrue(back.needsDetail)
         XCTAssertEqual(back.assumptionsNote, "assumed one bowl")
+        XCTAssertEqual(back.containsAlcohol, true, "the alcohol flag must survive the wire format (#555)")
 
         let restored = try JSONDecoder().decode([MealItemEntry].self, from: try XCTUnwrap(back.itemsData))
         XCTAssertEqual(restored.map(\.name), ["Chicken rice", "Teh tarik"])
@@ -377,14 +378,16 @@ final class MealDataLayerTests: XCTestCase {
                 mealType: "lunch", mealDescription: "a", calories: 1, proteinG: 0, carbsG: 0, fatG: 0,
                 fibreG: 0, sugarG: 0, sodiumMg: 0, satFatG: 0, itemsData: nil, confidence: 0.5,
                 source: "chat", needsDetail: false, isSuspect: false, suspectReason: nil,
-                assumptionsNote: nil, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+                assumptionsNote: nil, containsAlcohol: false,
+                createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
             ),
             DataArchive.MealDTO(
                 clientUUID: "meal-2", date: Date(timeIntervalSince1970: 0), loggedAt: Date(timeIntervalSince1970: 0),
                 mealType: "dinner", mealDescription: "b", calories: 2, proteinG: 0, carbsG: 0, fatG: 0,
                 fibreG: 0, sugarG: 0, sodiumMg: 0, satFatG: 0, itemsData: nil, confidence: 0.5,
                 source: "chat", needsDetail: false, isSuspect: false, suspectReason: nil,
-                assumptionsNote: nil, createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
+                assumptionsNote: nil, containsAlcohol: false,
+                createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
             )
         ]
         payload.mealTargets = [

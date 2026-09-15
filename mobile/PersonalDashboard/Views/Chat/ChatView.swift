@@ -82,6 +82,35 @@ struct ChatView: View {
             // added there would silently not exist on macOS — which is the
             // platform where section switching makes this easiest to hit.
             .onDisappear { viewModel.cancelStreaming() }
+            // "Ask Dexter about this" (#545). Both hooks are needed, for the
+            // same reason `MealsView.consumeFocus` needs both: on macOS the
+            // chat detail is built fresh when the sidebar switches to it, so
+            // the prompt is already waiting at `onAppear`; on iOS chat is the
+            // stack ROOT and stays mounted, so popping to it fires no appear
+            // and only the change is seen.
+            .onAppear { consumePendingPrompt() }
+            .onChange(of: router.pendingChatPrompt) { _, _ in consumePendingPrompt() }
+    }
+
+    /// Take a prompt another surface handed over and send it, once.
+    ///
+    /// Cleared BEFORE the send, so the `onAppear` and the `onChange` above
+    /// cannot both fire it, and so a failed send does not re-arm on the next
+    /// appearance.
+    private func consumePendingPrompt() {
+        guard let prompt = router.pendingChatPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty
+        else { return }
+        router.pendingChatPrompt = nil
+        // An in-flight stream would be cancelled and raced by a second send.
+        // The handed-over question is dropped into the field instead, for the
+        // user to send when the current answer has landed.
+        guard !viewModel.isSending else {
+            viewModel.draftInput = prompt
+            return
+        }
+        viewModel.draftInput = prompt
+        viewModel.startSend()
     }
 
     @ViewBuilder

@@ -151,6 +151,13 @@ extension AnthropicClient {
         // wire type is restricted to text / tool_use / tool_result and would
         // need a wider sum type to carry image/document blocks; this is a
         // one-call surface so a hand-rolled JSON body is simpler.
+        // Inherits the shared ceiling rather than naming its own, and that is
+        // right here: a receipt extraction emits ONE JSON object, strictly
+        // smaller than the statement chunks its sibling `runStatementExtraction`
+        // sends at 16384, and smaller than the meal estimate measured at 1866
+        // (#554). It runs on the same model, so it pays the same thinking cost,
+        // which is the whole reason the shared number moved off 1024. Not
+        // measured in its own right; the shared figure bounds it from above.
         let body: AnthropicJSONValue = .object([
             "model": .string(Self.model),
             "max_tokens": .int(Self.maxTokens),

@@ -17,6 +17,10 @@ struct AIStreamingService {
         case draft(ChatDraft)
         case textChunk(String)
         case done(followUpQuestion: String?)
+        /// The turn was cut off at the output ceiling and no draft from it was
+        /// applied (#554). Distinct from `.error`, which means the request
+        /// itself failed.
+        case truncated
         case error(String)
     }
 
@@ -56,6 +60,8 @@ struct AIStreamingService {
                             continuation.yield(.textChunk(c))
                         case .done(let q):
                             continuation.yield(.done(followUpQuestion: q))
+                        case .truncated:
+                            continuation.yield(.truncated)
                         case .error(let m):
                             continuation.yield(.error(m))
                         }

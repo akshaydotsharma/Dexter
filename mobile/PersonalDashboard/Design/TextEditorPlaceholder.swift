@@ -68,3 +68,103 @@ extension View {
         #endif
     }
 }
+
+// MARK: - Plain TextField placeholder
+//
+// `.textFieldStyle(.plain)` costs a `TextField` its placeholder TREATMENT on
+// macOS, not just its box (#576). Measured on this machine, Inter-Regular 13
+// against white, darkest glyph pixel composited onto the paper:
+//
+//   plain style, placeholder      black at 0.75 alpha   luminance 0.251
+//   default style, placeholder    rgb(146,146,146)      luminance 0.574
+//   either style, typed ink       rgb(33,32,39)         luminance 0.134
+//
+// So a plain field draws its placeholder nearer to ink than to muted, and the
+// meal composer read as pre-filled with a breakfast nobody ate. iOS renders the
+// same string correctly muted, which is why this is macOS-only.
+//
+// SwiftUI offers no way to re-tint it. `prompt: Text(…).foregroundColor(…)` was
+// measured against the same stack and renders identically to the plain title
+// (0.251), so the prompt is not an escape hatch. macOS therefore hands the field
+// an EMPTY title and draws the placeholder itself.
+
+/// The two halves of a macOS placeholder, kept together so a call site cannot
+/// adopt one and forget the other.
+enum PlainFieldPlaceholder {
+    /// What to hand `TextField(_:text:axis:)` as its title.
+    ///
+    /// Empty on macOS, where `plainFieldPlaceholder(_:isVisible:padding:)` draws
+    /// the string instead. The real string on iOS, which needs no help.
+    static func title(_ text: String) -> String {
+        #if os(macOS)
+        return ""
+        #else
+        return text
+        #endif
+    }
+
+    /// Vertical correction from the field's own padding to the first glyph.
+    ///
+    /// Measured, not assumed, the same way `macGlyphInsetX` above was: the field
+    /// was rendered holding the placeholder as REAL text, the overlay `Text` was
+    /// rendered on its own, and the two glyph bounding boxes were differenced.
+    /// The horizontal answer came out at exactly the field's padding, so only
+    /// the vertical needs a nudge. Stable across 12pt and 16pt padding and
+    /// across `lineLimit(2...5)` and `(2...6)`, and unchanged when the field
+    /// takes first responder, so the placeholder does not jump on a click.
+    static let macBaselineNudge: CGFloat = -0.5
+}
+
+extension View {
+    /// Draws `text` as a muted placeholder over a plain-styled `TextField`.
+    ///
+    /// Apply it to the field AFTER its own `.padding(…)` and BEFORE its
+    /// `.background(…)`, and pass that same padding:
+    ///
+    /// ```swift
+    /// TextField(PlainFieldPlaceholder.title(example), text: $text, axis: .vertical)
+    ///     .textFieldStyle(.plain)
+    ///     .padding(Space.md)
+    ///     .plainFieldPlaceholder(example, isVisible: text.isEmpty, padding: Space.md)
+    ///     .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md))
+    /// ```
+    ///
+    /// Order matters both ways. Before the padding the arithmetic has nothing to
+    /// work from; after the background the field's own fill would cover the
+    /// placeholder.
+    ///
+    /// - Note: A no-op on iOS, where the field's own title is already drawn in
+    ///   the placeholder colour. The call site still passes the real string to
+    ///   `PlainFieldPlaceholder.title`, so iOS keeps the native placeholder and
+    ///   its behaviour is unchanged.
+    @ViewBuilder
+    func plainFieldPlaceholder(
+        _ text: String,
+        isVisible: Bool,
+        padding: CGFloat
+    ) -> some View {
+        #if os(macOS)
+        ZStack(alignment: .topLeading) {
+            if isVisible {
+                Text(text)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.mutedSoft)
+                    // One line, like AppKit's own placeholder, so a long example
+                    // cannot push a two-line field into looking full.
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, padding)
+                    .padding(.top, padding + PlainFieldPlaceholder.macBaselineNudge)
+                    .padding(.trailing, padding)
+                    // It is paint, not a control: clicks reach the field under
+                    // it, and VoiceOver reads the field's own label instead.
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            self
+        }
+        #else
+        self
+        #endif
+    }
+}

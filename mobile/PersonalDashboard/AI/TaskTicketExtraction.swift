@@ -1140,11 +1140,26 @@ struct TaskTicketExtraction {
         userContent.append(.text(Self.userPrompt(context: context, pageCount: images.count)))
         let messages = [AnthropicMessage(role: "user", content: userContent)]
 
+        // Shared ceiling, raised from 1024 to a measured 8192 by #554. Same
+        // reasoning as its sibling in `TicketExtraction`: one tool call carrying
+        // every field of every pass printed in the document.
         let response = try await anthropic.send(
             systemPrompt: Self.systemPrompt,
             messages: messages,
             tools: [Self.extractTaskTicketTool]
         )
+
+
+        // A cut-off turn is not a usable read (#554). The non-streaming API
+        // returns the tool_use block with whatever input JSON it had managed to
+        // generate, so a truncated extraction hands back a HALF-READ ticket —
+        // plausible in every field it did fill, missing the ones it never
+        // reached, and indistinguishable from a complete read once written.
+        // Throwing lets the caller degrade, which is what it already does for
+        // every other failure here.
+        if response.stop_reason == "max_tokens" {
+            throw AnthropicError.http(0, "extract_task_ticket was cut off at the output limit")
+        }
 
         for block in response.content {
             if case let .toolUse(_, name, input) = block, name == "extract_task_ticket" {

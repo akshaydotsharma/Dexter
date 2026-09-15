@@ -584,6 +584,12 @@ enum DataArchive {
         let isSuspect: Bool
         let suspectReason: String?
         let assumptionsNote: String?
+        /// #555. Optional because it is additive: an archive written before
+        /// this field existed carries no key, and a non-optional `Bool` would
+        /// make every one of those archives fail to decode rather than read as
+        /// "not an alcoholic meal". The same call `ExpenseDTO.hiddenFromFinance`
+        /// makes.
+        let containsAlcohol: Bool?
         let createdAt: Date
         let updatedAt: Date
     }

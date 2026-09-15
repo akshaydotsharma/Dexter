@@ -54,6 +54,21 @@ final class AppRouter {
     /// back to nil so it doesn't fire again on the next appearance.
     var focus: ActivityFocus?
 
+    /// A question to ask chat, handed over by another surface (#545).
+    ///
+    /// Written by "Ask Dexter about this" in the Meals Trends tab, alongside a
+    /// `go(to: .chat)`. `ChatView` consumes it, clears it, and sends it — which
+    /// is the ONE API call that button makes.
+    ///
+    /// It lives on the router rather than on the chat view-model because the
+    /// view-model is `@State` on `ChatView`, and on macOS switching sections
+    /// destroys that view. A prompt written while Meals was the visible detail
+    /// would have nowhere to land.
+    ///
+    /// Cleared by the consumer, so a second appearance of the chat surface does
+    /// not re-send it.
+    var pendingChatPrompt: String?
+
     /// Drives the global voice-capture bottom sheet (issue #150). Set to true
     /// when the user press-and-holds the centre chat button; the overlay is
     /// attached once at the root `ZStack` in `ContentView` via

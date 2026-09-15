@@ -445,26 +445,39 @@ enum MealEstimateGuards {
 
     /// Re-check a meal whose items the USER has just edited by hand.
     ///
-    /// Runs the clamps and the hard bounds, and deliberately NOT the macro
-    /// consistency check.
+    /// Runs the clamps, the hard bounds AND the macro consistency check.
     ///
-    /// That check asks whether an estimate agrees with itself, and its answer
-    /// only means anything alongside the alcohol flag, which belongs to the
-    /// estimate and is not stored on the meal. Re-running it here would either
-    /// need that flag guessed back from the numbers — which reads any
-    /// legitimately exempt meal as a failure the moment a portion moves — or
-    /// would flag a user for a drink the app itself decided not to count. A
-    /// number the user typed is not an estimate, and the estimate's own
-    /// self-consistency test is not the right question to ask of it.
+    /// ### Why the consistency check runs here now (#555)
     ///
-    /// The bounds still apply: a portion typed as 4,000 g is a slip whoever made
-    /// it.
+    /// It did not before, and the reason was the alcohol flag. That flag
+    /// arrived on the estimate and was never stored, so this path could not
+    /// tell a beer from a broken estimate: the only two options were to guess
+    /// the flag back from the numbers, which reads every legitimately exempt
+    /// meal as a failure the moment a portion moves, or to skip the check.
+    /// `LocalMeal.containsAlcohol` removes that fork. The caller reads the
+    /// stored flag and passes it, so the exemption is decided by the same fact
+    /// that decided it the first time.
+    ///
+    /// The check is worth having back. It is the only one in the set that can
+    /// prove a number wrong without knowing anything about the food, and a
+    /// hand-typed number is not exempt from arithmetic: a portion halved in the
+    /// grams field and left alone in the calories field is exactly the slip it
+    /// catches.
+    ///
+    /// - Parameter containsAlcohol: `LocalMeal.containsAlcohol` for the meal
+    ///   being re-checked. True exempts it from the consistency check, for the
+    ///   reason spelled out on `macroConsistency`.
     static func recheckHandEdited(
-        items: [MealItemEntry]
+        items: [MealItemEntry],
+        containsAlcohol: Bool
     ) -> (items: [MealItemEntry], totals: MealNutrients, failures: [MealGuardFailure]) {
         let clamped = clampItems(items)
         let totals = MealNutrients.sum(of: clamped.items)
-        return (clamped.items, totals, clamped.failures + boundsFailures(totals: totals))
+        var failures = clamped.failures + boundsFailures(totals: totals)
+        if let mismatch = macroConsistency(totals: totals, containsAlcohol: containsAlcohol) {
+            failures.append(mismatch)
+        }
+        return (clamped.items, totals, failures)
     }
 
     /// Portion units a correction can scale by a ratio.
