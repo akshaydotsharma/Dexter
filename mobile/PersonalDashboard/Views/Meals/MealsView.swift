@@ -1,26 +1,23 @@
 import SwiftUI
 import SwiftData
 
-/// The four tabs inside Meals (#543, widened in #559, corrected in #565).
+/// The three tabs inside Meals (#543, #559, #565, narrowed in #567).
 ///
-/// ### Why there is no Trends tab
+/// ### What a tab is for here
 ///
-/// #559 read "historic charts" as "historic chats" and built the wrong shape: a
-/// History tab that browsed days, beside a Trends tab reserving the charts. They
-/// were always the same slot. History is where the historic charts live, so it
-/// takes that name and #545 now builds into it. Trends is gone rather than
-/// renamed, because there was never a second thing for it to hold.
+/// A tab is a place the content can BE. Today is a day, Plan is a plan, Targets
+/// is eight numbers. Each is somewhere you settle.
 ///
-/// ### Why Today browses days again
+/// History left because it is not that. It is a thing you look at and come back
+/// from, and #567 moved it into the section chrome with the date control, where
+/// navigation lives. The same reasoning took the date pill out of the content
+/// column: the strip should offer places to be, not routes to take.
 ///
-/// Splitting "log today" and "read an older day" across two tabs sounded right
-/// and was not. They are one question — how is this day going — asked of
-/// different days, and one surface answers it. Today holds the day, whichever
-/// day that is, and reaches the others through a calendar. Targets is the only
-/// genuine second surface #559 found.
+/// #559 briefly had five, including a Trends tab beside a History tab, from
+/// misreading "historic charts" as "historic chats". #565 collapsed those two
+/// into one and #567 moved the survivor to the chrome.
 enum MealsTab: String, CaseIterable, Identifiable {
     case today
-    case history
     case plan
     case targets
 
@@ -29,7 +26,6 @@ enum MealsTab: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .today:   return "Today"
-        case .history: return "History"
         case .plan:    return "Plan"
         case .targets: return "Targets"
         }
@@ -103,8 +99,11 @@ struct MealsView: View {
     /// the user did not leave it.
     @State private var visibleMonth: Date = MealCalendar.monthStart(of: Date())
 
-    /// The month grid, anchored to the date control.
+    /// The month grid, anchored to the date control in the section chrome.
     @State private var showingCalendar = false
+
+    /// The historic charts, presented over the current view (#567).
+    @State private var showingHistory = false
 
     @State private var openMeal: LocalMeal?
 
@@ -130,7 +129,8 @@ struct MealsView: View {
                     title: "Meals",
                     onMenu: {
                         withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true }
-                    }
+                    },
+                    trailing: { chromeControls }
                 )
                 #endif
 
@@ -138,14 +138,27 @@ struct MealsView: View {
 
                 switch tab {
                 case .today:   todayTab
-                case .history: scrolling { MealsHistoryPlaceholder() }
                 case .plan:    scrolling { MealsPlanPlaceholder() }
                 case .targets: targetsTab
                 }
             }
         }
         .activeSection(.meals)
-        .macSectionChrome("Meals")
+        // macOS puts the same two controls in the NATIVE window toolbar, beside
+        // the refresh item `macSectionChrome` already installs (#283, #291).
+        //
+        // One HStack, not two bare buttons: the whole trailing closure goes into
+        // a SINGLE `ToolbarItem`, which renders one control, so a second button
+        // beside the first REPLACES it rather than joining it. Tasks found this
+        // the hard way when its calendar silently vanished (#385/#524).
+        .macSectionChrome("Meals") {
+            #if os(macOS)
+            HStack(spacing: Space.xs) {
+                macDateButton
+                macHistoryButton
+            }
+            #endif
+        }
         // Activity / Today deep-link consumption. Both `onAppear` and
         // `onChange` are needed: on iOS the section is pushed and appears with
         // the focus already set, while on macOS the detail pane can already be
@@ -170,6 +183,133 @@ struct MealsView: View {
                 .presentationDragIndicator(.visible)
                 #endif
         }
+        // The charts open OVER the current view rather than owning a tab (#567).
+        // A sheet and not a popover: #545 builds a week and a month read together
+        // plus the balance analysis, which is far more surface than a popover
+        // should hold, and the placeholder standing in for it should be presented
+        // the way the real thing will be.
+        .sheet(isPresented: $showingHistory) {
+            MealsHistorySheet()
+                #if os(iOS)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                #endif
+        }
+    }
+
+    // MARK: - Chrome controls (#567)
+
+    /// The two navigation controls, in the order the issue fixes: date, then
+    /// history. On iOS they sit in `TopBar`'s trailing slot, immediately left of
+    /// the profile pip.
+    ///
+    /// There is no refresh control between them and the pip, because iOS has
+    /// none to place: refresh on this platform is the pull-to-refresh gesture
+    /// (`syncRefreshable`), and `MacSyncRefreshButton` is macOS-only by an
+    /// explicit decision recorded in `SyncRefresh.swift`. Adding a phone refresh
+    /// button here would be inventing a control, not moving one.
+    #if os(iOS)
+    @ViewBuilder
+    private var chromeControls: some View {
+        TopBarIconButton(
+            systemName: "calendar",
+            accessibilityLabel: dateControlAccessibilityLabel,
+            action: openCalendar,
+            label: dateControlLabel
+        )
+        .popover(isPresented: $showingCalendar) {
+            MealCalendarPopover(
+                month: $visibleMonth,
+                selectedDay: $selectedDay,
+                readings: MealCalendar.readings(in: allMeals),
+                today: Date()
+            )
+        }
+
+        TopBarIconButton(
+            systemName: "chart.xyaxis.line",
+            accessibilityLabel: "Historic charts",
+            action: { showingHistory = true }
+        )
+    }
+    #endif
+
+    #if os(macOS)
+    /// The toolbar twin of the iOS date control. A plain `Button` rather than
+    /// `TopBarIconButton`, because the native toolbar draws its own chrome and a
+    /// 44 pt touch target is a phone measure.
+    ///
+    /// The popover hangs off this button directly. That works here for the same
+    /// reason it works for the Tasks calendar (#385): a toolbar item is a stable
+    /// view with a real window-relative frame, so SwiftUI can anchor to it. The
+    /// hand-rolled `MacAnchoredPopover` is NOT needed — it exists for a popover
+    /// that must survive an `NSOpenPanel` taking key (#416), and nothing here
+    /// opens a file panel.
+    private var macDateButton: some View {
+        Button(action: openCalendar) {
+            HStack(spacing: Space.xs) {
+                Image(systemName: "calendar")
+                if let dateControlLabel {
+                    Text(dateControlLabel)
+                }
+            }
+        }
+        .help(dateControlAccessibilityLabel)
+        .accessibilityLabel(dateControlAccessibilityLabel)
+        .popover(isPresented: $showingCalendar) {
+            MealCalendarPopover(
+                month: $visibleMonth,
+                selectedDay: $selectedDay,
+                readings: MealCalendar.readings(in: allMeals),
+                today: Date()
+            )
+        }
+    }
+
+    private var macHistoryButton: some View {
+        Button { showingHistory = true } label: {
+            Image(systemName: "chart.xyaxis.line")
+        }
+        .help("Historic charts")
+        .accessibilityLabel("Historic charts")
+    }
+    #endif
+
+    /// Nil while today is selected, the day itself once another is (#567).
+    ///
+    /// This is what makes one control do two jobs. A bare glyph is a button and
+    /// says nothing, which is right when the content below is today and needs no
+    /// caption. The moment the content is some other day, the chrome has to say
+    /// so, because the tab strip still reads "Today" and nothing else above the
+    /// fold would name the day.
+    ///
+    /// It is also why there is no separate Today button: returning is picking
+    /// today in the calendar this control already opens.
+    ///
+    /// ### Why "10 Sep" and not "Thursday"
+    ///
+    /// The first build used `dayTitle`, the weekday the old in-content pill
+    /// showed, and beside the section title at 390 pt it truncated to "Thurs…".
+    /// A truncated label is worse than a short one here, because stating the day
+    /// is this state's entire job. The compact date is also the more honest
+    /// answer: "Thursday" never said WHICH Thursday, and "10 Sep" does, in fewer
+    /// characters. The weekday survives in the accessibility label and on the
+    /// day card below.
+    private var dateControlLabel: String? {
+        isSelectedToday ? nil : Self.chromeDayFormatter.string(from: selectedDay)
+    }
+
+    private var dateControlAccessibilityLabel: String {
+        isSelectedToday
+            ? "Choose a day. Showing today"
+            : "Choose a day. Showing \(dayTitle), \(Self.dayFormatter.string(from: selectedDay))"
+    }
+
+    /// Always re-point the grid at the day on screen before opening, so it never
+    /// reopens on a month the user paged to and abandoned.
+    private func openCalendar() {
+        visibleMonth = MealCalendar.monthStart(of: selectedDay)
+        showingCalendar = true
     }
 
     // MARK: - Chrome
@@ -177,8 +317,8 @@ struct MealsView: View {
     /// The app's own strip, not `.pickerStyle(.segmented)`. The native control
     /// draws its own greys and its own font, none of which come from `Tokens`,
     /// and it truncates rather than shrinks, which is what turned five segments
-    /// at phone width into five abbreviations. Four is easier than the five this
-    /// was built for, so nothing about it changes here. See `EdTabStrip`.
+    /// at phone width into five abbreviations. Three is easier still, so nothing
+    /// about its construction changes here. See `EdTabStrip`.
     private var tabBar: some View {
         EdTabStrip(
             tabs: MealsTab.allCases,
@@ -207,15 +347,13 @@ struct MealsView: View {
 
     /// One day in full, and by default that day is today.
     ///
-    /// The tab opens on today and every block below the date control follows
+    /// The tab opens on today and every block follows
     /// whichever day is selected: the composer's presence, the day card, the meal
     /// list and each row's breakdown. Nothing here knows about a second tab,
     /// because there is not one any more.
     private var todayTab: some View {
         dayScroll {
             VStack(alignment: .leading, spacing: Space.lg) {
-                dateControl
-
                 // The composer only appears on today. Estimating a meal onto a
                 // day that has ended is a legitimate thing to want, but the
                 // primary path has to stay one field and one button, and a
@@ -236,85 +374,6 @@ struct MealsView: View {
                     pulsedMealID: pulsedMealID,
                     onOpenMeal: { openMeal = $0 }
                 )
-            }
-        }
-    }
-
-    /// Names the day the tab is showing, and opens the month grid.
-    ///
-    /// A control rather than a heading, because it is the only way to any day
-    /// but today, and a label you cannot press would leave the user stranded on
-    /// a day in March. It carries a "Today" affordance of its own for the same
-    /// reason: returning is one tap, not a hunt through the grid.
-    ///
-    /// ### Why it wears the secondary button's shell
-    ///
-    /// It was bare text with a small glyph, and it did not read as tappable. The
-    /// "Today" button sitting beside it was a bordered pill, so the more
-    /// discoverable of the two was the one that did less — and the user has
-    /// already given this note once on this surface, about a discard button that
-    /// was "not very evident its a clickable button". Shipping a second quiet
-    /// affordance next to the first would be the same note twice.
-    ///
-    /// So it takes `EdButtonStyle(kind: .secondary, size: .sm)`, LITERALLY the
-    /// style its neighbour uses, rather than a hand-rolled lookalike. That makes
-    /// the two peers by construction: the same surface, the same border, the same
-    /// radius and the same press feedback, differing only in what they contain.
-    /// The children set their own fonts and inks, which override the style's.
-    ///
-    /// The glyph is the part that says what happens on tap, so it gains weight
-    /// rather than losing it beside a louder frame.
-    private var dateControl: some View {
-        // Centred, not baseline-aligned. While the date was bare text, matching
-        // its first baseline to the button's label was the right call. Now that
-        // both are pills, a shared baseline leaves the two frames visibly offset,
-        // and what the eye lines up is the boxes.
-        HStack(alignment: .center, spacing: Space.sm) {
-            Button {
-                visibleMonth = MealCalendar.monthStart(of: selectedDay)
-                showingCalendar = true
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(dayTitle)
-                            .font(.edHeading)
-                            .foregroundStyle(Tokens.ink)
-                        Text(Self.dayFormatter.string(from: selectedDay))
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                    }
-                    Image(systemName: "calendar")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Tokens.inkSoft)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-            .accessibilityLabel("\(dayTitle), \(Self.dayFormatter.string(from: selectedDay)). Choose a day")
-            // No `arrowEdge`. The control sits at the top of the tab, and forcing
-            // the popover above it clipped the month off the top of the window;
-            // the system places it below when that is where the room is. Same
-            // call as the Tasks calendar, which opens from the same kind of spot.
-            .popover(isPresented: $showingCalendar) {
-                MealCalendarPopover(
-                    month: $visibleMonth,
-                    selectedDay: $selectedDay,
-                    readings: MealCalendar.readings(in: allMeals),
-                    today: Date()
-                )
-            }
-
-            Spacer(minLength: Space.sm)
-
-            // Only worth screen space when it would do something.
-            if !isSelectedToday {
-                Button("Today") {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        selectedDay = todayDay
-                    }
-                }
-                .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-                .accessibilityLabel("Back to today")
             }
         }
     }
@@ -462,6 +521,15 @@ struct MealsView: View {
     private static let weekdayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "EEEE"
+        return f
+    }()
+
+    /// The chrome's own short form (#567). No year: the calendar cannot reach a
+    /// future day and a year-old day is rare enough that the accessibility label
+    /// and the calendar itself can carry it.
+    private static let chromeDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM"
         return f
     }()
 }

@@ -304,13 +304,18 @@ final class MealsCalendarTests: XCTestCase {
         )
     }
 
-    /// The four tabs, in the order the strip prints them. No Trends: its content
-    /// was always History's (#565).
-    func testTheTabOrderIsTodayHistoryPlanTargets() {
-        XCTAssertEqual(MealsTab.allCases, [.today, .history, .plan, .targets])
+    /// The three tabs, in the order the strip prints them (#567).
+    ///
+    /// No Trends: its content was always History's (#565). No History either:
+    /// it is a thing you look at and come back from, not a place the content
+    /// settles, so #567 moved it to the section chrome beside the date control.
+    /// A tab reappearing here would mean navigation had crept back into the
+    /// strip, which is the change this issue exists to make.
+    func testTheTabOrderIsTodayPlanTargets() {
+        XCTAssertEqual(MealsTab.allCases, [.today, .plan, .targets])
         XCTAssertEqual(
             MealsTab.allCases.map(\.displayName),
-            ["Today", "History", "Plan", "Targets"]
+            ["Today", "Plan", "Targets"]
         )
     }
 

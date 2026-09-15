@@ -75,13 +75,32 @@ struct TopBarIconButton: View {
     let accessibilityLabel: String
     let action: () -> Void
 
+    /// An optional word beside the glyph, for a control that is also an
+    /// INDICATOR (#567). Meals' date control is the first: a bare glyph while
+    /// today is selected, and the day's name once another is, so the chrome
+    /// always says which day the content below belongs to.
+    ///
+    /// Nil is the ordinary icon-only button every earlier caller gets, and its
+    /// rendering is unchanged. When it is set the control grows sideways only:
+    /// the height and the 44 pt minimum touch target stay, so a labelled control
+    /// and a bare one still line up in the same bar.
+    var label: String? = nil
+
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(Tokens.ink)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+            HStack(spacing: Space.xs) {
+                Image(systemName: systemName)
+                    .font(.system(size: 18, weight: .regular))
+                if let label {
+                    Text(label)
+                        .font(.edFootnote)
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(Tokens.ink)
+            .padding(.horizontal, label == nil ? 0 : Space.sm)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
         }
         .accessibilityLabel(accessibilityLabel)
     }
