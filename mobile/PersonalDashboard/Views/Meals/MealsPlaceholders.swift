@@ -34,14 +34,23 @@ struct MealsPlaceholderPanel: View {
     }
 }
 
-/// Trends is #545. The balance analysis is not built here.
-struct MealsTrendsPlaceholder: View {
+/// History holds the historic charts, and #545 builds them.
+///
+/// This was `MealsTrendsPlaceholder` until #565. The two names were always one
+/// slot: charts over the days you have logged ARE the history of this section,
+/// and a Trends tab sitting beside a History tab came from misreading the
+/// request. Renamed rather than kept alongside, so there is no second empty tab
+/// waiting on content that has nowhere to come from.
+///
+/// Reading a single past day is not here. That is Today's job, through the
+/// calendar in its date control, which is why the second body line says so.
+struct MealsHistoryPlaceholder: View {
     var body: some View {
         MealsPlaceholderPanel(
-            title: "Trends",
+            title: "History",
             systemImage: "chart.xyaxis.line",
-            body1: "A week and a month read together, so a single heavy day stops looking like a problem and a pattern starts to.",
-            body2: "Not built yet. Keep logging and there will be something to read."
+            body1: "Charts over the days you have logged: a week and a month read together, so a single heavy day stops looking like a problem and a pattern starts to.",
+            body2: "Not built yet: that is issue #545. To read one past day, tap the date at the top of Today."
         )
     }
 }

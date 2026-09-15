@@ -2,8 +2,13 @@ import XCTest
 import SwiftData
 @testable import PersonalDashboard
 
-/// The History month grid, and where a deep link lands now that Today is today
-/// only (#559).
+/// The month grid, and where a deep link lands (#559, host moved in #565).
+///
+/// The grid moved from a History tab into a popover on Today, and these tests
+/// came with it unchanged. That is the point of them: the arithmetic never
+/// depended on which tab drew it, so a change of host should not cost a single
+/// assertion. Only the deep-link tests moved with the rule they describe, from
+/// two landing places to one.
 ///
 /// ### Why this is pinned rather than eyeballed
 ///
@@ -259,53 +264,53 @@ final class MealsCalendarTests: XCTestCase {
 
     // MARK: - Where a deep link lands
 
-    /// A meal logged today lands on Today. A meal logged on any other day lands
-    /// on History, which is the only tab that can now show it.
-    func testADeepLinkLandsOnTodayOnlyForAMealLoggedToday() {
-        let today = date(2026, 9, 15)
-
+    /// Every meal lands on Today, whatever day it was logged on (#565).
+    ///
+    /// This was the two-armed routing test #559 needed, back when Today could
+    /// only show today and anything older had to go to a second tab. Today
+    /// reaches any day again, so the branch is gone, and what is worth pinning is
+    /// that it STAYS gone: a meal from an earlier year must not acquire a second
+    /// landing place.
+    func testEveryDeepLinkLandsOnTodayWhicheverDayTheMealIsOn() {
+        XCTAssertEqual(MealsView.landing(forMealOn: date(2026, 9, 15), calendar: calendar).tab, .today)
+        XCTAssertEqual(MealsView.landing(forMealOn: date(2026, 9, 14), calendar: calendar).tab, .today)
         XCTAssertEqual(
-            MealsView.tab(forMealOn: today, today: today, calendar: calendar),
-            .today
-        )
-        XCTAssertEqual(
-            MealsView.tab(
-                forMealOn: calendar.date(byAdding: .hour, value: 21, to: today)!,
-                today: today,
-                calendar: calendar
-            ),
+            MealsView.landing(forMealOn: date(2025, 12, 31), calendar: calendar).tab,
             .today,
-            "An evening meal today is still today."
-        )
-        XCTAssertEqual(
-            MealsView.tab(forMealOn: date(2026, 9, 14), today: today, calendar: calendar),
-            .history
-        )
-        XCTAssertEqual(
-            MealsView.tab(forMealOn: date(2025, 12, 31), today: today, calendar: calendar),
-            .history,
-            "A meal in an earlier year is reachable, in History."
+            "A meal in an earlier year lands on the same tab as one from this morning."
         )
     }
 
-    /// History opens on the month holding the day a deep link selected, which is
+    /// The landing normalises to the day, so an evening meal selects its own day
+    /// rather than an instant that formats as the next one.
+    func testTheLandingSelectsTheMealsOwnDay() {
+        let day = date(2026, 3, 7)
+        let evening = calendar.date(byAdding: .hour, value: 21, to: day)!
+
+        let landing = MealsView.landing(forMealOn: evening, calendar: calendar)
+        XCTAssertEqual(landing.day, day, "An evening meal belongs to the day it was eaten on.")
+        XCTAssertEqual(landing.month, date(2026, 3, 1))
+    }
+
+    /// The popover opens on the month holding the day the link selected, which is
     /// how a link to an earlier month becomes reachable at all.
-    func testADeepLinkToAnEarlierMonthStepsTheGridToThatMonth() {
-        let landing = date(2026, 3, 7)
-        XCTAssertEqual(MealCalendar.monthStart(of: landing, calendar: calendar), date(2026, 3, 1))
+    func testADeepLinkToAnEarlierMonthOpensTheGridOnThatMonth() {
+        let landing = MealsView.landing(forMealOn: date(2026, 3, 7), calendar: calendar)
+        XCTAssertEqual(landing.month, date(2026, 3, 1))
         XCTAssertTrue(
-            MealCalendar.slots(forMonthOf: landing, calendar: calendar)
+            MealCalendar.slots(forMonthOf: landing.month, calendar: calendar)
                 .compactMap(\.day)
-                .contains(landing)
+                .contains(landing.day)
         )
     }
 
-    /// The five tabs, in the order the strip prints them.
-    func testTheTabOrderIsTodayHistoryTrendsPlanTargets() {
-        XCTAssertEqual(MealsTab.allCases, [.today, .history, .trends, .plan, .targets])
+    /// The four tabs, in the order the strip prints them. No Trends: its content
+    /// was always History's (#565).
+    func testTheTabOrderIsTodayHistoryPlanTargets() {
+        XCTAssertEqual(MealsTab.allCases, [.today, .history, .plan, .targets])
         XCTAssertEqual(
             MealsTab.allCases.map(\.displayName),
-            ["Today", "History", "Trends", "Plan", "Targets"]
+            ["Today", "History", "Plan", "Targets"]
         )
     }
 
