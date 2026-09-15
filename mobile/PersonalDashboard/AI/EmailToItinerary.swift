@@ -29,15 +29,13 @@ struct EmailIngestResult: Sendable {
 
 /// Email-to-itinerary ingestion orchestrator (#143).
 ///
-/// Mirrors `ChatToDrafts.run()`'s tool-use loop, but is a SEPARATE path that
-/// deliberately ENABLES the trip tools for auto-execute. The existing
-/// `ChatToDrafts` / `CaptureService` paths are untouched, so their behaviour
-/// (chat + Shortcut capture) is unchanged — this keeps the "no-auto-trips
-/// guard" promise for those surfaces while letting forwarded booking emails
-/// auto-add to a matching trip.
-///
-/// To make a match-only path that NEVER creates a trip, this orchestrator
-/// advertises ONLY `add_itinerary_item` to the model. With no `draft_trip`
+/// Mirrors `ChatToDrafts.run()`'s tool-use loop, but is a SEPARATE, narrower
+/// path: `ChatToDrafts` already auto-executes the full toolset for the
+/// Shortcut/voice capture path, trip tools included (see the comment in
+/// `ChatToDrafts.run()`). This orchestrator does not rely on that; it exists
+/// to make a match-only path that NEVER creates a trip on its own, so a
+/// forwarded booking email can only attach to a trip the user already made.
+/// It advertises ONLY `add_itinerary_item` to the model. With no `draft_trip`
 /// tool available, the model cannot create a trip even if the email describes
 /// one — the worst it can do is decline and we record a skip.
 @MainActor
