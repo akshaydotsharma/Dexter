@@ -420,44 +420,113 @@ struct WrappingChipRow: View {
 
 /// The flow itself. Measures each child at its natural size, wraps when the next
 /// one would cross the right edge.
+///
+/// ### Why one solver and not two loops (#571)
+///
+/// The two passes used to carry their own copy of the arithmetic, and they
+/// wrapped against two different widths: `sizeThatFits` against
+/// `proposal.width`, `placeSubviews` against `bounds.width`. On a suspect meal
+/// row those were measured at 292 pt and placed into 232 pt, so the layout
+/// reported the height of two lines and then laid out three. The row reserved
+/// 46 pt for a 71 pt block and the nutrient pills under it were drawn straight
+/// over the third chip.
+///
+/// So the arithmetic is now stated exactly once, in `solve`, and both passes
+/// call it. Two loops that must agree are two loops that will not.
+///
+/// ### And why the reported width is the width it wrapped against
+///
+/// Stating one solver is necessary but not sufficient: both passes still have
+/// to feed it the same width. `placeSubviews` can only honestly use
+/// `bounds.width`, which is the space it was actually handed, so the fix is to
+/// make `bounds.width` equal the width `sizeThatFits` measured at.
+///
+/// That is what reporting `proposal.width` does. The old code reported
+/// `min(widest, maxWidth)` — the width its longest LINE happened to reach —
+/// which told the parent the flow was narrower than the space it had been
+/// offered. The parent believed it, gave the enclosing column less, and then
+/// placed into that smaller box without measuring again. A flow that claims
+/// the full width it wrapped against is given the full width it wrapped
+/// against, and the disagreement has nowhere left to live. The chips are still
+/// placed from the leading edge, so nothing moves on a row that already fitted.
+///
+/// An unspecified proposal is the one case with no width to claim. It reports
+/// the longest line, as it always did.
 struct ChipFlowLayout: Layout {
     var spacing: CGFloat = Space.xs
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
+    /// Where every child goes, and the box they need.
+    struct Solution: Equatable {
+        /// One offset per child, in order, from the top-leading corner.
+        var offsets: [CGPoint]
+        /// The box the offsets need. The width is the width the flow WRAPPED
+        /// against, not the width its longest line reaches — see the note on
+        /// the type.
+        var size: CGSize
+
+        /// The height the offsets actually occupy, worked out from the
+        /// placements rather than from the measuring loop.
+        ///
+        /// This is the assertion `size.height` exists to match, and the whole
+        /// bug was the two drifting apart. Kept on the solution so a test can
+        /// state the invariant in the same terms the layout does.
+        func placedHeight(of sizes: [CGSize]) -> CGFloat {
+            zip(offsets, sizes).reduce(0) { max($0, $1.0.y + $1.1.height) }
+        }
+    }
+
+    /// The one piece of arithmetic in this type.
+    ///
+    /// A child wider than the whole line is placed anyway rather than dropped,
+    /// and takes a line of its own. Clipping one chip is better than losing it,
+    /// and the case only arises at widths no phone gives this row.
+    static func solve(_ sizes: [CGSize], width: CGFloat, spacing: CGFloat) -> Solution {
+        guard !sizes.isEmpty else { return Solution(offsets: [], size: .zero) }
+
+        var offsets: [CGPoint] = []
+        offsets.reserveCapacity(sizes.count)
         var x: CGFloat = 0
         var y: CGFloat = 0
         var rowHeight: CGFloat = 0
         var widest: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0 && x + size.width > maxWidth {
+
+        for size in sizes {
+            if x > 0 && x + size.width > width {
                 widest = max(widest, x - spacing)
                 x = 0
                 y += rowHeight + spacing
                 rowHeight = 0
             }
+            offsets.append(CGPoint(x: x, y: y))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }
         widest = max(widest, x - spacing)
-        return CGSize(width: min(widest, maxWidth), height: y + rowHeight)
+
+        return Solution(
+            offsets: offsets,
+            size: CGSize(width: width.isFinite ? width : widest, height: y + rowHeight)
+        )
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        Self.solve(
+            subviews.map { $0.sizeThatFits(.unspecified) },
+            width: proposal.width ?? .infinity,
+            spacing: spacing
+        ).size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX && x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let solution = Self.solve(sizes, width: bounds.width, spacing: spacing)
+        for (index, subview) in subviews.enumerated() {
+            let offset = solution.offsets[index]
+            subview.place(
+                at: CGPoint(x: bounds.minX + offset.x, y: bounds.minY + offset.y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(sizes[index])
+            )
         }
     }
 }
