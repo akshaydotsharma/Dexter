@@ -63,11 +63,48 @@ struct AnthropicClient: Sendable {
         self.session = session
     }
 
+    /// One `POST /v1/messages`.
+    ///
+    /// The system field is an `AnthropicSystemPrompt`, not a `String`, because
+    /// prompt caching is a prefix match and this path's prompt ends in a
+    /// timestamp and the whole SwiftData library (#580). The split names which
+    /// half carries the `cache_control` breakpoint.
+    ///
+    /// Retries ONCE with every cache marker removed if the API rejects them.
+    /// That retry is the only defence available to a change that could not be
+    /// verified against the live API before it shipped: without it, a rejected
+    /// marker would fail every AI call in the app instead of costing one
+    /// duplicate request and a console line.
     func send(
-        systemPrompt: String,
+        systemPrompt: AnthropicSystemPrompt,
         messages: [AnthropicMessage],
         tools: [AnthropicTool],
         maxTokens: Int = Self.maxTokens
+    ) async throws -> AnthropicResponse {
+        do {
+            return try await sendOnce(
+                systemPrompt: Self.promptCachingEnabled ? systemPrompt : systemPrompt.withoutCacheControl,
+                messages: messages,
+                tools: tools,
+                maxTokens: maxTokens
+            )
+        } catch AnthropicError.http(let status, let body)
+            where Self.isCacheControlRejection(status: status, body: body) {
+            Self.disablePromptCaching()
+            return try await sendOnce(
+                systemPrompt: systemPrompt.withoutCacheControl,
+                messages: messages,
+                tools: tools,
+                maxTokens: maxTokens
+            )
+        }
+    }
+
+    private func sendOnce(
+        systemPrompt: AnthropicSystemPrompt,
+        messages: [AnthropicMessage],
+        tools: [AnthropicTool],
+        maxTokens: Int
     ) async throws -> AnthropicResponse {
         guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
             throw AnthropicError.notConfigured
@@ -113,7 +150,9 @@ struct AnthropicClient: Sendable {
         }
 
         do {
-            return try Self.decoder.decode(AnthropicResponse.self, from: data)
+            let decoded = try Self.decoder.decode(AnthropicResponse.self, from: data)
+            Self.logUsage(decoded.usage, path: "send")
+            return decoded
         } catch {
             throw AnthropicError.decoding(error)
         }
@@ -167,7 +206,7 @@ struct AnthropicClient: Sendable {
     /// (`ChatStream`, `AIStreamingService`, `ChatViewModel`) is `@MainActor`, so
     /// rendering and all SwiftData writes still happen on the main actor.
     func stream(
-        systemPrompt: String,
+        systemPrompt: AnthropicSystemPrompt,
         messages: [AnthropicMessage],
         tools: [AnthropicTool],
         maxTokens: Int = Self.maxTokens
@@ -179,36 +218,55 @@ struct AnthropicClient: Sendable {
                         throw AnthropicError.notConfigured
                     }
 
-                    let body = AnthropicStreamingRequest(
-                        model: Self.model,
-                        max_tokens: maxTokens,
-                        system: systemPrompt,
-                        messages: messages,
-                        tools: tools,
-                        stream: true
-                    )
+                    // Opens the SSE connection for one system-prompt shape.
+                    // Separated out so the cache-rejection retry below can run
+                    // the identical request with the markers stripped (#580).
+                    func open(
+                        _ prompt: AnthropicSystemPrompt
+                    ) async throws -> URLSession.AsyncBytes {
+                        let body = AnthropicStreamingRequest(
+                            model: Self.model,
+                            max_tokens: maxTokens,
+                            system: prompt,
+                            messages: messages,
+                            tools: tools,
+                            stream: true
+                        )
 
-                    var request = URLRequest(url: Self.endpoint)
-                    request.httpMethod = "POST"
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    request.setValue(key, forHTTPHeaderField: "x-api-key")
-                    request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
-                    request.timeoutInterval = 120
-                    request.httpBody = try Self.encoder.encode(body)
+                        var request = URLRequest(url: Self.endpoint)
+                        request.httpMethod = "POST"
+                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                        request.setValue(key, forHTTPHeaderField: "x-api-key")
+                        request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
+                        request.timeoutInterval = 120
+                        request.httpBody = try Self.encoder.encode(body)
 
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse else {
-                        throw AnthropicError.http(0, "non-HTTP response")
-                    }
-                    guard (200..<300).contains(http.statusCode) else {
-                        // Drain a small body preview to surface the API error.
-                        var preview = ""
-                        for try await line in bytes.lines {
-                            preview += line + "\n"
-                            if preview.count > 800 { break }
+                        let (bytes, response) = try await session.bytes(for: request)
+                        guard let http = response as? HTTPURLResponse else {
+                            throw AnthropicError.http(0, "non-HTTP response")
                         }
-                        throw AnthropicError.http(http.statusCode, preview)
+                        guard (200..<300).contains(http.statusCode) else {
+                            // Drain a small body preview to surface the API error.
+                            var preview = ""
+                            for try await line in bytes.lines {
+                                preview += line + "\n"
+                                if preview.count > 800 { break }
+                            }
+                            throw AnthropicError.http(http.statusCode, preview)
+                        }
+                        return bytes
+                    }
+
+                    let bytes: URLSession.AsyncBytes
+                    do {
+                        bytes = try await open(
+                            Self.promptCachingEnabled ? systemPrompt : systemPrompt.withoutCacheControl
+                        )
+                    } catch AnthropicError.http(let status, let preview)
+                        where Self.isCacheControlRejection(status: status, body: preview) {
+                        Self.disablePromptCaching()
+                        bytes = try await open(systemPrompt.withoutCacheControl)
                     }
 
                     // SSE parser ported from Services/AIStreamingService.swift.
@@ -361,10 +419,24 @@ struct AnthropicClient: Sendable {
             if let reason = p.delta?.stop_reason { terminal.stopReason = reason }
             if let tokens = p.usage?.output_tokens { terminal.outputTokens = tokens }
 
+        case "message_start":
+            // The ONLY record that carries the cache counters. `message_delta`
+            // later restates `output_tokens` but not these, so they are cached
+            // here and handed to the terminator (#580).
+            struct Payload: Decodable {
+                struct Message: Decodable { let usage: AnthropicUsage? }
+                let message: Message?
+            }
+            guard let p = try? Self.decoder.decode(Payload.self, from: data) else { return }
+            terminal.usage = p.message?.usage
+
         case "message_stop":
+            let usage = terminal.usage?.mergingOutputTokens(terminal.outputTokens)
+            Self.logUsage(usage, path: "stream")
             continuation.yield(.done(
                 stopReason: terminal.stopReason,
-                outputTokens: terminal.outputTokens
+                outputTokens: terminal.outputTokens,
+                usage: usage
             ))
 
         case "error":
@@ -379,14 +451,25 @@ struct AnthropicClient: Sendable {
             }
 
         default:
-            // message_start / ping / unknown: nothing to yield.
+            // ping / unknown: nothing to yield.
             break
         }
     }
 
+    /// `.sortedKeys` is load-bearing for prompt caching, not cosmetic (#580).
+    ///
+    /// Every tool's `input_schema` is an `AnthropicJSONValue.object`, which is a
+    /// Swift `Dictionary`. Swift seeds its hasher per PROCESS, so dictionary
+    /// iteration order — and therefore the JSON key order `JSONEncoder` emits —
+    /// is stable within one launch and different in the next one. The tool block
+    /// renders at position 0 of the cached prefix, so without this the bytes
+    /// would change on every app launch and the cache would miss every time the
+    /// user reopened Dexter, with nothing in the response to say why.
+    ///
+    /// JSON objects are unordered, so sorting changes nothing the API reads.
     static let encoder: JSONEncoder = {
         let e = JSONEncoder()
-        e.outputFormatting = []
+        e.outputFormatting = [.sortedKeys]
         return e
     }()
 
@@ -394,6 +477,187 @@ struct AnthropicClient: Sendable {
         let d = JSONDecoder()
         return d
     }()
+}
+
+// MARK: - Prompt caching (#580)
+
+/// How long a written cache entry stays warm.
+///
+/// The choice is arithmetic, not taste. A write costs 1.25x the input price at
+/// five minutes and 2x at one hour; a read costs about 0.1x either way, and a
+/// read restarts the entry's clock for free. So the question is only how long
+/// the gap between two requests that share a prefix usually is.
+/// Every path ships on `fiveMinutes` today. See the note above
+/// `ChatToDrafts.systemPrompt` for the table that decided it: the tool loop is
+/// never fewer than two calls, so a five-minute entry already pays for itself
+/// inside one capture, while an hour-long entry doubles the write price and
+/// makes an isolated capture cost MORE than sending no markers at all.
+enum AnthropicCacheTTL: Sendable, Equatable {
+    /// The API default, so nothing is written on the wire for it.
+    case fiveMinutes
+    /// For a prefix that comes back 5 to 60 minutes later rather than in a
+    /// burst. Nothing uses it yet; it is here so the switch is one word once
+    /// `cache_read_input_tokens` says how often the prefix goes cold.
+    case oneHour
+
+    /// `nil` means "send no `ttl` field", which the API reads as five minutes.
+    var wireValue: String? {
+        switch self {
+        case .fiveMinutes: return nil
+        case .oneHour: return "1h"
+        }
+    }
+}
+
+/// The `system` field of a Messages request, split at the prompt-cache
+/// breakpoint (#580).
+///
+/// Caching is a prefix match and the render order is `tools`, then `system`,
+/// then `messages`. This app's assistant prompt ends in the current timestamp
+/// and the user's whole SwiftData library, so a single `cache_control` marker
+/// on the prompt as one string would miss on every request: `nowIso` differs
+/// each time. Splitting the prompt is therefore the change; the marker is only
+/// the consequence.
+///
+/// - `stable` is byte-identical on every request on its path and carries the
+///   marker, so the cached prefix is the 28-tool block PLUS this text.
+/// - `volatile` renders after the breakpoint at full price and invalidates
+///   nothing, which is exactly what a timestamp should cost.
+///
+/// ## The split, measured 2026-09-15 (capture path)
+///
+///   part                       bytes    approx tokens
+///   28-tool JSON block        47,545          19,000
+///   stable system text        14,101           5,600
+///   ---- cache breakpoint ----------------------------
+///   volatile tail              2,860           1,100
+///
+/// Bytes are exact, from `PromptCacheShapeTests`, which encodes the SHIPPED
+/// tool array and the SHIPPED prompt against a 12-task / 8-note / 1-list
+/// library. Tokens are derived, not measured: `count_tokens` was not called
+/// because the account balance was zero while this was built. The conversion
+/// uses 2.5 bytes per token, which is what the Console request log's
+/// 25,248-to-26,152 input tokens for this same request on 15 Sep 2026 implies.
+///
+/// So the cached prefix is about 96% of every request on this path. Once it is
+/// warm, a call bills roughly 1,100 fresh tokens plus 24,600 at a tenth of the
+/// input rate, in place of 25,700 at full rate.
+///
+/// ## One capture loop, in billed-equivalent input tokens
+///
+///   no cache                  51,400
+///   five-minute TTL, cold     35,410   <- what ships
+///   one-hour TTL, cold        53,860
+///   either TTL, already warm   7,120
+///
+/// The loop is never fewer than two calls, so the second call reads what the
+/// first one wrote and the saving lands on the very first capture.
+struct AnthropicSystemPrompt: Sendable, Equatable {
+    let stable: String
+    let volatile: String?
+    /// `nil` places no breakpoint at all. Used by callers whose prompt is too
+    /// short to reach the model's minimum cacheable prefix.
+    let ttl: AnthropicCacheTTL?
+
+    init(stable: String, volatile: String? = nil, ttl: AnthropicCacheTTL? = .fiveMinutes) {
+        self.stable = stable
+        self.volatile = volatile
+        self.ttl = ttl
+    }
+
+    /// A prompt with no breakpoint. Name the reason at the call site.
+    static func uncached(_ text: String) -> AnthropicSystemPrompt {
+        AnthropicSystemPrompt(stable: text, volatile: nil, ttl: nil)
+    }
+
+    /// The same prompt with the marker removed. Sent on the one retry after the
+    /// API rejects `cache_control`.
+    var withoutCacheControl: AnthropicSystemPrompt {
+        AnthropicSystemPrompt(stable: stable, volatile: volatile, ttl: nil)
+    }
+}
+
+extension AnthropicSystemPrompt: Encodable {
+    private enum BlockKeys: String, CodingKey {
+        case type
+        case text
+        case cache_control
+    }
+
+    private enum CacheKeys: String, CodingKey {
+        case type
+        case ttl
+    }
+
+    /// Encodes as the array-of-blocks form the API takes for `system`. One
+    /// block when there is nothing volatile, two when there is.
+    func encode(to encoder: Encoder) throws {
+        var array = encoder.unkeyedContainer()
+
+        var first = array.nestedContainer(keyedBy: BlockKeys.self)
+        try first.encode("text", forKey: .type)
+        try first.encode(stable, forKey: .text)
+        if let ttl {
+            var cache = first.nestedContainer(keyedBy: CacheKeys.self, forKey: .cache_control)
+            try cache.encode("ephemeral", forKey: .type)
+            if let wire = ttl.wireValue {
+                try cache.encode(wire, forKey: .ttl)
+            }
+        }
+
+        if let volatile, !volatile.isEmpty {
+            var second = array.nestedContainer(keyedBy: BlockKeys.self)
+            try second.encode("text", forKey: .type)
+            try second.encode(volatile, forKey: .text)
+        }
+    }
+}
+
+extension AnthropicClient {
+    private static let cachingFlagLock = NSLock()
+    nonisolated(unsafe) private static var _promptCachingEnabled = true
+
+    /// False once the API has rejected the markers in this process. Every
+    /// request built after that point omits them.
+    static var promptCachingEnabled: Bool {
+        cachingFlagLock.lock()
+        defer { cachingFlagLock.unlock() }
+        return _promptCachingEnabled
+    }
+
+    static func disablePromptCaching() {
+        cachingFlagLock.lock()
+        _promptCachingEnabled = false
+        cachingFlagLock.unlock()
+        NSLog("[anthropic] API rejected cache_control; prompt caching off for this process")
+    }
+
+    /// Restores the default. Tests only — nothing in the app turns caching back
+    /// on, because a rejection is a property of the account or the API version,
+    /// not of one request.
+    static func resetPromptCachingForTesting() {
+        cachingFlagLock.lock()
+        _promptCachingEnabled = true
+        cachingFlagLock.unlock()
+    }
+
+    /// True when this failure is the API refusing the cache markers rather than
+    /// a real problem with the request.
+    ///
+    /// Deliberately narrow: a 400 only, and only one that names the field. A
+    /// bad tool schema or an empty text block is also a 400 and must keep
+    /// failing loudly.
+    static func isCacheControlRejection(status: Int, body: String) -> Bool {
+        guard status == 400, promptCachingEnabled else { return false }
+        return body.lowercased().contains("cache_control")
+    }
+
+    /// Prints the input split so a cache hit is observable rather than assumed.
+    /// Counters only: no prompt text, no key.
+    static func logUsage(_ usage: AnthropicUsage?, path: String) {
+        guard let usage else { return }
+        NSLog("[anthropic] %@ %@", path, usage.logLine)
+    }
 }
 
 // MARK: - Error type
@@ -424,7 +688,7 @@ enum AnthropicError: LocalizedError {
 struct AnthropicRequest: Encodable {
     let model: String
     let max_tokens: Int
-    let system: String
+    let system: AnthropicSystemPrompt
     let messages: [AnthropicMessage]
     let tools: [AnthropicTool]
 }
@@ -435,7 +699,7 @@ struct AnthropicRequest: Encodable {
 struct AnthropicStreamingRequest: Encodable {
     let model: String
     let max_tokens: Int
-    let system: String
+    let system: AnthropicSystemPrompt
     let messages: [AnthropicMessage]
     let tools: [AnthropicTool]
     let stream: Bool
@@ -451,7 +715,7 @@ enum AnthropicStreamEvent: Sendable {
     /// `max_tokens`, …); `outputTokens` is the turn's billed output count,
     /// which the token-budget measurement in `LiveToolLoopTokenBudgetTests`
     /// reads (#554).
-    case done(stopReason: String?, outputTokens: Int?)
+    case done(stopReason: String?, outputTokens: Int?, usage: AnthropicUsage?)
     case error(String)
 }
 
@@ -464,6 +728,8 @@ enum AnthropicStreamEvent: Sendable {
 private struct TerminalSignal {
     var stopReason: String?
     var outputTokens: Int?
+    /// Read from `message_start`, which is where the cache counters live (#580).
+    var usage: AnthropicUsage?
 }
 
 private struct AccumulatingBlock {
@@ -618,10 +884,51 @@ struct AnthropicResponse: Decodable {
     let usage: AnthropicUsage?
 }
 
-/// The `usage` object on a message response. Only `output_tokens` is modelled:
-/// it is the number the output ceiling is set from.
-struct AnthropicUsage: Decodable {
+/// The `usage` object on a message response.
+///
+/// `output_tokens` is the number the output ceiling is set from (#554). The
+/// three input counters are what make prompt caching observable rather than
+/// assumed (#580): a request that reads the cache reports most of its prompt
+/// under `cache_read_input_tokens` and only the tail under `input_tokens`. If
+/// `cache_read_input_tokens` stays zero across repeated requests, something is
+/// invalidating the prefix.
+///
+/// Total prompt size is the SUM of the three input fields, never `input_tokens`
+/// alone.
+struct AnthropicUsage: Decodable, Sendable, Equatable {
     let output_tokens: Int?
+    let input_tokens: Int?
+    let cache_creation_input_tokens: Int?
+    let cache_read_input_tokens: Int?
+
+    init(
+        output_tokens: Int? = nil,
+        input_tokens: Int? = nil,
+        cache_creation_input_tokens: Int? = nil,
+        cache_read_input_tokens: Int? = nil
+    ) {
+        self.output_tokens = output_tokens
+        self.input_tokens = input_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
+    }
+
+    /// The streaming path learns the cache counters from `message_start` and
+    /// the final `output_tokens` from `message_delta`. This joins the two.
+    func mergingOutputTokens(_ tokens: Int?) -> AnthropicUsage {
+        AnthropicUsage(
+            output_tokens: tokens ?? output_tokens,
+            input_tokens: input_tokens,
+            cache_creation_input_tokens: cache_creation_input_tokens,
+            cache_read_input_tokens: cache_read_input_tokens
+        )
+    }
+
+    /// One console line. Carries counters only — no prompt text, no key.
+    var logLine: String {
+        "input=\(input_tokens ?? -1) cache_write=\(cache_creation_input_tokens ?? -1) "
+            + "cache_read=\(cache_read_input_tokens ?? -1) output=\(output_tokens ?? -1)"
+    }
 }
 
 /// Recursive JSON value. Load-bearing because tool inputs are arbitrary

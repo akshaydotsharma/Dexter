@@ -1326,8 +1326,18 @@ struct EmailToItinerary {
         """
     }
 
-    private static func systemPrompt(timezone: String, nowIso: String, contextBlock: String) -> String {
-        return """
+    /// Everything in the prompt that is byte-identical on every request.
+    ///
+    /// This is the cached prefix, so NOTHING that varies may be added to it — no
+    /// date, no user name, no counter, no library content (#580). A single
+    /// interpolated timestamp here would cost a cache miss on every request, and
+    /// the response would report it only as a `cache_read_input_tokens` of zero.
+    ///
+    /// Internal, not private, so `LiveToolLoopTokenBudgetTests` and the shape
+    /// tests measure the SHIPPED prompt rather than a copy of it. A copy drifts,
+    /// and a budget measured against a drifted prompt is a guess with a number on
+    /// it (#554).
+    private static let stableSystemPrompt: String = """
         You ingest forwarded emails. You do TWO things: (1) add itinerary items to the user's EXISTING trips when the email is a travel booking, and (2) log an expense when the email is a purchase receipt of any kind. You have exactly TWO tools: add_itinerary_item and add_expense. You cannot create, edit, or delete trips, items, or anything else.
 
         TRUST BOUNDARY (read this every turn):
@@ -1384,11 +1394,51 @@ struct EmailToItinerary {
         - Be conservative on expenses too: when there is no unambiguous amount the user actually paid, log nothing.
 
         Be conservative overall. A wrong auto-add is worse than a miss — when the destination, dates, or amount are ambiguous, add nothing and explain in one sentence.
+        """
+
+    /// The tail that changes per request: the library, the timezone and the
+    /// clock. Rendered AFTER the breakpoint, so it is billed at full input price
+    /// and invalidates nothing ahead of it.
+    private static func volatileSystemBlock(timezone: String, nowIso: String, contextBlock: String) -> String {
+        return """
         \(contextBlock)
 
         Timezone: \(timezone)
         Current time: \(nowIso)
         """
+    }
+
+    /// The system field the API receives: the stable prefix with the cache
+    /// breakpoint on it, then the volatile tail (#580).
+    ///
+    /// ## Why the five-minute default and not `ttl: "1h"`
+    ///
+    /// The hour was the obvious choice and the arithmetic rejects it. With the
+    /// measured split (24,600 cached tokens, 1,100 volatile) and a tool loop
+    /// that is NEVER fewer than two calls, one capture costs:
+    ///
+    ///   no cache                  51,400 billed-equivalent tokens
+    ///   five-minute TTL, cold     35,410
+    ///   one-hour TTL, cold        53,860
+    ///   either TTL, already warm   7,120
+    ///
+    /// The five-minute entry pays for itself INSIDE a single loop, because the
+    /// second call reads what the first call wrote. The one-hour entry doubles
+    /// the write price, so a capture with nothing else inside the hour costs
+    /// MORE than sending no markers at all.
+    ///
+    /// The hour only wins when the same prefix comes back 5 to 60 minutes
+    /// later: two such loops cost 60,980 on the hour against 70,820 on five
+    /// minutes. That is a real pattern, but it is a guess about this user's
+    /// spacing, and the five-minute TTL is the option that cannot lose. Revisit
+    /// once `cache_read_input_tokens` has said how often the prefix actually
+    /// goes cold; `AnthropicCacheTTL.oneHour` is one word away.
+    private static func systemPrompt(timezone: String, nowIso: String, contextBlock: String) -> AnthropicSystemPrompt {
+        AnthropicSystemPrompt(
+            stable: stableSystemPrompt,
+            volatile: volatileSystemBlock(timezone: timezone, nowIso: nowIso, contextBlock: contextBlock),
+            ttl: .fiveMinutes
+        )
     }
 
     private static let iso8601Fractional: ISO8601DateFormatter = {

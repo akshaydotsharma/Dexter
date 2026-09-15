@@ -54,8 +54,13 @@ enum HindiScriptNormalizer {
             // here — the `catch` and the empty-string guard both fall back to
             // the raw transcript — so this is the one caller that can afford a
             // tight ceiling.
+            // NOT cached (#580). Sonnet 5 needs a prefix of at least 1024
+            // tokens before it writes a cache entry at all, and this prompt is
+            // about a tenth of that, so a marker here would be ignored in
+            // silence. It also sends no tools, so there is no 28-tool block in
+            // front of it to make the prefix worth caching.
             let response = try await AnthropicClient().send(
-                systemPrompt: system,
+                systemPrompt: .uncached(system),
                 messages: [AnthropicMessage(role: "user", content: [.text(text)])],
                 tools: [],
                 maxTokens: 2048
