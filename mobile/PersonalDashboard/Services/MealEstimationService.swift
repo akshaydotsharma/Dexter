@@ -68,9 +68,14 @@ struct MealEstimationService {
             mealTypeHint: mealTypeHint,
             loggedAt: loggedAt
         )
+        // #594. The sources come from the RESPONSE and travel beside the
+        // estimate rather than inside it, so the guards below grade a grounded
+        // answer with exactly the arithmetic they grade a guessed one with. A
+        // published panel can still be transcribed wrong.
         return MealEstimateGuards.check(
-            raw,
-            fallbackMealType: mealTypeHint ?? Self.inferredType(at: loggedAt)
+            raw.estimate,
+            fallbackMealType: mealTypeHint ?? Self.inferredType(at: loggedAt),
+            groundingSources: raw.groundingSources
         )
     }
 
@@ -164,6 +169,10 @@ struct MealEstimationService {
             // later hand edit re-checks the meal against the same fact that
             // exempted it the first time.
             containsAlcohol: checked.containsAlcohol,
+            // #594. Stored so the figure can be checked against the page it
+            // came from months later, and so the surfaces can stop printing it
+            // as a portion guess.
+            groundingSources: checked.groundingSources,
             clientUUID: clientUUID
         )
     }
@@ -194,7 +203,11 @@ struct MealEstimationService {
             suspectReason: meal.suspectReason,
             assumptionsNote: meal.assumptionsNote,
             // #555. A repeat of a meal that held a drink still holds a drink.
-            containsAlcohol: meal.containsAlcohol
+            containsAlcohol: meal.containsAlcohol,
+            // #594. A repeat copies the numbers, so it copies what they came
+            // from. The same GYG bowl logged on Thursday is still the same
+            // published panel.
+            groundingSources: meal.groundingSources
         )
     }
 
@@ -269,7 +282,11 @@ struct MealEstimationService {
             source: MealSource.user,
             needsDetail: false,
             isSuspect: false,
-            suspectReason: .some(nil)
+            suspectReason: .some(nil),
+            // #594. The sources go with the numbers they described. These
+            // numbers were typed, so pointing at a brand's page for them would
+            // credit a figure the brand never published.
+            groundingSources: []
         )
     }
 

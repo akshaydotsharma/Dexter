@@ -154,6 +154,29 @@ final class LocalMeal {
     /// decides whether a guard fires.
     var containsAlcohol: Bool = false
 
+    /// JSON-encoded `[WebSearchSource]`: the pages a web search returned for
+    /// this estimate (#594).
+    ///
+    /// Additive and OPTIONAL, which is the safe kind of SwiftData migration for
+    /// a blob: an attribute added as optional gets NULL on every existing row
+    /// and nothing else on the model moves. `containsAlcohol` above needed a
+    /// `= false` on its declaration because a non-optional attribute with no
+    /// declared default fails the lightweight migration outright; an optional
+    /// has no such gap, which is why `itemsData` above carries none either.
+    ///
+    /// ### Why the blob and not a boolean
+    ///
+    /// A `wasGrounded` flag would say the estimate is traceable without saying
+    /// what it is traceable to, which is the half that is worth anything: the
+    /// user's move on seeing "from published nutrition" is to ask whose. The
+    /// list also answers the flag, so there is no second field to disagree with
+    /// it, which is the reason `totalsWereOverridden` is derived from `source`.
+    ///
+    /// Read and written through `groundingSources`, which turns nil and a decode
+    /// failure both into the empty array, so a meal whose payload is unreadable
+    /// still shows its numbers instead of taking the day down with it.
+    var groundingSourcesData: Data?
+
     var createdAt: Date
     var updatedAt: Date
 
@@ -189,6 +212,7 @@ final class LocalMeal {
         suspectReason: String? = nil,
         assumptionsNote: String? = nil,
         containsAlcohol: Bool = false,
+        groundingSourcesData: Data? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         needsSync: Bool = false,
@@ -215,6 +239,7 @@ final class LocalMeal {
         self.suspectReason = suspectReason
         self.assumptionsNote = assumptionsNote
         self.containsAlcohol = containsAlcohol
+        self.groundingSourcesData = groundingSourcesData
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.needsSync = needsSync
@@ -249,6 +274,25 @@ final class LocalMeal {
             itemsData = newValue.isEmpty ? nil : (try? JSONEncoder().encode(newValue))
         }
     }
+
+    /// Read/write the pages this estimate was grounded in (#594). Nil and a
+    /// decode failure both read as empty, and setting an empty array clears the
+    /// blob back to nil so an ordinary estimate stores nothing.
+    var groundingSources: [WebSearchSource] {
+        get {
+            guard let groundingSourcesData, !groundingSourcesData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([WebSearchSource].self, from: groundingSourcesData)) ?? []
+        }
+        set {
+            groundingSourcesData = newValue.isEmpty ? nil : (try? JSONEncoder().encode(newValue))
+        }
+    }
+
+    /// True when this meal's figures can be traced to a published source.
+    ///
+    /// The one test every surface uses, so no two of them can draw the badge on
+    /// different meals.
+    var isGrounded: Bool { !groundingSources.isEmpty }
 
     /// This meal's value for one nutrient. The single accessor every bar,
     /// verdict and callout reads, paired with `Nutrient.goalKind`, so no

@@ -862,6 +862,10 @@ final class DataImportService {
                     // nothing about alcohol, which reads as "no alcohol": the
                     // same default a row created before the field carries.
                     containsAlcohol: dto.containsAlcohol ?? false,
+                    // #594. An archive or a peer that predates the field says
+                    // nothing about grounding, which reads as "not grounded":
+                    // the same default a row created before the field carries.
+                    groundingSourcesData: dto.groundingSourcesData,
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt
                 )

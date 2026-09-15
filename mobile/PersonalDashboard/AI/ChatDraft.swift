@@ -12,11 +12,44 @@ struct ChatDraft: Identifiable, Hashable, Sendable {
     let input: AnthropicJSONValue
     let preview: String
 
-    init(id: UUID = UUID(), actionType: DraftActionType, input: AnthropicJSONValue, preview: String) {
+    /// The pages the TURN's own web search returned, read off the response
+    /// (#594).
+    ///
+    /// On the draft rather than on the turn because the executor writes the
+    /// meal and the executor only ever sees a draft. Empty on every draft that
+    /// is not a meal, and on every meal the model did not look up.
+    let groundingSources: [WebSearchSource]
+
+    init(
+        id: UUID = UUID(),
+        actionType: DraftActionType,
+        input: AnthropicJSONValue,
+        preview: String,
+        groundingSources: [WebSearchSource] = []
+    ) {
         self.id = id
         self.actionType = actionType
         self.input = input
         self.preview = preview
+        self.groundingSources = groundingSources
+    }
+
+    /// The same draft, credited to what the turn actually searched.
+    ///
+    /// Only a meal takes the sources. A task or a note logged in the same turn
+    /// as a branded meal did not come from the brand's page, and stamping it
+    /// would make the provenance meaningless the first time a turn did two
+    /// things (#594).
+    func grounded(in sources: [WebSearchSource]) -> ChatDraft {
+        guard !sources.isEmpty,
+              actionType == .logMeal || actionType == .updateMeal else { return self }
+        return ChatDraft(
+            id: id,
+            actionType: actionType,
+            input: input,
+            preview: preview,
+            groundingSources: sources
+        )
     }
 }
 

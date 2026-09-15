@@ -217,6 +217,7 @@ final class MealAlcoholFlagTests: XCTestCase {
                     itemsData: nil, confidence: 0.5, source: "chat",
                     needsDetail: false, isSuspect: false, suspectReason: nil,
                     assumptionsNote: nil, containsAlcohol: alcohol,
+                    groundingSourcesData: nil,
                     createdAt: Date(timeIntervalSince1970: 0),
                     updatedAt: Date(timeIntervalSince1970: 0)
                 )

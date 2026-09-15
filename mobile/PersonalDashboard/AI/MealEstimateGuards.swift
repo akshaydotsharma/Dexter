@@ -150,6 +150,24 @@ struct CheckedMealEstimate: Equatable, Sendable {
     /// message is worth showing even though it does not flag the meal.
     var failures: [MealGuardFailure]
 
+    /// The pages a web search actually returned for this estimate (#594).
+    ///
+    /// Read off the response, never off the model's prose, and carried here so
+    /// the preview, the write and the detail sheet all read one value. Empty is
+    /// the normal case: a generic meal does not search, and a search that fails
+    /// or finds nothing lands here as empty too.
+    ///
+    /// Defaulted, so every existing construction site and every test fixture
+    /// keeps compiling and keeps meaning what it meant.
+    var groundingSources: [WebSearchSource] = []
+
+    /// True when this estimate's figures can be traced to a published source.
+    ///
+    /// Derived rather than stored, for the reason `totalsWereOverridden` is: a
+    /// second field asserting the same thing is a field that can disagree with
+    /// the list it describes.
+    var isGrounded: Bool { !groundingSources.isEmpty }
+
     /// The failures that leave the meal unusable.
     var invalidatingFailures: [MealGuardFailure] {
         failures.filter(\.invalidatesEstimate)
@@ -252,9 +270,15 @@ enum MealEstimateGuards {
     ///   - fallbackMealType: the type to use when the model returned none or
     ///     returned one that does not map. The user's picked type, or the one
     ///     inferred from the clock.
+    /// - Parameter groundingSources: the pages the model's own web search
+    ///   returned, read from the RESPONSE by `WebSearchGrounding` (#594). It is
+    ///   carried through and never graded: a published panel can still be
+    ///   transcribed wrong, so every check below runs on a grounded estimate
+    ///   exactly as it runs on a guessed one.
     static func check(
         _ estimate: EstimatedMeal,
-        fallbackMealType: MealType
+        fallbackMealType: MealType,
+        groundingSources: [WebSearchSource] = []
     ) -> CheckedMealEstimate {
         let mealType = estimate.mealType
             .flatMap { MealType(rawValue: $0.lowercased()) } ?? fallbackMealType
@@ -277,7 +301,8 @@ enum MealEstimateGuards {
                 assumptionsNote: assumptions,
                 needsDetail: true,
                 containsAlcohol: containsAlcohol,
-                failures: []
+                failures: [],
+                groundingSources: groundingSources
             )
         }
 
@@ -342,7 +367,8 @@ enum MealEstimateGuards {
             assumptionsNote: assumptions,
             needsDetail: false,
             containsAlcohol: containsAlcohol,
-            failures: failures
+            failures: failures,
+            groundingSources: groundingSources
         )
     }
 
