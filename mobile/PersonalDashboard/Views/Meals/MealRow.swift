@@ -98,6 +98,22 @@ struct MealRow: View {
         meal.isSuspect || meal.needsDetail || isDuplicate
     }
 
+    /// How much closer the meal type sits to the description than the other
+    /// rungs sit to each other (#574).
+    ///
+    /// The row is six rungs now — type, description, time, flag chips,
+    /// breakdown, note — and six evenly spaced lines read as a list of
+    /// unrelated facts rather than as one record. The type is not a peer of
+    /// the rungs under it; it is a label on the record, so it is set closer to
+    /// the description than anything else in the stack.
+    ///
+    /// Stated as a NEGATIVE padding against the enclosing stack's `Space.xs`
+    /// rather than by nesting another `VStack`, so the one number here is the
+    /// difference itself and cannot drift away from the gap it is measured
+    /// against. `Space.xs` minus this is the type-to-description gap;
+    /// everything else in the stack keeps the full `Space.xs`.
+    static let typeToDescriptionGap: CGFloat = -Space.xxs
+
     /// What the left-gutter icon is drawn in.
     ///
     /// A flag outranks an identity, so a row that needs attention keeps the
@@ -151,32 +167,30 @@ struct MealRow: View {
                 // under the description share its left edge rather than each
                 // finding its own.
                 VStack(alignment: .leading, spacing: Space.xs) {
+                    // Rung 0: which meal this was (#574).
+                    //
+                    // A kicker on its own line, not a prefix on the
+                    // description's. #570 put it inline and the description
+                    // paid about 70 pt of its first line for it, then wrapped
+                    // under itself with a hanging indent. A kicker costs one
+                    // short line and gives every line of the description the
+                    // full width.
+                    //
+                    // OUTSIDE the HStack below, which is what keeps the
+                    // calorie figure aligned to the description rather than to
+                    // this word. See the note on `typeToDescriptionGap`.
+                    Text(meal.mealTypeEnum.displayName)
+                        .eyebrow(meal.mealTypeEnum.tint)
+                        .padding(.bottom, Self.typeToDescriptionGap)
+
                     // Rung 1: what the meal is, and what it cost.
                     HStack(alignment: .top, spacing: Space.md) {
                         VStack(alignment: .leading, spacing: Space.xs) {
-                            // The type leads the description, on the line the
-                            // eye lands on first (#570). It used to sit on
-                            // line 2 beside the time, in the same grey at the
-                            // same size, which made "which meal was this"
-                            // something a reader had to go and look for.
-                            //
-                            // Baselines aligned, not tops: an 11 pt tracked
-                            // eyebrow and a 15 pt body share a line only if
-                            // they share a baseline. `fixedSize` keeps the
-                            // word whole — a truncated "LUNC…" would be worse
-                            // than no word — so a long description wraps under
-                            // itself and the type keeps the left edge of the
-                            // first line to itself.
-                            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                                Text(meal.mealTypeEnum.displayName)
-                                    .eyebrow(meal.mealTypeEnum.tint)
-                                    .fixedSize()
-                                Text(meal.mealDescription)
-                                    .font(.edBody)
-                                    .foregroundStyle(Tokens.ink)
-                                    .multilineTextAlignment(.leading)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                            Text(meal.mealDescription)
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.ink)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
 
                             Text(Self.timeFormatter.string(from: meal.loggedAt))
                                 .font(.edCaption)
