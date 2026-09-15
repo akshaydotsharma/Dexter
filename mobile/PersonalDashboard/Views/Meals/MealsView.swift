@@ -71,6 +71,10 @@ struct MealsView: View {
 
     @State private var openMeal: LocalMeal?
 
+    /// The derive-review-save flow (#544). Opened from the setup card when no
+    /// targets exist and from the targets row once they do.
+    @State private var showingTargets = false
+
     var body: some View {
         ZStack {
             Tokens.paper.canvasIgnoresSafeArea()
@@ -100,6 +104,13 @@ struct MealsView: View {
         .macSectionChrome("Meals")
         .sheet(item: $openMeal) { meal in
             MealDetailSheet(meal: meal)
+                #if os(iOS)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                #endif
+        }
+        .sheet(isPresented: $showingTargets) {
+            MealTargetsSheet()
                 #if os(iOS)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
@@ -136,6 +147,13 @@ struct MealsView: View {
     private var todayTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.lg) {
+                // Pinned above everything while no targets exist (#544). It is
+                // an offer, not a wall: the composer and the day card below it
+                // work exactly the same before and after it is answered.
+                if targetsInForce == nil {
+                    MealTargetsSetupCard { showingTargets = true }
+                }
+
                 dateStepper
 
                 // The composer only appears on today. Estimating a meal onto a
@@ -154,6 +172,13 @@ struct MealsView: View {
                 MealDayCard(summary: summary, targets: targetsInForce)
 
                 mealList
+
+                // Once targets exist the setup card is replaced by a quiet row
+                // at the foot of the tab, which is where you go to re-derive
+                // after a weight change.
+                if let targets = targetsInForce {
+                    MealTargetsRow(targets: targets) { showingTargets = true }
+                }
             }
             .padding(.horizontal, Space.lg)
             .padding(.bottom, Space.xxl)

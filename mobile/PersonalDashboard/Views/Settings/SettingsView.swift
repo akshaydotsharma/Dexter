@@ -14,6 +14,9 @@ struct SettingsView: View {
     @State private var showingParsedFiles: Bool = false
     @State private var showingBackup: Bool = false
     @State private var showingSync: Bool = false
+    /// Daily nutrition targets (#544). The same sheet the Meals section opens,
+    /// so there is one derive-review-save flow and not two.
+    @State private var showingMealTargets: Bool = false
 
     /// Currency all finances are DISPLAYED in (#220). SGD stays the canonical
     /// stored base — this is a display-only conversion applied at format time.
@@ -52,6 +55,9 @@ struct SettingsView: View {
         .sheet(isPresented: $showingParsedFiles) {
             ParsedFilesView()
         }
+        .sheet(isPresented: $showingMealTargets) {
+            MealTargetsSheet()
+        }
         .sheet(isPresented: $showingBackup) {
             BackupSettingsView()
         }
@@ -82,6 +88,7 @@ struct SettingsView: View {
                     appearanceSection
                     aiSection
                     financeSection
+                    mealsSection
                     automationSection
                     dataSection
                     aboutSection
@@ -173,6 +180,23 @@ struct SettingsView: View {
             .onChange(of: displayCurrencyCode) { _, _ in
                 Task { await FXService.default().refreshDisplayRate() }
             }
+        }
+    }
+
+    /// Daily nutrition targets (#544). One row, because the eight numbers and
+    /// the six inputs behind them belong on the sheet that derives them, not
+    /// spread across a settings list where nothing explains how they relate.
+    private var mealsSection: some View {
+        SettingsSection(title: "Meals") {
+            Button {
+                showingMealTargets = true
+            } label: {
+                automationRow(
+                    title: "Daily targets",
+                    subtitle: "The eight numbers a logged day is read against"
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 
