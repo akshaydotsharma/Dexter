@@ -46,12 +46,18 @@ struct AnthropicClient: Sendable {
     /// `AnthropicClient+DeriveTargets`, which reached it from their own
     /// measurements.
     ///
-    /// NOT measured on the chat (streaming) path: the API account ran out of
-    /// credit part-way through the run. Chat sends a near-verbatim copy of the
-    /// capture system prompt and the identical 28 tools, and additionally
-    /// streams a prose reply, so its need is bounded BELOW by the table above,
-    /// never above it. Re-run `testChatStreamOutputTokenDistribution` when
-    /// there is credit, and correct this note if chat lands higher.
+    /// Measured on the chat (streaming) path too, 15 Sep 2026, after #580:
+    ///
+    ///   scenario                        n    min    max
+    ///   chat, long note                 5    444    655
+    ///   chat, three tool calls          5    727   1784
+    ///   chat, meal                      5   1266   1662
+    ///
+    /// Chat's maximum is 1784 against capture's 1866, so chat needs LESS
+    /// headroom than capture, not more. 8192 stays right for both: it is about
+    /// 4.4x the measured maximum across every scenario on either path. This
+    /// note previously said the chat run was blocked on credit; it is not any
+    /// more, and the numbers above replace that caveat.
     static let maxTokens = 8192
     // No `temperature`: Sonnet 5 rejects the field with
     // "`temperature` is deprecated for this model" (400). Any extraction rule
