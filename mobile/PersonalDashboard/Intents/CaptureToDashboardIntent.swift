@@ -61,7 +61,10 @@ struct CaptureToDashboardIntent: AppIntent {
         switch response.status {
         case .executed:
             let items = response.executed ?? []
+            // A capture that applied some of the request and was then cut off
+            // must say so out loud. Silence here reads as "all done" (#554).
             let summary = Self.executedDialog(for: items)
+                + (response.truncated ? CaptureService.partialTruncationNote : "")
             let openIntent = Self.openIntent(for: items)
             return .result(
                 dialog: IntentDialog(stringLiteral: summary),

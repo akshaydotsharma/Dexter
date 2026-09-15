@@ -6,6 +6,11 @@ struct ChatToDraftsResult {
     let failed: [FailedDraftRecord]
     let assistantText: String?
     let followUpQuestion: String?
+    /// A turn in this run stopped at the output ceiling (#554). Whatever that
+    /// turn asked for was NOT applied. `executed` may still be non-empty: an
+    /// earlier, complete iteration of the loop can have written things before
+    /// the truncated one arrived.
+    var truncated: Bool = false
 }
 
 /// One tool call the model issued that we couldn't apply (bad UUID,
@@ -70,6 +75,7 @@ struct ChatToDrafts {
         var executed: [DraftActionOutcome] = []
         var failed: [FailedDraftRecord] = []
         var assistantText: String? = nil
+        var truncated = false
 
         // Capture sees the full toolset (including trip tools) so voice
         // requests like "plan a trip to Italy" route to draft_trip instead
@@ -82,6 +88,22 @@ struct ChatToDrafts {
                 messages: messages,
                 tools: ToolDefinitions.allTools
             )
+
+            // Asked BEFORE a single tool call is read, let alone run (#554).
+            //
+            // This path auto-executes everything, deletes included, with no
+            // conversation in which a half-applied turn would be noticed. A
+            // `max_tokens` stop means the model was cut off part-way through
+            // generating its tool calls: the last block is incomplete, and the
+            // ones before it belong to a turn it never finished. Executing the
+            // well-formed prefix would apply a fragment of an intention.
+            //
+            // Anything an EARLIER iteration applied stands. Those turns
+            // completed; only this one did not.
+            if response.stop_reason == "max_tokens" {
+                truncated = true
+                break
+            }
 
             let toolUses = response.content.compactMap { block -> (id: String, name: String, input: [String: AnthropicJSONValue])? in
                 if case let .toolUse(id, name, input) = block {
@@ -172,7 +194,8 @@ struct ChatToDrafts {
             executed: executed,
             failed: failed,
             assistantText: assistantText,
-            followUpQuestion: followUp
+            followUpQuestion: followUp,
+            truncated: truncated
         )
     }
 
@@ -181,7 +204,11 @@ struct ChatToDrafts {
     /// Verbatim port of `getInstructions` in server/ai/chatToDrafts.js, with
     /// "task ID" / "note ID" rephrased to "UUID" so the model emits UUID
     /// strings rather than integers.
-    private static func systemPrompt(timezone: String, nowIso: String, contextBlock: String) -> String {
+    /// Internal, not private, so `LiveToolLoopTokenBudgetTests` measures the
+    /// SHIPPED prompt rather than a copy of it. A copy drifts, and a token
+    /// budget measured against a drifted prompt is a guess with a number on it
+    /// (#554).
+    static func systemPrompt(timezone: String, nowIso: String, contextBlock: String) -> String {
         return """
         You are a personal assistant that helps users manage their tasks, notes, and lists.
 

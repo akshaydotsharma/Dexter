@@ -42,6 +42,11 @@ struct CaptureResponse: Sendable {
     let assistantText: String?
     let followUpQuestion: String?
     let errors: [CaptureErrorEntry]?
+    /// The model was cut off at its output ceiling part-way through a turn
+    /// (#554). Nothing from that turn was applied. The dialog must say so: the
+    /// Shortcut path has no conversation in which a silently dropped half of a
+    /// request would ever be noticed.
+    var truncated: Bool = false
 
     enum Status: String, Sendable {
         case executed
@@ -93,68 +98,108 @@ struct CaptureService: Sendable {
         }
     }
 
-    @MainActor
-    private static func runCapture(input: String, timezone: String) async -> CaptureResponse {
-        let pipeline = ChatToDrafts.default()
-        do {
-            let result = try await pipeline.run(input: input, timezone: timezone)
+    /// Spoken when a capture was cut off before anything was applied.
+    ///
+    /// It names the cause and the consequence in one sentence, because the only
+    /// feedback this path has is the sentence Siri reads back.
+    static let truncatedMessage =
+        "the reply was cut off before it finished, so nothing was saved. Say it again, or one thing at a time."
 
-            let executed = result.executed.map { outcome in
-                ExecutedDraft(
-                    type: outcome.type,
-                    action: outcome.action,
-                    id: outcome.id,
-                    title: outcome.title,
-                    dueDate: outcome.dueDate,
-                    addedNames: outcome.addedNames,
-                    meal: outcome.meal
-                )
-            }
-            let failed = result.failed.map { rec in
-                FailedDraft(tool: rec.tool, id: rec.id, message: rec.message)
-            }
+    /// Appended to the dialog when SOME of a capture landed and a later turn
+    /// was then cut off.
+    static let partialTruncationNote =
+        " The rest was cut off, so say it again if something is missing."
 
-            if !executed.isEmpty {
-                return CaptureResponse(
-                    status: .executed,
-                    executed: executed,
-                    failed: failed.isEmpty ? nil : failed,
-                    assistantText: result.assistantText,
-                    followUpQuestion: nil,
-                    errors: nil
-                )
-            }
-            if let q = result.followUpQuestion {
-                return CaptureResponse(
-                    status: .needsClarification,
-                    executed: nil,
-                    failed: nil,
-                    assistantText: result.assistantText,
-                    followUpQuestion: q,
-                    errors: nil
-                )
-            }
-            // No actions and no clarification — surface failures (if any)
-            // or fall back to the assistant text.
-            if !failed.isEmpty {
-                let entries = failed.map { CaptureErrorEntry(tool: $0.tool, message: $0.message) }
-                return CaptureResponse(
-                    status: .error,
-                    executed: nil,
-                    failed: failed,
-                    assistantText: result.assistantText,
-                    followUpQuestion: nil,
-                    errors: entries
-                )
-            }
+
+    /// Turn a pipeline result into the response the App Intent speaks.
+    ///
+    /// Lifted out of `runCapture` (#554) so the truncation branches can be
+    /// tested. `runCapture` builds `ChatToDrafts.default()`, which is wired to
+    /// the REAL SwiftData store, so a test that went through it would write to
+    /// the user's own data. This function is pure.
+    static func response(for result: ChatToDraftsResult) -> CaptureResponse {
+        let executed = result.executed.map { outcome in
+            ExecutedDraft(
+                type: outcome.type,
+                action: outcome.action,
+                id: outcome.id,
+                title: outcome.title,
+                dueDate: outcome.dueDate,
+                addedNames: outcome.addedNames,
+                meal: outcome.meal
+            )
+        }
+        let failed = result.failed.map { rec in
+            FailedDraft(tool: rec.tool, id: rec.id, message: rec.message)
+        }
+
+        if !executed.isEmpty {
+            return CaptureResponse(
+                status: .executed,
+                executed: executed,
+                failed: failed.isEmpty ? nil : failed,
+                assistantText: result.assistantText,
+                followUpQuestion: nil,
+                errors: nil,
+                truncated: result.truncated
+            )
+        }
+
+        // Cut off before anything was applied. This is an error, not a
+        // clarification: the user asked for something real and got nothing, and
+        // the remedy is to repeat the request, not to answer a question.
+        // Ordered ahead of the follow-up and failure branches so a truncated
+        // turn never reports as "I need a bit more detail".
+        if result.truncated {
+            return CaptureResponse(
+                status: .error,
+                executed: nil,
+                failed: failed.isEmpty ? nil : failed,
+                assistantText: result.assistantText,
+                followUpQuestion: nil,
+                errors: [CaptureErrorEntry(tool: nil, message: truncatedMessage)],
+                truncated: true
+            )
+        }
+
+        if let q = result.followUpQuestion {
             return CaptureResponse(
                 status: .needsClarification,
                 executed: nil,
                 failed: nil,
                 assistantText: result.assistantText,
-                followUpQuestion: result.assistantText ?? "I need a bit more detail.",
+                followUpQuestion: q,
                 errors: nil
             )
+        }
+        // No actions and no clarification — surface failures (if any)
+        // or fall back to the assistant text.
+        if !failed.isEmpty {
+            let entries = failed.map { CaptureErrorEntry(tool: $0.tool, message: $0.message) }
+            return CaptureResponse(
+                status: .error,
+                executed: nil,
+                failed: failed,
+                assistantText: result.assistantText,
+                followUpQuestion: nil,
+                errors: entries
+            )
+        }
+        return CaptureResponse(
+            status: .needsClarification,
+            executed: nil,
+            failed: nil,
+            assistantText: result.assistantText,
+            followUpQuestion: result.assistantText ?? "I need a bit more detail.",
+            errors: nil
+        )
+    }
+
+    @MainActor
+    private static func runCapture(input: String, timezone: String) async -> CaptureResponse {
+        let pipeline = ChatToDrafts.default()
+        do {
+            return response(for: try await pipeline.run(input: input, timezone: timezone))
         } catch let err as AnthropicError {
             return CaptureResponse(
                 status: .error,

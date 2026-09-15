@@ -265,6 +265,11 @@ extension AnthropicClient {
     /// headroom. A chunk that somehow still hits the ceiling sets
     /// `possiblyTruncated`, which propagates to a prominent warning in the
     /// import summary (see `StatementImporter`).
+    ///
+    /// Reviewed under #554 and left alone. It is the one cap in `AI/` that was
+    /// already sized against its own output (a transaction array, ~30-70 tokens
+    /// a line, chunked to ~80 lines) rather than inherited, and it already
+    /// reports `possiblyTruncated` when it is hit.
     static let statementMaxTokens = 16384
 
     /// Extract every transaction line from a credit-card statement PDF (#184),

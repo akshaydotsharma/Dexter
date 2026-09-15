@@ -7,6 +7,10 @@ enum ChatStreamEvent: Sendable {
     case draft(ChatDraft)
     case textChunk(String)
     case done(followUpQuestion: String?)
+    /// The model ran out of output budget mid-turn (`stop_reason ==
+    /// "max_tokens"`). No draft from that turn is emitted, so nothing is
+    /// applied. See the buffering note on `run` (#554).
+    case truncated
     case error(String)
 }
 
@@ -40,6 +44,27 @@ struct ChatStream {
         let text: String
     }
 
+    /// Run one chat turn.
+    ///
+    /// ## Drafts are buffered until the turn ends (#554)
+    ///
+    /// The chat surface AUTO-EXECUTES every non-destructive draft the moment it
+    /// arrives. Anthropic closes each `tool_use` block as it is generated, so a
+    /// turn cut off at `max_tokens` can close three tool blocks and then stop
+    /// mid-way through the fourth. Yielding each draft as it closed meant those
+    /// first three were already written to SwiftData before the terminator told
+    /// us the turn was incomplete: a partial result applied from a truncated
+    /// turn, with no conversation in which to notice it.
+    ///
+    /// So drafts accumulate here and are released in order only once the
+    /// terminator says the turn finished. A `max_tokens` stop releases none of
+    /// them and yields `.truncated` instead. Prose still streams live, because
+    /// text writes nothing.
+    ///
+    /// The cost is that draft cards appear together at the end of a turn rather
+    /// than one at a time. That is the right trade: tool blocks are generated
+    /// near the end of a turn anyway, so the delay is small, and the failure it
+    /// removes is a silent half-applied write.
     func run(history: [PriorTurn] = [], input: String, timezone: String) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
@@ -56,7 +81,7 @@ struct ChatStream {
                     messages.append(AnthropicMessage(role: "user", content: [.text(input)]))
 
                     var accumulatedText = ""
-                    var draftCount = 0
+                    var pendingDrafts: [ChatDraft] = []
 
                     for try await event in anthropic.stream(
                         systemPrompt: systemPrompt,
@@ -82,15 +107,28 @@ struct ChatStream {
                                 input: input,
                                 preview: preview
                             )
-                            draftCount += 1
-                            continuation.yield(.draft(draft))
+                            // Held, not yielded. See the note on `run`.
+                            pendingDrafts.append(draft)
 
-                        case .done:
+                        case .done(let stopReason, _):
+                            // A cut-off turn releases NOTHING. Its last tool
+                            // block is incomplete by definition, and the ones
+                            // before it belong to a turn the model never
+                            // finished reasoning about.
+                            guard stopReason != "max_tokens" else {
+                                pendingDrafts.removeAll()
+                                continuation.yield(.truncated)
+                                continue
+                            }
+                            for draft in pendingDrafts {
+                                continuation.yield(.draft(draft))
+                            }
                             // Trailing assistant text ending in "?" is a
                             // clarifying question only when the model didn't
                             // propose any drafts this turn.
                             let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let followUp: String? = (draftCount == 0 && trimmed.hasSuffix("?")) ? trimmed : nil
+                            let followUp: String? = (pendingDrafts.isEmpty && trimmed.hasSuffix("?")) ? trimmed : nil
+                            pendingDrafts.removeAll()
                             continuation.yield(.done(followUpQuestion: followUp))
 
                         case .error(let msg):
@@ -111,7 +149,11 @@ struct ChatStream {
     /// Verbatim port of the system prompt used in `ChatToDrafts`. Kept as a
     /// duplicate (rather than a shared helper) because the two orchestrators
     /// diverge on tool-result handling and may grow apart in tone.
-    private static func systemPrompt(timezone: String, nowIso: String, contextBlock: String) -> String {
+    /// Internal, not private, so `LiveToolLoopTokenBudgetTests` measures the
+    /// SHIPPED prompt rather than a copy of it. A copy drifts, and a token
+    /// budget measured against a drifted prompt is a guess with a number on it
+    /// (#554).
+    static func systemPrompt(timezone: String, nowIso: String, contextBlock: String) -> String {
         return """
         You are a personal assistant that helps users manage their tasks, notes, and lists.
 

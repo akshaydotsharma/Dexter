@@ -171,12 +171,31 @@ struct EmailToItinerary {
         // re-forward / re-scan resolves to "already added", not a duplicate.
         var skippedDuplicates = 0
 
+        // A turn in this loop was cut off at the output ceiling (#554). Nothing
+        // from that turn was applied; whatever earlier, complete turns wrote
+        // stands and is reported normally, with this appended to the summary so
+        // the ingest log says the email was only half read.
+        var truncated = false
+
         for _ in 0..<Self.maxIterations {
+            // Shared ceiling, raised from 1024 to a measured 8192 by #554.
             let response = try await anthropic.send(
                 systemPrompt: systemPrompt,
                 messages: messages,
                 tools: emailTools
             )
+
+            // Asked BEFORE a single tool call is read, for the same reason as
+            // in `ChatToDrafts`: this loop auto-executes too. It inserts
+            // itinerary rows and logs expenses with no confirmation step, and a
+            // forwarded booking email is read while nobody is watching. Half an
+            // itinerary applied from a turn the model never finished is worse
+            // than none, because the missing legs look like legs the booking
+            // never had.
+            if response.stop_reason == "max_tokens" {
+                truncated = true
+                break
+            }
 
             let toolUses = response.content.compactMap { block -> (id: String, name: String, input: [String: AnthropicJSONValue])? in
                 if case let .toolUse(id, name, input) = block { return (id, name, input) }
@@ -363,13 +382,14 @@ struct EmailToItinerary {
         // matching trip) — that's a valid `.added` (#177).
         if !addedItemUUIDs.isEmpty || !updatedItemUUIDs.isEmpty || !addedExpenseUUIDs.isEmpty {
             let name = matchedTripName
-            let summary = Self.changeSummary(
+            var summary = Self.changeSummary(
                 added: addedItemUUIDs.count,
                 updated: updatedItemUUIDs.count,
                 expenses: addedExpenseUUIDs.count,
                 skipped: skippedDuplicates + skippedExpenseDuplicates,
                 tripName: name
             )
+            if truncated { summary += Self.truncationNote }
             return EmailIngestResult(
                 outcome: .added,
                 tripUUID: matchedTripUUID,
@@ -398,11 +418,28 @@ struct EmailToItinerary {
             }
             let detail = pieces.joined(separator: " and ")
             return EmailIngestResult(
-                outcome: .skipped,
+                outcome: truncated ? .failed : .skipped,
                 tripUUID: matchedTripUUID,
                 tripName: matchedTripName,
                 addedItemUUIDs: [],
-                summary: "Already processed — \(detail), so nothing was added again.",
+                summary: "Already processed — \(detail), so nothing was added again."
+                    + (truncated ? Self.truncationNote : ""),
+                debugBody: debugBody,
+                debugTripContext: contextBlock
+            )
+        }
+
+        // Cut off before anything was applied. `.failed`, not `.skipped`: a
+        // skip means the email was read and had nothing in it, and this email
+        // was never finished being read.
+        if truncated {
+            return EmailIngestResult(
+                outcome: .failed,
+                tripUUID: nil,
+                tripName: nil,
+                addedItemUUIDs: [],
+                summary: "The model was cut off at its output limit before anything was added. "
+                    + "Nothing was applied. Re-scan this email to try again.",
                 debugBody: debugBody,
                 debugTripContext: contextBlock
             )
@@ -423,6 +460,10 @@ struct EmailToItinerary {
             debugTripContext: contextBlock
         )
     }
+
+    /// Appended to an ingest summary when the read was cut short (#554).
+    static let truncationNote =
+        " The model was then cut off at its output limit, so the rest of this email was not read."
 
     // MARK: - Expense handling (#177)
 

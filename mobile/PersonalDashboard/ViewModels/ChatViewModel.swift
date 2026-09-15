@@ -193,6 +193,14 @@ final class ChatViewModel {
                     turns[idx].text += chunk
                 case .done:
                     turns[idx].isStreaming = false
+                case .truncated:
+                    // The model hit its output ceiling part-way through the
+                    // turn. `ChatStream` withheld every draft, so nothing was
+                    // written. Say that plainly: the user needs to know the
+                    // reply is incomplete AND that no half-action landed
+                    // (#554).
+                    errorMessage = Self.truncatedTurnMessage
+                    turns[idx].isStreaming = false
                 case .error(let message):
                     errorMessage = message
                     turns[idx].isStreaming = false
@@ -215,6 +223,13 @@ final class ChatViewModel {
 
         isSending = false
     }
+
+    /// Shown when a turn is cut off at the output ceiling.
+    ///
+    /// It states the cause and the consequence, because "something went wrong"
+    /// would send the user looking for a half-created task that does not exist.
+    static let truncatedTurnMessage =
+        "That reply was cut off before it finished, so nothing was applied. Try again, or ask for one thing at a time."
 
     // MARK: - Held-back actions (#546)
 
