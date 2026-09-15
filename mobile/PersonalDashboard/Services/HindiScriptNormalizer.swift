@@ -45,10 +45,20 @@ enum HindiScriptNormalizer {
         """
 
         do {
+            // Its own cap, well under the shared 8192 (#554). This call is a
+            // script conversion: the output is the input rewritten in another
+            // script, so its length is bounded by the transcript, and no tool
+            // call can appear in it. 2048 covers a long utterance plus the
+            // thinking block this model emits, which is the term the old shared
+            // 1024 did not account for. A truncated conversion is harmless
+            // here — the `catch` and the empty-string guard both fall back to
+            // the raw transcript — so this is the one caller that can afford a
+            // tight ceiling.
             let response = try await AnthropicClient().send(
                 systemPrompt: system,
                 messages: [AnthropicMessage(role: "user", content: [.text(text)])],
-                tools: []
+                tools: [],
+                maxTokens: 2048
             )
             let converted = response.content
                 .compactMap { block -> String? in
