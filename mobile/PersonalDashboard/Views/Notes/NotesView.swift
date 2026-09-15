@@ -270,8 +270,9 @@ struct NotesView: View {
             NewFolderSheet(viewModel: viewModel)
         }
         .alert("Rename folder", isPresented: $renamingFolder) {
-            TextField("Folder name", text: $folderRenameDraft)
+            TextField(PlainFieldPlaceholder.title("Folder name"), text: $folderRenameDraft)
                 .paperFieldOnMac()
+                .plainFieldPlaceholder("Folder name", isVisible: folderRenameDraft.isEmpty, padding: 0)
             Button("Cancel", role: .cancel) {}
             Button("Rename") {
                 guard let folder = selectedFolder else { return }
@@ -781,7 +782,10 @@ private struct NoteRow: View {
 
 }
 
-private struct NewFolderSheet: View {
+// Internal, not private: `#578`'s coverage test hosts this sheet directly to
+// verify its "Name" field's placeholder renders muted on macOS. No behavior
+// change — only the access level widens so a test file can construct it.
+struct NewFolderSheet: View {
     let viewModel: NotesViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
@@ -792,11 +796,12 @@ private struct NewFolderSheet: View {
                 Tokens.paper.ignoresSafeArea()
                 VStack(alignment: .leading, spacing: Space.lg) {
                     Text("Folder name").eyebrow()
-                    TextField("Name", text: $name)
+                    TextField(PlainFieldPlaceholder.title("Name"), text: $name)
                         .paperFieldOnMac()
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)
                         .padding(Space.md)
+                        .plainFieldPlaceholder("Name", isVisible: name.isEmpty, padding: Space.md)
                         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                         .paperBorder(Tokens.border, radius: Radius.md)
                     Spacer()
@@ -890,12 +895,13 @@ private struct NoteDetailContent: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
-                    TextField("Untitled", text: $title, axis: .vertical)
+                    TextField(PlainFieldPlaceholder.title("Untitled"), text: $title, axis: .vertical)
                         .paperFieldOnMac()
                         .font(.edDisplay)
                         .foregroundStyle(Tokens.ink)
                         .textFieldStyle(.plain)
                         .lineLimit(1...3)
+                        .plainFieldPlaceholder("Untitled", isVisible: title.isEmpty, padding: 0)
 
                     if !viewModel.folders.isEmpty {
                         Menu {

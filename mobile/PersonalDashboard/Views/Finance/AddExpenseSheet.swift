@@ -481,7 +481,7 @@ struct AddExpenseSheet: View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Amount").eyebrow()
             HStack(spacing: Space.sm) {
-                TextField("0.00", text: amountBinding)
+                TextField(PlainFieldPlaceholder.title("0.00"), text: amountBinding)
                     .paperFieldOnMac()
                     .decimalKeyboard()
                     .font(.edDisplay)
@@ -489,6 +489,7 @@ struct AddExpenseSheet: View {
                     .focused($amountFocused)
                     .padding(.vertical, Space.sm)
                     .padding(.horizontal, Space.md)
+                    .plainFieldPlaceholder("0.00", isVisible: amountText.isEmpty, padding: Space.md)
                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                     .paperBorder(Tokens.border, radius: Radius.md)
 
@@ -577,11 +578,12 @@ struct AddExpenseSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
-            TextField("e.g. Starbucks", text: $merchant)
+            TextField(PlainFieldPlaceholder.title("e.g. Starbucks"), text: $merchant)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder("e.g. Starbucks", isVisible: merchant.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
         }
@@ -596,11 +598,12 @@ struct AddExpenseSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
-            TextField("Lunch with Sarah", text: $descriptionField)
+            TextField(PlainFieldPlaceholder.title("Lunch with Sarah"), text: $descriptionField)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder("Lunch with Sarah", isVisible: descriptionField.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
         }
@@ -615,11 +618,12 @@ struct AddExpenseSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
-            TextField("Cash, Visa **1234, …", text: $paymentMethod)
+            TextField(PlainFieldPlaceholder.title("Cash, Visa **1234, …"), text: $paymentMethod)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder("Cash, Visa **1234, …", isVisible: paymentMethod.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
         }
@@ -1200,7 +1204,7 @@ struct AddExpenseSheet: View {
     /// One compact money field, sized so a row can hold a name and a figure at
     /// phone width.
     private func moneyField(text: Binding<String>, label: String) -> some View {
-        TextField("0.00", text: text)
+        TextField(PlainFieldPlaceholder.title("0.00"), text: text)
             .paperFieldOnMac()
             .decimalKeyboard()
             .font(.edFootnoteStrong)
@@ -1210,6 +1214,7 @@ struct AddExpenseSheet: View {
             .frame(width: 92)
             .padding(.vertical, 4)
             .padding(.horizontal, Space.sm)
+            .plainFieldPlaceholder("0.00", isVisible: text.wrappedValue.isEmpty, padding: Space.sm)
             .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.sm))
             .accessibilityLabel(label)
     }
@@ -1984,13 +1989,14 @@ struct PersonPickerSheet: View {
 
     private var newPersonRow: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            TextField("Name", text: $newName)
+            TextField(PlainFieldPlaceholder.title("Name"), text: $newName)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .focused($nameFocused)
                 .submitLabel(.done)
                 .onSubmit { commitNew() }
+                .plainFieldPlaceholder("Name", isVisible: newName.isEmpty, padding: 0)
             if let errorMessage {
                 Text(errorMessage)
                     .font(.edCaption)
@@ -2144,13 +2150,14 @@ struct EventPickerSheet: View {
     @ViewBuilder
     private var newEventSection: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            TextField("Event name", text: $newName)
+            TextField(PlainFieldPlaceholder.title("Event name"), text: $newName)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .focused($nameFocused)
                 .submitLabel(.done)
                 .onSubmit { commitNew() }
+                .plainFieldPlaceholder("Event name", isVisible: newName.isEmpty, padding: 0)
 
             Toggle("Set dates", isOn: $useDates.animation())
                 .font(.edFootnote)

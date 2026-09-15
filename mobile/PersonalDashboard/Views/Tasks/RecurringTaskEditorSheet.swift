@@ -49,22 +49,24 @@ struct RecurringTaskEditorSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         labeled("Title") {
-                            TextField("What comes back?", text: $title, axis: .vertical)
+                            TextField(PlainFieldPlaceholder.title("What comes back?"), text: $title, axis: .vertical)
                                 .paperFieldOnMac()
                                 .lineLimit(1...3)
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
                                 .padding(Space.md)
+                                .plainFieldPlaceholder("What comes back?", isVisible: title.isEmpty, padding: Space.md)
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
                         }
                         labeled("Notes") {
-                            TextField("Optional notes", text: $descriptionText, axis: .vertical)
+                            TextField(PlainFieldPlaceholder.title("Optional notes"), text: $descriptionText, axis: .vertical)
                                 .paperFieldOnMac()
                                 .lineLimit(2...6)
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
                                 .padding(Space.md)
+                                .plainFieldPlaceholder("Optional notes", isVisible: descriptionText.isEmpty, padding: Space.md)
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
                         }

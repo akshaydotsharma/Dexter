@@ -497,11 +497,12 @@ struct TaskTicketDetailSheet: View {
     }
 
     private func field(_ text: Binding<String>, placeholder: String) -> some View {
-        TextField(placeholder, text: text)
+        TextField(PlainFieldPlaceholder.title(placeholder), text: text)
             .paperFieldOnMac()
             .font(.edBody)
             .foregroundStyle(Tokens.ink)
             .padding(Space.md)
+            .plainFieldPlaceholder(placeholder, isVisible: text.wrappedValue.isEmpty, padding: Space.md)
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
             .paperBorder(Tokens.border, radius: Radius.md)
     }

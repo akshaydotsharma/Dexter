@@ -143,7 +143,7 @@ struct TagChipPicker: View {
     @ViewBuilder
     private var addNewChip: some View {
         if isAddingNew {
-            TextField("New tag", text: $newTagText)
+            TextField(PlainFieldPlaceholder.title("New tag"), text: $newTagText)
                 .paperFieldOnMac()
                 .noAutocapitalization()
                 .autocorrectionDisabled(true)
@@ -155,6 +155,7 @@ struct TagChipPicker: View {
                 .frame(minWidth: 120, maxWidth: 200)
                 .padding(.horizontal, Space.md)
                 .padding(.vertical, Space.sm)
+                .plainFieldPlaceholder("New tag", isVisible: newTagText.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
         } else {

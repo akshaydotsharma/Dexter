@@ -140,12 +140,29 @@ struct SettingsView: View {
 
                 Spacer(minLength: Space.md)
 
-                TextField("You", text: $userDisplayName)
-                    .paperFieldOnMac()
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 160)
+                // Trailing-aligned, so the shared leading-anchored
+                // `plainFieldPlaceholder` helper does not fit: it would draw
+                // "You" flush left while the typed name sits flush right
+                // (#578). A small trailing-anchored overlay does the same job
+                // the helper does for a leading field.
+                ZStack(alignment: .topTrailing) {
+                    #if os(macOS)
+                    if userDisplayName.isEmpty {
+                        Text("You")
+                            .font(.edBody)
+                            .foregroundStyle(Tokens.mutedSoft)
+                            .lineLimit(1)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                    #endif
+                    TextField(PlainFieldPlaceholder.title("You"), text: $userDisplayName)
+                        .paperFieldOnMac()
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: 160)
+                }
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
@@ -445,7 +462,7 @@ private struct AnthropicKeyRow: View {
             }
 
             HStack(spacing: Space.sm) {
-                SecureField("sk-ant-…", text: $draft)
+                SecureField(PlainFieldPlaceholder.title("sk-ant-…"), text: $draft)
                     .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
@@ -455,6 +472,7 @@ private struct AnthropicKeyRow: View {
                     .onSubmit { if canSave { save(draft) } }
                     .padding(.horizontal, Space.md)
                     .padding(.vertical, Space.sm)
+                    .plainFieldPlaceholder("sk-ant-…", isVisible: draft.isEmpty, padding: Space.md)
                     .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                     .paperBorder(Tokens.border, radius: Radius.md)
 

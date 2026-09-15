@@ -34,7 +34,7 @@ struct RenamePersonSheet: View {
                 Tokens.paper.ignoresSafeArea()
                 VStack(alignment: .leading, spacing: Space.sm) {
                     Text("Name").eyebrow()
-                    TextField("Name", text: $name)
+                    TextField(PlainFieldPlaceholder.title("Name"), text: $name)
                         .paperFieldOnMac()
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)
@@ -43,6 +43,7 @@ struct RenamePersonSheet: View {
                         .onSubmit(commit)
                         .onChange(of: name) { _, _ in errorMessage = nil }
                         .padding(Space.md)
+                        .plainFieldPlaceholder("Name", isVisible: name.isEmpty, padding: Space.md)
                         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                         .paperBorder(Tokens.border, radius: Radius.md)
 

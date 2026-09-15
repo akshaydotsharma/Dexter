@@ -901,12 +901,13 @@ private struct MoreFiltersSheet: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Tokens.muted)
-            TextField("Search all merchants", text: $merchantSearch)
+            TextField(PlainFieldPlaceholder.title("Search all merchants"), text: $merchantSearch)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .autocorrectionDisabled(true)
                 .noAutocapitalization()
+                .plainFieldPlaceholder("Search all merchants", isVisible: merchantSearch.isEmpty, padding: 0)
             if !merchantSearch.isEmpty {
                 Button {
                     merchantSearch = ""

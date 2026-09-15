@@ -249,11 +249,12 @@ private struct KeywordEditorSheet: View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Term").eyebrow()
 
-            TextField("e.g. Envisso", text: $term)
+            TextField(PlainFieldPlaceholder.title("e.g. Envisso"), text: $term)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder("e.g. Envisso", isVisible: term.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
                 .submitLabel(.done)

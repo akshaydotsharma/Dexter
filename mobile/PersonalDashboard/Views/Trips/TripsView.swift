@@ -776,11 +776,12 @@ private struct TripEditorSheet: View {
     private var nameField: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text("Destination").eyebrow()
-            TextField("e.g. Vietnam", text: $name)
+            TextField(PlainFieldPlaceholder.title("e.g. Vietnam"), text: $name)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder("e.g. Vietnam", isVisible: name.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
                 .submitLabel(.done)
