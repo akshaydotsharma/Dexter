@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
-# Same-network ship: build with the Mac's LAN IP baked in for API calls,
-# and serve the OTA install page via a Cloudflare quick tunnel (HTTPS is
-# required by itms-services://, plain LAN HTTP cannot install IPAs).
+# Archive, sign, and export the Dexter iOS app as a .ipa. Install it on the
+# phone over a USB cable or the same wifi network with:
+#   xcrun devicectl device install app --device <UDID> <path/to/app.ipa>
 #
-# Why this exists:
-#   ship.sh ties install AND API to a single Tailscale tunnel. If MagicDNS
-#   on the phone hiccups, the App Intent can't reach the API. ship-lan.sh
-#   decouples the two: install via public-DNS Cloudflare URL, API direct
-#   over wifi to the Mac's LAN IP.
+# This script does not serve the IPA and does not open any tunnel. It only
+# builds the artifact and prints the path (#579 — the Cloudflare OTA install
+# path is retired; installs go over cable or LAN via devicectl).
 #
 # Usage:
 #   bash mobile/ota/ship-lan.sh
 #
 # Prereqs:
-#   - Phone and Mac on the same wifi.
-#   - cloudflared installed (brew install cloudflared).
-#   - Personal-dashboard dev server running (npm run dev). Port is
-#     auto-detected: tries 3001 first (where it lives when 3000 is taken),
-#     then 3000.
+#   - Phone paired with the Mac at least once (devicectl needs that to see it).
+#   - Personal-dashboard dev server running (npm run dev), only if you rely
+#     on the legacy OTA_API_URL fallback baked into the build — see below.
 
 set -euo pipefail
 
@@ -26,8 +22,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MOBILE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT="${MOBILE_DIR}/PersonalDashboard.xcodeproj"
 SCHEME="PersonalDashboard"
-# Output dir and HTTP port. Overridable via the environment because BOTH are
-# shared machine-wide, and line ~96 does `rm -rf "${OTA_DIR}"`: two worktrees
+# Output dir. Overridable via the environment because it's shared machine-wide,
+# and this script does `rm -rf "${OTA_DIR}"` near the start: two worktrees
 # shipping at once don't merely race, the second one deletes the first's build
 # and leaves its own `app.ipa` at the same path. The loser then installs the
 # winner's app while every log line says success.
@@ -36,17 +32,15 @@ SCHEME="PersonalDashboard"
 # were in flight together, and both times the phone silently ended up with the
 # other branch's binary.
 #
-#   OTA_DIR=/tmp/ota-myfeature PORT=8082 bash mobile/ota/ship-lan.sh
+#   OTA_DIR=/tmp/ota-myfeature bash mobile/ota/ship-lan.sh
 #
-# Defaults are unchanged, so a single-worktree ship behaves exactly as before.
+# Default is unchanged, so a single-worktree ship behaves exactly as before.
 OTA_DIR="${OTA_DIR:-/tmp/ota}"
-PORT="${PORT:-8081}"
 
 # ---- Pre-flight ----
 command -v xcodegen     >/dev/null || { echo "xcodegen not found (brew install xcodegen)"; exit 1; }
 command -v xcodebuild   >/dev/null || { echo "xcodebuild not found"; exit 1; }
 command -v python3      >/dev/null || { echo "python3 not found"; exit 1; }
-command -v cloudflared  >/dev/null || { echo "cloudflared not found (brew install cloudflared)"; exit 1; }
 
 cd "${MOBILE_DIR}"
 
@@ -108,6 +102,23 @@ xcodegen generate >/dev/null
 # ---- Clean OTA staging ----
 rm -rf "${OTA_DIR}"
 mkdir -p "${OTA_DIR}"
+
+# ---- Remove key-bearing artifacts if the build does not finish cleanly ----
+# app.ipa and the .xcarchive both carry the Anthropic/OpenAI keys in plaintext
+# (baked into Info.plist), so a half-finished build left behind is a credential
+# sitting on disk. On a successful run this trap does nothing — app.ipa is the
+# deliverable, and build-to-phone's stale-IPA check relies on it staying put
+# with a fresh mtime (project_ship_lan_stale_ipa_trap). On any failure it wipes
+# the whole staging dir so nothing key-bearing survives.
+cleanup_on_failure() {
+    local exit_code=$?
+    if [ "${exit_code}" -ne 0 ]; then
+        echo ""
+        echo "-> build failed (exit ${exit_code}); removing ${OTA_DIR} (key-bearing build artifacts)"
+        rm -rf "${OTA_DIR}"
+    fi
+}
+trap cleanup_on_failure EXIT
 
 # ---- Versioning: a.b.c (d) ----
 # a.b live in mobile/VERSION (manually bumped on big refactors / minor cuts).
@@ -226,86 +237,24 @@ mv "${EXPORTED_IPA}" "${OTA_DIR}/app.ipa"
 PROFILE_EXPIRY="$(security cms -D -i "${ARCHIVE_PATH}/Products/Applications/PersonalDashboard.app/embedded.mobileprovision" 2>/dev/null \
     | plutil -extract ExpirationDate raw - 2>/dev/null | cut -d'T' -f1 || echo "unknown")"
 
-# ---- Start local HTTP server (will be reverse-proxied by cloudflared) ----
-#
-# Custom server (NOT `python3 -m http.server`) — Apple's OTA install spec
-# REQUIRES manifest.plist to be served with Content-Type: application/xml.
-# The default SimpleHTTPRequestHandler returns application/octet-stream for
-# .plist, which causes iOS to silently fail the install (200 OK fetch but no
-# plist parse, no IPA download, no upgrade). The "blue dot" appears but the
-# binary on disk never changes.
-echo "-> starting HTTP server on :${PORT}"
-cd "${OTA_DIR}"
-python3 - "${PORT}" >"${OTA_DIR}/http.log" 2>&1 <<'PYEOF' &
-import http.server, socketserver, sys
-class H(http.server.SimpleHTTPRequestHandler):
-    extensions_map = {
-        **http.server.SimpleHTTPRequestHandler.extensions_map,
-        '.plist': 'application/xml',
-        '.ipa':   'application/octet-stream',
-    }
-port = int(sys.argv[1])
-with socketserver.TCPServer(('127.0.0.1', port), H) as srv:
-    srv.serve_forever()
-PYEOF
-HTTP_PID=$!
+# ---- Drop the archive (key-bearing, no longer needed after export) ----
+# Only app.ipa is needed to install. The .xcarchive is bulkier and carries the
+# same plaintext key in its own Info.plist, so remove it now instead of
+# leaving it on disk until the next ship's `rm -rf "${OTA_DIR}"`.
+rm -rf "${ARCHIVE_PATH}"
 
-# ---- Cloudflare quick tunnel for the install page ----
-echo "-> starting cloudflared quick tunnel"
-cloudflared tunnel --url "http://127.0.0.1:${PORT}" >"${OTA_DIR}/cloudflared.log" 2>&1 &
-TUNNEL_PID=$!
-
-cleanup() {
-    echo ""
-    echo "-> cleaning up (cloudflared + http server)"
-    kill "${TUNNEL_PID}" 2>/dev/null || true
-    kill "${HTTP_PID}" 2>/dev/null || true
-    wait 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
-# ---- Wait for tunnel URL ----
-TUNNEL_URL=""
-for i in {1..40}; do
-    TUNNEL_URL="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "${OTA_DIR}/cloudflared.log" | head -1 || true)"
-    [ -n "${TUNNEL_URL}" ] && break
-    sleep 0.5
-done
-[ -n "${TUNNEL_URL}" ] || { echo "tunnel did not come up in 20s — see ${OTA_DIR}/cloudflared.log"; exit 1; }
-echo "-> tunnel: ${TUNNEL_URL}"
-
-# ---- Render manifest.plist + index.html ----
-IPA_URL="${TUNNEL_URL}/app.ipa"
-MANIFEST_URL="${TUNNEL_URL}/manifest.plist"
-
-sed -e "s|__IPA_URL__|${IPA_URL}|g" \
-    -e "s|__BUNDLE_VERSION__|${BUNDLE_VERSION}|g" \
-    -e "s|__BUNDLE_SHORT_VERSION__|${SHORT_VERSION}|g" \
-    "${SCRIPT_DIR}/manifest.template.plist" > "${OTA_DIR}/manifest.plist"
-
-sed -e "s|__MANIFEST_URL__|${MANIFEST_URL}|g" \
-    -e "s|__BUNDLE_VERSION__|${SHORT_VERSION} (${BUNDLE_VERSION})|g" \
-    -e "s|__PROFILE_EXPIRY__|${PROFILE_EXPIRY}|g" \
-    "${SCRIPT_DIR}/index.template.html" > "${OTA_DIR}/index.html"
-
-INSTALL_URL="${TUNNEL_URL}/"
+IPA_PATH="${OTA_DIR}/app.ipa"
 
 echo ""
 echo "================================================================"
-echo "  Open this URL in Safari on your iPhone, then tap Install:"
+echo "  app.ipa: ${IPA_PATH}"
 echo ""
-echo "  ${INSTALL_URL}"
+echo "  Install over cable or wifi:"
+echo "    xcrun devicectl device install app --device <UDID> ${IPA_PATH}"
+echo ""
+echo "  Find <UDID>: xcrun devicectl list devices"
 echo ""
 echo "  Profile expires: ${PROFILE_EXPIRY}  (re-run this script after that)"
 echo "================================================================"
-echo ""
-echo "  After install, the app will call the API at: ${API_URL}"
-echo "  Phone and Mac must stay on the same wifi for that to work."
-echo "  iOS will prompt 'Allow find devices on local network' the first"
-echo "  time you run anything that touches the API. Tap Allow."
-echo ""
-echo "  Ctrl-C here once the install starts on your phone."
 
-printf "%s" "${INSTALL_URL}" | pbcopy 2>/dev/null || true
-
-wait "${TUNNEL_PID}"
+printf "%s" "${IPA_PATH}" | pbcopy 2>/dev/null || true

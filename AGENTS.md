@@ -60,7 +60,7 @@ Long-lived notes about this codebase live at:
 - `mobile/PersonalDashboard/Intents/CaptureToDashboardIntent.swift` — Shortcut entry point
 - `mobile/PersonalDashboard/Intents/DashboardAppShortcuts.swift` — `AppShortcutsProvider` registry
 - `mobile/PersonalDashboard/App/AppConfig.swift` — `apiBaseURL` (legacy, server-bound features only) + `anthropicAPIKey` resolver
-- `mobile/ota/ship-lan.sh` — archive + sign + Cloudflare-tunneled IPA + ANTHROPIC_API_KEY injection
+- `mobile/ota/ship-lan.sh` — archive + sign + export `app.ipa` + ANTHROPIC_API_KEY injection. No tunnel, no server; install via `devicectl` over cable or LAN (#579)
 
 ### macOS target (`DexterMac`)
 
@@ -132,6 +132,6 @@ The web client and server still build (`npm run install:all`, `npm start`) but n
 
 ## Deployment
 
-- iOS: free dev builds shipped via OTA + `devicectl device install` over wifi. No App Store distribution today.
+- iOS: free dev builds shipped via `devicectl device install` over cable or wifi. No App Store distribution today.
 - macOS: dev-signed, run from Xcode (`ENABLE_APP_SANDBOX: NO`). No packaged/distributed build yet — revisit sandbox + signing before any distribution and before the iCloud-backup restore milestone.
 - Web/server: previously deployed to Railway (`railway.json`). Currently paused. The startCommand reference in `railway.json` is broken; if/when web revives, fix it before redeploying.
