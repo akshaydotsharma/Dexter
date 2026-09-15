@@ -206,7 +206,11 @@ struct MealRow: View {
                         // breakdown under it is a second rung rather than a
                         // replacement.
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text(meal.needsDetail ? "—" : MealFormat.calories(meal.calories))
+                            Text(
+                                meal.needsDetail
+                                    ? "—"
+                                    : MealFormat.calories(meal.calories, Self.precision(of: meal))
+                            )
                                 .font(.edHeading)
                                 .foregroundStyle(meal.isSuspect || meal.needsDetail ? Tokens.muted : Tokens.ink)
                                 .monospacedDigit()
@@ -354,7 +358,20 @@ struct MealRow: View {
     /// One nutrient's value with its unit, formatted the one way Meals formats
     /// numbers.
     static func reading(_ nutrient: Nutrient, of meal: LocalMeal) -> String {
-        MealFormat.value(meal.value(for: nutrient), for: nutrient)
+        MealFormat.value(
+            meal.value(for: nutrient),
+            for: nutrient,
+            precision: precision(of: meal)
+        )
+    }
+
+    /// How this meal's figures are printed on the row, decided the one way
+    /// every Meals surface decides it (#594).
+    static func precision(of meal: LocalMeal) -> MealFormat.Precision {
+        MealGrounding.precision(
+            isGrounded: meal.isGrounded,
+            totalsWereOverridden: meal.totalsWereOverridden
+        )
     }
 
     /// One group of nutrients as a spoken clause, or nil when the meal has no
@@ -377,6 +394,13 @@ struct MealRow: View {
         if isDuplicate {
             out.append(MealFlagChip("Possible duplicate", systemImage: "doc.on.doc", tint: Tokens.info))
         }
+        // Ahead of the confidence band, which it qualifies rather than replaces:
+        // the figures are published, the portion they were scaled to is still
+        // assumed (#594). One more chip on a row that already flows them, so it
+        // costs the layout nothing.
+        if meal.isGrounded {
+            out.append(MealGrounding.chip())
+        }
         if !meal.needsDetail {
             out.append(
                 MealFlagChip(
@@ -397,7 +421,7 @@ struct MealRow: View {
         if meal.needsDetail {
             parts.append("needs detail, no numbers yet")
         } else {
-            parts.append("\(MealFormat.calories(meal.calories)) kilocalories")
+            parts.append("\(MealFormat.calories(meal.calories, Self.precision(of: meal))) kilocalories")
         }
         if meal.isSuspect, let reason = meal.suspectReason { parts.append(reason) }
         if isDuplicate { parts.append("possible duplicate") }

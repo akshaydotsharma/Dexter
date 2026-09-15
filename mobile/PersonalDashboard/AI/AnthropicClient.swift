@@ -65,7 +65,30 @@ struct AnthropicClient: Sendable {
 
     let session: URLSession
 
-    init(session: URLSession = .shared) {
+    /// The session every real call runs on, replacing `URLSession.shared` (#594).
+    ///
+    /// `URLSession.shared` carries a `timeoutIntervalForRequest` of 60 s, and a
+    /// session's configured value CAPS whatever an individual `URLRequest` asks
+    /// for. So `request.timeoutInterval = 150` on a shared-session request is
+    /// not a longer timeout, it is a 60 s timeout with a misleading line of code
+    /// in front of it. That is exactly how #594's grounded estimate kept dying:
+    /// the request said 150, the session said 60, and the call failed at 60.1 s
+    /// with `NSURLErrorTimedOut`.
+    ///
+    /// The ceiling has to move here or it does not move. A request that would
+    /// finish in 16 s still finishes in 16 s; this only changes how long a slow
+    /// one is allowed to keep going before it is thrown away.
+    ///
+    /// For the streaming path this value means "time to wait for more data",
+    /// not total duration, so a longer one does not let a finished stream hang:
+    /// it lets a slow generation keep arriving.
+    static let defaultSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 150
+        return URLSession(configuration: config)
+    }()
+
+    init(session: URLSession = AnthropicClient.defaultSession) {
         self.session = session
     }
 
@@ -282,6 +305,9 @@ struct AnthropicClient: Sendable {
                     var currentEvent: String = "message"
                     var currentData: String = ""
                     var blocks: [Int: AccumulatingBlock] = [:]
+                    // The turn's own content, rebuilt block by block, for the
+                    // resume a `pause_turn` needs (#594).
+                    var finished: [AnthropicJSONValue] = []
                     // `stop_reason` arrives on `message_delta`, one record
                     // BEFORE `message_stop`. It used to be dropped, so every
                     // `.done` reported `stopReason: nil` and no consumer could
@@ -297,6 +323,7 @@ struct AnthropicClient: Sendable {
                             eventName: currentEvent,
                             dataLine: currentData,
                             blocks: &blocks,
+                            finished: &finished,
                             terminal: &terminal,
                             continuation: continuation
                         )
@@ -346,6 +373,7 @@ struct AnthropicClient: Sendable {
         eventName: String,
         dataLine: String,
         blocks: inout [Int: AccumulatingBlock],
+        finished: inout [AnthropicJSONValue],
         terminal: inout TerminalSignal,
         continuation: AsyncThrowingStream<AnthropicStreamEvent, Error>.Continuation
     ) {
@@ -354,20 +382,31 @@ struct AnthropicClient: Sendable {
         switch eventName {
         case "content_block_start":
             // Body: { type, index, content_block: { type, name?, ... } }
+            //
+            // The whole `content_block` is kept, not just its type and name: a
+            // `web_search_tool_result` states its results here and nowhere else,
+            // and a paused turn is replayed from these blocks (#594).
             struct Payload: Decodable {
-                struct Block: Decodable {
-                    let type: String
-                    let name: String?
-                }
                 let index: Int
-                let content_block: Block
+                let content_block: AnthropicJSONValue
             }
-            guard let p = try? Self.decoder.decode(Payload.self, from: data) else { return }
+            guard let p = try? Self.decoder.decode(Payload.self, from: data),
+                  let fields = p.content_block.objectValue,
+                  let type = fields["type"]?.stringValue else { return }
             blocks[p.index] = AccumulatingBlock(
-                type: p.content_block.type,
-                name: p.content_block.name,
-                partialJSON: ""
+                type: type,
+                name: fields["name"]?.stringValue,
+                start: p.content_block,
+                partialJSON: "",
+                text: fields["text"]?.stringValue ?? ""
             )
+            if type == WebSearchGrounding.resultBlockType {
+                continuation.yield(
+                    .webSearchResult(
+                        sources: WebSearchGrounding.sources(inResultBlock: p.content_block)
+                    )
+                )
+            }
 
         case "content_block_delta":
             // Body: { type, index, delta: { type, text?, partial_json? } }
@@ -384,6 +423,10 @@ struct AnthropicClient: Sendable {
             switch p.delta.type {
             case "text_delta":
                 if let text = p.delta.text, !text.isEmpty {
+                    if var block = blocks[p.index] {
+                        block.text += text
+                        blocks[p.index] = block
+                    }
                     continuation.yield(.textDelta(text))
                 }
             case "input_json_delta":
@@ -400,15 +443,46 @@ struct AnthropicClient: Sendable {
             struct Payload: Decodable { let index: Int }
             guard let p = try? Self.decoder.decode(Payload.self, from: data),
                   let block = blocks.removeValue(forKey: p.index) else { return }
-            guard block.type == "tool_use", let name = block.name else { return }
+
             // Empty input is valid (zero-arg tool); fall back to {} when blank.
             let raw = block.partialJSON.isEmpty ? "{}" : block.partialJSON
-            guard let inputData = raw.data(using: .utf8),
-                  let value = try? JSONDecoder().decode(AnthropicJSONValue.self, from: inputData) else {
+            let input: AnthropicJSONValue? = raw.data(using: .utf8).flatMap {
+                try? JSONDecoder().decode(AnthropicJSONValue.self, from: $0)
+            }
+
+            // Rebuild the block for the replay a paused turn needs (#594).
+            // Blocks stop in the order they started, so appending preserves the
+            // order the API stated them in. Thinking is deliberately absent, for
+            // the reason `AnthropicMessage.assistantReplay` gives.
+            switch block.type {
+            case "text":
+                if !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    finished.append(.object([
+                        "type": .string("text"),
+                        "text": .string(block.text)
+                    ]))
+                }
+            case "tool_use", WebSearchGrounding.serverToolUseBlockType:
+                if var fields = block.start.objectValue, let input {
+                    fields["input"] = input
+                    finished.append(.object(fields))
+                }
+            case WebSearchGrounding.resultBlockType:
+                finished.append(block.start)
+            default:
+                break
+            }
+
+            // Only a CLIENT tool call is dispatched. A `server_tool_use` looks
+            // like one and is not: Anthropic already ran it, and handing its
+            // name to the draft mapper would report the turn as calling a tool
+            // this app has never heard of (#594).
+            guard block.type == "tool_use", let name = block.name else { return }
+            guard let input else {
                 NSLog("AnthropicClient.stream: dropped malformed tool input for %@", name)
                 return
             }
-            continuation.yield(.toolUse(name: name, input: value))
+            continuation.yield(.toolUse(name: name, input: input))
 
         case "message_delta":
             // Body: { type, delta: { stop_reason?, ... }, usage: { output_tokens } }
@@ -442,7 +516,8 @@ struct AnthropicClient: Sendable {
             continuation.yield(.done(
                 stopReason: terminal.stopReason,
                 outputTokens: terminal.outputTokens,
-                usage: usage
+                usage: usage,
+                assistantContent: finished
             ))
 
         case "error":
@@ -717,11 +792,29 @@ struct AnthropicStreamingRequest: Encodable {
 enum AnthropicStreamEvent: Sendable {
     case textDelta(String)
     case toolUse(name: String, input: AnthropicJSONValue)
+    /// A SERVER tool finished a web search inside this turn (#594).
+    ///
+    /// Separate from `.toolUse` on purpose: nothing on the device executes it,
+    /// and a consumer that dispatched on it would look for a client tool of that
+    /// name and report the turn as broken. Empty sources mean the search ran and
+    /// returned nothing usable, which includes the failure shape the API answers
+    /// with on an HTTP 200.
+    case webSearchResult(sources: [WebSearchSource])
     /// Terminator. `stopReason` is Anthropic's own (`end_turn`, `tool_use`,
-    /// `max_tokens`, …); `outputTokens` is the turn's billed output count,
-    /// which the token-budget measurement in `LiveToolLoopTokenBudgetTests`
-    /// reads (#554).
-    case done(stopReason: String?, outputTokens: Int?, usage: AnthropicUsage?)
+    /// `max_tokens`, `pause_turn`, …); `outputTokens` is the turn's billed
+    /// output count, which the token-budget measurement in
+    /// `LiveToolLoopTokenBudgetTests` reads (#554).
+    ///
+    /// `assistantContent` is the turn's own content array, rebuilt as raw JSON,
+    /// which is what a `pause_turn` has to be handed back to be finished (#594).
+    /// Thinking blocks are not in it, for the reason
+    /// `AnthropicMessage.assistantReplay` states.
+    case done(
+        stopReason: String?,
+        outputTokens: Int?,
+        usage: AnthropicUsage?,
+        assistantContent: [AnthropicJSONValue]
+    )
     case error(String)
 }
 
@@ -741,7 +834,14 @@ private struct TerminalSignal {
 private struct AccumulatingBlock {
     let type: String
     let name: String?
+    /// The block exactly as `content_block_start` stated it, kept so a paused
+    /// turn can be replayed verbatim (#594). For a `web_search_tool_result`
+    /// this already holds the whole block: its results do not arrive as deltas.
+    let start: AnthropicJSONValue
     var partialJSON: String
+    /// Text accumulated from `text_delta`, which is the only part of a text
+    /// block that ever arrives after its start.
+    var text: String
 }
 
 /// One conversation turn. `role` is "user" or "assistant"; content is an
@@ -763,6 +863,17 @@ enum AnthropicContentBlock: Codable {
     case document(base64: String, mediaType: String)
     /// Native image block (base64). `mediaType` is e.g. "image/png".
     case image(base64: String, mediaType: String)
+    /// A block replayed EXACTLY as the API stated it, carried as raw JSON
+    /// (#594).
+    ///
+    /// Resuming a paused turn means handing the assistant's own content back
+    /// unchanged, and the cases above are a lossy reading of it: a
+    /// `server_tool_use` and its `web_search_tool_result` have no case here and
+    /// must travel as a pair or the API rejects the replay. Round-tripping the
+    /// raw value is the only shape that cannot drop a field this enum has not
+    /// heard of. Never produced by the decoder, only by a caller that kept the
+    /// response's own JSON.
+    case raw(AnthropicJSONValue)
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -785,6 +896,14 @@ enum AnthropicContentBlock: Codable {
     }
 
     func encode(to encoder: Encoder) throws {
+        // Taken before the keyed container: an encoder may only hand out one
+        // container, so a raw block cannot be written from inside the switch
+        // below (#594).
+        if case .raw(let value) = self {
+            var single = encoder.singleValueContainer()
+            try single.encode(value)
+            return
+        }
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .text(let value):
@@ -812,6 +931,9 @@ enum AnthropicContentBlock: Codable {
             try src.encode("base64", forKey: .type)
             try src.encode(mediaType, forKey: .media_type)
             try src.encode(base64, forKey: .data)
+        case .raw:
+            // Handled above, before any container was taken.
+            break
         }
     }
 
@@ -873,10 +995,72 @@ extension AnthropicMessage {
 /// Tool advertised to the model. `input_schema` is a JSON Schema object;
 /// kept as `AnthropicJSONValue` so we can build it in pure Swift literals
 /// without dragging in a schema library.
+///
+/// ### Two kinds of tool, one array (#594)
+///
+/// A CLIENT tool is one this app executes: it carries a name, a description and
+/// a schema, and the model's call comes back for `ExecuteDraftAction` to run. A
+/// SERVER tool runs inside Anthropic's own infrastructure and is declared by
+/// TYPE alone, because its schema, its description and its execution all live
+/// on their side. Sending a server tool the three client keys is rejected, and
+/// sending a client tool a `type` is meaningless, so the two encode differently
+/// and the `serverToolType` is what decides which.
 struct AnthropicTool: Codable {
     let name: String
     let description: String
     let input_schema: AnthropicJSONValue
+
+    /// Anthropic's own type string for a server tool, e.g.
+    /// `web_search_20250305`. Nil for every tool this app executes itself.
+    let serverToolType: String?
+
+    /// How many times the server may run this tool in one turn. Nil sends no
+    /// cap, which the API reads as its own default.
+    let maxUses: Int?
+
+    init(
+        name: String,
+        description: String,
+        input_schema: AnthropicJSONValue,
+        serverToolType: String? = nil,
+        maxUses: Int? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+        self.serverToolType = serverToolType
+        self.maxUses = maxUses
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case input_schema
+        case type
+        case max_uses
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        if let serverToolType {
+            try c.encode(serverToolType, forKey: .type)
+            if let maxUses { try c.encode(maxUses, forKey: .max_uses) }
+            return
+        }
+        try c.encode(description, forKey: .description)
+        try c.encode(input_schema, forKey: .input_schema)
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        serverToolType = try c.decodeIfPresent(String.self, forKey: .type)
+        maxUses = try c.decodeIfPresent(Int.self, forKey: .max_uses)
+        description = (try? c.decode(String.self, forKey: .description)) ?? ""
+        input_schema = (try? c.decode(AnthropicJSONValue.self, forKey: .input_schema))
+            ?? .object([:])
+    }
 }
 
 /// One message-completion response. We only consume `content` and

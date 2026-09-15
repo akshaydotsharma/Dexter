@@ -291,6 +291,7 @@ final class MealDataLayerTests: XCTestCase {
             itemsData: itemsData, confidence: 0.7, source: "chat",
             needsDetail: true, isSuspect: false, suspectReason: nil,
             assumptionsNote: "assumed one bowl", containsAlcohol: true,
+            groundingSourcesData: nil,
             createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2)
         )
         var payload = DataArchive.Payload.empty
@@ -378,7 +379,7 @@ final class MealDataLayerTests: XCTestCase {
                 mealType: "lunch", mealDescription: "a", calories: 1, proteinG: 0, carbsG: 0, fatG: 0,
                 fibreG: 0, sugarG: 0, sodiumMg: 0, satFatG: 0, itemsData: nil, confidence: 0.5,
                 source: "chat", needsDetail: false, isSuspect: false, suspectReason: nil,
-                assumptionsNote: nil, containsAlcohol: false,
+                assumptionsNote: nil, containsAlcohol: false, groundingSourcesData: nil,
                 createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
             ),
             DataArchive.MealDTO(
@@ -386,7 +387,7 @@ final class MealDataLayerTests: XCTestCase {
                 mealType: "dinner", mealDescription: "b", calories: 2, proteinG: 0, carbsG: 0, fatG: 0,
                 fibreG: 0, sugarG: 0, sodiumMg: 0, satFatG: 0, itemsData: nil, confidence: 0.5,
                 source: "chat", needsDetail: false, isSuspect: false, suspectReason: nil,
-                assumptionsNote: nil, containsAlcohol: false,
+                assumptionsNote: nil, containsAlcohol: false, groundingSourcesData: nil,
                 createdAt: Date(timeIntervalSince1970: 0), updatedAt: Date(timeIntervalSince1970: 0)
             )
         ]

@@ -138,6 +138,16 @@ struct MealDetailSheet: View {
 
     private var service: MealEstimationService { .default() }
 
+    /// How this meal's figures are printed. A grounded meal and a meal whose
+    /// totals the user typed are both stated rather than guessed, so neither is
+    /// rounded as if a portion had been assumed for it (#594).
+    private var precision: MealFormat.Precision {
+        MealGrounding.precision(
+            isGrounded: meal.isGrounded,
+            totalsWereOverridden: meal.totalsWereOverridden
+        )
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -217,6 +227,9 @@ struct MealDetailSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
                     .monospacedDigit()
+                if meal.isGrounded {
+                    MealGrounding.chip()
+                }
                 MealFlagChip(
                     MealFormat.confidenceBand(meal.confidence),
                     tint: meal.totalsWereOverridden ? Tokens.success : Tokens.muted
@@ -240,6 +253,10 @@ struct MealDetailSheet: View {
                     .foregroundStyle(Tokens.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // After the fact is where the sources belong: the preview had to
+            // answer "should I log this", and this sheet answers "where did
+            // this number come from" months later (#594).
+            MealSourcesBlock(sources: meal.groundingSources)
         }
         .padding(Space.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -452,7 +469,13 @@ struct MealDetailSheet: View {
                             .font(.edFootnote)
                             .foregroundStyle(Tokens.inkSoft)
                         Spacer(minLength: Space.sm)
-                        Text(MealFormat.value(meal.nutrients[nutrient], for: nutrient))
+                        Text(
+                            MealFormat.value(
+                                meal.nutrients[nutrient],
+                                for: nutrient,
+                                precision: precision
+                            )
+                        )
                             .font(.edFootnote)
                             .foregroundStyle(Tokens.ink)
                             .monospacedDigit()
