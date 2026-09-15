@@ -51,10 +51,39 @@ struct MealStatPill: View {
     /// has to measure at its natural size or the layout cannot place it.
     var fillsWidth: Bool = false
 
+    /// True in a grid whose pills must match the tallest in their OWN row.
+    ///
+    /// The companion to `fillsWidth`, and it exists for `note`. A grid row sizes
+    /// to its tallest cell, so one pill carrying a note makes its neighbour's box
+    /// end short of the row while the row keeps the height anyway — two boxes at
+    /// two heights side by side, which reads as a layout fault rather than as a
+    /// mark. Filling the height makes the shorter pill's box take the row it was
+    /// already given.
+    ///
+    /// Deliberately per ROW and not per grid. A row with no note stays short, so
+    /// a card whose values were all accepted as derived is exactly as tall as it
+    /// would be with no note feature at all. Reserving on every pill instead
+    /// would make the common case pay for the rare one.
+    var fillsHeight: Bool = false
+
     /// Overrides the spoken reading. The visible text is shorthand — "1,900 mg"
     /// says nothing about the target it is under — so a caller that knows the
     /// target passes the full sentence here.
     var accessibilityText: String? = nil
+
+    /// A short line under the value, saying where the figure came from rather
+    /// than what it is (#559). Nil draws no line at all, which is every caller
+    /// that predates it and every pill the fact is not true of.
+    ///
+    /// Never tinted, and never a verdict. Hue on this surface means a reading
+    /// about a day, and where a number came from is not one.
+    ///
+    /// A caller putting a note on SOME pills of a grid sets `fillsHeight` on all
+    /// of them, so the boxes inside a row match. See that flag.
+    ///
+    /// Not spoken from here. The pill is one accessibility element with one
+    /// label, so a caller passing a note folds it into `accessibilityText` too.
+    var note: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -66,8 +95,22 @@ struct MealStatPill: View {
                 .foregroundStyle(valueInk)
                 .monospacedDigit()
                 .lineLimit(1)
+            if let note {
+                Text(note)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
         }
-        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+        // Top-aligned only when filling the height, so the pill without the note
+        // keeps its label and figure level with its neighbour's and lets the
+        // spare room fall below, where that neighbour's note is.
+        .frame(
+            maxWidth: fillsWidth ? .infinity : nil,
+            maxHeight: fillsHeight ? .infinity : nil,
+            alignment: fillsHeight ? .topLeading : .leading
+        )
         .padding(.horizontal, Space.sm)
         .padding(.vertical, Space.sm)
         .background(fill, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
