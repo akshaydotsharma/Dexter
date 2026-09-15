@@ -73,9 +73,10 @@ struct MealRow: View {
                             .font(.edCaption)
                             .foregroundStyle(Tokens.muted)
                             .monospacedDigit()
-                        Text(meal.mealTypeEnum.displayName)
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
+                        // An eyebrow rather than a second caption: at the same
+                        // size and colour as the time beside it, line 2 had no
+                        // structure and read as one grey string.
+                        Text(meal.mealTypeEnum.displayName).eyebrow()
                     }
 
                     if !chips.isEmpty {
@@ -85,8 +86,10 @@ struct MealRow: View {
                     }
 
                     if let reason = meal.suspectReason {
+                        // The reason the row is flagged, so it sits a rung above
+                        // the assumptions note that shares this slot.
                         Text(reason)
-                            .font(.edCaption)
+                            .font(.edFootnote)
                             .foregroundStyle(Tokens.warning)
                             .fixedSize(horizontal: false, vertical: true)
                     } else if let note = meal.assumptionsNote {
@@ -105,14 +108,15 @@ struct MealRow: View {
 
                 Spacer(minLength: Space.sm)
 
+                // The row's anchor. No pill here: ten accent-filled pills down
+                // a list would be ten competing anchors, and the day card is
+                // where the one figure that matters lives.
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(meal.needsDetail ? "—" : MealFormat.calories(meal.calories))
-                        .font(.edBodyMedium)
+                        .font(.edHeading)
                         .foregroundStyle(meal.isSuspect || meal.needsDetail ? Tokens.muted : Tokens.ink)
                         .monospacedDigit()
-                    Text("kcal")
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.muted)
+                    Text("kcal").eyebrow()
                 }
             }
             .padding(.vertical, Space.md)

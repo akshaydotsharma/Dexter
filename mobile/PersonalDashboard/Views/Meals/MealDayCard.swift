@@ -34,7 +34,7 @@ struct MealNutrientBar: View {
                     .foregroundStyle(Tokens.inkSoft)
                 Spacer(minLength: Space.sm)
                 Text(valueText)
-                    .font(.edFootnote)
+                    .font(.edFootnoteStrong)
                     .foregroundStyle(Tokens.ink)
                     .monospacedDigit()
             }
@@ -72,53 +72,6 @@ struct MealNutrientBar: View {
     }
 }
 
-/// One compact chip for a ceiling nutrient (#543).
-///
-/// The three ceilings get chips rather than bars because a ceiling is a
-/// yes/no reading — you are under it or you are not — and three more full-width
-/// bars for a question with a one-bit answer would out-weigh the four macros
-/// above them, which are the ones a day is actually steered by.
-struct MealWatchChip: View {
-    let nutrient: Nutrient
-    let value: Double
-    let target: Double?
-
-    private var verdict: MealVerdict? {
-        guard let target else { return nil }
-        return nutrient.verdict(value: value, target: target)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(nutrient.displayName)
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .lineLimit(1)
-            Text(MealFormat.value(value, for: nutrient))
-                .font(.edFootnote)
-                .foregroundStyle(verdict?.tint ?? Tokens.ink)
-                .monospacedDigit()
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, Space.sm)
-        .padding(.vertical, Space.sm)
-        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                .stroke(Tokens.border, lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText)
-    }
-
-    private var accessibilityText: String {
-        let reading = "\(nutrient.displayName), \(MealFormat.value(value, for: nutrient))"
-        guard let target, let verdict else { return reading }
-        return "\(reading) of \(MealFormat.value(target, for: nutrient)), \(verdict.label)"
-    }
-}
-
 /// The day's numbers, at the top of Today (#543).
 ///
 /// ### Bars, not a ring
@@ -138,13 +91,6 @@ struct MealDayCard: View {
     let summary: MealDaySummary
     let targets: MealTargets?
 
-    /// The four the day is steered by. Fibre joins the three macros because it
-    /// is a floor most days miss and nothing else on the card would show it.
-    private static let macros: [Nutrient] = [.protein, .carbs, .fat, .fibre]
-
-    /// The three ceilings, in the Watch row.
-    private static let watch: [Nutrient] = [.sugar, .sodium, .saturatedFat]
-
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             header
@@ -156,13 +102,44 @@ struct MealDayCard: View {
                 Rectangle()
                     .fill(Tokens.divider)
                     .frame(height: 0.5)
-                VStack(alignment: .leading, spacing: Space.md) {
-                    ForEach(Self.macros) { nutrient in
-                        MealNutrientBar(
-                            nutrient: nutrient,
-                            value: summary.totals[nutrient],
-                            target: target(for: nutrient)
-                        )
+                // Addition 3: the bar stack gets a label, because the Watch row
+                // below it has one and an unlabelled stack beside a labelled
+                // one reads as an oversight. To revert, drop the eyebrow line
+                // and the VStack around it.
+                VStack(alignment: .leading, spacing: Space.sm) {
+                    Text("Macros").eyebrow()
+                    // Fibre joins the three macros because it is a floor most
+                    // days miss and nothing else on the card shows it.
+                    //
+                    // The treatment forks on whether a target exists, because a
+                    // bar with no target has no track to draw: it degrades to a
+                    // bare label-and-value row, directly above a Watch row of
+                    // pills carrying exactly the same kind of fact. Two
+                    // treatments for one kind of data, and the bar's whole
+                    // justification (it carries proportion) is the part that
+                    // went missing. With no target the pill is the honest mark;
+                    // once a target exists the bar earns its place back.
+                    if targets == nil {
+                        HStack(spacing: Space.sm) {
+                            ForEach(Nutrient.macrosInOrder) { nutrient in
+                                MealStatPill(
+                                    nutrient: nutrient,
+                                    value: summary.totals[nutrient],
+                                    target: nil,
+                                    fillsWidth: true
+                                )
+                            }
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: Space.md) {
+                            ForEach(Nutrient.macrosInOrder) { nutrient in
+                                MealNutrientBar(
+                                    nutrient: nutrient,
+                                    value: summary.totals[nutrient],
+                                    target: target(for: nutrient)
+                                )
+                            }
+                        }
                     }
                 }
                 watchRow
@@ -213,13 +190,14 @@ struct MealDayCard: View {
                     .foregroundStyle(Tokens.ink)
                     .tracking(-0.6)
                     .monospacedDigit()
-                Text("kcal")
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.muted)
+                Text("kcal").eyebrow()
                 Spacer(minLength: Space.sm)
                 if let remainder = remainderText {
+                    // The number a next meal is chosen against. At edFootnote
+                    // beside a 28pt figure it was not one of the two numbers
+                    // this row exists to give.
                     Text(remainder)
-                        .font(.edFootnote)
+                        .font(.edBodyMedium)
                         .foregroundStyle(remainderTint)
                         .monospacedDigit()
                 }
@@ -271,11 +249,12 @@ struct MealDayCard: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text("Watch").eyebrow()
             HStack(spacing: Space.sm) {
-                ForEach(Self.watch) { nutrient in
-                    MealWatchChip(
+                ForEach(Nutrient.ceilingsInOrder) { nutrient in
+                    MealStatPill(
                         nutrient: nutrient,
                         value: summary.totals[nutrient],
-                        target: target(for: nutrient)
+                        target: target(for: nutrient),
+                        fillsWidth: true
                     )
                 }
             }
@@ -290,8 +269,10 @@ struct MealDayCard: View {
             Text("Not logged")
                 .font(.edHeading)
                 .foregroundStyle(Tokens.ink)
+            // In this state it is the card's entire content, so it is set at
+            // reading size rather than as a footnote under a heading.
             Text("No meals were recorded on this day. That is different from a day that came to very little.")
-                .font(.edFootnote)
+                .font(.edSubheadline)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -303,14 +284,14 @@ struct MealDayCard: View {
                 ? "One meal is held out of these totals until it is corrected."
                 : "\(summary.excluded.count) meals are held out of these totals until they are corrected."
         )
-        .font(.edCaption)
+        .font(.edFootnote)
         .foregroundStyle(Tokens.warning)
         .fixedSize(horizontal: false, vertical: true)
     }
 
     private var noTargetsNote: some View {
         Text("No targets set, so these are totals only. Set your targets to see how a day is tracking.")
-            .font(.edCaption)
+            .font(.edFootnote)
             .foregroundStyle(Tokens.muted)
             .fixedSize(horizontal: false, vertical: true)
     }

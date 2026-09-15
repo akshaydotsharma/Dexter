@@ -16,18 +16,21 @@ struct MealItemLine: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
             VStack(alignment: .leading, spacing: 1) {
+                // The name leads its line, so it sits a full rung above the
+                // portion under it. At 13 over 12 the two were one point apart
+                // and the whole block read as a single grey mass.
                 Text(item.name)
-                    .font(.edFootnote)
+                    .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(portionMissing ? "No portion assumed" : item.portionDescription)
-                    .font(.edCaption)
+                    .font(.edFootnote)
                     .foregroundStyle(portionMissing ? Tokens.danger : Tokens.muted)
                     .monospacedDigit()
             }
             Spacer(minLength: Space.sm)
             Text("\(MealFormat.calories(item.calories)) kcal")
-                .font(.edCaption)
+                .font(.edFootnoteStrong)
                 .foregroundStyle(Tokens.inkSoft)
                 .monospacedDigit()
         }
@@ -40,6 +43,12 @@ struct MealItemLine: View {
 /// Shows the per-item assumptions, the totals, a confidence badge, and — when a
 /// guard failed — the reason, stated plainly and before the Log button rather
 /// than after it.
+///
+/// ### Why the kcal figure is a rung below the day card's
+///
+/// The day card prints its total at `edDisplay`; this prints its proposal at
+/// `edTitle`. A proposal must never outrank the day it feeds, or the surface
+/// reads as though logging has already happened.
 struct MealEstimatePreview: View {
     let checked: CheckedMealEstimate
     let description: String
@@ -48,10 +57,6 @@ struct MealEstimatePreview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            Rectangle()
-                .fill(Tokens.divider)
-                .frame(height: 0.5)
-
             header
 
             if checked.needsDetail {
@@ -69,32 +74,35 @@ struct MealEstimatePreview: View {
                 repairBlock(repaired)
             }
 
-            if let note = checked.assumptionsNote {
-                Text(note)
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+            // Addition 2: the block is reserved on any estimate that produced
+            // items, so the preview does not change height between one estimate
+            // and the next. To revert, make this `if checked.assumptionsNote != nil`.
+            if !checked.needsDetail || checked.assumptionsNote != nil {
+                assumptionsBlock
             }
 
             if let reason = checked.suspectReason {
                 suspectBlock(reason)
             }
 
-            HStack(spacing: Space.sm) {
-                Button("Discard", action: onDiscard)
-                    .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
-                Spacer(minLength: Space.sm)
-                Button(checked.needsDetail ? "Log it anyway" : "Log meal", action: onConfirm)
-                    .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
-            }
+            actions
         }
+        // Addition 1: the preview is a proposal and gets a surface of its own,
+        // rather than sharing the composer's box with the input field behind a
+        // hairline rule. To revert, drop these three modifiers and put back the
+        // leading `Rectangle().fill(Tokens.divider).frame(height: 0.5)`.
+        .padding(Space.lg)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.lg)
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            // A category label, not a fact about the meal. As an eyebrow it
+            // demotes by kind instead of by size, which leaves the size budget
+            // to the numbers below it.
             Label(checked.mealType.displayName, systemImage: checked.mealType.sfSymbol)
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.accentMeals)
+                .eyebrow(Tokens.accentMeals)
             Spacer(minLength: Space.sm)
             MealFlagChip(
                 MealFormat.confidenceBand(checked.confidence),
@@ -103,36 +111,74 @@ struct MealEstimatePreview: View {
         }
     }
 
+    /// The headline figure and the four macros the day is steered by.
+    ///
+    /// The three ceilings stay out: this is a decision surface, and three
+    /// ceiling numbers with no target to read them against are noise. All eight
+    /// are in the detail sheet.
     private var totalsRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            Text("\(MealFormat.calories(checked.nutrients.calories)) kcal")
-                .font(.edBodyMedium)
-                .foregroundStyle(Tokens.ink)
-                .monospacedDigit()
-            Spacer(minLength: Space.sm)
-            Text(macroSummary)
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .monospacedDigit()
+        VStack(alignment: .leading, spacing: Space.sm) {
+            MealStatPill(
+                label: "kcal",
+                value: MealFormat.calories(checked.nutrients.calories),
+                variant: .accent,
+                accessibilityText: "\(MealFormat.calories(checked.nutrients.calories)) kilocalories"
+            )
+
+            // Flowed rather than stacked in an HStack: four pills plus their
+            // labels do not fit one line on a phone, and clipping a macro is
+            // worse than wrapping it.
+            ChipFlowLayout {
+                ForEach(Nutrient.macrosInOrder) { nutrient in
+                    MealStatPill(
+                        label: nutrient.displayName,
+                        value: MealFormat.value(checked.nutrients[nutrient], for: nutrient)
+                    )
+                }
+            }
         }
         .padding(.top, Space.xs)
-        .accessibilityElement(children: .combine)
     }
 
-    private var macroSummary: String {
-        let n = checked.nutrients
-        return "P \(MealFormat.grams(n.proteinG)) · C \(MealFormat.grams(n.carbsG)) · F \(MealFormat.grams(n.fatG))"
+    /// What the estimate had to guess at.
+    ///
+    /// The sentence is the one thing on this surface a user argues with, so it
+    /// is set at reading size and it is selectable: on macOS a `Text` cannot be
+    /// copied unless it says so, and this is a line people want to paste back
+    /// into the description to correct it.
+    private var assumptionsBlock: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text("Assumed").eyebrow()
+            Text(checked.assumptionsNote ?? " ")
+                .font(.edSubheadline)
+                .foregroundStyle(Tokens.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
     }
 
     private var needsDetailBlock: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Text("No food identified")
-                .font(.edFootnote)
+                .font(.edHeading)
                 .foregroundStyle(Tokens.warning)
             Text("Logging this keeps the description and the fact that you ate. Add detail later and re-estimate.")
-                .font(.edCaption)
+                .font(.edSubheadline)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Discard sits immediately left of the primary, not marooned at the far
+    /// edge in ghost styling. A destructive-ish action the user has to find is
+    /// not an action they will take, and the pair reads as one decision.
+    private var actions: some View {
+        HStack(spacing: Space.sm) {
+            Spacer(minLength: Space.sm)
+            Button("Discard", action: onDiscard)
+                .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+            Button(checked.needsDetail ? "Log it anyway" : "Log meal", action: onConfirm)
+                .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
         }
     }
 
@@ -144,9 +190,10 @@ struct MealEstimatePreview: View {
     /// was changed.
     private func repairBlock(_ note: String) -> some View {
         Label(note, systemImage: "slider.horizontal.3")
-            .font(.edCaption)
+            .font(.edFootnote)
             .foregroundStyle(Tokens.inkSoft)
             .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
     }
 
     /// Stated before the button, not after it. A warning a user meets only once
@@ -154,14 +201,17 @@ struct MealEstimatePreview: View {
     private func suspectBlock(_ reason: String) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Label("This estimate does not add up", systemImage: "exclamationmark.triangle")
-                .font(.edFootnote)
+                .font(.edHeading)
                 .foregroundStyle(Tokens.danger)
             Text(reason)
-                .font(.edCaption)
+                .font(.edSubheadline)
                 .foregroundStyle(Tokens.inkSoft)
                 .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            // Deliberately one rung under the reason: it says what happens
+            // next, which nobody has to act on.
             Text("It still saves, flagged, and stays out of the day's totals until you correct it.")
-                .font(.edCaption)
+                .font(.edFootnote)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }

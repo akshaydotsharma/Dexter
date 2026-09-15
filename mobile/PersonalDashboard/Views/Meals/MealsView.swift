@@ -176,8 +176,11 @@ struct MealsView: View {
             .accessibilityLabel("Previous day")
 
             VStack(spacing: 0) {
+                // Addition 4: the navigation anchor for the whole tab, so it
+                // sits above the meal row kcal figures it governs rather than
+                // level with them. To revert, put back `.edBodyMedium`.
                 Text(dayTitle)
-                    .font(.edBodyMedium)
+                    .font(.edHeading)
                     .foregroundStyle(Tokens.ink)
                 Text(Self.dayFormatter.string(from: selectedDay))
                     .font(.edCaption)

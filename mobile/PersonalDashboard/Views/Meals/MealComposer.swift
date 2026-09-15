@@ -48,6 +48,9 @@ struct MealComposer: View {
     /// description usually says, and a picker the user has to touch on every
     /// meal is friction on the one path that has to stay fast.
     @State private var typeOverride: MealType?
+    /// Whether the meal-type options are open. The list grows inside the
+    /// composer, so there is no panel lifetime to manage.
+    @State private var typeExpanded = false
     @State private var phase: MealComposerPhase = .idle
 
     /// Meals the pending estimate duplicates. Non-empty puts the choice in
@@ -77,8 +80,12 @@ struct MealComposer: View {
 
             field
 
-            HStack(spacing: Space.sm) {
-                typeMenu
+            // Top-aligned: the options grow downwards out of the dropdown, and
+            // the Estimate button must stay on the first line rather than drift
+            // to the middle of an expanded list.
+            HStack(alignment: .top, spacing: Space.sm) {
+                typeDropdown
+                    .frame(maxWidth: 240)
                 Spacer(minLength: Space.sm)
                 estimateButton
             }
@@ -138,34 +145,48 @@ struct MealComposer: View {
         .onSubmit { if canEstimate { estimate() } }
     }
 
-    private var typeMenu: some View {
-        Menu {
-            Button("Let Dexter decide") { typeOverride = nil }
-            Divider()
+    /// Meal type, or "let Dexter decide".
+    ///
+    /// Opens in place rather than in a `Menu` (#540). A system menu panel is
+    /// the one control the design system cannot reach: system font, system row
+    /// metrics, system checkmarks, and a different panel again on macOS. Here
+    /// the options are more rows of the same box, so the closed and the open
+    /// state are the same control.
+    private var typeDropdown: some View {
+        InlineDropdown(isExpanded: $typeExpanded) {
+            Image(systemName: typeOverride?.sfSymbol ?? "wand.and.stars")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(typeOverride == nil ? Tokens.muted : Tokens.accentMeals)
+                .frame(width: 24, alignment: .leading)
+            Text(typeOverride?.displayName ?? "Auto")
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .lineLimit(1)
+        } options: {
+            InlineDropdownRow(
+                glyph: .symbol("wand.and.stars"),
+                label: "Let Dexter decide",
+                isSelected: typeOverride == nil,
+                accent: Tokens.accentMeals
+            ) { selectType(nil) }
+
+            InlineDropdownDivider()
+
             ForEach(MealType.allCases) { type in
-                Button {
-                    typeOverride = type
-                } label: {
-                    Label(type.displayName, systemImage: type.sfSymbol)
-                }
+                InlineDropdownRow(
+                    glyph: .symbol(type.sfSymbol),
+                    label: type.displayName,
+                    isSelected: typeOverride == type,
+                    accent: Tokens.accentMeals
+                ) { selectType(type) }
             }
-        } label: {
-            HStack(spacing: Space.xs) {
-                Image(systemName: typeOverride?.sfSymbol ?? "wand.and.stars")
-                    .font(.system(size: 11, weight: .regular))
-                Text(typeOverride?.displayName ?? "Auto")
-                    .font(.edFootnote)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(Tokens.inkSoft)
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, 6)
-            .background(Tokens.surface2, in: Capsule())
-            .overlay(Capsule().stroke(Tokens.border, lineWidth: 0.5))
         }
-        .menuStyleCompat()
         .accessibilityLabel("Meal type, \(typeOverride?.displayName ?? "decided automatically")")
+    }
+
+    private func selectType(_ type: MealType?) {
+        typeOverride = type
+        withAnimation(.easeInOut(duration: 0.18)) { typeExpanded = false }
     }
 
     private var estimateButton: some View {
@@ -316,6 +337,7 @@ struct MealComposer: View {
     private func reset() {
         descriptionText = ""
         typeOverride = nil
+        typeExpanded = false
         phase = .idle
         duplicateMatches = []
     }
