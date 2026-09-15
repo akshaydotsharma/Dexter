@@ -740,11 +740,12 @@ struct FinanceView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Tokens.muted)
-            TextField("Search merchant or description", text: $searchText)
+            TextField(PlainFieldPlaceholder.title("Search merchant or description"), text: $searchText)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .autocorrectionDisabled(true)
+                .plainFieldPlaceholder("Search merchant or description", isVisible: searchText.isEmpty, padding: 0)
                 .noAutocapitalization()
             if !searchText.isEmpty {
                 Button {

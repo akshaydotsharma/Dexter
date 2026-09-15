@@ -2049,11 +2049,12 @@ struct ItineraryItemEditorSheet: View {
     private var titleField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Title").eyebrow()
-            TextField(placeholder(for: kind), text: $title)
+            TextField(PlainFieldPlaceholder.title(placeholder(for: kind)), text: $title)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder(placeholder(for: kind), isVisible: title.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
                 .submitLabel(.done)
@@ -2268,13 +2269,14 @@ struct ItineraryItemEditorSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
-            TextField("Street address or area", text: $address, axis: .vertical)
+            TextField(PlainFieldPlaceholder.title("Street address or area"), text: $address, axis: .vertical)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1...3)
                 .submitLabel(.done)
                 .padding(Space.md)
+                .plainFieldPlaceholder("Street address or area", isVisible: address.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
                 .onChange(of: address) { _, newValue in
@@ -2300,7 +2302,7 @@ struct ItineraryItemEditorSheet: View {
                     .foregroundStyle(Tokens.mutedSoft)
             }
             HStack(spacing: Space.sm) {
-                TextField("Paste a Google Maps link", text: $googleMapsLink)
+                TextField(PlainFieldPlaceholder.title("Paste a Google Maps link"), text: $googleMapsLink)
                     .paperFieldOnMac()
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
@@ -2309,6 +2311,7 @@ struct ItineraryItemEditorSheet: View {
                     .urlKeyboard()
                     .submitLabel(.done)
                     .padding(Space.md)
+                    .plainFieldPlaceholder("Paste a Google Maps link", isVisible: googleMapsLink.isEmpty, padding: Space.md)
                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                     .paperBorder(Tokens.border, radius: Radius.md)
                     .accessibilityLabel("Google Maps link")

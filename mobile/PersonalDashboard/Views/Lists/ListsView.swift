@@ -1151,13 +1151,14 @@ private struct ItemDetailsSheet: View {
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             Text("Item").eyebrow()
                             if nameEditable {
-                                TextField("Type item name…", text: $nameText)
+                                TextField(PlainFieldPlaceholder.title("Type item name…"), text: $nameText)
                                     .paperFieldOnMac()
                                     .focused($nameFocused)
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
                                     .padding(Space.md)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                    .plainFieldPlaceholder("Type item name…", isVisible: nameText.isEmpty, padding: Space.md)
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                     .paperBorder(Tokens.border, radius: Radius.md)
                             } else {
@@ -1173,7 +1174,7 @@ private struct ItemDetailsSheet: View {
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             Text("Link (URL)").eyebrow()
                             HStack(spacing: Space.sm) {
-                                TextField("Paste a link", text: $urlText)
+                                TextField(PlainFieldPlaceholder.title("Paste a link"), text: $urlText)
                                     .paperFieldOnMac()
                                     .noAutocapitalization()
                                     .autocorrectionDisabled(true)
@@ -1181,6 +1182,7 @@ private struct ItemDetailsSheet: View {
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
                                     .padding(Space.md)
+                                    .plainFieldPlaceholder("Paste a link", isVisible: urlText.isEmpty, padding: Space.md)
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                     .paperBorder(Tokens.border, radius: Radius.md)
                                 if let url = editorURL {
@@ -1288,11 +1290,12 @@ private struct NewListSheet: View {
                         )
                         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                             Text("Title").eyebrow()
-                            TextField("List title", text: $title)
+                            TextField(PlainFieldPlaceholder.title("List title"), text: $title)
                                 .paperFieldOnMac()
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
                                 .padding(Space.md)
+                                .plainFieldPlaceholder("List title", isVisible: title.isEmpty, padding: Space.md)
                                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                 .paperBorder(Tokens.border, radius: Radius.md)
                         }
@@ -1353,11 +1356,12 @@ private struct ListPropertiesSheet: View {
                             ListIconChip(icon: selectedIcon, color: accent, size: 48)
                             VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
                                 Text("Name").eyebrow()
-                                TextField("List name", text: $name)
+                                TextField(PlainFieldPlaceholder.title("List name"), text: $name)
                                     .paperFieldOnMac()
                                     .font(.edBody)
                                     .foregroundStyle(Tokens.ink)
                                     .padding(Space.md)
+                                    .plainFieldPlaceholder("List name", isVisible: name.isEmpty, padding: Space.md)
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                                     .paperBorder(Tokens.border, radius: Radius.md)
                             }

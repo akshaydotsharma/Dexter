@@ -104,8 +104,9 @@ struct EmailInboxView: View {
                         .foregroundStyle(Tokens.success)
                 }
             }
-            SecureField(hasStoredPassword ? "Enter to replace" : "16-char app password", text: $appPassword)
+            SecureField(PlainFieldPlaceholder.title(hasStoredPassword ? "Enter to replace" : "16-char app password"), text: $appPassword)
                 .paperFieldOnMac()
+                .plainFieldPlaceholder(hasStoredPassword ? "Enter to replace" : "16-char app password", isVisible: appPassword.isEmpty, padding: 0)
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .textInputAutocapitalization(.never)
@@ -205,13 +206,14 @@ struct EmailInboxView: View {
             Text(label)
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.muted)
-            TextField(placeholder, text: text)
+            TextField(PlainFieldPlaceholder.title(placeholder), text: text)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .keyboardType(keyboard)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .plainFieldPlaceholder(placeholder, isVisible: text.wrappedValue.isEmpty, padding: 0)
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)

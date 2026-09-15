@@ -1917,21 +1917,23 @@ struct TaskEditorSheet: View {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     // Title + Notes — first grouped card, no icons (Reminders).
                     macGroup {
-                        TextField("Title", text: $title, axis: .vertical)
+                        TextField(PlainFieldPlaceholder.title("Title"), text: $title, axis: .vertical)
                             .paperFieldOnMac()
                             .lineLimit(1...3)
                             .font(.edBodyMedium)
                             .foregroundStyle(Tokens.ink)
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.sm)
+                            .plainFieldPlaceholder("Title", isVisible: title.isEmpty, padding: Space.md)
                         macRowDivider
-                        TextField("Notes", text: $descriptionText, axis: .vertical)
+                        TextField(PlainFieldPlaceholder.title("Notes"), text: $descriptionText, axis: .vertical)
                             .paperFieldOnMac()
                             .lineLimit(2...6)
                             .font(.edBody)
                             .foregroundStyle(Tokens.inkSoft)
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.sm)
+                            .plainFieldPlaceholder("Notes", isVisible: descriptionText.isEmpty, padding: Space.md)
                     }
 
                     // Tickets sits high on the Mac deliberately. This editor is a
@@ -2037,11 +2039,12 @@ struct TaskEditorSheet: View {
                                 }
                                 Spacer()
                             }
-                            TextField("Street address or area", text: $address, axis: .vertical)
+                            TextField(PlainFieldPlaceholder.title("Street address or area"), text: $address, axis: .vertical)
                                 .paperFieldOnMac()
                                 .lineLimit(1...3)
                                 .font(.edSubheadline)
                                 .foregroundStyle(Tokens.inkSoft)
+                                .plainFieldPlaceholder("Street address or area", isVisible: address.isEmpty, padding: 0)
                         }
                         .padding(.horizontal, Space.md)
                         .padding(.vertical, Space.sm)
@@ -2050,11 +2053,12 @@ struct TaskEditorSheet: View {
 
                         HStack(spacing: Space.sm) {
                             macIconTile("map.fill", Tokens.accentTasks)
-                            TextField("Google Maps link", text: $googleMapsLink)
+                            TextField(PlainFieldPlaceholder.title("Google Maps link"), text: $googleMapsLink)
                                 .paperFieldOnMac()
                                 .autocorrectionDisabled(true)
                                 .font(.edSubheadline)
                                 .foregroundStyle(Tokens.inkSoft)
+                                .plainFieldPlaceholder("Google Maps link", isVisible: googleMapsLink.isEmpty, padding: 0)
                                 .onChange(of: googleMapsLink) { _, newValue in
                                     scheduleAddressResolve(from: newValue)
                                 }

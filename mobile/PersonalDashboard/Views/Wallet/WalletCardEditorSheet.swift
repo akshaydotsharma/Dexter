@@ -222,11 +222,12 @@ struct WalletCardEditorSheet: View {
     private var titleField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Title").eyebrow()
-            TextField(placeholder(for: kind), text: $title)
+            TextField(PlainFieldPlaceholder.title(placeholder(for: kind)), text: $title)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder(placeholder(for: kind), isVisible: title.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
                 .submitLabel(.done)
@@ -336,12 +337,13 @@ struct WalletCardEditorSheet: View {
     private var notesField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Notes").eyebrow()
-            TextField("Anything else worth remembering", text: $notes, axis: .vertical)
+            TextField(PlainFieldPlaceholder.title("Anything else worth remembering"), text: $notes, axis: .vertical)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(3...6)
                 .padding(Space.md)
+                .plainFieldPlaceholder("Anything else worth remembering", isVisible: notes.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
                 .accessibilityLabel("Notes")
@@ -412,11 +414,12 @@ struct WalletCardEditorSheet: View {
     private func plainField(label: String, placeholder: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text(label).eyebrow()
-            TextField(placeholder, text: text)
+            TextField(PlainFieldPlaceholder.title(placeholder), text: text)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder(placeholder, isVisible: text.wrappedValue.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
                 .accessibilityLabel(label)

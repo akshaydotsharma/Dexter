@@ -89,7 +89,7 @@ struct RecurringExpenseEditorSheet: View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Monthly amount").eyebrow()
             HStack(spacing: Space.sm) {
-                TextField("0.00", text: $amountText)
+                TextField(PlainFieldPlaceholder.title("0.00"), text: $amountText)
                     .paperFieldOnMac()
                     .decimalKeyboard()
                     .font(.edDisplay)
@@ -97,6 +97,7 @@ struct RecurringExpenseEditorSheet: View {
                     .focused($amountFocused)
                     .padding(.vertical, Space.sm)
                     .padding(.horizontal, Space.md)
+                    .plainFieldPlaceholder("0.00", isVisible: amountText.isEmpty, padding: Space.md)
                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                     .paperBorder(Tokens.border, radius: Radius.md)
 
@@ -271,11 +272,12 @@ struct RecurringExpenseEditorSheet: View {
                         .foregroundStyle(Tokens.mutedSoft)
                 }
             }
-            TextField(placeholder, text: text)
+            TextField(PlainFieldPlaceholder.title(placeholder), text: text)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .padding(Space.md)
+                .plainFieldPlaceholder(placeholder, isVisible: text.wrappedValue.isEmpty, padding: Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
                 .paperBorder(Tokens.border, radius: Radius.md)
         }

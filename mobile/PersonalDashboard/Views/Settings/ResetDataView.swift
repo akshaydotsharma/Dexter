@@ -236,13 +236,14 @@ struct ResetDataView: View {
                         .font(.edBody)
                         .foregroundStyle(Tokens.inkSoft)
 
-                    TextField("reset", text: $confirmText)
+                    TextField(PlainFieldPlaceholder.title("reset"), text: $confirmText)
                         .paperFieldOnMac()
                         .noAutocapitalization()
                         .autocorrectionDisabled()
                         .font(.edBody)
                         .foregroundStyle(Tokens.ink)
                         .padding(Space.md)
+                        .plainFieldPlaceholder("reset", isVisible: confirmText.isEmpty, padding: Space.md)
                         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                         .paperBorder(Tokens.border, radius: Radius.md)
                 }

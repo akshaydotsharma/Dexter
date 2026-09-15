@@ -94,12 +94,13 @@ struct ParsedFilesView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Tokens.muted)
-            TextField("Search file, subject, or sender", text: $searchText)
+            TextField(PlainFieldPlaceholder.title("Search file, subject, or sender"), text: $searchText)
                 .paperFieldOnMac()
                 .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .autocorrectionDisabled(true)
                 .noAutocapitalization()
+                .plainFieldPlaceholder("Search file, subject, or sender", isVisible: searchText.isEmpty, padding: 0)
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
