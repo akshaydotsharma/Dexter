@@ -181,6 +181,14 @@ enum MealEstimationError: LocalizedError {
     case transport(Error)
     case http(Int, String)
     case noJSON
+    /// The generation hit `max_tokens`, so the JSON was cut off mid-object and
+    /// no closing fence ever arrived. Distinct from `noJSON`, which means the
+    /// model answered fully and answered wrongly. Conflating them tells the
+    /// user the reply was malformed when it was merely unfinished, and makes
+    /// the "Try again" button look like superstition when it is the correct
+    /// move. `AnthropicClient+ExtractStatement` has drawn this distinction
+    /// since #189; this path did not inherit it.
+    case truncated
     case parse(Error)
 
     var errorDescription: String? {
@@ -195,6 +203,8 @@ enum MealEstimationError: LocalizedError {
             return "Anthropic API HTTP \(status). \(preview)"
         case .noJSON:
             return "Couldn't find a JSON block in Claude's response."
+        case .truncated:
+            return "The estimate was cut off before it finished. Try again, or shorten the description."
         case .parse(let err):
             return "Couldn't parse Claude's response. \(err.localizedDescription)"
         }
@@ -238,12 +248,20 @@ extension AnthropicClient {
         // `AnthropicRequest` carries the tool-use shape this call does not want.
         //
         // A meal can decompose into a lot of dishes and each one states eleven
-        // fields, so the shared 1024-token ceiling is too tight here. 2048 is
-        // roughly twelve dishes with an assumptions note, which is more than any
-        // single description has produced.
+        // fields, so the shared 1024-token ceiling is too tight here.
+        //
+        // 2048 was too tight as well, and the reason is worth stating: this
+        // model returns a `thinking` block, and thinking spends the SAME
+        // max_tokens budget the answer needs. Measured against the live API, a
+        // five-dish Indian dinner ("2 parathas, 250 g chicken gravy, a cup of
+        // arhar dal, cucumber salad") needs about 2555 output tokens all in. At
+        // 2048 the thinking consumed the budget and the JSON was cut off
+        // mid-object, which surfaced to the user as "couldn't find a JSON
+        // block" — a true statement about a response that had simply been
+        // truncated. 8192 leaves room for the reasoning and a dozen dishes.
         let body: AnthropicJSONValue = .object([
             "model": .string(Self.model),
-            "max_tokens": .int(2048),
+            "max_tokens": .int(8192),
             "messages": .array([
                 .object([
                     "role": .string("user"),
@@ -304,6 +322,10 @@ extension AnthropicClient {
 
         guard let jsonString = Self.firstJSONBlock(in: combinedText),
               let jsonData = jsonString.data(using: .utf8) else {
+            // Order matters: a truncated reply has no closing fence, so it
+            // fails the same parse a malformed one does. Ask WHY the fence is
+            // missing before reporting it missing.
+            if decoded.stop_reason == "max_tokens" { throw MealEstimationError.truncated }
             throw MealEstimationError.noJSON
         }
         do {

@@ -48,9 +48,13 @@ struct MealComposer: View {
     /// description usually says, and a picker the user has to touch on every
     /// meal is friction on the one path that has to stay fast.
     @State private var typeOverride: MealType?
-    /// Whether the meal-type options are open. The list grows inside the
-    /// composer, so there is no panel lifetime to manage.
-    @State private var typeExpanded = false
+    /// Whether the meal-type options are open. They float in a popover over
+    /// the composer rather than growing inside it, so opening the picker never
+    /// moves the description field or the Estimate button.
+    @State private var typePickerOpen = false
+    #if os(macOS)
+    @State private var triggerHovering = false
+    #endif
     @State private var phase: MealComposerPhase = .idle
 
     /// Meals the pending estimate duplicates. Non-empty puts the choice in
@@ -80,10 +84,9 @@ struct MealComposer: View {
 
             field
 
-            // Top-aligned: the options grow downwards out of the dropdown, and
-            // the Estimate button must stay on the first line rather than drift
-            // to the middle of an expanded list.
-            HStack(alignment: .top, spacing: Space.sm) {
+            // Centred: the options open in a popover now, so this row never
+            // changes height and the two controls can sit as a matched pair.
+            HStack(alignment: .center, spacing: Space.sm) {
                 typeDropdown
                     .frame(maxWidth: 240)
                 Spacer(minLength: Space.sm)
@@ -147,22 +150,87 @@ struct MealComposer: View {
 
     /// Meal type, or "let Dexter decide".
     ///
-    /// Opens in place rather than in a `Menu` (#540). A system menu panel is
-    /// the one control the design system cannot reach: system font, system row
-    /// metrics, system checkmarks, and a different panel again on macOS. Here
-    /// the options are more rows of the same box, so the closed and the open
-    /// state are the same control.
+    /// Not a `Menu` (#540). A system menu panel is the one control the design
+    /// system cannot reach: system font, system row metrics, system checkmarks,
+    /// and a different panel again on macOS. The rows here are the same
+    /// `InlineDropdownRow`s Finance uses, so the open state is still drawn out
+    /// of the design system.
+    ///
+    /// It no longer opens *inside* the form either. Growing the list in place
+    /// pushed the description field, the Estimate button and everything below
+    /// them down the screen every time the picker opened, for a choice most
+    /// meals never make. A popover floats the rows over the surface and leaves
+    /// the composer exactly where it was.
     private var typeDropdown: some View {
-        InlineDropdown(isExpanded: $typeExpanded) {
-            Image(systemName: typeOverride?.sfSymbol ?? "wand.and.stars")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(typeOverride == nil ? Tokens.muted : Tokens.accentMeals)
-                .frame(width: 24, alignment: .leading)
-            Text(typeOverride?.displayName ?? "Auto")
-                .font(.edBody)
-                .foregroundStyle(Tokens.ink)
-                .lineLimit(1)
-        } options: {
+        Button {
+            typePickerOpen.toggle()
+        } label: {
+            HStack(spacing: Space.sm) {
+                Image(systemName: typeOverride?.sfSymbol ?? "wand.and.stars")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(typeOverride == nil ? Tokens.muted : Tokens.accentMeals)
+                    .frame(width: 24, alignment: .leading)
+                Text(typeOverride?.displayName ?? "Auto")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                Spacer(minLength: Space.sm)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Tokens.muted)
+                    .rotationEffect(.degrees(typePickerOpen ? 180 : 0))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // The metrics `EdButtonStyle` applies at `size: .sm`, which is what
+            // the Estimate button beside this one uses: 12 horizontal, 6
+            // vertical (Design/Buttons.swift, `hpad` / `vpad`). `InlineDropdown`
+            // pads `Space.md` (12) all round, which made this trigger read half
+            // again as tall as the button it sits next to.
+            .padding(.horizontal, Space.md)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(triggerBackground, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(triggerBorder, radius: Radius.md)
+        #if os(macOS)
+        // Stripping the system chrome takes the button's own highlight with it,
+        // and without a hover response a bordered surface reads as a static
+        // caption rather than something you can open. The same rule
+        // `InlineDropdown` follows, so this picker and the Finance one behave
+        // alike under the pointer.
+        .onHover { triggerHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: triggerHovering)
+        #endif
+        .popover(isPresented: $typePickerOpen, arrowEdge: .bottom) {
+            typeOptions
+        }
+        .accessibilityLabel("Meal type, \(typeOverride?.displayName ?? "decided automatically")")
+    }
+
+    private var triggerBackground: Color {
+        #if os(macOS)
+        return triggerHovering && !typePickerOpen ? Tokens.surface2 : Tokens.surface
+        #else
+        return Tokens.surface
+        #endif
+    }
+
+    private var triggerBorder: Color {
+        #if os(macOS)
+        return triggerHovering || typePickerOpen ? Tokens.borderStrong : Tokens.border
+        #else
+        return typePickerOpen ? Tokens.borderStrong : Tokens.border
+        #endif
+    }
+
+    /// The five options, floated over the composer.
+    ///
+    /// Fixed to the trigger's own 240pt so the panel and the control it came
+    /// from are one width, and the labels keep the 24pt glyph slot they line up
+    /// against in the closed state.
+    private var typeOptions: some View {
+        VStack(spacing: 0) {
             InlineDropdownRow(
                 glyph: .symbol("wand.and.stars"),
                 label: "Let Dexter decide",
@@ -181,12 +249,22 @@ struct MealComposer: View {
                 ) { selectType(type) }
             }
         }
-        .accessibilityLabel("Meal type, \(typeOverride?.displayName ?? "decided automatically")")
+        .padding(.vertical, Space.xs)
+        .frame(width: 240)
+        .background(Tokens.surface)
+        // The panel's chrome belongs to the system; this puts it back on the
+        // design system's surface colour in both themes.
+        .presentationBackground(Tokens.surface)
+        // Without this an iPhone adapts a popover into a full-screen sheet,
+        // which is a far bigger interruption than the inline list this
+        // replaces. Available from iOS 16.4 / macOS 13.3, both below the 17.0 /
+        // 14.0 deployment targets in project.yml, so no availability guard.
+        .presentationCompactAdaptation(.popover)
     }
 
     private func selectType(_ type: MealType?) {
         typeOverride = type
-        withAnimation(.easeInOut(duration: 0.18)) { typeExpanded = false }
+        typePickerOpen = false
     }
 
     private var estimateButton: some View {
@@ -337,7 +415,7 @@ struct MealComposer: View {
     private func reset() {
         descriptionText = ""
         typeOverride = nil
-        typeExpanded = false
+        typePickerOpen = false
         phase = .idle
         duplicateMatches = []
     }
