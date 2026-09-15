@@ -259,6 +259,15 @@ extension AnthropicClient {
         // mid-object, which surfaced to the user as "couldn't find a JSON
         // block" — a true statement about a response that had simply been
         // truncated. 8192 leaves room for the reasoning and a dozen dishes.
+        //
+        // NOT prompt-cached (#580). This call sends no `system` field and no
+        // tools, so there is no shared prefix in front of it: the whole prompt
+        // is one user block whose SECOND paragraph is the meal description. A
+        // breakpoint would have to sit after that description, which differs
+        // every meal, so it would write an entry nothing ever reads. Making it
+        // cacheable means moving the description to the end of the prompt,
+        // which changes what the model reads first and cannot be validated
+        // without live calls. Left alone deliberately, not overlooked.
         let body: AnthropicJSONValue = .object([
             "model": .string(Self.model),
             "max_tokens": .int(8192),

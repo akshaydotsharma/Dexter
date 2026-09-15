@@ -152,6 +152,13 @@ extension AnthropicClient {
         // and eight nutrient splits before it writes anything, so its thinking
         // is LONGER than a meal estimate's, not shorter. Sizing this cap by
         // guesswork is the one mistake this call already knows how to make.
+        //
+        // NOT prompt-cached (#580), for the same reason as the meal estimator
+        // and one of its own: no system field, no tools, and the prompt is
+        // built entirely from the user's own targets and history, so almost
+        // nothing in it repeats between two calls. It also runs rarely — a
+        // target derivation is not a loop — so there is no second request
+        // inside any TTL to read an entry back.
         let body: AnthropicJSONValue = .object([
             "model": .string(Self.model),
             "max_tokens": .int(8192),

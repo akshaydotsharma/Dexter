@@ -158,6 +158,10 @@ extension AnthropicClient {
         // (#554). It runs on the same model, so it pays the same thinking cost,
         // which is the whole reason the shared number moved off 1024. Not
         // measured in its own right; the shared figure bounds it from above.
+        //
+        // NOT prompt-cached (#580). No system field and no tools, and the one
+        // user message is the receipt image or PDF itself. Two receipts share
+        // no bytes at all, so there is no prefix to cache.
         let body: AnthropicJSONValue = .object([
             "model": .string(Self.model),
             "max_tokens": .int(Self.maxTokens),

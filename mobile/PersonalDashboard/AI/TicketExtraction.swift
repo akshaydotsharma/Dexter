@@ -671,8 +671,13 @@ struct TicketExtraction {
         // asks for — 1024 could not have held a two-leg read with its thinking
         // block, and the failure would have looked like a bad extraction rather
         // than a short one.
+        // Cached prefix = the `extract_ticket` tool plus this whole system
+        // prompt, neither of which varies (#580). Five minutes, not an hour:
+        // a lone import would pay a 2x write for a prefix nothing reads back,
+        // and imports that DO repeat come in bursts — a Wallet batch, a re-read
+        // right after a bad read — which the default TTL already covers.
         let response = try await anthropic.send(
-            systemPrompt: Self.systemPrompt,
+            systemPrompt: AnthropicSystemPrompt(stable: Self.systemPrompt, ttl: .fiveMinutes),
             messages: messages,
             tools: [Self.extractTicketTool]
         )

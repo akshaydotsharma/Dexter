@@ -402,6 +402,12 @@ extension AnthropicClient {
         // Hand-rolled body (same rationale as `runExtraction`): heterogeneous
         // content blocks + a per-call max_tokens override the shared
         // `AnthropicRequest` wire type doesn't expose.
+        //
+        // NOT prompt-cached (#580). Same shape as `runExtraction`: no system
+        // field, no tools, and every chunk carries a different page of the
+        // statement. A multi-chunk import does repeat this call, but the bytes
+        // it repeats are the instructions inside each chunk's own content
+        // block, which is not a prefix the two chunks share.
         let body: AnthropicJSONValue = .object([
             "model": .string(Self.model),
             "max_tokens": .int(Self.statementMaxTokens),

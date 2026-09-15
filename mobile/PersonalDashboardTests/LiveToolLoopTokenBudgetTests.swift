@@ -53,6 +53,13 @@ import SwiftData
 /// `AnthropicClient.maxTokens` was set to 8192 from this. The chat rows are
 /// missing because the API account ran out of credit part-way through the run;
 /// re-run `testChatStreamOutputTokenDistribution` when there is credit.
+/// Thrown by `recordSpend` once a run crosses its ceiling. Named, so the
+/// failure says which budget stopped it rather than reading as a flake.
+struct MeasurementBudgetExceeded: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+}
+
 @MainActor
 final class LiveToolLoopTokenBudgetTests: XCTestCase {
 
@@ -62,7 +69,86 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
 
     /// Runs per scenario. One run measures nothing: #543's four runs spanned
     /// 1991 to 3361 tokens on one identical input.
+    ///
+    /// Five, not ten. The 2026-09-15 table below was sampled at ten, and the
+    /// ranges in it are already wide and clearly separated at half that count.
+    /// A cap decision does not need the extra five runs, and the extra five
+    /// runs are what turned one measurement session into an empty balance.
     private static let runsPerScenario = 5
+
+    // MARK: - Spend guard (#580)
+
+    /// What one full run of this class may cost before it stops itself.
+    ///
+    /// This exists because the first measurement run drained the account:
+    /// roughly 110 calls at 25k to 26k input tokens each, about 2.2M input
+    /// tokens, and nothing in the harness was counting. A test that spends real
+    /// money needs a ceiling for the same reason a tool loop needs a max
+    /// iteration count.
+    ///
+    /// Two ceilings, because after #580 one number no longer says what a run
+    /// costs. Prompt caching bills a cache READ at about a tenth of the input
+    /// rate, so the same token count can cost four times more or less depending
+    /// on whether the prefix hit. The dollar budget is the real guard; the token
+    /// budget is a backstop against a loop that never terminates.
+    private static let costBudgetUSD = 1.50
+    private static let tokenBudget = 3_000_000
+
+    /// `claude-sonnet-5`, US dollars per million tokens. A cache write is 1.25x
+    /// the input rate at the five-minute TTL and 2x at one hour; this uses 2x
+    /// for every write, so the estimate never reads low.
+    private static let inputRate = 2.00
+    private static let outputRate = 10.00
+
+    private static let spendLock = NSLock()
+    nonisolated(unsafe) private static var spentTokens = 0
+    nonisolated(unsafe) private static var spentUSD = 0.0
+
+    /// Adds one response to the running total and throws once either ceiling is
+    /// crossed. Throwing fails the test with the message, which is the abort:
+    /// the scenario loop stops and no further call is made.
+    private static func recordSpend(_ usage: AnthropicUsage?, label: String) throws {
+        guard let usage else { return }
+        let fresh = usage.input_tokens ?? 0
+        let written = usage.cache_creation_input_tokens ?? 0
+        let read = usage.cache_read_input_tokens ?? 0
+        let out = usage.output_tokens ?? 0
+
+        let dollars = (Double(fresh) * inputRate
+                       + Double(written) * inputRate * 2.0
+                       + Double(read) * inputRate * 0.1
+                       + Double(out) * outputRate) / 1_000_000.0
+
+        spendLock.lock()
+        spentTokens += fresh + written + read + out
+        spentUSD += dollars
+        let tokens = spentTokens
+        let usd = spentUSD
+        spendLock.unlock()
+
+        print(String(
+            format: "SPEND %@: +$%.4f  run total $%.4f / $%.2f, %d / %d tokens",
+            label, dollars, usd, costBudgetUSD, tokens, tokenBudget
+        ))
+
+        if usd > costBudgetUSD {
+            throw MeasurementBudgetExceeded(
+                message: String(
+                    format: "measurement stopped at %@: the run has spent about $%.2f, "
+                        + "over its $%.2f budget (LiveToolLoopTokenBudgetTests.costBudgetUSD). "
+                        + "Raise the budget deliberately or cut runsPerScenario.",
+                    label, usd, costBudgetUSD
+                )
+            )
+        }
+        if tokens > tokenBudget {
+            throw MeasurementBudgetExceeded(
+                message: "measurement stopped at \(label): the run has used \(tokens) tokens, "
+                    + "over its \(tokenBudget) budget "
+                    + "(LiveToolLoopTokenBudgetTests.tokenBudget)."
+            )
+        }
+    }
 
     private var store: SwiftDataStore!
 
@@ -122,6 +208,7 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
                     tools: ToolDefinitions.allTools,
                     maxTokens: Self.measurementCeiling
                 )
+                try Self.recordSpend(response.usage, label: "\(scenario.name) run \(run)")
                 let tokens = response.usage?.output_tokens ?? -1
                 let tools = response.content.filter {
                     if case .toolUse = $0 { return true }
@@ -153,6 +240,7 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
                     tools: ToolDefinitions.allTools,
                     maxTokens: Self.measurementCeiling
                 )
+                try Self.recordSpend(second.usage, label: "\(scenario.name)/turn-2 run \(run)")
                 let secondTokens = second.usage?.output_tokens ?? -1
                 table["\(scenario.name)/turn-2", default: []].append(secondTokens)
                 print("MEASURE \(scenario.name)/turn-2 run \(run): output_tokens=\(secondTokens) "
@@ -184,9 +272,10 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
                 ) {
                     switch event {
                     case .toolUse: toolCalls += 1
-                    case .done(let reason, let output):
+                    case .done(let reason, let output, let usage):
                         stop = reason
                         tokens = output ?? -1
+                        try Self.recordSpend(usage, label: "\(scenario.name) run \(run)")
                     default: break
                     }
                 }
@@ -206,6 +295,74 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
         Self.report(table, label: "CHAT")
     }
 
+    // MARK: - Prompt cache (#580)
+
+    /// The acceptance criterion for #580, and the only one a stub cannot stand
+    /// in for.
+    ///
+    /// Every shape test in `PromptCacheShapeTests` proves the request LOOKS
+    /// right. None of them can prove the cache HIT, because a miss is silent:
+    /// the API answers normally and simply bills the full prefix again. Only
+    /// `usage.cache_read_input_tokens` says which happened.
+    ///
+    /// Two calls, identical prefix. The first writes the entry and must report
+    /// a non-zero `cache_creation_input_tokens`; the second must report a
+    /// non-zero `cache_read_input_tokens`. The tool loop is never fewer than
+    /// two calls, so this is the shape of every real capture.
+    ///
+    /// PENDING CREDIT as of 2026-09-15: written, never run. The account balance
+    /// was zero while #580 was built, so no live call was made. Run this first
+    /// once there is credit.
+    func testCaptureLoopSecondCallReadsTheCache() async throws {
+        try skipUnlessLive()
+        let systemPrompt = await captureSystemPrompt()
+        let client = AnthropicClient()
+        let messages = [AnthropicMessage(
+            role: "user",
+            content: [.text("remind me to call the dentist tomorrow at 3")]
+        )]
+
+        let first = try await client.send(
+            systemPrompt: systemPrompt,
+            messages: messages,
+            tools: ToolDefinitions.allTools
+        )
+        try Self.recordSpend(first.usage, label: "cache/first")
+        print("CACHE first: \(first.usage?.logLine ?? "no usage")")
+
+        XCTAssertGreaterThan(
+            first.usage?.cache_creation_input_tokens ?? 0, 0,
+            "the first call must WRITE the cache; zero here means the prefix never "
+            + "reached the model's minimum cacheable length, or the marker was dropped"
+        )
+
+        // Same system prompt object, so the same bytes. A real loop's second
+        // call also appends the tool_result turn, which sits after the
+        // breakpoint and changes nothing about the cached prefix.
+        var second = messages
+        second.append(.assistantReplay(first.content))
+        second.append(AnthropicMessage(role: "user", content: first.content.compactMap { block in
+            guard case let .toolUse(id, _, _) = block else { return nil }
+            return .toolResult(toolUseId: id, content: "OK", isError: false)
+        }))
+        let follow = second.count > 1 ? second : messages
+
+        let read = try await client.send(
+            systemPrompt: systemPrompt,
+            messages: follow,
+            tools: ToolDefinitions.allTools
+        )
+        try Self.recordSpend(read.usage, label: "cache/second")
+        print("CACHE second: \(read.usage?.logLine ?? "no usage")")
+
+        XCTAssertGreaterThan(
+            read.usage?.cache_read_input_tokens ?? 0, 0,
+            "the second call must READ the cache. Zero means something in the prefix "
+            + "changed between the two requests — diff the two encoded bodies and look "
+            + "for the first difference before the breakpoint."
+        )
+    }
+
     // MARK: - Helpers
 
     private func skipUnlessLive() throws {
@@ -214,7 +371,7 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
         try XCTSkipIf((env["ANTHROPIC_API_KEY"] ?? "").isEmpty, "no API key in the environment")
     }
 
-    private func captureSystemPrompt() async -> String {
+    private func captureSystemPrompt() async -> AnthropicSystemPrompt {
         ChatToDrafts.systemPrompt(
             timezone: "Asia/Singapore",
             nowIso: ISO8601DateFormatter().string(from: Date()),
@@ -222,7 +379,7 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
         )
     }
 
-    private func chatSystemPrompt() async -> String {
+    private func chatSystemPrompt() async -> AnthropicSystemPrompt {
         ChatStream.systemPrompt(
             timezone: "Asia/Singapore",
             nowIso: ISO8601DateFormatter().string(from: Date()),

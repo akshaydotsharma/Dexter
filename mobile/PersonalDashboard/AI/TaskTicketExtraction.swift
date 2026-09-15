@@ -1143,8 +1143,13 @@ struct TaskTicketExtraction {
         // Shared ceiling, raised from 1024 to a measured 8192 by #554. Same
         // reasoning as its sibling in `TicketExtraction`: one tool call carrying
         // every field of every pass printed in the document.
+        // Same shape as its sibling in `TicketExtraction`: the tool and this
+        // system prompt are the cached prefix, on the five-minute TTL because
+        // the repeats here are bursts of imports, not a session (#580). The
+        // page images stay after the breakpoint and are never cached, which is
+        // correct — no two documents share them.
         let response = try await anthropic.send(
-            systemPrompt: Self.systemPrompt,
+            systemPrompt: AnthropicSystemPrompt(stable: Self.systemPrompt, ttl: .fiveMinutes),
             messages: messages,
             tools: [Self.extractTaskTicketTool]
         )
