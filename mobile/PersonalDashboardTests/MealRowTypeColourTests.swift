@@ -256,19 +256,22 @@ final class MealRowTypeColourTests: XCTestCase {
         XCTAssertLessThan(image.size.height, 400)
     }
 
-    /// The whole eyebrow fits beside a description on one line at phone width,
-    /// for the longest of the four words. "BREAKFAST" tracked and uppercased is
-    /// the worst case, and if it ever stopped fitting the row would lose its
-    /// first line to a single word.
-    func testTheLongestMealTypeWordFitsTheColumn() throws {
+    /// Each of the four words fits the column whole on the line it now has to
+    /// itself (#574).
+    ///
+    /// It used to share that line with the description and the assertion was
+    /// that it left room for one. It does not share any more, so what matters
+    /// is only that the word never has to wrap or truncate: a kicker reading
+    /// "BREAKFAS" would be worse than no kicker.
+    func testEveryMealTypeWordFitsItsOwnLine() throws {
         let column: CGFloat = 390 - (Space.lg * 2) - 22 - Space.md
         for type in MealType.allCases {
             let width = try XCTUnwrap(
                 ImageRenderer(content: Text(type.displayName).eyebrow(type.tint)).uiImage?.size.width
             )
             XCTAssertLessThan(
-                width, column / 2,
-                "\(type.displayName) takes \(width) pt of a \(column) pt line and leaves no room for the description"
+                width, column,
+                "\(type.displayName) takes \(width) pt of a \(column) pt line and would wrap"
             )
         }
     }
