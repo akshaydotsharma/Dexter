@@ -56,6 +56,28 @@ struct MealFlagChip: View {
 /// `init(nutrient:value:target:)` carrying a real target. Tinting would also
 /// put verdict hue on ten rows at once, which is the reading the day card
 /// exists to give, and one this list cannot support.
+///
+/// ### The meal type, and why it wears no box (#570)
+///
+/// The type now leads line 1 with the description, in its own colour, and the
+/// gutter icon carries the same colour on any row that is not flagged. What it
+/// deliberately does NOT have is a container.
+///
+/// `MealStatPill`'s note records that Meals draws two pill species and that
+/// SHAPE is what tells them apart: a `Capsule` carries a word about the RECORD
+/// — "Needs detail", "Check this", "Possible duplicate", the confidence band —
+/// and a rounded rectangle carries a QUANTITY. A meal type is neither. It is
+/// not a judgement about the record and it is not a number, so putting it in
+/// either shape would make it read as a third instance of a meaning it does
+/// not have. On a suspect row, where a red "Check this" capsule sits two
+/// millimetres below it, a tinted capsule saying "DINNER" would be read as one
+/// more flag before it was read as an identity.
+///
+/// So the mark is bare type: the same uppercase tracked eyebrow the row
+/// already used, in the type's colour instead of grey. No fill, no stroke, no
+/// corner radius. It cannot be confused with a chip because it is not a chip,
+/// and the distinction survives on the warning ground where the risk is
+/// highest.
 struct MealRow: View {
     let meal: LocalMeal
 
@@ -74,6 +96,16 @@ struct MealRow: View {
 
     private var needsAttention: Bool {
         meal.isSuspect || meal.needsDetail || isDuplicate
+    }
+
+    /// What the left-gutter icon is drawn in.
+    ///
+    /// A flag outranks an identity, so a row that needs attention keeps the
+    /// warning tint it has always had and the meal type is left to the word on
+    /// line 1. Lifted out of the body so the precedence is assertable rather
+    /// than only visible.
+    var gutterTint: Color {
+        needsAttention ? Tokens.warning : meal.mealTypeEnum.tint
     }
 
     /// One accessibility element, with the numbers behind the More Content
@@ -105,9 +137,14 @@ struct MealRow: View {
     private var rowButton: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: Space.md) {
+                // The second carrier of the meal-type colour, and the only
+                // one that survives the description being read rather than
+                // scanned. A flag OUTRANKS an identity: on a row that needs
+                // attention the icon goes to `warning` as it always has, and
+                // the word on line 1 is left holding the type on its own.
                 Image(systemName: meal.mealTypeEnum.sfSymbol)
                     .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(needsAttention ? Tokens.warning : Tokens.accentMeals)
+                    .foregroundStyle(gutterTint)
                     .frame(width: 22, height: 22)
 
                 // Everything but the icon hangs off one gutter, so the rungs
@@ -117,23 +154,34 @@ struct MealRow: View {
                     // Rung 1: what the meal is, and what it cost.
                     HStack(alignment: .top, spacing: Space.md) {
                         VStack(alignment: .leading, spacing: Space.xs) {
-                            Text(meal.mealDescription)
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.ink)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            HStack(spacing: Space.sm) {
-                                Text(Self.timeFormatter.string(from: meal.loggedAt))
-                                    .font(.edCaption)
-                                    .foregroundStyle(Tokens.muted)
-                                    .monospacedDigit()
-                                // An eyebrow rather than a second caption: at
-                                // the same size and colour as the time beside
-                                // it, line 2 had no structure and read as one
-                                // grey string.
-                                Text(meal.mealTypeEnum.displayName).eyebrow()
+                            // The type leads the description, on the line the
+                            // eye lands on first (#570). It used to sit on
+                            // line 2 beside the time, in the same grey at the
+                            // same size, which made "which meal was this"
+                            // something a reader had to go and look for.
+                            //
+                            // Baselines aligned, not tops: an 11 pt tracked
+                            // eyebrow and a 15 pt body share a line only if
+                            // they share a baseline. `fixedSize` keeps the
+                            // word whole — a truncated "LUNC…" would be worse
+                            // than no word — so a long description wraps under
+                            // itself and the type keeps the left edge of the
+                            // first line to itself.
+                            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                                Text(meal.mealTypeEnum.displayName)
+                                    .eyebrow(meal.mealTypeEnum.tint)
+                                    .fixedSize()
+                                Text(meal.mealDescription)
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.ink)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
+
+                            Text(Self.timeFormatter.string(from: meal.loggedAt))
+                                .font(.edCaption)
+                                .foregroundStyle(Tokens.muted)
+                                .monospacedDigit()
                         }
 
                         Spacer(minLength: Space.sm)
@@ -372,44 +420,113 @@ struct WrappingChipRow: View {
 
 /// The flow itself. Measures each child at its natural size, wraps when the next
 /// one would cross the right edge.
+///
+/// ### Why one solver and not two loops (#571)
+///
+/// The two passes used to carry their own copy of the arithmetic, and they
+/// wrapped against two different widths: `sizeThatFits` against
+/// `proposal.width`, `placeSubviews` against `bounds.width`. On a suspect meal
+/// row those were measured at 292 pt and placed into 232 pt, so the layout
+/// reported the height of two lines and then laid out three. The row reserved
+/// 46 pt for a 71 pt block and the nutrient pills under it were drawn straight
+/// over the third chip.
+///
+/// So the arithmetic is now stated exactly once, in `solve`, and both passes
+/// call it. Two loops that must agree are two loops that will not.
+///
+/// ### And why the reported width is the width it wrapped against
+///
+/// Stating one solver is necessary but not sufficient: both passes still have
+/// to feed it the same width. `placeSubviews` can only honestly use
+/// `bounds.width`, which is the space it was actually handed, so the fix is to
+/// make `bounds.width` equal the width `sizeThatFits` measured at.
+///
+/// That is what reporting `proposal.width` does. The old code reported
+/// `min(widest, maxWidth)` — the width its longest LINE happened to reach —
+/// which told the parent the flow was narrower than the space it had been
+/// offered. The parent believed it, gave the enclosing column less, and then
+/// placed into that smaller box without measuring again. A flow that claims
+/// the full width it wrapped against is given the full width it wrapped
+/// against, and the disagreement has nowhere left to live. The chips are still
+/// placed from the leading edge, so nothing moves on a row that already fitted.
+///
+/// An unspecified proposal is the one case with no width to claim. It reports
+/// the longest line, as it always did.
 struct ChipFlowLayout: Layout {
     var spacing: CGFloat = Space.xs
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
+    /// Where every child goes, and the box they need.
+    struct Solution: Equatable {
+        /// One offset per child, in order, from the top-leading corner.
+        var offsets: [CGPoint]
+        /// The box the offsets need. The width is the width the flow WRAPPED
+        /// against, not the width its longest line reaches — see the note on
+        /// the type.
+        var size: CGSize
+
+        /// The height the offsets actually occupy, worked out from the
+        /// placements rather than from the measuring loop.
+        ///
+        /// This is the assertion `size.height` exists to match, and the whole
+        /// bug was the two drifting apart. Kept on the solution so a test can
+        /// state the invariant in the same terms the layout does.
+        func placedHeight(of sizes: [CGSize]) -> CGFloat {
+            zip(offsets, sizes).reduce(0) { max($0, $1.0.y + $1.1.height) }
+        }
+    }
+
+    /// The one piece of arithmetic in this type.
+    ///
+    /// A child wider than the whole line is placed anyway rather than dropped,
+    /// and takes a line of its own. Clipping one chip is better than losing it,
+    /// and the case only arises at widths no phone gives this row.
+    static func solve(_ sizes: [CGSize], width: CGFloat, spacing: CGFloat) -> Solution {
+        guard !sizes.isEmpty else { return Solution(offsets: [], size: .zero) }
+
+        var offsets: [CGPoint] = []
+        offsets.reserveCapacity(sizes.count)
         var x: CGFloat = 0
         var y: CGFloat = 0
         var rowHeight: CGFloat = 0
         var widest: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0 && x + size.width > maxWidth {
+
+        for size in sizes {
+            if x > 0 && x + size.width > width {
                 widest = max(widest, x - spacing)
                 x = 0
                 y += rowHeight + spacing
                 rowHeight = 0
             }
+            offsets.append(CGPoint(x: x, y: y))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }
         widest = max(widest, x - spacing)
-        return CGSize(width: min(widest, maxWidth), height: y + rowHeight)
+
+        return Solution(
+            offsets: offsets,
+            size: CGSize(width: width.isFinite ? width : widest, height: y + rowHeight)
+        )
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        Self.solve(
+            subviews.map { $0.sizeThatFits(.unspecified) },
+            width: proposal.width ?? .infinity,
+            spacing: spacing
+        ).size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX && x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let solution = Self.solve(sizes, width: bounds.width, spacing: spacing)
+        for (index, subview) in subviews.enumerated() {
+            let offset = solution.offsets[index]
+            subview.place(
+                at: CGPoint(x: bounds.minX + offset.x, y: bounds.minY + offset.y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(sizes[index])
+            )
         }
     }
 }
