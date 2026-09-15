@@ -1,17 +1,26 @@
 import SwiftUI
 import SwiftData
 
-/// The five tabs inside Meals (#543, widened in #559).
+/// The four tabs inside Meals (#543, widened in #559, corrected in #565).
 ///
-/// Today held five jobs at once before #559: the composer, the day total, the
-/// meal log, a day stepper and the targets card, with targets appearing in two
-/// different places depending on whether they had been set. Logging a meal and
-/// browsing the past are two different visits to this section, and neither had a
-/// surface of its own. History and Targets are those two surfaces.
+/// ### Why there is no Trends tab
+///
+/// #559 read "historic charts" as "historic chats" and built the wrong shape: a
+/// History tab that browsed days, beside a Trends tab reserving the charts. They
+/// were always the same slot. History is where the historic charts live, so it
+/// takes that name and #545 now builds into it. Trends is gone rather than
+/// renamed, because there was never a second thing for it to hold.
+///
+/// ### Why Today browses days again
+///
+/// Splitting "log today" and "read an older day" across two tabs sounded right
+/// and was not. They are one question — how is this day going — asked of
+/// different days, and one surface answers it. Today holds the day, whichever
+/// day that is, and reaches the others through a calendar. Targets is the only
+/// genuine second surface #559 found.
 enum MealsTab: String, CaseIterable, Identifiable {
     case today
     case history
-    case trends
     case plan
     case targets
 
@@ -21,14 +30,13 @@ enum MealsTab: String, CaseIterable, Identifiable {
         switch self {
         case .today:   return "Today"
         case .history: return "History"
-        case .trends:  return "Trends"
         case .plan:    return "Plan"
         case .targets: return "Targets"
         }
     }
 }
 
-/// Meal logging v1 (#543), restructured into five tabs (#559).
+/// Meal logging v1 (#543), restructured in #559 and corrected in #565.
 ///
 /// ### What this surface is
 ///
@@ -39,27 +47,28 @@ enum MealsTab: String, CaseIterable, Identifiable {
 /// estimates, so calories round to the nearest 10 and every meal carries a
 /// confidence.
 ///
-/// ### The five tabs
+/// ### The four tabs
 ///
-/// Today is strictly today: the composer, the day card and today's meals.
-/// History is the day browser — a month grid you pick a day out of, with that
-/// day's breakdown under it. Targets holds the setup offer or the eight derived
-/// numbers. Trends is #545 and Plan has no feature behind it at all; both render
-/// a panel saying so. Plan is a TAB rather than a section because that reserves
-/// the slot without adding a permanently empty row to a twelve-section sidebar.
+/// Today is the day: a date control, the composer, the day card and that day's
+/// meals. It opens on today and the date control reaches any earlier day.
+/// History is the historic charts and is #545. Targets holds the setup offer or
+/// the eight derived numbers. Plan has no feature behind it at all. History and
+/// Plan both render a panel saying so; Plan is a TAB rather than a section
+/// because that reserves the slot without adding a permanently empty row to a
+/// twelve-section sidebar.
 ///
-/// ### Why the composer is only on Today
+/// ### Why the composer is only on today
 ///
 /// Estimating a meal onto a day that has ended is a legitimate thing to want,
 /// but the primary path has to stay one field and one button, and a composer
-/// that silently logs to March is worse than one that is not there. So History
-/// browses and does not write.
+/// that silently logs to March is worse than one that is not there. So the tab
+/// reads any day and writes only to today.
 ///
 /// ### Targets
 ///
 /// `MealTargets` is read when a record exists and ignored when it does not. A
 /// day is never blocked on setup: with no targets the day card shows totals and
-/// no bars, on Today and in History alike.
+/// no bars, whichever day is selected.
 struct MealsView: View {
     @Bindable var router: AppRouter
 
@@ -83,15 +92,19 @@ struct MealsView: View {
 
     @State private var tab: MealsTab = .today
 
-    /// The day History is showing, device-local midnight. Only History reads it;
-    /// Today is always `todayDay`. It never moves past today, because a meal you
-    /// have not eaten is not a log entry.
+    /// The day Today is showing, device-local midnight. Starts on today and
+    /// never moves past it, because a meal you have not eaten is not a log entry.
     @State private var selectedDay: Date = Calendar.current.startOfDay(for: Date())
 
-    /// The month the History grid is on, device-local midnight of its first day.
-    /// Held separately from `selectedDay` so stepping through months does not
-    /// change which day the breakdown is reading.
+    /// The month the popover grid is on, device-local midnight of its first day.
+    /// Held separately from `selectedDay` so paging through months does not
+    /// change which day the tab is reading; the date control re-points it at the
+    /// selected day each time the popover opens, so it never reopens somewhere
+    /// the user did not leave it.
     @State private var visibleMonth: Date = MealCalendar.monthStart(of: Date())
+
+    /// The month grid, anchored to the date control.
+    @State private var showingCalendar = false
 
     @State private var openMeal: LocalMeal?
 
@@ -125,8 +138,7 @@ struct MealsView: View {
 
                 switch tab {
                 case .today:   todayTab
-                case .history: historyTab
-                case .trends:  scrolling { MealsTrendsPlaceholder() }
+                case .history: scrolling { MealsHistoryPlaceholder() }
                 case .plan:    scrolling { MealsPlanPlaceholder() }
                 case .targets: targetsTab
                 }
@@ -140,6 +152,10 @@ struct MealsView: View {
         // showing Meals when the focus is written.
         .onAppear { consumeFocus() }
         .onChange(of: router.focus) { _, _ in consumeFocus() }
+        // Picking a day is the popover's whole purpose, so it closes on the pick
+        // rather than waiting to be dismissed. Also fires for the "Today" button
+        // and the deep link, where closing an already-closed popover is a no-op.
+        .onChange(of: selectedDay) { _, _ in showingCalendar = false }
         .sheet(item: $openMeal) { meal in
             MealDetailSheet(meal: meal)
                 #if os(iOS)
@@ -160,8 +176,9 @@ struct MealsView: View {
 
     /// The app's own strip, not `.pickerStyle(.segmented)`. The native control
     /// draws its own greys and its own font, none of which come from `Tokens`,
-    /// and it truncates rather than shrinks, so five segments at phone width
-    /// become five abbreviations. See `EdTabStrip`.
+    /// and it truncates rather than shrinks, which is what turned five segments
+    /// at phone width into five abbreviations. Four is easier than the five this
+    /// was built for, so nothing about it changes here. See `EdTabStrip`.
     private var tabBar: some View {
         EdTabStrip(
             tabs: MealsTab.allCases,
@@ -174,7 +191,7 @@ struct MealsView: View {
         .padding(.bottom, Space.sm)
     }
 
-    /// Trends, Plan and Targets. The bottom inset clears the floating tab bar,
+    /// History, Plan and Targets. The bottom inset clears the floating tab bar,
     /// which is 74 pt tall and was covering the foot of the Targets card.
     @ViewBuilder
     private func scrolling<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
@@ -188,50 +205,29 @@ struct MealsView: View {
 
     // MARK: - Today
 
-    /// Strictly today. No stepper, and no targets card in either state: the
-    /// setup offer and the eight numbers both live on the Targets tab now, so
-    /// this tab has one job and keeps it.
+    /// One day in full, and by default that day is today.
+    ///
+    /// The tab opens on today and every block below the date control follows
+    /// whichever day is selected: the composer's presence, the day card, the meal
+    /// list and each row's breakdown. Nothing here knows about a second tab,
+    /// because there is not one any more.
     private var todayTab: some View {
         dayScroll {
             VStack(alignment: .leading, spacing: Space.lg) {
-                MealComposer(
-                    day: todayDay,
-                    existingOnDay: todaySummary.all,
-                    onLogged: { _ in }
-                )
+                dateControl
 
-                MealDayBreakdown(
-                    summary: todaySummary,
-                    targets: MealTargets.inForce(on: todayDay, among: allTargets),
-                    isToday: true,
-                    pulsedMealID: pulsedMealID,
-                    onOpenMeal: { openMeal = $0 }
-                )
-            }
-        }
-    }
-
-    // MARK: - History
-
-    /// The day browser. The grid picks a day; the breakdown under it is the SAME
-    /// component Today renders, so a day cannot read one way here and another way
-    /// there.
-    ///
-    /// Stacked rather than side by side on macOS. The breakdown is a tall column
-    /// of bars and meal rows and the grid is a fixed-width block, so a two-pane
-    /// layout would put a short calendar beside a long scroll and leave most of
-    /// the left half empty.
-    private var historyTab: some View {
-        dayScroll {
-            VStack(alignment: .leading, spacing: Space.lg) {
-                MealCalendarCard(
-                    month: $visibleMonth,
-                    selectedDay: $selectedDay,
-                    readings: MealCalendar.readings(in: allMeals),
-                    today: Date()
-                )
-
-                selectedDayTitle
+                // The composer only appears on today. Estimating a meal onto a
+                // day that has ended is a legitimate thing to want, but the
+                // primary path has to stay one field and one button, and a
+                // composer that silently logs to March is worse than one that is
+                // not there.
+                if isSelectedToday {
+                    MealComposer(
+                        day: selectedDay,
+                        existingOnDay: selectedSummary.all,
+                        onLogged: { _ in }
+                    )
+                }
 
                 MealDayBreakdown(
                     summary: selectedSummary,
@@ -244,21 +240,83 @@ struct MealsView: View {
         }
     }
 
-    /// Names the day the breakdown below is about. The grid highlights the
-    /// square, but the square is a numeral in a block of numerals, and the card
-    /// under it carries no date of its own.
-    private var selectedDayTitle: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(dayTitle)
-                .font(.edHeading)
-                .foregroundStyle(Tokens.ink)
-            Text(Self.dayFormatter.string(from: selectedDay))
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
+    /// Names the day the tab is showing, and opens the month grid.
+    ///
+    /// A control rather than a heading, because it is the only way to any day
+    /// but today, and a label you cannot press would leave the user stranded on
+    /// a day in March. It carries a "Today" affordance of its own for the same
+    /// reason: returning is one tap, not a hunt through the grid.
+    ///
+    /// ### Why it wears the secondary button's shell
+    ///
+    /// It was bare text with a small glyph, and it did not read as tappable. The
+    /// "Today" button sitting beside it was a bordered pill, so the more
+    /// discoverable of the two was the one that did less — and the user has
+    /// already given this note once on this surface, about a discard button that
+    /// was "not very evident its a clickable button". Shipping a second quiet
+    /// affordance next to the first would be the same note twice.
+    ///
+    /// So it takes `EdButtonStyle(kind: .secondary, size: .sm)`, LITERALLY the
+    /// style its neighbour uses, rather than a hand-rolled lookalike. That makes
+    /// the two peers by construction: the same surface, the same border, the same
+    /// radius and the same press feedback, differing only in what they contain.
+    /// The children set their own fonts and inks, which override the style's.
+    ///
+    /// The glyph is the part that says what happens on tap, so it gains weight
+    /// rather than losing it beside a louder frame.
+    private var dateControl: some View {
+        // Centred, not baseline-aligned. While the date was bare text, matching
+        // its first baseline to the button's label was the right call. Now that
+        // both are pills, a shared baseline leaves the two frames visibly offset,
+        // and what the eye lines up is the boxes.
+        HStack(alignment: .center, spacing: Space.sm) {
+            Button {
+                visibleMonth = MealCalendar.monthStart(of: selectedDay)
+                showingCalendar = true
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(dayTitle)
+                            .font(.edHeading)
+                            .foregroundStyle(Tokens.ink)
+                        Text(Self.dayFormatter.string(from: selectedDay))
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                    }
+                    Image(systemName: "calendar")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Tokens.inkSoft)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+            .accessibilityLabel("\(dayTitle), \(Self.dayFormatter.string(from: selectedDay)). Choose a day")
+            // No `arrowEdge`. The control sits at the top of the tab, and forcing
+            // the popover above it clipped the month off the top of the window;
+            // the system places it below when that is where the room is. Same
+            // call as the Tasks calendar, which opens from the same kind of spot.
+            .popover(isPresented: $showingCalendar) {
+                MealCalendarPopover(
+                    month: $visibleMonth,
+                    selectedDay: $selectedDay,
+                    readings: MealCalendar.readings(in: allMeals),
+                    today: Date()
+                )
+            }
+
+            Spacer(minLength: Space.sm)
+
+            // Only worth screen space when it would do something.
+            if !isSelectedToday {
+                Button("Today") {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        selectedDay = todayDay
+                    }
+                }
+                .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+                .accessibilityLabel("Back to today")
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
     }
 
     // MARK: - Targets
@@ -316,15 +374,13 @@ struct MealsView: View {
 
     // MARK: - Deep link
 
-    /// Land a deep-link on its meal: put the right tab in front of it, point that
-    /// tab at the right day, and pulse the row.
+    /// Land a deep-link on its meal: point Today at the meal's day and pulse the
+    /// row.
     ///
-    /// The tab is chosen by the meal's own day, which is what #559 changed. Today
-    /// is now today only, so a link to a meal logged three weeks ago has no
-    /// landing place there; it goes to History, which selects the day and steps
-    /// the grid to the month holding it. A link to a meal logged today still
-    /// lands on Today, because that is the tab the user was looking at when they
-    /// logged it.
+    /// One path for every meal, which is what #565 restored. #559 had to choose
+    /// a tab, because Today could only show today and anything older belonged to
+    /// a second tab. Today reaches any day again, so there is no choice left to
+    /// make and no branch that can send a link to the wrong surface.
     ///
     /// Goes through the SAME `ActivityFocus` mechanism every other section uses,
     /// rather than a second navigation path. The id travels as a `UUID` there and
@@ -338,12 +394,10 @@ struct MealsView: View {
             $0.clientUUID.caseInsensitiveCompare(focus.id.uuidString) == .orderedSame
         }) else { return }
 
-        let landing = MealsView.tab(forMealOn: meal.deviceDay)
-        tab = landing
-        if landing == .history {
-            selectedDay = Calendar.current.startOfDay(for: meal.deviceDay)
-            visibleMonth = MealCalendar.monthStart(of: meal.deviceDay)
-        }
+        let landing = MealsView.landing(forMealOn: meal.deviceDay)
+        tab = landing.tab
+        selectedDay = landing.day
+        visibleMonth = landing.month
         pulsedMealID = meal.clientUUID
 
         let id = meal.clientUUID
@@ -353,10 +407,21 @@ struct MealsView: View {
         }
     }
 
-    /// Which tab shows the meal logged on `day`. Pulled out of `consumeFocus` so
-    /// the routing rule can be pinned by a test without a view hierarchy.
-    static func tab(forMealOn day: Date, today: Date = Date(), calendar: Calendar = .current) -> MealsTab {
-        calendar.isDate(day, inSameDayAs: today) ? .today : .history
+    /// Where a deep-link to a meal logged on `day` puts the section.
+    ///
+    /// Pulled out of `consumeFocus` so the rule can be pinned by a test without a
+    /// view hierarchy. `tab` is unconditional now, and is returned rather than
+    /// assumed so that a future tab which could also hold a meal has one place to
+    /// change.
+    static func landing(
+        forMealOn day: Date,
+        calendar: Calendar = .current
+    ) -> (tab: MealsTab, day: Date, month: Date) {
+        (
+            tab: .today,
+            day: calendar.startOfDay(for: day),
+            month: MealCalendar.monthStart(of: day, calendar: calendar)
+        )
     }
 
     // MARK: - Derived
@@ -371,10 +436,6 @@ struct MealsView: View {
     /// total one day exactly once (#547). The day match itself lives in
     /// `MealDaySummary.onDay`, where a stored UTC anchor is compared as a day and
     /// never as an instant (#506).
-    private var todaySummary: MealDaySummary {
-        MealDaySummary.onDay(todayDay, in: allMeals)
-    }
-
     private var selectedSummary: MealDaySummary {
         MealDaySummary.onDay(selectedDay, in: allMeals)
     }
