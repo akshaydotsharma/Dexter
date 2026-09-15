@@ -90,6 +90,44 @@ struct MealEstimationService {
         }
     }
 
+    /// The instant to stamp on a meal logged onto a day that has already ended
+    /// (#592).
+    ///
+    /// The clock cannot answer this one. A dinner logged three days late is
+    /// still a dinner, and the hour on the row is the only thing the log has to
+    /// say when it was eaten, so the meal type answers instead of "now". Every
+    /// retrospective meal used to be stamped at midday, which printed "12:00" on
+    /// a dinner and put four meals of one day on the same minute.
+    ///
+    /// The hours sit inside the band `inferredType(at:)` reads for that type, so
+    /// the two functions are inverses: a retrospective stamp fed back through the
+    /// inference returns the type it was derived from. That is not decoration. A
+    /// row can be re-estimated later with no type hint, and a stamp that inferred
+    /// back to a different meal would reclassify it silently.
+    ///
+    /// Dinner is the one stamp that is not on the hour. The evening band is the
+    /// widest of the four, so 19:30 costs nothing there, and a log whose every
+    /// retrospective row lands on an exact hour reads as a form a machine filled
+    /// in.
+    static func retrospectiveInstant(
+        for type: MealType,
+        on day: Date,
+        calendar: Calendar = .current
+    ) -> Date {
+        let hour: Int
+        let minute: Int
+        switch type {
+        case .breakfast: hour = 8;  minute = 0
+        case .lunch:     hour = 13; minute = 0
+        case .dinner:    hour = 19; minute = 30
+        case .snack:     hour = 16; minute = 0
+        }
+        // Anchored on the day's own start, so a `day` that arrives as any
+        // instant inside the day lands on the same stamp as its midnight.
+        let start = calendar.startOfDay(for: day)
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: start) ?? start
+    }
+
     // MARK: - Writes
 
     /// Write a checked estimate as a meal.

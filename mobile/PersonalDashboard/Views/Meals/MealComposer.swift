@@ -34,6 +34,20 @@ enum MealDuplicateChoice: String, Identifiable {
 /// only part of it a user can argue with. Writing straight to the log would mean
 /// the first time anyone saw "assumed 10 g of butter" was after the day's totals
 /// had already moved.
+///
+/// ### Why it names the day it writes to
+///
+/// The composer used to be on today alone, because one field and one button that
+/// silently log to March is worse than no composer at all. #592 put it on every
+/// day the calendar can reach, and the day label is what pays for that: on an
+/// earlier day the eyebrow states the date before the estimate runs, and the
+/// preview states it again beside the Log button. Both statements are load
+/// bearing. Take them away and the today-only rule has to come back.
+///
+/// There is no day control here, and there must not be one. The calendar in the
+/// section chrome is the single place a day is chosen, so a second control would
+/// give the surface two answers to one question and no way to tell which one the
+/// meal was written against.
 struct MealComposer: View {
     /// The calendar day the meal will be logged against. Device-local.
     let day: Date
@@ -78,9 +92,33 @@ struct MealComposer: View {
         !trimmed.isEmpty && phase != .estimating
     }
 
+    /// Derived from `day` rather than passed in, so the composer cannot disagree
+    /// with itself about which day it is writing to.
+    private var isToday: Bool {
+        Calendar.current.isDateInToday(day)
+    }
+
+    /// The day in words, for the two places that state it (#592).
+    ///
+    /// Weekday and date together, not one or the other. The weekday is how
+    /// anyone remembers a meal three days back, and the date is the only half
+    /// that stays true a month later. The section chrome states the same day as
+    /// "14 Sep", so the date here has to match it exactly or the two controls
+    /// read as two different days.
+    private var dayPhrase: String {
+        Self.dayPhraseFormatter.string(from: day)
+    }
+
+    /// The field's eyebrow. Today keeps the original four words: the primary
+    /// path is the one that must not grow, and on today there is no other day
+    /// for the meal to land on.
+    private var prompt: String {
+        isToday ? "What did you eat?" : "What did you eat on \(dayPhrase)?"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            Text("What did you eat?").eyebrow()
+            Text(prompt).eyebrow()
 
             field
 
@@ -102,6 +140,7 @@ struct MealComposer: View {
                 MealEstimatePreview(
                     checked: checked,
                     description: trimmed,
+                    dayNote: isToday ? nil : "This logs onto \(dayPhrase), not today.",
                     onDiscard: { reset() },
                     onConfirm: { confirm(checked) }
                 )
@@ -157,7 +196,7 @@ struct MealComposer: View {
             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .stroke(Tokens.border, lineWidth: 0.5)
         )
-        .accessibilityLabel("Describe the meal")
+        .accessibilityLabel(isToday ? "Describe the meal" : "Describe the meal eaten on \(dayPhrase)")
         .onSubmit { if canEstimate { estimate() } }
     }
 
@@ -329,7 +368,7 @@ struct MealComposer: View {
         guard canEstimate else { return }
         let description = trimmed
         let hint = typeOverride
-        let at = loggedAt()
+        let at = estimateReferenceInstant()
         fieldFocused = false
         phase = .estimating
         Task {
@@ -357,7 +396,7 @@ struct MealComposer: View {
             dayAnchor: WallClock.dayAnchor(from: day),
             mealType: checked.mealType,
             mealDescription: trimmed,
-            loggedAt: loggedAt()
+            loggedAt: loggedAt(for: checked.mealType)
         )
         let existing = existingOnDay.map(MealDuplicateCandidate.init)
         let matchedIDs = Set(
@@ -398,7 +437,7 @@ struct MealComposer: View {
                 checked,
                 description: trimmed,
                 day: day,
-                loggedAt: loggedAt()
+                loggedAt: loggedAt(for: checked.mealType)
             )
             onLogged(meal)
             reset()
@@ -413,7 +452,7 @@ struct MealComposer: View {
     /// is worse than losing the number.
     private func logWithoutNumbers() {
         let fallback = CheckedMealEstimate(
-            mealType: typeOverride ?? MealEstimationService.inferredType(at: loggedAt()),
+            mealType: typeOverride ?? MealEstimationService.inferredType(at: estimateReferenceInstant()),
             items: [],
             nutrients: .zero,
             confidence: 0,
@@ -433,17 +472,43 @@ struct MealComposer: View {
         duplicateMatches = []
     }
 
-    /// The instant to stamp on the meal.
+    /// The instant to stamp on the meal, and the ONLY place the composer decides
+    /// it (#592).
     ///
-    /// Today logs at the real clock. A past day logs at midday on that day,
-    /// because "now" on a day that has ended is not a time anyone ate, and the
-    /// two-hour duplicate window needs an instant that sits inside the day it
-    /// belongs to.
-    private func loggedAt() -> Date {
+    /// Today logs at the real clock. An earlier day logs at the hour that type
+    /// of meal is eaten, because "now" on a day that has ended is not a time
+    /// anyone ate, and the midday stamp this replaces printed "12:00" on a
+    /// dinner logged three days late.
+    ///
+    /// The type is only known once the estimate comes back, which is why this
+    /// takes it as a parameter and why nothing calls it before then.
+    /// `confirm(_:)` measures the two-hour duplicate window from this same call,
+    /// so the instant the check reads and the instant written onto the row are
+    /// derived the same way and cannot drift apart.
+    private func loggedAt(for type: MealType) -> Date {
+        if isToday { return Date() }
+        return MealEstimationService.retrospectiveInstant(for: type, on: day)
+    }
+
+    /// The instant the estimate call infers a meal type from when the user
+    /// picked none.
+    ///
+    /// NOT the instant that gets written. Nothing knows the meal type yet at
+    /// that point, so an earlier day has nothing better to offer than its own
+    /// middle; `loggedAt(for:)` then stamps the row from the type that came
+    /// back.
+    private func estimateReferenceInstant() -> Date {
         let calendar = Calendar.current
-        if calendar.isDateInToday(day) { return Date() }
+        if isToday { return Date() }
         return calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
     }
+
+    /// Weekday and short date, matching the `d MMM` the section chrome uses.
+    private static let dayPhraseFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, d MMM"
+        return f
+    }()
 
     private var duplicateTitle: String {
         duplicateMatches.count == 1
