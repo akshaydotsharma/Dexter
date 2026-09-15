@@ -246,6 +246,65 @@ enum Tokens {
     static let dangerSoft   = Color.paper(0xFEE2E2, 0x450A0A)
     static let info         = Color.paper(0x0E7490, 0x22D3EE)
 
+    // MARK: Meal type identity (#570)
+
+    /// The four meal types, as four colours a day can be scanned by (#570).
+    ///
+    /// ### Why none of them is amber, green, red or cyan
+    ///
+    /// Meals has exactly one rule about hue, and it is a strong one: a hue
+    /// means a VERDICT about a quantity. `MealVerdict.tint` is `warning` amber
+    /// for under, `success` green for on track, `danger` red for over. The
+    /// "Possible duplicate" chip owns `info` cyan. `accentMeals` azure is the
+    /// deep-link pulse and nothing else.
+    ///
+    /// A meal type is not a verdict. Breakfast is not better than dinner, and a
+    /// snack painted green would tell a reader the row was on track when the
+    /// row says nothing of the kind. So the identity palette is taken from the
+    /// one arc the verdict family never enters: indigo through violet to
+    /// orchid, with a cool slate for the snack.
+    ///
+    /// ### The hues, and the gaps between them
+    ///
+    /// Breakfast 236 degrees, Lunch 270, Dinner 304. Two gaps of 34 degrees,
+    /// which is the widest even spread the arc allows once `accentMeals` azure
+    /// at 210 is left room below it and the red family at 0 is left room above
+    /// it. Dinner orchid stops 56 degrees short of `danger` red, so the
+    /// loudest identity and the loudest flag are still two different families
+    /// in dark mode, where both are drawn light.
+    ///
+    /// Snack is the exception and is separated by CHROMA rather than by hue: a
+    /// cool slate at 221 degrees and about a quarter of the saturation of the
+    /// other three. A snack is the minor meal of a day, so the quiet mark is
+    /// the true one. Its hue sits near breakfast's on purpose — a grey-blue and
+    /// a vivid periwinkle are told apart at a glance, and spending another 30
+    /// degrees of arc on it would have squeezed the three that need the room.
+    ///
+    /// ### What dark mode did to that, and what it cost
+    ///
+    /// The chroma trick is the half of this palette dark mode attacks. A dark
+    /// value has to be a pastel to be legible on near-black, and making a
+    /// colour pale takes saturation out of it, so the first dark pair drawn
+    /// here put Breakfast at 0.38 saturation and Snack at 0.17 — a gap of 0.21
+    /// across 14 degrees of hue, which is two grey-blues.
+    /// `testTheFourMealTypesAreDistinctInBothThemes` caught it. The correction
+    /// went both ways: Breakfast's dark value keeps far more of its chroma
+    /// (0.49) and Snack's gives up nearly all of its own (0.12), which puts the
+    /// gap at 0.37 and restores the periwinkle-against-grey reading the light
+    /// pair has.
+    ///
+    /// ### Both halves are judged, not derived
+    ///
+    /// Each pair is picked for its own theme, never computed from the other.
+    /// Every light value clears 5.6:1 against `surface` and stays over 5:1
+    /// against the `warningSoft` ground a flagged row draws on; every dark
+    /// value clears 4.9:1 against that same ground in dark mode, where it is
+    /// nearly black.
+    static let mealTypeBreakfast = Color.paper(0x444ED6, 0x7E82F5)
+    static let mealTypeLunch     = Color.paper(0x812ED4, 0xC492F6)
+    static let mealTypeDinner    = Color.paper(0xB420AA, 0xF47CEC)
+    static let mealTypeSnack     = Color.paper(0x58637C, 0xA8AFBE)
+
     // MARK: Vision Board state hues (#446)
 
     /// Block state: Ongoing. Steel cyan (192°). Cool family, deliberately

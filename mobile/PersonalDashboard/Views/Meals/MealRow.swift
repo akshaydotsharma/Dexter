@@ -56,6 +56,28 @@ struct MealFlagChip: View {
 /// `init(nutrient:value:target:)` carrying a real target. Tinting would also
 /// put verdict hue on ten rows at once, which is the reading the day card
 /// exists to give, and one this list cannot support.
+///
+/// ### The meal type, and why it wears no box (#570)
+///
+/// The type now leads line 1 with the description, in its own colour, and the
+/// gutter icon carries the same colour on any row that is not flagged. What it
+/// deliberately does NOT have is a container.
+///
+/// `MealStatPill`'s note records that Meals draws two pill species and that
+/// SHAPE is what tells them apart: a `Capsule` carries a word about the RECORD
+/// — "Needs detail", "Check this", "Possible duplicate", the confidence band —
+/// and a rounded rectangle carries a QUANTITY. A meal type is neither. It is
+/// not a judgement about the record and it is not a number, so putting it in
+/// either shape would make it read as a third instance of a meaning it does
+/// not have. On a suspect row, where a red "Check this" capsule sits two
+/// millimetres below it, a tinted capsule saying "DINNER" would be read as one
+/// more flag before it was read as an identity.
+///
+/// So the mark is bare type: the same uppercase tracked eyebrow the row
+/// already used, in the type's colour instead of grey. No fill, no stroke, no
+/// corner radius. It cannot be confused with a chip because it is not a chip,
+/// and the distinction survives on the warning ground where the risk is
+/// highest.
 struct MealRow: View {
     let meal: LocalMeal
 
@@ -74,6 +96,16 @@ struct MealRow: View {
 
     private var needsAttention: Bool {
         meal.isSuspect || meal.needsDetail || isDuplicate
+    }
+
+    /// What the left-gutter icon is drawn in.
+    ///
+    /// A flag outranks an identity, so a row that needs attention keeps the
+    /// warning tint it has always had and the meal type is left to the word on
+    /// line 1. Lifted out of the body so the precedence is assertable rather
+    /// than only visible.
+    var gutterTint: Color {
+        needsAttention ? Tokens.warning : meal.mealTypeEnum.tint
     }
 
     /// One accessibility element, with the numbers behind the More Content
@@ -105,9 +137,14 @@ struct MealRow: View {
     private var rowButton: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: Space.md) {
+                // The second carrier of the meal-type colour, and the only
+                // one that survives the description being read rather than
+                // scanned. A flag OUTRANKS an identity: on a row that needs
+                // attention the icon goes to `warning` as it always has, and
+                // the word on line 1 is left holding the type on its own.
                 Image(systemName: meal.mealTypeEnum.sfSymbol)
                     .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(needsAttention ? Tokens.warning : Tokens.accentMeals)
+                    .foregroundStyle(gutterTint)
                     .frame(width: 22, height: 22)
 
                 // Everything but the icon hangs off one gutter, so the rungs
@@ -117,23 +154,34 @@ struct MealRow: View {
                     // Rung 1: what the meal is, and what it cost.
                     HStack(alignment: .top, spacing: Space.md) {
                         VStack(alignment: .leading, spacing: Space.xs) {
-                            Text(meal.mealDescription)
-                                .font(.edBody)
-                                .foregroundStyle(Tokens.ink)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            HStack(spacing: Space.sm) {
-                                Text(Self.timeFormatter.string(from: meal.loggedAt))
-                                    .font(.edCaption)
-                                    .foregroundStyle(Tokens.muted)
-                                    .monospacedDigit()
-                                // An eyebrow rather than a second caption: at
-                                // the same size and colour as the time beside
-                                // it, line 2 had no structure and read as one
-                                // grey string.
-                                Text(meal.mealTypeEnum.displayName).eyebrow()
+                            // The type leads the description, on the line the
+                            // eye lands on first (#570). It used to sit on
+                            // line 2 beside the time, in the same grey at the
+                            // same size, which made "which meal was this"
+                            // something a reader had to go and look for.
+                            //
+                            // Baselines aligned, not tops: an 11 pt tracked
+                            // eyebrow and a 15 pt body share a line only if
+                            // they share a baseline. `fixedSize` keeps the
+                            // word whole — a truncated "LUNC…" would be worse
+                            // than no word — so a long description wraps under
+                            // itself and the type keeps the left edge of the
+                            // first line to itself.
+                            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                                Text(meal.mealTypeEnum.displayName)
+                                    .eyebrow(meal.mealTypeEnum.tint)
+                                    .fixedSize()
+                                Text(meal.mealDescription)
+                                    .font(.edBody)
+                                    .foregroundStyle(Tokens.ink)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
+
+                            Text(Self.timeFormatter.string(from: meal.loggedAt))
+                                .font(.edCaption)
+                                .foregroundStyle(Tokens.muted)
+                                .monospacedDigit()
                         }
 
                         Spacer(minLength: Space.sm)
