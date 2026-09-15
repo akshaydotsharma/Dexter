@@ -74,8 +74,9 @@ final class MealTargets {
     /// `biologicalSex`.
     var activityLevel: String
 
-    /// What the targets are for: "lose", "maintain", "gain". Raw string, same
-    /// reasoning again.
+    /// What the targets are for: "lose", "maintain", "gain_muscle", "gain".
+    /// Raw string, same reasoning again — which is what let #544 add the fourth
+    /// value with no migration. See `MealGoal`.
     var goal: String
 
     /// Plain-language explanation of how these eight numbers came out of those
