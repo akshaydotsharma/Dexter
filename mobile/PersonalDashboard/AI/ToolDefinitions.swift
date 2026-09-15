@@ -650,6 +650,29 @@ enum ToolDefinitions {
         )
     )
 
+    // MARK: - Web search (#594)
+
+    /// Anthropic's server-side web search, declared by type.
+    ///
+    /// It is NOT in `allTools`, and that is the whole design. `allTools` is what
+    /// the Shortcut sends, and the Shortcut has a hard 22 s timeout in
+    /// `CaptureService` and auto-executes without a preview: a search there
+    /// costs a timeout on a write nobody reviewed. Chat sends `chatTools`
+    /// instead, so the model can look up a branded product before it calls
+    /// `log_meal`.
+    ///
+    /// Nothing on the device executes this. The result arrives as a
+    /// `web_search_tool_result` content block, which `AnthropicClient.stream`
+    /// reads for its sources and deliberately does not offer to the draft
+    /// mapper.
+    static let webSearch = AnthropicTool(
+        name: WebSearchGrounding.toolName,
+        description: "",
+        input_schema: .object([:]),
+        serverToolType: WebSearchGrounding.toolType,
+        maxUses: WebSearchGrounding.maxUses
+    )
+
     // MARK: - Public surface
 
     static let allTools: [AnthropicTool] = [
@@ -682,6 +705,15 @@ enum ToolDefinitions {
         updateMeal,
         deleteMeal
     ]
+
+    /// What the CHAT surface advertises: every client tool, plus web search
+    /// (#594).
+    ///
+    /// `allTools` first and unchanged, so the prompt-cache prefix the 28 tools
+    /// render into is identical on both paths up to the one appended entry, and
+    /// so `PromptCacheShapeTests` keeps measuring the array it was written
+    /// against.
+    static let chatTools: [AnthropicTool] = allTools + [webSearch]
 
     /// Map tool name → action type. Mirrors `toolToActionType` in
     /// server/ai/tools.js. Reuses `DraftActionType` from Models/Draft.swift

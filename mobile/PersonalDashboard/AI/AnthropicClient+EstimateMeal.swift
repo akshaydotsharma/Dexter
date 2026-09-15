@@ -168,6 +168,28 @@ struct EstimatedMeal: Decodable, Sendable, Equatable {
     }
 }
 
+/// An estimate and what, if anything, grounded it (#594).
+///
+/// Two values rather than a field on `EstimatedMeal` because they come from two
+/// different places and must not be allowed to look alike. `estimate` is what
+/// the model SAID, decoded from its JSON. `groundingSources` is what the wire
+/// SHOWS: the pages its own web search returned. A model cannot write itself a
+/// source list here, which is the point.
+struct GroundedMealEstimate: Sendable, Equatable {
+    let estimate: EstimatedMeal
+
+    /// Empty when the estimate was not grounded, which covers three cases that
+    /// are all the same case for the user: no search was needed, the search
+    /// found nothing, or the search failed. None of them produced a published
+    /// figure to point at.
+    let groundingSources: [WebSearchSource]
+
+    init(estimate: EstimatedMeal, groundingSources: [WebSearchSource] = []) {
+        self.estimate = estimate
+        self.groundingSources = groundingSources
+    }
+}
+
 /// Errors surfaced to the Meals UI when an estimate fails (#543).
 ///
 /// Mirrors `ReceiptExtractionError` case for case, and for the same reason: the
@@ -213,11 +235,28 @@ enum MealEstimationError: LocalizedError {
 
 extension AnthropicClient {
 
-    /// Estimate one meal from a text description. Exactly ONE API call.
+    /// Estimate one meal from a text description.
     ///
     /// Built like `extractExpense(imageData:mediaType:)`: a hand-rolled JSON
     /// body, a schema in the prompt, a fenced-JSON reply, a lenient decode. The
     /// difference is only the payload — text in, items out.
+    ///
+    /// ### Why this is no longer exactly one call (#594)
+    ///
+    /// The request declares Anthropic's web-search server tool, so a branded
+    /// description can be answered from the brand's published panel instead of
+    /// from the model's memory of it. A turn that uses a server tool can come
+    /// back with `stop_reason: "pause_turn"`, which means the turn is not
+    /// finished rather than that it was malformed: the assistant's own content
+    /// goes back up as an assistant message and the same request is posted
+    /// again. `WebSearchGrounding.maxResumes` caps it at two, so a pathological
+    /// turn costs three round trips and never loops.
+    ///
+    /// A generic description ("two eggs on toast") still costs one call and no
+    /// search, because the rule the prompt carries says when to look something
+    /// up and when not to. A search that fails comes back on an HTTP 200 with an
+    /// error object where the results should be, and degrades to exactly the
+    /// estimate this function returned before: no sources, a saveable meal.
     ///
     /// - Parameters:
     ///   - description: what the user typed or spoke, verbatim.
@@ -230,7 +269,7 @@ extension AnthropicClient {
         description: String,
         mealTypeHint: MealType? = nil,
         loggedAt: Date = Date()
-    ) async throws -> EstimatedMeal {
+    ) async throws -> GroundedMealEstimate {
         let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MealEstimationError.emptyDescription }
 
@@ -260,87 +299,154 @@ extension AnthropicClient {
         // block" — a true statement about a response that had simply been
         // truncated. 8192 leaves room for the reasoning and a dozen dishes.
         //
-        // NOT prompt-cached (#580). This call sends no `system` field and no
-        // tools, so there is no shared prefix in front of it: the whole prompt
-        // is one user block whose SECOND paragraph is the meal description. A
-        // breakpoint would have to sit after that description, which differs
-        // every meal, so it would write an entry nothing ever reads. Making it
-        // cacheable means moving the description to the end of the prompt,
-        // which changes what the model reads first and cannot be validated
-        // without live calls. Left alone deliberately, not overlooked.
-        let body: AnthropicJSONValue = .object([
-            "model": .string(Self.model),
-            "max_tokens": .int(8192),
-            "messages": .array([
-                .object([
-                    "role": .string("user"),
-                    "content": .array([
-                        .object([
-                            "type": .string("text"),
-                            "text": .string(prompt)
-                        ])
+        // NOT prompt-cached (#580). The prompt is one user block whose SECOND
+        // paragraph is the meal description, so a breakpoint would have to sit
+        // after text that differs every meal and would write an entry nothing
+        // ever reads. Making it cacheable means moving the description to the
+        // end of the prompt, which changes what the model reads first and cannot
+        // be validated without live calls. Left alone deliberately, not
+        // overlooked. The tool block added in #594 renders ahead of the prompt
+        // and carries no marker either, for the same reason: nothing here is
+        // cached at all.
+        var messages: [AnthropicJSONValue] = [
+            .object([
+                "role": .string("user"),
+                "content": .array([
+                    .object([
+                        "type": .string("text"),
+                        "text": .string(prompt)
                     ])
                 ])
             ])
-        ])
+        ]
 
-        var request = URLRequest(url: Self.endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(key, forHTTPHeaderField: "x-api-key")
-        request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
-        // Text in, JSON out. Nothing here is slow the way a PDF read is, but a
-        // cold connection on a phone still beats URLSession's 60s default
-        // occasionally, and a composer that gives up is worse than one that waits.
-        request.timeoutInterval = 60
+        var groundingSources: [WebSearchSource] = []
+        var resumesUsed = 0
 
-        do {
-            request.httpBody = try Self.encoder.encode(body)
-        } catch {
-            throw MealEstimationError.parse(error)
-        }
+        while true {
+            let body: AnthropicJSONValue = .object([
+                "model": .string(Self.model),
+                "max_tokens": .int(8192),
+                // Declared on every estimate, used on almost none. The rule in
+                // the prompt is what keeps a generic meal from paying for a
+                // search; advertising the tool costs only its declaration.
+                //
+                // `code_execution` is deliberately NOT declared beside it. This
+                // web-search variant runs code execution under the hood, and a
+                // second declared execution environment confuses the model about
+                // which one it is in.
+                "tools": .array([WebSearchGrounding.toolJSON]),
+                "messages": .array(messages)
+            ])
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch {
-            throw MealEstimationError.transport(error)
-        }
+            var request = URLRequest(url: Self.endpoint)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue(key, forHTTPHeaderField: "x-api-key")
+            request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
+            // Text in, JSON out. Nothing here is slow the way a PDF read is, but
+            // a cold connection on a phone still beats URLSession's 60s default
+            // occasionally, and a composer that gives up is worse than one that
+            // waits. A turn that searches spends its time on Anthropic's side of
+            // this request, so the ceiling covers the search too.
+            //
+            // 60 was that ceiling until #594 measured what a grounded turn
+            // actually costs: two live runs of "Guzman y Gomez chicken burrito
+            // bowl" took 38.5 s and then over 60 s, and the second one died on
+            // this line. That is not a slow outlier to be cut off, it is the
+            // normal spread of a turn that runs real searches, and cutting it
+            // off throws away a working answer and makes the user retype the
+            // meal. An ungrounded estimate never approaches either number, so
+            // raising this costs the fast path nothing: a request that is going
+            // to take 16 s still takes 16 s.
+            request.timeoutInterval = 150
 
-        guard let http = response as? HTTPURLResponse else {
-            throw MealEstimationError.http(0, "non-HTTP response")
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let preview = String(data: data.prefix(800), encoding: .utf8) ?? "<non-utf8 bytes>"
-            throw MealEstimationError.http(http.statusCode, preview)
-        }
+            do {
+                request.httpBody = try Self.encoder.encode(body)
+            } catch {
+                throw MealEstimationError.parse(error)
+            }
 
-        let decoded: AnthropicResponse
-        do {
-            decoded = try Self.decoder.decode(AnthropicResponse.self, from: data)
-        } catch {
-            throw MealEstimationError.parse(error)
-        }
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: request)
+            } catch {
+                throw MealEstimationError.transport(error)
+            }
 
-        let combinedText = decoded.content.compactMap { block -> String? in
-            if case .text(let t) = block { return t }
-            return nil
-        }.joined(separator: "\n")
+            guard let http = response as? HTTPURLResponse else {
+                throw MealEstimationError.http(0, "non-HTTP response")
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let preview = String(data: data.prefix(800), encoding: .utf8) ?? "<non-utf8 bytes>"
+                throw MealEstimationError.http(http.statusCode, preview)
+            }
 
-        guard let jsonString = Self.firstJSONBlock(in: combinedText),
-              let jsonData = jsonString.data(using: .utf8) else {
-            // Order matters: a truncated reply has no closing fence, so it
-            // fails the same parse a malformed one does. Ask WHY the fence is
-            // missing before reporting it missing.
-            if decoded.stop_reason == "max_tokens" { throw MealEstimationError.truncated }
-            throw MealEstimationError.noJSON
-        }
-        do {
-            return try Self.decoder.decode(EstimatedMeal.self, from: jsonData)
-        } catch {
-            throw MealEstimationError.parse(error)
+            // Read as raw JSON rather than through `AnthropicResponse`, because
+            // the resume has to hand the assistant's content BACK unchanged and
+            // that type models only the four block shapes this app produces
+            // itself (#594). A `server_tool_use` and its `web_search_tool_result`
+            // must travel together or the replay is rejected, and neither
+            // survives the typed decode.
+            guard let root = (try? Self.decoder.decode(AnthropicJSONValue.self, from: data))?
+                .objectValue else {
+                throw MealEstimationError.noJSON
+            }
+            let content = root["content"]?.arrayValue ?? []
+            let stopReason = root["stop_reason"]?.stringValue
+
+            for source in WebSearchGrounding.sources(inContent: content)
+            where !groundingSources.contains(source) {
+                groundingSources.append(source)
+            }
+
+            if WebSearchGrounding.shouldResume(stopReason: stopReason, resumesUsed: resumesUsed) {
+                resumesUsed += 1
+                // Empty text blocks are dropped for the reason
+                // `AnthropicMessage.assistantReplay` gives: the API rejects the
+                // whole message with "text content blocks must be non-empty".
+                let replayed = content.filter { block in
+                    guard let fields = block.objectValue else { return false }
+                    guard fields["type"]?.stringValue == "text" else { return true }
+                    let text = fields["text"]?.stringValue ?? ""
+                    return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+                // A pause with nothing to replay would post the same request
+                // again and pause again. Fall through and work with what came
+                // back instead.
+                if !replayed.isEmpty {
+                    messages.append(.object([
+                        "role": .string("assistant"),
+                        "content": .array(replayed)
+                    ]))
+                    continue
+                }
+            }
+
+            let combinedText = content.compactMap { block -> String? in
+                guard let fields = block.objectValue,
+                      fields["type"]?.stringValue == "text" else { return nil }
+                return fields["text"]?.stringValue
+            }.joined(separator: "\n")
+
+            guard let jsonString = Self.firstJSONBlock(in: combinedText),
+                  let jsonData = jsonString.data(using: .utf8) else {
+                // Order matters: a truncated reply has no closing fence, so it
+                // fails the same parse a malformed one does. Ask WHY the fence is
+                // missing before reporting it missing.
+                if stopReason == "max_tokens" { throw MealEstimationError.truncated }
+                throw MealEstimationError.noJSON
+            }
+            do {
+                return GroundedMealEstimate(
+                    estimate: try Self.decoder.decode(EstimatedMeal.self, from: jsonData),
+                    groundingSources: groundingSources
+                )
+            } catch {
+                throw MealEstimationError.parse(error)
+            }
         }
     }
 
@@ -387,10 +493,11 @@ extension AnthropicClient {
         }
 
         return """
-        Estimate the nutrition of this meal from its description. The description
-        is the only input: there is no database lookup, no portion picker and no
-        serving dropdown, so every quantity you use is an assumption you must
-        state.
+        Estimate the nutrition of this meal from its description. There is no
+        portion picker and no serving dropdown, so every quantity you use is an
+        assumption you must state. You have one lookup and only one: the web
+        search tool, for a product a brand has published figures for. See BRAND
+        LOOKUP below for when to reach for it and when not to.
 
         The description, verbatim:
         \(description)
@@ -425,6 +532,7 @@ extension AnthropicClient {
         Rules:
         \(typeInstruction)
         \(MealToolSchema.estimateRules)
+        \(MealToolSchema.brandLookupRule)
 
         Do not invent fields. Do not add commentary outside the JSON fence.
         """

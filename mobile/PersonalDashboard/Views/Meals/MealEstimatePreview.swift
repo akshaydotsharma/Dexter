@@ -8,6 +8,10 @@ import SwiftUI
 struct MealItemLine: View {
     let item: MealItemEntry
 
+    /// How this item's calories are printed. An item scaled from a published
+    /// panel keeps its own figure; a portion guess rounds (#594).
+    var precision: MealFormat.Precision = .estimate
+
     /// True when the portion could not be read and the meal was flagged for it.
     private var portionMissing: Bool {
         item.portionQuantity <= 0 || item.portionUnit.isEmpty
@@ -29,7 +33,7 @@ struct MealItemLine: View {
                     .monospacedDigit()
             }
             Spacer(minLength: Space.sm)
-            Text("\(MealFormat.calories(item.calories)) kcal")
+            Text("\(MealFormat.calories(item.calories, precision)) kcal")
                 .font(.edFootnoteStrong)
                 .foregroundStyle(Tokens.inkSoft)
                 .monospacedDigit()
@@ -67,7 +71,7 @@ struct MealEstimatePreview: View {
             } else {
                 VStack(alignment: .leading, spacing: Space.sm) {
                     ForEach(checked.items) { item in
-                        MealItemLine(item: item)
+                        MealItemLine(item: item, precision: precision)
                     }
                 }
                 totalsRow
@@ -87,6 +91,11 @@ struct MealEstimatePreview: View {
             if let reason = checked.suspectReason {
                 suspectBlock(reason)
             }
+
+            // Below the assumptions and above the day note: the assumptions say
+            // what was guessed, this says what was not, and the pair is the
+            // whole story of where the numbers came from (#594).
+            MealSourcesBlock(sources: checked.groundingSources)
 
             if let dayNote {
                 dayTargetBlock(dayNote)
@@ -111,11 +120,25 @@ struct MealEstimatePreview: View {
             Label(checked.mealType.displayName, systemImage: checked.mealType.sfSymbol)
                 .eyebrow(Tokens.accentMeals)
             Spacer(minLength: Space.sm)
+            // Both chips, never one instead of the other. They answer different
+            // questions: this one says the figures came from a published panel,
+            // the confidence band still reports the PORTION, which a lookup does
+            // not settle and which is where a text-derived estimate goes wrong
+            // (#594).
+            if checked.isGrounded {
+                MealGrounding.chip()
+            }
             MealFlagChip(
                 MealFormat.confidenceBand(checked.confidence),
                 tint: checked.confidence >= 0.75 ? Tokens.success : Tokens.muted
             )
         }
+    }
+
+    /// How this estimate's figures are printed. A grounded meal is not rounded
+    /// as though its calories were worked out from an assumed portion (#594).
+    private var precision: MealFormat.Precision {
+        MealGrounding.precision(isGrounded: checked.isGrounded)
     }
 
     /// The headline figure and the four macros the day is steered by.
@@ -127,9 +150,9 @@ struct MealEstimatePreview: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             MealStatPill(
                 label: "kcal",
-                value: MealFormat.calories(checked.nutrients.calories),
+                value: MealFormat.calories(checked.nutrients.calories, precision),
                 variant: .accent,
-                accessibilityText: "\(MealFormat.calories(checked.nutrients.calories)) kilocalories"
+                accessibilityText: "\(MealFormat.calories(checked.nutrients.calories, precision)) kilocalories"
             )
 
             // Flowed rather than stacked in an HStack: four pills plus their

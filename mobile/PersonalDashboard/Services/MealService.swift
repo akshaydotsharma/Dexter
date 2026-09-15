@@ -70,6 +70,7 @@ struct MealService {
         suspectReason: String? = nil,
         assumptionsNote: String? = nil,
         containsAlcohol: Bool = false,
+        groundingSources: [WebSearchSource] = [],
         clientUUID: String? = nil
     ) throws -> LocalMeal {
         guard !nutrients.hasNegativeValue else { throw MealServiceError.invalidNutrients }
@@ -91,6 +92,11 @@ struct MealService {
             existing.suspectReason   = suspectReason?.trimmedNonEmptyMealField
             existing.assumptionsNote = assumptionsNote?.trimmedNonEmptyMealField
             existing.containsAlcohol = containsAlcohol
+            // #594. Written on every upsert, including with an empty array: a
+            // re-estimate that no longer searched must not keep the previous
+            // answer's sources, or the meal would claim a provenance its numbers
+            // no longer have.
+            existing.groundingSources = groundingSources
             existing.updatedAt       = Date()
             try save()
             return existing
@@ -112,6 +118,7 @@ struct MealService {
         )
         row.nutrients = nutrients
         row.items = items
+        row.groundingSources = groundingSources
         store.context.insert(row)
         try save()
         return row
@@ -148,7 +155,8 @@ struct MealService {
         isSuspect: Bool? = nil,
         suspectReason: String?? = nil,
         assumptionsNote: String?? = nil,
-        containsAlcohol: Bool? = nil
+        containsAlcohol: Bool? = nil,
+        groundingSources: [WebSearchSource]? = nil
     ) throws {
         if let date {
             meal.date = WallClock.dayAnchor(from: date)
@@ -194,6 +202,13 @@ struct MealService {
         // what #444 and #488 got wrong.
         if let containsAlcohol {
             meal.containsAlcohol = containsAlcohol
+        }
+        // #594. A plain optional for the same reason `containsAlcohol` is one:
+        // the caller that clears this passes an EMPTY ARRAY, which is a
+        // different request from passing nothing. Only `overrideTotals` clears
+        // it, and it clears it because typed numbers are not a brand's numbers.
+        if let groundingSources {
+            meal.groundingSources = groundingSources
         }
         meal.updatedAt = Date()
         try save()
