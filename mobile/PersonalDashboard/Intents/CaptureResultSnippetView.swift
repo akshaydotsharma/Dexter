@@ -181,6 +181,7 @@ private enum TypeStyle {
         case "trip":           return "suitcase.fill"
         case "itinerary_item": return "airplane"
         case "expense":        return "creditcard.fill"
+        case "meal":           return "fork.knife"
         default:               return "sparkle"
         }
     }
@@ -194,6 +195,7 @@ private enum TypeStyle {
         case "trip",
              "itinerary_item": return Tokens.accentItineraries
         case "expense":        return Tokens.accentFinance
+        case "meal":           return Tokens.accentMeals
         default:               return Tokens.ink
         }
     }

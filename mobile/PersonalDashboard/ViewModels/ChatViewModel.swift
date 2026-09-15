@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftData
 
 struct ChatTurn: Identifiable, Hashable {
     let id: UUID
@@ -164,6 +165,20 @@ final class ChatViewModel {
                 guard let idx = turns.firstIndex(where: { $0.id == assistantTurnId }) else { break }
                 switch event {
                 case .draft(let d):
+                    // Destructive drafts are held back for an explicit tap
+                    // (#546). Chat auto-executes add and update because a
+                    // confirm tap on every capture is friction with no
+                    // question behind it; a delete has a question behind it,
+                    // and an AI-initiated one the user never agreed to is the
+                    // one mistake here that cannot be undone.
+                    //
+                    // This gate is CHAT ONLY. `ChatToDrafts` (the Shortcut)
+                    // runs the same tool straight through, which is the
+                    // standing decision for that path.
+                    if d.actionType.requiresChatConfirmation {
+                        turns[idx].results.append(pending(draft: d))
+                        continue
+                    }
                     // Auto-execute: drafts arrive one-at-a-time as the model
                     // closes each tool block. Run the executor on each and
                     // append the success / failure record so the user sees
@@ -199,6 +214,128 @@ final class ChatViewModel {
         }
 
         isSending = false
+    }
+
+    // MARK: - Held-back actions (#546)
+
+    /// Build the card that asks before a destructive action runs.
+    ///
+    /// Resolves the target's own words so the card names what would go. A
+    /// confirm prompt that says "delete this?" about a UUID is a prompt the
+    /// user can only answer by guessing.
+    private func pending(draft: ChatDraft) -> ChatActionResult {
+        ChatActionResult(
+            id: draft.id,
+            actionType: draft.actionType,
+            input: draft.input,
+            pendingConfirmation: true,
+            pendingSummary: describeTarget(of: draft)
+        )
+    }
+
+    private func describeTarget(of draft: ChatDraft) -> String? {
+        guard draft.actionType == .deleteMeal,
+              let raw = draft.input.objectValue?["id"]?.stringValue,
+              UUID(uuidString: raw) != nil else { return nil }
+        let lowered = raw.lowercased()
+        let descriptor = FetchDescriptor<LocalMeal>(
+            predicate: #Predicate<LocalMeal> { $0.clientUUID == lowered }
+        )
+        guard let meal = try? executor.store.context.fetch(descriptor).first else {
+            return nil
+        }
+        return "\(meal.mealTypeEnum.displayName) · \(meal.mealDescription)"
+    }
+
+    /// Apply a held-back action. Wired to the confirm card's Delete button.
+    func confirmPending(_ result: ChatActionResult) async {
+        guard result.pendingConfirmation else { return }
+        let draft = ChatDraft(
+            id: result.id,
+            actionType: result.actionType,
+            input: result.input,
+            preview: result.title ?? ""
+        )
+        let applied = await execute(draft: draft)
+        replace(id: result.id, with: applied)
+    }
+
+    /// Drop a held-back action without applying it. The card goes; nothing was
+    /// ever written, so there is nothing to undo and nothing to report.
+    func dismissPending(_ result: ChatActionResult) {
+        guard result.pendingConfirmation else { return }
+        for index in turns.indices {
+            turns[index].results.removeAll { $0.id == result.id }
+        }
+    }
+
+    /// Move a meal logged in the small hours back to yesterday.
+    ///
+    /// Only ever reached from the card's own button. Nothing here runs on its
+    /// own: a 1am snack usually belongs to the day that just ended, but a wrong
+    /// guess is invisible on both days and the user has no reason to go looking
+    /// for it.
+    func moveMealToYesterday(_ result: ChatActionResult) {
+        guard let outcome = result.outcome, outcome.type == "meal" else { return }
+        let id = outcome.id
+        let descriptor = FetchDescriptor<LocalMeal>(
+            predicate: #Predicate<LocalMeal> { $0.clientUUID == id }
+        )
+        guard let meal = try? executor.store.context.fetch(descriptor).first else { return }
+        let yesterday = WallClock.deviceDay(
+            from: WallClock.storedDay(WallClock.dayAnchor(from: meal.deviceDay), byAdding: -1)
+        )
+        let service = MealService(store: executor.store)
+        guard (try? service.updateMeal(meal, date: yesterday)) != nil else { return }
+
+        // Re-render the card against the day the meal now belongs to, so the
+        // remaining-today line stops counting a meal that is no longer today's.
+        guard let summary = rebuiltSummary(for: meal, using: service, from: outcome) else { return }
+        replace(
+            id: result.id,
+            with: ChatActionResult(
+                id: result.id,
+                actionType: result.actionType,
+                input: result.input,
+                outcome: DraftActionOutcome(
+                    type: outcome.type,
+                    action: outcome.action,
+                    id: outcome.id,
+                    title: summary.dialogSentence(),
+                    dueDate: nil,
+                    addedNames: nil,
+                    meal: summary
+                )
+            )
+        )
+        NotificationCenter.default.post(name: .localStoreDidChange, object: nil)
+    }
+
+    private func rebuiltSummary(
+        for meal: LocalMeal,
+        using service: MealService,
+        from outcome: DraftActionOutcome
+    ) -> MealLogSummary? {
+        let dayMeals = (try? service.meals(on: meal.deviceDay)) ?? [meal]
+        return MealLogSummary(
+            meal: meal,
+            dayMeals: dayMeals,
+            targets: try? service.targets(on: meal.deviceDay),
+            duplicateOf: nil,
+            // The clamp was a fact about the ORIGINAL write, not about this
+            // move, and repeating it here would claim the user's own choice of
+            // day had been overridden.
+            wasDateClampedFromFuture: false
+        )
+    }
+
+    private func replace(id: UUID, with result: ChatActionResult) {
+        for turnIndex in turns.indices {
+            guard let resultIndex = turns[turnIndex].results.firstIndex(where: { $0.id == id })
+            else { continue }
+            turns[turnIndex].results[resultIndex] = result
+            return
+        }
     }
 
     /// Run the executor against one draft and turn the outcome / error into

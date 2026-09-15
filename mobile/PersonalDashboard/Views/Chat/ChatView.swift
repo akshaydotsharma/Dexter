@@ -472,7 +472,12 @@ struct ChatView: View {
                     ForEach(viewModel.turns) { turn in
                         TurnView(
                             turn: turn,
-                            onOpen: { result in openResult(result) }
+                            onOpen: { result in openResult(result) },
+                            onConfirm: { result in
+                                Task { await viewModel.confirmPending(result) }
+                            },
+                            onDismiss: { result in viewModel.dismissPending(result) },
+                            onMoveToYesterday: { result in viewModel.moveMealToYesterday(result) }
                         )
                         .id(turn.id)
                     }
@@ -806,6 +811,14 @@ private struct LogoBars: View {
 private struct TurnView: View {
     let turn: ChatTurn
     let onOpen: (ChatActionResult) -> Void
+    /// Apply a destructive card the model proposed and the view model is
+    /// holding back (#546).
+    let onConfirm: (ChatActionResult) -> Void
+    /// Drop a held-back card without applying it.
+    let onDismiss: (ChatActionResult) -> Void
+    /// Re-date a small-hours meal to yesterday, only ever from the card's own
+    /// button.
+    let onMoveToYesterday: (ChatActionResult) -> Void
 
     var body: some View {
         VStack(alignment: turn.role == .user ? .trailing : .leading, spacing: Space.md) {
@@ -820,7 +833,12 @@ private struct TurnView: View {
             ForEach(turn.results) { result in
                 ChatResultCard(
                     result: result,
-                    onOpen: result.supportsDeepLink ? { onOpen(result) } : nil
+                    onOpen: result.supportsDeepLink ? { onOpen(result) } : nil,
+                    onConfirm: result.pendingConfirmation ? { onConfirm(result) } : nil,
+                    onDismiss: result.pendingConfirmation ? { onDismiss(result) } : nil,
+                    onMoveToYesterday: (result.meal?.offersYesterdayMove ?? false)
+                        ? { onMoveToYesterday(result) }
+                        : nil
                 )
             }
         }

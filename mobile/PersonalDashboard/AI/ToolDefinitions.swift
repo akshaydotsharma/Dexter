@@ -1,6 +1,6 @@
 import Foundation
 
-/// The 15 draft / edit / delete tools advertised to the LLM. Ported one-for-one
+/// The draft / edit / delete tools advertised to the LLM. The original 15 were ported one-for-one
 /// from `server/ai/tools.js` with one shape change: every entity ID is a
 /// UUID string instead of a server-assigned integer, so the on-device
 /// SwiftData primary key (`clientUUID`) can be referenced directly.
@@ -547,6 +547,109 @@ enum ToolDefinitions {
         )
     )
 
+    // MARK: - Meals (#546)
+
+    /// The estimate parameters shared by `log_meal` and `update_meal`.
+    ///
+    /// Built from `MealToolSchema.itemSchema`, whose key names are
+    /// `EstimatedMealItem.CodingKeys` verbatim. That is what lets the executor
+    /// hand a tool payload to the SAME `EstimatedMeal` the composer's
+    /// fenced-JSON path decodes, and therefore to the SAME
+    /// `MealEstimateGuards.check`. Nothing about plausibility, portions or
+    /// bounds is judged here or in the prose below — the guards own all of it.
+    private static let mealEstimateProperties: [String: AnthropicJSONValue] = [
+        "items": arrayOf(
+            MealToolSchema.itemSchema,
+            description: "One object per DISTINCT dish or drink in the description, with its assumed portion and its own eight nutrient values. Empty array ONLY when no_food_identified is true."
+        ),
+        "contains_alcohol": bool("True if any item is beer, wine, cider, a spirit or a mixed drink. Get this right even when the alcohol is a small part of the meal; it changes how the numbers are checked."),
+        "confidence": string("One of \"high\", \"medium\", \"low\". How sure you are about the PORTIONS specifically, not about whether you recognised the food."),
+        "assumptions": string("One or two plain sentences naming what you assumed and the user never said — portion sizes, cooking oil, a default drink size, a default preparation. Empty string only if you genuinely assumed nothing."),
+        "no_food_identified": bool("True, with an EMPTY items array, when the description names nothing edible. Do not invent a meal to fill the schema.")
+    ]
+
+    /// Log a meal the user described, WITH the estimate already worked out.
+    ///
+    /// The estimate travels in the tool call rather than triggering a second
+    /// API call on the device: the model has already read the description this
+    /// turn, and asking it again would double the cost of every log and open a
+    /// second place for the rules to live. The rules it works to are
+    /// `MealToolSchema.estimateRules`, the same string the composer's prompt
+    /// interpolates.
+    ///
+    /// `id` is the reason a retried Shortcut is safe. `MealService.addMeal`
+    /// treats a supplied `clientUUID` as an IDENTITY, so a re-run that carries
+    /// the same id rewrites the row it already made instead of logging lunch
+    /// twice.
+    private static let logMeal = AnthropicTool(
+        name: "log_meal",
+        description: """
+        Log a meal the user says they ate, together with your nutrition estimate of it. Use this whenever the user reports eating or drinking something (e.g. "two eggs on toast and a flat white for breakfast", "I had pasta last night", "just had a protein shake").
+
+        Call it ONCE PER MEAL. A message naming two meals ("for breakfast I had X and for lunch Y") is two calls, each with its own id and its own meal_type.
+
+        Estimate the nutrition from the description alone. There is no database lookup, no portion picker and no serving dropdown, so every quantity you use is an assumption you must state.
+
+        \(MealToolSchema.estimateRules)
+        - "meal_type": one of \(MealToolSchema.mealTypeList). Use what the user said; infer it from the description and the current time when they did not say.
+        - "description": what the user said they ate, VERBATIM. Do not tidy it up, do not substitute your own wording, and do not fold your estimate into it. This is the text a later correction re-estimates against.
+        - "date": the ISO 8601 day the meal was EATEN, defaulting to today. Resolve "yesterday", "last night", "on Tuesday" yourself. Never emit a date in the future — a meal is a record of something already eaten.
+
+        If the description is too vague to estimate at all ("food", "lunch", "something"), do NOT call this tool in a conversation — ask ONE short question instead. When there is no conversation available, call it with an empty items array and no_food_identified true, so the fact that they ate survives even though the number does not.
+        """,
+        input_schema: object(
+            properties: mealEstimateProperties.merging([
+                "id": string("UUID string for this meal. Generate a fresh one for every NEW meal (any valid lowercase UUID, e.g., 9b3a8e1c-2f6f-4a3b-9d2c-7e0a1b4c5d6e). Repeating an id rewrites that meal rather than logging a second one."),
+                "meal_type": string("One of \(MealToolSchema.mealTypeList)."),
+                "description": string("What the user said they ate, VERBATIM."),
+                "date": string("ISO 8601 day the meal was eaten (e.g. 2026-09-14). Use today's date when the user did not say. Never a future date.")
+            ]) { current, _ in current },
+            required: ["id", "meal_type", "description", "date", "items", "contains_alcohol", "confidence", "assumptions"]
+        )
+    )
+
+    /// Correct a meal already logged, by re-estimating it in place.
+    ///
+    /// This is what makes "that latte was oat milk" work: the user names a
+    /// change, the model re-reads the whole meal with the change applied and
+    /// returns a fresh breakdown, and the device rewrites the SAME row. There
+    /// is no second row and no partial edit — a meal whose items and totals
+    /// came from two different estimates would be a meal whose numbers no
+    /// longer describe any single description.
+    private static let updateMeal = AnthropicTool(
+        name: "update_meal",
+        description: """
+        Correct a meal ALREADY LOGGED, replacing its description and its numbers with a fresh estimate. Use when the user corrects something they told you ("that latte was oat milk", "the rice was two cups not one", "make that lunch not breakfast"). Requires the meal's UUID from the MEALS TODAY context.
+
+        Re-estimate the WHOLE meal with the correction applied and return the complete items array, not just the part that changed. The meal's totals are the sum of the items, so a partial array silently deletes the rest of the meal.
+
+        \(MealToolSchema.estimateRules)
+        - "description": the corrected description, VERBATIM in the user's own words where you can ("oat milk latte"). This replaces the stored one.
+
+        If the user is asking to REMOVE a meal rather than correct it, use delete_meal. If you cannot tell which logged meal they mean, ask ONE short question instead of guessing.
+        """,
+        input_schema: object(
+            properties: mealEstimateProperties.merging([
+                "id": string("The UUID of the EXISTING meal to correct (from the MEALS TODAY context)."),
+                "description": string("The corrected description of the whole meal, VERBATIM in the user's words where possible."),
+                "meal_type": string("One of \(MealToolSchema.mealTypeList). Set when the correction changes it; otherwise repeat the meal's current type."),
+                "date": string("OPTIONAL ISO 8601 day, only when the correction MOVES the meal to another day. Use an empty string to leave the day alone.")
+            ]) { current, _ in current },
+            required: ["id", "description", "items", "contains_alcohol", "confidence", "assumptions"]
+        )
+    )
+
+    private static let deleteMeal = AnthropicTool(
+        name: "delete_meal",
+        description: "Delete a logged meal. Use when the user says a meal should not be there at all (\"remove that breakfast\", \"I didn't actually eat the cake\"). Requires the meal UUID from the MEALS TODAY context. To CORRECT a meal's contents use update_meal instead — deleting and re-logging loses the original entry.",
+        input_schema: object(
+            properties: [
+                "id": string("The UUID of the existing meal to delete (from the MEALS TODAY context)")
+            ],
+            required: ["id"]
+        )
+    )
+
     // MARK: - Public surface
 
     static let allTools: [AnthropicTool] = [
@@ -574,7 +677,10 @@ enum ToolDefinitions {
         deleteItineraryItem,
         addExpense,
         addRecurringExpense,
-        clearExpenses
+        clearExpenses,
+        logMeal,
+        updateMeal,
+        deleteMeal
     ]
 
     /// Map tool name → action type. Mirrors `toolToActionType` in
@@ -606,6 +712,9 @@ enum ToolDefinitions {
         "delete_itinerary_item": .deleteItineraryItem,
         "add_expense": .addExpense,
         "add_recurring_expense": .addRecurringExpense,
-        "clear_expenses": .clearExpenses
+        "clear_expenses": .clearExpenses,
+        "log_meal": .logMeal,
+        "update_meal": .updateMeal,
+        "delete_meal": .deleteMeal
     ]
 }

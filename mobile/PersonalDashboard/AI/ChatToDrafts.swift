@@ -48,7 +48,10 @@ struct ChatToDrafts {
         ChatToDrafts(
             anthropic: AnthropicClient(),
             context: AssistantContextBuilder.default(),
-            executor: ExecuteDraftAction.default()
+            // The Shortcut's own executor, stamping `capture` on any meal it
+            // writes (#546). `ExecuteDraftAction.default()` is the chat wiring
+            // and would mislabel the provenance of a hands-free log.
+            executor: ExecuteDraftAction(store: .shared, mealSource: MealSource.capture)
         )
     }
 
@@ -212,6 +215,7 @@ struct ChatToDrafts {
         - draft_list: Create a NEW list with title and items array
         - draft_trip: Create a NEW trip with name, start_date, end_date, notes. Do NOT call unless both start_date AND end_date are known; ask the user for dates first if missing.
         - add_itinerary_item: Add stays / activities / places / restaurants to an existing trip (multi-item supported via items array; kind enum is stay|activity|place|restaurant)
+        - log_meal: Log a meal the user says they ate, WITH your nutrition estimate of it (items, per-item portions and nutrients, confidence, assumptions)
 
         EDIT (for existing items - requires UUID):
         - complete_task: Mark a task as completed or incomplete
@@ -224,6 +228,7 @@ struct ChatToDrafts {
         - edit_folder: Rename an existing folder
         - edit_trip: Edit an existing trip's name, start_date, end_date, or notes (notes can be cleared with "null")
         - edit_itinerary_item: Edit an existing itinerary item's day_date, kind, title, or notes
+        - update_meal: Correct a meal already logged, re-estimated in place (requires the meal UUID from MEALS TODAY)
 
         DELETE/REMOVE (for existing items - requires UUID):
         - delete_task: Delete an existing task
@@ -233,6 +238,7 @@ struct ChatToDrafts {
         - remove_list_item: Remove a specific item from a list (requires list_id and item_index)
         - delete_trip: Delete an existing trip (cascades to all its itinerary items)
         - delete_itinerary_item: Delete a single itinerary item
+        - delete_meal: Delete a logged meal (requires the meal UUID from MEALS TODAY)
         - clear_expenses: Bulk-delete expenses matching an OPTIONAL filter (after_date, before_date, category). Filters are ANDed and apply immediately. FULL-WIPE SAFETY: a call with NO filter deletes EVERY expense — never issue an unfiltered clear on a first request. Instead respond with assistant text warning the user this erases ALL their expenses and asking them to confirm (e.g. "yes, clear all"). Only after they explicitly confirm, call clear_expenses with confirm_all: true. A clear that carries any filter never needs confirm_all.
 
         CAPTURE DEFAULTS (for NEW items via draft_task / draft_note / draft_list / draft_trip):
@@ -249,6 +255,8 @@ struct ChatToDrafts {
         - A vague but content-bearing short input ("the thing about the meeting") → draft_note. Do NOT ask the user to clarify; just capture it as a note and move on.
 
         Trip-intent override: travel and itinerary phrasings NEVER fall through to draft_note. They go to draft_trip (with a dates ask-back as assistant text if needed) or add_itinerary_item.
+
+        \(MealToolSchema.promptSection(canAskQuestions: false))
 
         IMPORTANT RULES:
         1. NEVER perform actions directly - ONLY call tools to create draft proposals

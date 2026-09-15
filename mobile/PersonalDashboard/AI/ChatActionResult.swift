@@ -18,28 +18,48 @@ struct ChatActionResult: Identifiable, Hashable, Sendable {
     /// `DraftExecutionError.errorDescription` or `localizedDescription`.
     let errorMessage: String?
 
+    /// Nothing has been applied yet: the card is asking the user to confirm a
+    /// destructive action (#546).
+    ///
+    /// Only chat ever sets this. The Shortcut path has no card and nobody to
+    /// tap it, and keeps executing destructive tools directly.
+    let pendingConfirmation: Bool
+
+    /// What the held-back action would do, in the user's own terms.
+    ///
+    /// A `delete_meal` tool input carries a UUID and nothing else, so without
+    /// this the confirm card would ask "delete this?" about a row the user
+    /// cannot see. The chat layer resolves the row's description when it builds
+    /// the pending card — the one place that still has a store to ask.
+    let pendingSummary: String?
+
     init(
         id: UUID = UUID(),
         actionType: DraftActionType,
         input: AnthropicJSONValue,
         outcome: DraftActionOutcome? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        pendingConfirmation: Bool = false,
+        pendingSummary: String? = nil
     ) {
         self.id = id
         self.actionType = actionType
         self.input = input
         self.outcome = outcome
         self.errorMessage = errorMessage
+        self.pendingConfirmation = pendingConfirmation
+        self.pendingSummary = pendingSummary
     }
 
     var isFailure: Bool { errorMessage != nil }
 
-    /// One of `created`, `updated`, `deleted`, or `error`. Drives eyebrow
-    /// tone and the bottom-row affordance (open / none / retry-none).
-    enum State { case created, updated, deleted, error }
+    /// One of `created`, `updated`, `deleted`, `pending` or `error`. Drives the
+    /// eyebrow tone and the bottom row (open / confirm / none).
+    enum State { case created, updated, deleted, error, pending }
 
     var state: State {
         if isFailure { return .error }
+        if pendingConfirmation { return .pending }
         guard let outcome else { return .updated }
         switch outcome.action {
         case ActionString.created:
@@ -76,6 +96,7 @@ extension ChatActionResult {
     /// the row's title from the fetch.
     var title: String? {
         if let t = outcome?.title, !t.isEmpty { return t }
+        if let t = pendingSummary, !t.isEmpty { return t }
         let dict = input.objectValue ?? [:]
         if let t = dict["title"]?.stringValue, !t.isEmpty, t != "null" { return t }
         if let n = dict["name"]?.stringValue, !n.isEmpty, n != "null" { return n }
@@ -126,9 +147,13 @@ extension ChatActionResult {
         case "list": return .lists
         case "folder": return .notes
         case "trip", "itinerary_item": return .itineraries
+        case "meal": return .meals
         default: return nil
         }
     }
+
+    /// The meal summary the card renders, when this result wrote one (#546).
+    var meal: MealLogSummary? { outcome?.meal }
 
     /// True when we have a usable id + section to focus a row. Folders +
     /// itinerary items skip the affordance (their destination views don't

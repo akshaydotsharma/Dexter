@@ -11,8 +11,31 @@ struct ChatResultCard: View {
     /// push the destination section. Called only when the bottom-row
     /// affordance is visible (success, non-deleted, has deep link).
     var onOpen: (() -> Void)? = nil
+    /// Apply a destructive action the card is holding back (#546). Non-nil only
+    /// while `result.state == .pending`.
+    var onConfirm: (() -> Void)? = nil
+    /// Drop a held-back action without applying it.
+    var onDismiss: (() -> Void)? = nil
+    /// Move a small-hours meal to yesterday. Non-nil only when the meal summary
+    /// offers it.
+    var onMoveToYesterday: (() -> Void)? = nil
 
     var body: some View {
+        // A logged meal gets its own card: calories large, four macros and a
+        // remaining-today line do not fit the title-and-chips shell, and the
+        // remaining-today line is the whole reason the card is worth showing.
+        if let meal = result.meal, !result.isFailure {
+            MealChatCard(
+                summary: meal,
+                onMoveToYesterday: meal.offersYesterdayMove ? onMoveToYesterday : nil,
+                onOpen: result.supportsDeepLink ? onOpen : nil
+            )
+        } else {
+            standardCard
+        }
+    }
+
+    private var standardCard: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             eyebrow
 
@@ -34,6 +57,12 @@ struct ChatResultCard: View {
                     bodyFont: .edSubheadline,
                     bodyColor: Tokens.inkSoft
                 )
+            }
+
+            if result.state == .pending {
+                Text("Nothing has been deleted yet.")
+                    .font(.edSubheadline)
+                    .foregroundStyle(Tokens.inkSoft)
             }
 
             if result.state != .error {
@@ -96,6 +125,7 @@ struct ChatResultCard: View {
         case .updated: return "\(updatedVerb.uppercased()) · \(entity)"
         case .deleted: return "REMOVED · \(entity)"
         case .error:   return "FAILED · \(entity)"
+        case .pending: return "CONFIRM · \(entity)"
         }
     }
 
@@ -128,6 +158,8 @@ struct ChatResultCard: View {
             return "recurring expense"
         case .clearExpenses:
             return "expenses"
+        case .logMeal, .updateMeal, .deleteMeal:
+            return "meal"
         case .unknown:
             return "action"
         }
@@ -238,6 +270,21 @@ struct ChatResultCard: View {
             }
         case .error:
             EmptyView()
+        case .pending:
+            // Nothing has been applied. The buttons are the only way this row
+            // becomes a delete, which is the whole point of holding it back.
+            HStack(spacing: Space.sm) {
+                Spacer(minLength: 0)
+                if let onDismiss {
+                    Button("Keep it", action: onDismiss)
+                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                }
+                if let onConfirm {
+                    Button("Delete", action: onConfirm)
+                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                        .foregroundStyle(Tokens.danger)
+                }
+            }
         }
     }
 
@@ -251,6 +298,9 @@ struct ChatResultCard: View {
         case .created, .updated: return Tokens.muted
         case .deleted:           return Tokens.muted
         case .error:             return Tokens.warning
+        // The one state that is asking for something rather than reporting
+        // something. It gets the only non-muted eyebrow on a successful card.
+        case .pending:           return Tokens.danger
         }
     }
 
@@ -275,8 +325,9 @@ struct ChatResultCard: View {
 
     private var borderColor: Color {
         switch result.state {
-        case .error: return Tokens.warning.opacity(0.4)
-        default:     return Tokens.border
+        case .error:   return Tokens.warning.opacity(0.4)
+        case .pending: return Tokens.danger.opacity(0.4)
+        default:       return Tokens.border
         }
     }
 }

@@ -339,8 +339,12 @@ extension AnthropicClient {
 
     /// The meal types advertised to the model, kept in sync with `MealType` so
     /// a returned string always maps back to the enum.
+    ///
+    /// Forwards to `MealToolSchema` rather than rebuilding the list, so the
+    /// composer and the chat / Shortcut tools offer the model the same four
+    /// words (#546).
     private static var mealTypeList: String {
-        MealType.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ", ")
+        MealToolSchema.mealTypeList
     }
 
     /// Build the estimation prompt.
@@ -411,38 +415,7 @@ extension AnthropicClient {
 
         Rules:
         \(typeInstruction)
-        - "items": one object per DISTINCT dish or drink in the description.
-          Break the meal down rather than returning one lumped row: "chicken rice
-          and a teh tarik" is two items, not one. A decomposed estimate is more
-          accurate, and it lets one component be corrected later without
-          re-estimating the rest.
-        - "portion_quantity" and "portion_unit" are REQUIRED on every item and
-          must never be null. "portion_unit" must be exactly "g" or "ml" —
-          grams for anything solid, millilitres for anything poured. Do NOT
-          return "bowl", "slice", "serving", "cup" or any other household
-          measure: a weight or a volume can be scaled by a ratio when the user
-          corrects it, and a household measure cannot.
-        - "portion_quantity" is the TOTAL amount of that item in the meal. Two
-          eggs is one item at 100 g, not two items at 50 g.
-        - The eight nutrient values on each item describe THAT item at THAT
-          portion. Units: calories in kcal, sodium in mg, everything else in
-          grams. Never return a null or a negative number — use 0 for a nutrient
-          the food genuinely has none of.
-        - Do not return meal totals. The totals are the sum of the items and are
-          computed from them.
-        - "contains_alcohol": true if any item is beer, wine, cider, a spirit or
-          a mixed drink. Get this right even when the alcohol is a small part of
-          the meal; it changes how the numbers are checked.
-        - "confidence": one of "high", "medium", "low". Reflect how sure you are
-          about the PORTIONS specifically, which is where a text-derived estimate
-          goes wrong, not about whether you recognised the food.
-        - "assumptions": one or two plain sentences naming what you assumed and
-          the user never said — portion sizes, cooking oil, a default drink size,
-          a default preparation. This is the most useful thing you return.
-          Null only if you genuinely assumed nothing.
-        - "no_food_identified": true, with an EMPTY "items" array, when the
-          description names nothing edible. Do not invent a meal to fill the
-          schema. Returning nothing is correct; returning a guess is not.
+        \(MealToolSchema.estimateRules)
 
         Do not invent fields. Do not add commentary outside the JSON fence.
         """

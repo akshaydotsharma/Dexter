@@ -35,7 +35,7 @@ Long-lived notes about this codebase live at:
 
 - **iOS app** (`PersonalDashboard` target): SwiftUI on iOS 17+, SwiftData on-device, `URLSession.bytes` for SSE streaming directly against `https://api.anthropic.com/v1/messages`. `xcodegen` generates the project file. Free Apple personal-team signing (7-day cert expiry).
 - **macOS app** (`DexterMac` target): native SwiftUI on macOS 14+ (SwiftData needs 14), NOT Mac Catalyst. `NavigationSplitView` shell instead of the iOS ZStack-router + floating tab bar. Shares portable source with iOS via a curated source list in `project.yml`; UIKit-coupled files are shimmed with `#if canImport(UIKit)`. Own local SwiftData store, own bundle id (`com.akshaysharma.personaldashboard.mac`), `ENABLE_APP_SANDBOX: NO` (dev-only, run from Xcode).
-- **AI**: Anthropic `claude-sonnet-4-5`, temperature 0.3, max 1024 tokens. Tool-use loop runs on-device; 15 tools in `mobile/PersonalDashboard/AI/ToolDefinitions.swift`. API key baked into IPA at archive time via `OTA_API_URL` / `ANTHROPIC_API_KEY` build settings.
+- **AI**: Anthropic `claude-sonnet-5`. No `temperature` (Sonnet 5 rejects the field, so any rule that relied on low-temperature determinism belongs in code). `max_tokens` is 1024 for the shared tool loop, but the extraction calls override it: meal estimation and target derivation both sit at 8192, because this model returns a `thinking` block that spends the same budget the answer needs (#543). Tool-use loop runs on-device; 28 tools in `mobile/PersonalDashboard/AI/ToolDefinitions.swift`. API key baked into IPA at archive time via `OTA_API_URL` / `ANTHROPIC_API_KEY` build settings.
 
 ## Tech stack (paused — leave alone)
 
@@ -49,9 +49,11 @@ Long-lived notes about this codebase live at:
 - `mobile/PersonalDashboard/AI/ChatToDrafts.swift` — capture orchestrator (auto-executes tool calls)
 - `mobile/PersonalDashboard/AI/ChatStream.swift` — chat orchestrator (yields drafts, user confirms)
 - `mobile/PersonalDashboard/AI/ChatDraft.swift` — UI-facing draft struct + per-action preview text
-- `mobile/PersonalDashboard/AI/ExecuteDraftAction.swift` — 15-action SwiftData dispatcher
+- `mobile/PersonalDashboard/AI/ExecuteDraftAction.swift` — 28-action SwiftData dispatcher
 - `mobile/PersonalDashboard/AI/AssistantContextBuilder.swift` — formats SwiftData state into the EXISTING blocks the LLM needs
-- `mobile/PersonalDashboard/AI/ToolDefinitions.swift` — 15 tools with UUID-string ids
+- `mobile/PersonalDashboard/AI/ToolDefinitions.swift` — 28 tools with UUID-string ids
+- `mobile/PersonalDashboard/AI/MealToolSchema.swift` — the ONE statement of the meal-estimate schema and rules, shared by the composer's prompt and the `log_meal` / `update_meal` tools (#546)
+- `mobile/PersonalDashboard/AI/MealLogSummary.swift` — what a written meal reports back: the numbers, the flags, the remaining-today figures, the Shortcut's spoken sentence
 - `mobile/PersonalDashboard/Services/CaptureService.swift` — App Intent entry point; wraps `ChatToDrafts` with a 22 s timeout
 - `mobile/PersonalDashboard/Services/AIStreamingService.swift` — chat-side wrapper around `ChatStream`
 - `mobile/PersonalDashboard/ViewModels/ChatViewModel.swift` — chat state; `confirm(_:)` calls `ExecuteDraftAction`
@@ -76,10 +78,10 @@ Long-lived notes about this codebase live at:
 ## On-device AI
 
 The capture (Shortcut) and chat surfaces both run entirely on the device:
-- `CaptureService` → `ChatToDrafts.run()` → `AnthropicClient.send()` (with 15 tools) → `ExecuteDraftAction.run()` (mutates SwiftData) → dialog summary back to App Intent.
+- `CaptureService` → `ChatToDrafts.run()` → `AnthropicClient.send()` (with all 28 tools) → `ExecuteDraftAction.run()` (mutates SwiftData) → dialog summary back to App Intent.
 - `ChatViewModel` → `AIStreamingService.parseStream()` → `ChatStream.run()` → `AnthropicClient.stream()` → text deltas + `ChatDraft` cards. User taps Confirm → `ExecuteDraftAction.run()` on SwiftData.
 
-The same 15 tools serve both paths — capture auto-executes, chat surfaces drafts for review. Tool input ids are UUID strings (the SwiftData `clientUUID`), not integers.
+The same 28 tools serve both paths. Capture auto-executes everything, including deletes. Chat auto-executes add and update and holds `delete_meal` back for an explicit tap (`DraftActionType.requiresChatConfirmation`, a CHAT-layer gate that `ExecuteDraftAction` deliberately knows nothing about). Tool input ids are UUID strings (the SwiftData `clientUUID`), not integers.
 
 ## Project rules
 

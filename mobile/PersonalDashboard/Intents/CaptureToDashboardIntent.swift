@@ -98,6 +98,17 @@ struct CaptureToDashboardIntent: AppIntent {
         return multiActionSentence(for: items)
     }
 
+    /// The meals in a batch, each speaking its own full sentence.
+    ///
+    /// Meals are pulled out of the verb-bucket grouping below on purpose. That
+    /// grouping renders a title as a quoted NOUN PHRASE ("Added \"Buy milk\"")
+    /// and a meal's title is a whole sentence carrying its numbers, so the two
+    /// shapes cannot share a clause. "For breakfast I had X and for lunch Y" is
+    /// a normal thing to say, so this is not an edge case.
+    private static func mealSentences(for items: [ExecutedDraft]) -> [String] {
+        items.filter { $0.type == "meal" }.map(sentence(for:))
+    }
+
     /// Soft cap on titles named in the multi-action dialog. The snippet view
     /// renders the full list visually; the dialog stays terse so it reads
     /// well when Shortcuts speaks it (Siri, AirPods announcement).
@@ -110,7 +121,7 @@ struct CaptureToDashboardIntent: AppIntent {
         var updated: [String] = []
         var deleted: [String] = []
 
-        for item in items {
+        for item in items where item.type != "meal" {
             guard let phrase = phrase(for: item) else { continue }
             switch verbBucket(for: item.action) {
             case .added:   added.append(phrase)
@@ -124,12 +135,16 @@ struct CaptureToDashboardIntent: AppIntent {
         if let clause = clause(verb: "Updated", titles: updated) { clauses.append(clause) }
         if let clause = clause(verb: "Deleted", titles: deleted) { clauses.append(clause) }
 
+        let meals = mealSentences(for: items)
         guard !clauses.isEmpty else {
+            // Meals only: their sentences already end in a full stop.
+            if !meals.isEmpty { return meals.joined(separator: " ") }
             // No phrases survived — fall back to the legacy tally so the
             // user still gets a count even if titles were all empty.
             return legacyTally(for: items)
         }
-        return clauses.joined(separator: ". ") + "."
+        let others = clauses.joined(separator: ". ") + "."
+        return meals.isEmpty ? others : ([others] + meals).joined(separator: " ")
     }
 
     private enum VerbBucket { case added, updated, deleted }
@@ -216,6 +231,16 @@ struct CaptureToDashboardIntent: AppIntent {
         case ("recurring_expense", "created"):
             return "Set up recurring expense\(titleClause)."
 
+        // A logged meal's title IS the whole spoken sentence, numbers and all
+        // (#546) — same convention as the bulk expense clear below. Wrapping it
+        // in "Added meal \"…\"" would bury the one thing the user needs to
+        // hear, and these cases sit above the generic (_, "updated") arm
+        // because a Swift switch takes the first match.
+        case ("meal", "created"), ("meal", "updated"):
+            return title.isEmpty ? "Logged that meal." : title
+        case ("meal", "deleted"):
+            return title.isEmpty ? "Deleted that meal." : "Deleted meal\(titleClause)."
+
         case ("todo", "completed"):
             return "Marked task\(titleClause) complete."
         case ("todo", "reopened"):
@@ -261,6 +286,7 @@ struct CaptureToDashboardIntent: AppIntent {
         case "folder": return "folder"
         case "expense": return "expense"
         case "recurring_expense": return "recurring expense"
+        case "meal": return "meal"
         default: return type
         }
     }
@@ -317,6 +343,7 @@ struct CaptureToDashboardIntent: AppIntent {
         case "trip", "itinerary_item":     return AppSection.itineraries.rawValue
         case "folder":                     return AppSection.notes.rawValue
         case "expense":                    return AppSection.finance.rawValue
+        case "meal":                       return AppSection.meals.rawValue
         default:                           return nil
         }
     }
