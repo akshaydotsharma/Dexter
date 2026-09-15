@@ -273,6 +273,8 @@ struct ContentView: View {
             WalletView(router: router)
         case .finance:
             FinanceView(router: router)
+        case .meals:
+            MealsView(router: router)
         case .vocabulary:
             PersonalVocabularyView(router: router)
         case .helpCenter:

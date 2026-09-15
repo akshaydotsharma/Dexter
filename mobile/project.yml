@@ -225,6 +225,19 @@ targets:
       # globbed at the top of this list. The service does, and it must be here
       # or the Mac holds the tables and has no way to write them.
       - path: PersonalDashboard/Services/MealService.swift
+      # Meal logging v1 (#543). `Views/Meals` goes in as ONE directory entry,
+      # the way `Views/VisionBoard` does: every file in it belongs to this
+      # surface and none of them is iOS-only (the two platform forks inside it
+      # are `#if os(iOS)` shims, not separate files). The @Models, the enums and
+      # the value types are already covered by the `PersonalDashboard/Models`
+      # glob at the top of this list; the estimation service and the two AI
+      # files are not, and must be listed or the Mac holds the tables with no
+      # way to fill them.
+      - path: PersonalDashboard/Services/MealEstimationService.swift
+      - path: PersonalDashboard/AI/AnthropicClient+EstimateMeal.swift
+      - path: PersonalDashboard/AI/MealEstimateGuards.swift
+      - path: PersonalDashboard/AI/MealDuplicateCheck.swift
+      - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift
       - path: PersonalDashboard/Services/EventService.swift
