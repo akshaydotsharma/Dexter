@@ -77,6 +77,16 @@ enum SyncRecordMapper {
         // its member list are one sync unit — last write wins on the whole list,
         // the same call `LocalList` makes about its checklist items.
         out += try map("LocalVisionBlock", payload.visionBlocks ?? []) { $0.clientUUID.uuidString }
+        // #542. Both already Strings on the model, like the expense above. A
+        // meal's per-dish breakdown travels inside the record as a blob, so a
+        // meal and its items are one sync unit and last write wins on the whole
+        // list — the same call `LocalList` and `LocalVisionBlock` make.
+        out += try map("LocalMeal", payload.meals ?? []) { $0.clientUUID }
+        // One record, and on this build only ever one row. It still ships as an
+        // ordinary record rather than as a device setting, because targets that
+        // differ between the phone and the Mac make every verdict on one of them
+        // wrong without looking wrong.
+        out += try map("MealTargets", payload.mealTargets ?? []) { $0.clientUUID }
 
         return out
     }
