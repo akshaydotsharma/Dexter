@@ -34,64 +34,6 @@ struct MealsPlaceholderPanel: View {
     }
 }
 
-/// History holds the historic charts, and #545 builds them.
-///
-/// This was `MealsTrendsPlaceholder` until #565. The two names were always one
-/// slot: charts over the days you have logged ARE the history of this section,
-/// and a Trends tab sitting beside a History tab came from misreading the
-/// request. Renamed rather than kept alongside, so there is no second empty tab
-/// waiting on content that has nowhere to come from.
-///
-/// Reading a single past day is not here. That is the date control's job, which
-/// is why the second body line says where it now lives (#567).
-struct MealsHistoryPlaceholder: View {
-    var body: some View {
-        MealsPlaceholderPanel(
-            title: "History",
-            systemImage: "chart.xyaxis.line",
-            body1: "Charts over the days you have logged: a week and a month read together, so a single heavy day stops looking like a problem and a pattern starts to.",
-            body2: "Not built yet: that is issue #545. To read one past day, use the date control at the top of the screen."
-        )
-    }
-}
-
-/// The charts, presented over whatever Meals was showing (#567).
-///
-/// History stopped being a tab because it is somewhere you look and come back
-/// from, not somewhere the content settles. That makes it a presentation, and a
-/// presentation needs a way out, which a tab never did: hence the Done button
-/// this wrapper adds around the panel.
-///
-/// The macOS frame is not optional. A SwiftUI sheet on macOS sizes to its
-/// content, and a panel that only states what is coming collapses to little more
-/// than its own toolbar without an explicit size (#474 hit this three times).
-struct MealsHistorySheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Tokens.paper.canvasIgnoresSafeArea()
-                ScrollView {
-                    MealsHistoryPlaceholder()
-                        .padding(.horizontal, Space.lg)
-                        .padding(.vertical, Space.xl)
-                }
-            }
-            .navigationTitle("History")
-            .inlineNavigationTitle()
-            .toolbar {
-                ToolbarItem(placement: .trailingBar) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        #if os(macOS)
-        .frame(minWidth: 520, minHeight: 420)
-        #endif
-    }
-}
-
 /// Plan is a tab rather than its own section on purpose.
 ///
 /// It reserves the slot, so the real feature is not a navigation redesign later.

@@ -1,23 +1,31 @@
 import SwiftUI
 import SwiftData
 
-/// The three tabs inside Meals (#543, #559, #565, narrowed in #567).
+/// The three tabs inside Meals (#543, #559, #565, #567, renamed in #569).
 ///
 /// ### What a tab is for here
 ///
-/// A tab is a place the content can BE. Today is a day, Plan is a plan, Targets
-/// is eight numbers. Each is somewhere you settle.
+/// A tab is a place the content can BE. Tracking is a day, Plan is a plan,
+/// Targets is eight numbers. Each is somewhere you settle.
 ///
 /// History left because it is not that. It is a thing you look at and come back
-/// from, and #567 moved it into the section chrome with the date control, where
-/// navigation lives. The same reasoning took the date pill out of the content
-/// column: the strip should offer places to be, not routes to take.
+/// from, so #567 moved it into the section chrome. #569 removed it outright: the
+/// charts it opened are #545 and unbuilt, so the control only ever presented a
+/// placeholder, and the calendar already reaches any past day.
 ///
-/// #559 briefly had five, including a Trends tab beside a History tab, from
-/// misreading "historic charts" as "historic chats". #565 collapsed those two
-/// into one and #567 moved the survivor to the chrome.
+/// ### Why the first tab is Tracking and not Today
+///
+/// It was called Today and then stopped being today: picking a day in the
+/// calendar re-renders it for that day. A tab named for one day while showing
+/// any day is a label contradicting its own content, and the name is the thing
+/// that was wrong. The case is renamed too, not just the string, because a case
+/// called `today` that shows March is the same mismatch one level down.
+///
+/// The rename moves a job. The tab used to name the day; now the date control in
+/// the chrome does, which is why that control states the date at all times
+/// rather than only when you have moved off today.
 enum MealsTab: String, CaseIterable, Identifiable {
-    case today
+    case tracking
     case plan
     case targets
 
@@ -25,14 +33,14 @@ enum MealsTab: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .today:   return "Today"
-        case .plan:    return "Plan"
-        case .targets: return "Targets"
+        case .tracking: return "Tracking"
+        case .plan:     return "Plan"
+        case .targets:  return "Targets"
         }
     }
 }
 
-/// Meal logging v1 (#543), restructured in #559 and corrected in #565.
+/// Meal logging v1 (#543), restructured in #559, #565, #567 and #569.
 ///
 /// ### What this surface is
 ///
@@ -43,15 +51,19 @@ enum MealsTab: String, CaseIterable, Identifiable {
 /// estimates, so calories round to the nearest 10 and every meal carries a
 /// confidence.
 ///
-/// ### The four tabs
+/// ### The three tabs
 ///
-/// Today is the day: a date control, the composer, the day card and that day's
-/// meals. It opens on today and the date control reaches any earlier day.
-/// History is the historic charts and is #545. Targets holds the setup offer or
-/// the eight derived numbers. Plan has no feature behind it at all. History and
-/// Plan both render a panel saying so; Plan is a TAB rather than a section
-/// because that reserves the slot without adding a permanently empty row to a
-/// twelve-section sidebar.
+/// Tracking is the day: the composer, the day card and that day's meals. It
+/// opens on today, and the date control in the section chrome names the day and
+/// reaches any earlier one. Targets holds the setup offer or the eight derived
+/// numbers. Plan has no feature behind it at all and renders a panel saying so;
+/// it is a TAB rather than a section because that reserves the slot without
+/// adding a permanently empty row to a twelve-section sidebar.
+///
+/// The historic charts are #545 and have no control here. #567 gave them a
+/// chrome button and #569 took it away again: with nothing built behind it the
+/// button only ever opened a placeholder, and the calendar already reaches the
+/// past day anyone was pressing it for.
 ///
 /// ### Why the composer is only on today
 ///
@@ -86,7 +98,7 @@ struct MealsView: View {
     @Query(sort: [SortDescriptor(\MealTargets.effectiveFrom, order: .forward)])
     private var allTargets: [MealTargets]
 
-    @State private var tab: MealsTab = .today
+    @State private var tab: MealsTab = .tracking
 
     /// The day Today is showing, device-local midnight. Starts on today and
     /// never moves past it, because a meal you have not eaten is not a log entry.
@@ -101,9 +113,6 @@ struct MealsView: View {
 
     /// The month grid, anchored to the date control in the section chrome.
     @State private var showingCalendar = false
-
-    /// The historic charts, presented over the current view (#567).
-    @State private var showingHistory = false
 
     @State private var openMeal: LocalMeal?
 
@@ -137,25 +146,27 @@ struct MealsView: View {
                 tabBar
 
                 switch tab {
-                case .today:   todayTab
-                case .plan:    scrolling { MealsPlanPlaceholder() }
-                case .targets: targetsTab
+                case .tracking: trackingTab
+                case .plan:     scrolling { MealsPlanPlaceholder() }
+                case .targets:  targetsTab
                 }
             }
         }
         .activeSection(.meals)
-        // macOS puts the same two controls in the NATIVE window toolbar, beside
-        // the refresh item `macSectionChrome` already installs (#283, #291).
+        // macOS puts the date control in the NATIVE window toolbar, beside the
+        // refresh item `macSectionChrome` already installs (#283, #291).
         //
-        // One HStack, not two bare buttons: the whole trailing closure goes into
-        // a SINGLE `ToolbarItem`, which renders one control, so a second button
-        // beside the first REPLACES it rather than joining it. Tasks found this
-        // the hard way when its calendar silently vanished (#385/#524).
+        // The HStack holds ONE control since #569 removed the history button, and
+        // it stays anyway. The whole trailing closure goes into a SINGLE
+        // `ToolbarItem`, which renders one control, so a second button added
+        // beside the first REPLACES it rather than joining it. Tasks found that
+        // out when its calendar silently vanished (#385/#524). Deleting the
+        // wrapper would take the warning with it and leave the next control to
+        // rediscover the trap.
         .macSectionChrome("Meals") {
             #if os(macOS)
             HStack(spacing: Space.xs) {
                 macDateButton
-                macHistoryButton
             }
             #endif
         }
@@ -178,18 +189,6 @@ struct MealsView: View {
         }
         .sheet(isPresented: $showingTargets) {
             MealTargetsSheet()
-                #if os(iOS)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                #endif
-        }
-        // The charts open OVER the current view rather than owning a tab (#567).
-        // A sheet and not a popover: #545 builds a week and a month read together
-        // plus the balance analysis, which is far more surface than a popover
-        // should hold, and the placeholder standing in for it should be presented
-        // the way the real thing will be.
-        .sheet(isPresented: $showingHistory) {
-            MealsHistorySheet()
                 #if os(iOS)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
@@ -225,12 +224,6 @@ struct MealsView: View {
                 today: Date()
             )
         }
-
-        TopBarIconButton(
-            systemName: "chart.xyaxis.line",
-            accessibilityLabel: "Historic charts",
-            action: { showingHistory = true }
-        )
     }
     #endif
 
@@ -249,9 +242,7 @@ struct MealsView: View {
         Button(action: openCalendar) {
             HStack(spacing: Space.xs) {
                 Image(systemName: "calendar")
-                if let dateControlLabel {
-                    Text(dateControlLabel)
-                }
+                Text(dateControlLabel)
             }
         }
         .help(dateControlAccessibilityLabel)
@@ -266,43 +257,44 @@ struct MealsView: View {
         }
     }
 
-    private var macHistoryButton: some View {
-        Button { showingHistory = true } label: {
-            Image(systemName: "chart.xyaxis.line")
-        }
-        .help("Historic charts")
-        .accessibilityLabel("Historic charts")
-    }
     #endif
 
-    /// Nil while today is selected, the day itself once another is (#567).
+    /// The selected day, always (#567, widened in #569).
     ///
-    /// This is what makes one control do two jobs. A bare glyph is a button and
-    /// says nothing, which is right when the content below is today and needs no
-    /// caption. The moment the content is some other day, the chrome has to say
-    /// so, because the tab strip still reads "Today" and nothing else above the
-    /// fold would name the day.
+    /// This is what makes one control do two jobs: it states the day and it opens
+    /// the calendar. #567 showed the date only once you had moved off today,
+    /// because the tab was called "Today" and carried the day itself. #569
+    /// renamed that tab to "Tracking", which took the day off it, so the control
+    /// is now the ONLY thing above the fold naming the day the numbers belong to
+    /// and it has to say so in every state.
     ///
     /// It is also why there is no separate Today button: returning is picking
     /// today in the calendar this control already opens.
     ///
-    /// ### Why "10 Sep" and not "Thursday"
+    /// ### Why "15 Sep" and not "Monday"
     ///
-    /// The first build used `dayTitle`, the weekday the old in-content pill
-    /// showed, and beside the section title at 390 pt it truncated to "Thurs…".
-    /// A truncated label is worse than a short one here, because stating the day
-    /// is this state's entire job. The compact date is also the more honest
-    /// answer: "Thursday" never said WHICH Thursday, and "10 Sep" does, in fewer
-    /// characters. The weekday survives in the accessibility label and on the
-    /// day card below.
-    private var dateControlLabel: String? {
-        isSelectedToday ? nil : Self.chromeDayFormatter.string(from: selectedDay)
+    /// The first build used the weekday, and beside the section title at 390 pt
+    /// it truncated to "Thurs…". A truncated label is worse than a short one when
+    /// stating the day is the whole job. The date is also the more honest answer:
+    /// a weekday never said WHICH week, and "15 Sep" does, in fewer characters.
+    /// The weekday survives in the accessibility label and on the day card.
+    private var dateControlLabel: String {
+        Self.chromeDayFormatter.string(from: selectedDay)
     }
 
+    /// Where the difference between today and an older day still lives.
+    ///
+    /// #569 traded a strong visual signal for a constant one: the date used to
+    /// APPEAR when you moved off today, and now it is always there, so its
+    /// presence no longer carries the distinction. Sighted users get it from the
+    /// composer, which is absent on any day but today. A screen-reader user has
+    /// no such cue, so this says it in words rather than leaving the date to be
+    /// compared against a today the reader has to already know.
     private var dateControlAccessibilityLabel: String {
-        isSelectedToday
-            ? "Choose a day. Showing today"
-            : "Choose a day. Showing \(dayTitle), \(Self.dayFormatter.string(from: selectedDay))"
+        let date = Self.dayFormatter.string(from: selectedDay)
+        return isSelectedToday
+            ? "Choose a day. Showing today, \(date)"
+            : "Choose a day. Showing \(dayTitle), \(date). Not today"
     }
 
     /// Always re-point the grid at the day on screen before opening, so it never
@@ -343,7 +335,7 @@ struct MealsView: View {
         }
     }
 
-    // MARK: - Today
+    // MARK: - Tracking
 
     /// One day in full, and by default that day is today.
     ///
@@ -351,7 +343,7 @@ struct MealsView: View {
     /// whichever day is selected: the composer's presence, the day card, the meal
     /// list and each row's breakdown. Nothing here knows about a second tab,
     /// because there is not one any more.
-    private var todayTab: some View {
+    private var trackingTab: some View {
         dayScroll {
             VStack(alignment: .leading, spacing: Space.lg) {
                 // The composer only appears on today. Estimating a meal onto a
@@ -477,7 +469,7 @@ struct MealsView: View {
         calendar: Calendar = .current
     ) -> (tab: MealsTab, day: Date, month: Date) {
         (
-            tab: .today,
+            tab: .tracking,
             day: calendar.startOfDay(for: day),
             month: MealCalendar.monthStart(of: day, calendar: calendar)
         )
