@@ -577,19 +577,6 @@ enum ToolDefinitions {
         clearExpenses
     ]
 
-    /// Subset of `allTools` excluded from the capture (Shortcut) auto-execute
-    /// path. Capture auto-confirms everything the LLM emits; trip-related
-    /// tools require date confirmation and contextual review that only the
-    /// chat surface offers. Filter applied in `ChatToDrafts.run()`.
-    static let captureExcludedToolNames: Set<String> = [
-        "draft_trip",
-        "add_itinerary_item",
-        "edit_trip",
-        "delete_trip",
-        "edit_itinerary_item",
-        "delete_itinerary_item"
-    ]
-
     /// Map tool name → action type. Mirrors `toolToActionType` in
     /// server/ai/tools.js. Reuses `DraftActionType` from Models/Draft.swift
     /// so any future cross-references (chat preview cards, telemetry)
