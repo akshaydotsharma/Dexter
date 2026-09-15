@@ -19,6 +19,12 @@ struct ActivityItem: Identifiable, Equatable {
         /// `statementLabel` render as ONE row so a single upload doesn't
         /// explode the feed. Deep-links into Finance.
         case statement
+        /// One `LocalMeal` (#547). Deliberately NOT collapsed the way
+        /// `.statement` is: a statement upload is a single act that happens to
+        /// write many rows, while four meals are four things the user did. A
+        /// per-day aggregate would also be a new code path inside a feed whose
+        /// whole value is that every section appears in it the same way.
+        case meal
     }
 
     let id: UUID
@@ -45,6 +51,18 @@ struct ActivityItem: Identifiable, Equatable {
     /// `id`). Keeps `rowKey` unique + stable across recomputes of the feed.
     let groupKey: String?
 
+    /// A figure shown at the trailing edge, above the timestamp. `.meal` rows
+    /// put their calories here ("520 kcal", or "—" for a meal that has no
+    /// numbers yet); every other type leaves it nil and keeps the trailing
+    /// column at one line.
+    let trailingValue: String?
+
+    /// True when `trailingValue` is a number that does NOT count towards a
+    /// total: a suspect or needs-detail meal. Drawn muted, the same way
+    /// `MealRow` greys the same figure, so the feed and the Meals section agree
+    /// about which numbers are real.
+    let trailingIsMuted: Bool
+
     init(
         id: UUID,
         type: ItemType,
@@ -54,7 +72,9 @@ struct ActivityItem: Identifiable, Equatable {
         sortDate: Date,
         createdAt: Date,
         tripUUID: UUID? = nil,
-        groupKey: String? = nil
+        groupKey: String? = nil,
+        trailingValue: String? = nil,
+        trailingIsMuted: Bool = false
     ) {
         self.id = id
         self.type = type
@@ -65,6 +85,8 @@ struct ActivityItem: Identifiable, Equatable {
         self.createdAt = createdAt
         self.tripUUID = tripUUID
         self.groupKey = groupKey
+        self.trailingValue = trailingValue
+        self.trailingIsMuted = trailingIsMuted
     }
 
     var rowKey: String {

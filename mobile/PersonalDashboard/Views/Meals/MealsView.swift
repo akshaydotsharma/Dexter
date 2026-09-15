@@ -71,6 +71,12 @@ struct MealsView: View {
 
     @State private var openMeal: LocalMeal?
 
+    /// The row an Activity deep-link just landed on (#547). Held for ~600 ms,
+    /// which is long enough to be seen and short enough not to read as a
+    /// selection the user has to dismiss. Keyed on `clientUUID` because that is
+    /// also the row's scroll id.
+    @State private var pulsedMealID: String?
+
     var body: some View {
         ZStack {
             Tokens.paper.canvasIgnoresSafeArea()
@@ -98,6 +104,12 @@ struct MealsView: View {
         }
         .activeSection(.meals)
         .macSectionChrome("Meals")
+        // Activity / Today deep-link consumption. Both `onAppear` and
+        // `onChange` are needed: on iOS the section is pushed and appears with
+        // the focus already set, while on macOS the detail pane can already be
+        // showing Meals when the focus is written.
+        .onAppear { consumeFocus() }
+        .onChange(of: router.focus) { _, _ in consumeFocus() }
         .sheet(item: $openMeal) { meal in
             MealDetailSheet(meal: meal)
                 #if os(iOS)
@@ -134,30 +146,74 @@ struct MealsView: View {
     // MARK: - Today
 
     private var todayTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.lg) {
-                dateStepper
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    dateStepper
 
-                // The composer only appears on today. Estimating a meal onto a
-                // day that has ended is a legitimate thing to want, but the
-                // primary path has to stay one field and one button, and a
-                // composer that silently logs to March is worse than one that is
-                // not there.
-                if isToday {
-                    MealComposer(
-                        day: selectedDay,
-                        existingOnDay: mealsOnDay,
-                        onLogged: { _ in }
-                    )
+                    // The composer only appears on today. Estimating a meal onto a
+                    // day that has ended is a legitimate thing to want, but the
+                    // primary path has to stay one field and one button, and a
+                    // composer that silently logs to March is worse than one that is
+                    // not there.
+                    if isToday {
+                        MealComposer(
+                            day: selectedDay,
+                            existingOnDay: mealsOnDay,
+                            onLogged: { _ in }
+                        )
+                    }
+
+                    MealDayCard(summary: summary, targets: targetsInForce)
+
+                    mealList
                 }
-
-                MealDayCard(summary: summary, targets: targetsInForce)
-
-                mealList
+                .padding(.horizontal, Space.lg)
+                .padding(.bottom, Space.xxl)
+                .padding(.top, Space.xs)
             }
-            .padding(.horizontal, Space.lg)
-            .padding(.bottom, Space.xxl)
-            .padding(.top, Space.xs)
+            // The scroll half of the deep-link. It runs on the pulse rather than on
+            // the focus, because the focus may arrive while another tab is showing
+            // and this reader is not mounted; the pulse survives that and fires the
+            // scroll once the list is on screen. One run loop of slack lets the day
+            // switch render its rows before we ask for one of them.
+            .onChange(of: pulsedMealID) { _, id in scroll(proxy, to: id) }
+            .onAppear { scroll(proxy, to: pulsedMealID) }
+        }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, to id: String?) {
+        guard let id else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+        }
+    }
+
+    /// Land a deep-link on its meal: switch to the day that holds it, put the
+    /// Today tab in front of it, and pulse the row.
+    ///
+    /// Goes through the SAME `ActivityFocus` mechanism every other section
+    /// uses, rather than a second navigation path. The id travels as a `UUID`
+    /// there and is stored here as a string, so the match is case-insensitive:
+    /// `MealService` lowercases what it writes, but a row that arrived from a
+    /// peer or a tool call need not have.
+    private func consumeFocus() {
+        guard router.focus?.section == .meals, let focus = router.focus else { return }
+        router.focus = nil
+        guard let meal = allMeals.first(where: {
+            $0.clientUUID.caseInsensitiveCompare(focus.id.uuidString) == .orderedSame
+        }) else { return }
+
+        tab = .today
+        selectedDay = meal.deviceDay
+        pulsedMealID = meal.clientUUID
+
+        let id = meal.clientUUID
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            if pulsedMealID == id { pulsedMealID = nil }
         }
     }
 
@@ -222,8 +278,10 @@ struct MealsView: View {
                     MealRow(
                         meal: meal,
                         isDuplicate: flagged.contains(meal.clientUUID),
-                        onTap: { openMeal = meal }
+                        onTap: { openMeal = meal },
+                        isFocused: pulsedMealID == meal.clientUUID
                     )
+                    .id(meal.clientUUID)
                 }
             }
         }
@@ -231,16 +289,17 @@ struct MealsView: View {
 
     // MARK: - Derived
 
-    /// Meals on the selected day. Matched through `WallClock.isSameStoredDay`,
-    /// so a stored UTC anchor is compared as a day and never as an instant
-    /// (#506).
-    private var mealsOnDay: [LocalMeal] {
-        let anchor = WallClock.dayAnchor(from: selectedDay)
-        return allMeals.filter { WallClock.isSameStoredDay($0.date, anchor) }
-    }
+    /// Meals on the selected day, in the order they were logged. Read off the
+    /// summary rather than filtered again here, so the composer's duplicate
+    /// check and the card's totals are looking at the same rows. The day match
+    /// itself lives in `MealDaySummary.onDay`, where a stored UTC anchor is
+    /// compared as a day and never as an instant (#506).
+    private var mealsOnDay: [LocalMeal] { summary.all }
 
+    /// Built through the shared selector, so this section and the Today card
+    /// total one day exactly once (#547).
     private var summary: MealDaySummary {
-        MealDaySummary(meals: mealsOnDay)
+        MealDaySummary.onDay(selectedDay, in: allMeals)
     }
 
     /// The targets in force on the selected day: the latest record that has
@@ -248,9 +307,7 @@ struct MealsView: View {
     /// `MealService.targets(on:)`, read off the live query so the card repaints
     /// without a refetch.
     private var targetsInForce: MealTargets? {
-        let anchor = WallClock.dayAnchor(from: selectedDay)
-        return allTargets.last { WallClock.startOfStoredDay($0.effectiveFrom) <= anchor }
-            ?? allTargets.first
+        MealTargets.inForce(on: selectedDay, among: allTargets)
     }
 
     private var isToday: Bool {

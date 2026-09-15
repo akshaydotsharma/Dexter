@@ -175,3 +175,45 @@ enum MealFormat {
         }
     }
 }
+
+// MARK: - Picking a day out of the store (#547)
+
+extension MealDaySummary {
+
+    /// The summary for one device-local day, selected out of every meal held.
+    ///
+    /// The ONE place a day is picked out of a list of meals. The Meals section
+    /// and the Today card both call it, so the calories on the two surfaces
+    /// cannot disagree. A second `filter` written beside a second `reduce` is
+    /// exactly how one day ends up with two numbers, and the exclusions this
+    /// type exists to draw are the part that would silently differ: a card that
+    /// summed its own rows would fold a suspect meal back into the total and
+    /// nothing on either screen would say which of the two was right.
+    ///
+    /// `day` is a DEVICE-local date. Matching goes through
+    /// `WallClock.isSameStoredDay`, so a stored UTC anchor is compared as a day
+    /// and never as an instant (#506).
+    static func onDay(_ day: Date, in meals: [LocalMeal]) -> MealDaySummary {
+        let anchor = WallClock.dayAnchor(from: day)
+        return MealDaySummary(meals: meals.filter { WallClock.isSameStoredDay($0.date, anchor) })
+    }
+}
+
+extension MealTargets {
+
+    /// The targets in force on a day, out of every record held.
+    ///
+    /// Same rule as `MealService.targets(on:)` — the latest record that has
+    /// already taken effect, or the earliest there is — but read off a live
+    /// `@Query` so a surface repaints the moment targets are written, without a
+    /// refetch. Shared by the Meals section and the Today card for the same
+    /// reason `MealDaySummary.onDay` is: two surfaces reading two different
+    /// target records would paint two different verdicts for one day.
+    ///
+    /// `all` must be sorted by `effectiveFrom` ascending, which is how both
+    /// queries declare it.
+    static func inForce(on day: Date, among all: [MealTargets]) -> MealTargets? {
+        let anchor = WallClock.dayAnchor(from: day)
+        return all.last { WallClock.startOfStoredDay($0.effectiveFrom) <= anchor } ?? all.first
+    }
+}
