@@ -1,7 +1,23 @@
 import SwiftUI
+import SwiftData
 
 struct TodayView: View {
     @Bindable var router: AppRouter
+
+    // Meals is the one card here that is not backed by a manual-fetch view
+    // model (#547). It reads the store live, the way the Meals section does, so
+    // a meal logged from chat, a Shortcut or a synced peer lands on this card
+    // without waiting for `loadAll`.
+    @Query(
+        sort: [
+            SortDescriptor(\LocalMeal.date, order: .forward),
+            SortDescriptor(\LocalMeal.loggedAt, order: .forward)
+        ]
+    ) private var allMeals: [LocalMeal]
+
+    /// Sorted ascending because `MealTargets.inForce` reads it that way.
+    @Query(sort: [SortDescriptor(\MealTargets.effectiveFrom, order: .forward)])
+    private var allTargets: [MealTargets]
 
     /// Tasks carrying at least one ticket attachment (#399), for the row glyph.
     @State private var ticketedTaskIDs: Set<UUID> = []
@@ -31,6 +47,11 @@ struct TodayView: View {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         header
                         tasksCard
+                        // Second, above the two reference cards: it is the only
+                        // card on this surface whose subject is the day itself,
+                        // and it changes several times a day while Notes and
+                        // Lists mostly do not.
+                        mealsCard
                         notesCard
                         listsCard
                     }
@@ -192,6 +213,24 @@ struct TodayView: View {
         }
     }
 
+    // MARK: - Meals card
+
+    /// The day's calories, macros and meal count (#547).
+    ///
+    /// Reads `MealDaySummary` rather than summing the day's rows here. That is
+    /// the whole point: the summary is where suspect and needs-detail meals are
+    /// held out of a total, and a card that did its own arithmetic would show a
+    /// different number from the Meals section for the same day with nothing on
+    /// either screen to say which was right.
+    private var mealsCard: some View {
+        let today = Date()
+        return TodayMealsCard(
+            summary: MealDaySummary.onDay(today, in: allMeals),
+            targets: MealTargets.inForce(on: today, among: allTargets),
+            onOpen: { router.go(to: .meals) }
+        )
+    }
+
     // MARK: - Lists card
 
     private var listsCard: some View {
@@ -263,7 +302,13 @@ struct TodayView: View {
 
 // MARK: - Card
 
-private struct TodayCard<Content: View, Footer: View>: View {
+/// The shared Today container: eyebrow, count, bordered surface, footer link.
+///
+/// Internal rather than file-private because `TodayMealsCard` lives in its own
+/// file (#547) and has to be the SAME card, not a copy of it. A second
+/// implementation of this shape is how one surface ends up with two card
+/// treatments.
+struct TodayCard<Content: View, Footer: View>: View {
     let section: AppSection
     let title: String
     let count: Int
@@ -271,6 +316,16 @@ private struct TodayCard<Content: View, Footer: View>: View {
     let isLoading: Bool
     let isEmpty: Bool
     let emptyText: String
+
+    /// Whether the footer link survives the empty state.
+    ///
+    /// False for the three cards whose empty state means "you have none of
+    /// these at all", where a link into an empty section is a dead end. True
+    /// for Meals, whose empty state is EVERY morning: the day simply has not
+    /// been logged yet, and the tap-through is exactly what is wanted at that
+    /// moment (#547).
+    var keepsFooterWhenEmpty: Bool = false
+
     @ViewBuilder var content: Content
     @ViewBuilder var footer: Footer
 
@@ -307,7 +362,7 @@ private struct TodayCard<Content: View, Footer: View>: View {
                     content
                 }
 
-                if !isLoading && !isEmpty {
+                if !isLoading && (!isEmpty || keepsFooterWhenEmpty) {
                     Rectangle()
                         .fill(Tokens.divider)
                         .frame(height: 0.5)
@@ -320,7 +375,7 @@ private struct TodayCard<Content: View, Footer: View>: View {
     }
 }
 
-private struct TodayCardFooter: View {
+struct TodayCardFooter: View {
     let label: String
     let onTap: () -> Void
 

@@ -10,7 +10,7 @@ import SwiftData
 /// confirm) updates the feed automatically without a pull-to-refresh.
 struct ActivityView: View {
     enum Filter: Equatable, CaseIterable, Identifiable {
-        case all, note, todo, list, folder, trips, finance
+        case all, note, todo, list, folder, trips, finance, meals
 
         var id: String {
             switch self {
@@ -21,6 +21,7 @@ struct ActivityView: View {
             case .folder:  return "folder"
             case .trips:   return "trips"
             case .finance: return "finance"
+            case .meals:   return "meals"
             }
         }
 
@@ -33,6 +34,7 @@ struct ActivityView: View {
             case .folder:  return "Folders"
             case .trips:   return "Trips"
             case .finance: return "Finance"
+            case .meals:   return "Meals"
             }
         }
 
@@ -48,6 +50,7 @@ struct ActivityView: View {
             case .folder:  return type == .folder
             case .trips:   return type == .itinerary
             case .finance: return type == .expense || type == .statement
+            case .meals:   return type == .meal
             }
         }
     }
@@ -79,6 +82,17 @@ struct ActivityView: View {
     @Query private var itineraryItems: [LocalItineraryItem]
 
     @Query private var trips: [LocalTrip]
+
+    // Meals are hard-deleted like expenses, so there is no soft-delete filter
+    // to apply. Sorted the way the log reads; the feed re-sorts by `sortDate`
+    // anyway, so this is only so the query is the same one the Meals section
+    // asks for.
+    @Query(
+        sort: [
+            SortDescriptor(\LocalMeal.date, order: .forward),
+            SortDescriptor(\LocalMeal.loggedAt, order: .forward)
+        ]
+    ) private var meals: [LocalMeal]
 
     @State private var filter: Filter = .all
     @State private var visibleCount: Int = pageSize
@@ -186,7 +200,7 @@ struct ActivityView: View {
 
     private var combinedItems: [ActivityItem] {
         var out: [ActivityItem] = []
-        out.reserveCapacity(todos.count + notes.count + lists.count + folders.count)
+        out.reserveCapacity(todos.count + notes.count + lists.count + folders.count + meals.count)
 
         for todo in todos {
             out.append(ActivityItem(
@@ -276,6 +290,38 @@ struct ActivityView: View {
                 sortDate: item.createdAt,
                 createdAt: item.createdAt,
                 tripUUID: item.tripUUID
+            ))
+        }
+
+        // Meals: ONE ROW EACH, never a per-day aggregate (#547). An aggregate
+        // would be a new code path inside a shared feed, and consistency with
+        // the other eleven sections is worth more than a tidier timeline. If
+        // four rows a day genuinely drowns the feed after a real week of use,
+        // that is a later decision with evidence behind it.
+        //
+        // The description is the title because a meal has no other name — it is
+        // what the user typed and what a re-estimate runs against — and the
+        // meal type takes the snippet slot below it.
+        for meal in meals {
+            out.append(ActivityItem(
+                id: UUID(uuidString: meal.clientUUID) ?? UUID(),
+                type: .meal,
+                title: meal.mealDescription,
+                snippet: meal.mealTypeEnum.displayName,
+                parent: nil,
+                // When it was LOGGED, like expenses and itinerary rows, not
+                // when it was eaten. A meal back-filled onto yesterday sorts by
+                // `loggedAt` into a day above the act that recorded it, which is
+                // the one thing this feed's day headers must not do.
+                sortDate: meal.createdAt,
+                createdAt: meal.createdAt,
+                // Calories carry the same reading they carry in the Meals
+                // section: a needs-detail meal has no numbers, and a suspect
+                // one has numbers that do not count.
+                trailingValue: meal.needsDetail
+                    ? "—"
+                    : MealFormat.value(meal.calories, for: .calories),
+                trailingIsMuted: meal.needsDetail || meal.isSuspect
             ))
         }
 
@@ -403,6 +449,12 @@ struct ActivityView: View {
             router.go(to: .itineraries)
         case .expense, .statement:
             router.go(to: .finance)
+        case .meal:
+            // The same focus mechanism every other section uses. MealsView
+            // consumes it, switches to the day that holds the meal, and pulses
+            // the row.
+            router.focus = ActivityFocus(section: .meals, id: item.id, isFolder: false)
+            router.go(to: .meals)
         }
     }
 
@@ -527,6 +579,13 @@ private struct ActivityRow: View {
                                 .font(.edSubheadline)
                                 .foregroundStyle(Tokens.muted)
                                 .lineLimit(1)
+                        } else if item.type == .meal {
+                            // The meal type is a classifier, not a description,
+                            // and it is set as an eyebrow in the Meals section
+                            // for exactly that reason. Keeping the treatment
+                            // here means one word does not read as two different
+                            // kinds of thing on two surfaces.
+                            Text(snippet).eyebrow()
                         } else {
                             Text(snippet)
                                 .font(.edSubheadline)
@@ -549,12 +608,24 @@ private struct ActivityRow: View {
 
                 Spacer(minLength: Space.sm)
 
-                // Timestamp mirrors the sort/group key so the row's relative
-                // label always agrees with its day header.
-                Text(formatRelative(item.sortDate))
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.mutedSoft)
-                    .accessibilityLabel(formatAbsolute(item.sortDate))
+                VStack(alignment: .trailing, spacing: 2) {
+                    // The row's trailing figure, when its type has one. No pill:
+                    // ten accent-filled pills down a feed would be ten competing
+                    // anchors, which is the rule that already governs `MealRow`.
+                    if let value = item.trailingValue {
+                        Text(value)
+                            .font(.edFootnoteStrong)
+                            .foregroundStyle(item.trailingIsMuted ? Tokens.muted : Tokens.ink)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                    // Timestamp mirrors the sort/group key so the row's relative
+                    // label always agrees with its day header.
+                    Text(formatRelative(item.sortDate))
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.mutedSoft)
+                        .accessibilityLabel(formatAbsolute(item.sortDate))
+                }
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
@@ -585,6 +656,7 @@ private struct ActivityRow: View {
         case .itinerary: return "airplane"
         case .expense:   return "creditcard"
         case .statement: return "doc.text"
+        case .meal:      return "fork.knife"
         }
     }
 
@@ -597,6 +669,7 @@ private struct ActivityRow: View {
         case .itinerary: return Tokens.accentItineraries
         case .expense:   return Tokens.accentFinance
         case .statement: return Tokens.accentFinance
+        case .meal:      return Tokens.accentMeals
         }
     }
 
@@ -610,6 +683,7 @@ private struct ActivityRow: View {
         case .itinerary: kind = "Itinerary item"
         case .expense:   kind = "Expense"
         case .statement: kind = "Statement import"
+        case .meal:      kind = "Meal"
         }
         var parts = ["\(kind) created.", item.title.isEmpty ? "Untitled" : item.title]
         if let s = item.snippet, !s.isEmpty { parts.append(s) }
@@ -618,6 +692,9 @@ private struct ActivityRow: View {
         }
         if item.type == .itinerary, let p = item.parent, !p.isEmpty {
             parts.append("Trip: \(p).")
+        }
+        if let value = item.trailingValue {
+            parts.append(item.trailingIsMuted ? "\(value), held out of the day's total." : value)
         }
         parts.append(formatAbsolute(item.sortDate))
         return parts.joined(separator: " ")
@@ -653,7 +730,7 @@ private struct EmptyStateView: View {
     }
 
     private var sub: String {
-        if filter == .all { return "Notes, todos, lists, folders, trips, and expenses you capture will show up here." }
+        if filter == .all { return "Notes, todos, lists, folders, trips, expenses, and meals you capture will show up here." }
         return "Switch to All to see everything."
     }
 }
