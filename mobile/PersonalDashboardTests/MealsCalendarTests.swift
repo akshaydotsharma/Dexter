@@ -264,19 +264,19 @@ final class MealsCalendarTests: XCTestCase {
 
     // MARK: - Where a deep link lands
 
-    /// Every meal lands on Today, whatever day it was logged on (#565).
+    /// Every meal lands on Tracking, whatever day it was logged on (#565).
     ///
-    /// This was the two-armed routing test #559 needed, back when Today could
-    /// only show today and anything older had to go to a second tab. Today
+    /// This was the two-armed routing test #559 needed, back when the first tab
+    /// could only show today and anything older had to go to a second one. It
     /// reaches any day again, so the branch is gone, and what is worth pinning is
     /// that it STAYS gone: a meal from an earlier year must not acquire a second
     /// landing place.
-    func testEveryDeepLinkLandsOnTodayWhicheverDayTheMealIsOn() {
-        XCTAssertEqual(MealsView.landing(forMealOn: date(2026, 9, 15), calendar: calendar).tab, .today)
-        XCTAssertEqual(MealsView.landing(forMealOn: date(2026, 9, 14), calendar: calendar).tab, .today)
+    func testEveryDeepLinkLandsOnTrackingWhicheverDayTheMealIsOn() {
+        XCTAssertEqual(MealsView.landing(forMealOn: date(2026, 9, 15), calendar: calendar).tab, .tracking)
+        XCTAssertEqual(MealsView.landing(forMealOn: date(2026, 9, 14), calendar: calendar).tab, .tracking)
         XCTAssertEqual(
             MealsView.landing(forMealOn: date(2025, 12, 31), calendar: calendar).tab,
-            .today,
+            .tracking,
             "A meal in an earlier year lands on the same tab as one from this morning."
         )
     }
@@ -304,18 +304,24 @@ final class MealsCalendarTests: XCTestCase {
         )
     }
 
-    /// The three tabs, in the order the strip prints them (#567).
+    /// The three tabs, in the order the strip prints them (#567, renamed #569).
     ///
     /// No Trends: its content was always History's (#565). No History either:
     /// it is a thing you look at and come back from, not a place the content
-    /// settles, so #567 moved it to the section chrome beside the date control.
-    /// A tab reappearing here would mean navigation had crept back into the
-    /// strip, which is the change this issue exists to make.
-    func testTheTabOrderIsTodayPlanTargets() {
-        XCTAssertEqual(MealsTab.allCases, [.today, .plan, .targets])
+    /// settles, so #567 moved it to the section chrome and #569 removed it once
+    /// it was clear the charts behind it were unbuilt. A navigation tab
+    /// reappearing here would undo both.
+    ///
+    /// The first tab is Tracking, not Today. It shows whichever day the date
+    /// control selected, so a name meaning one particular day was a label
+    /// contradicting its own content. Asserting the display string and not only
+    /// the case is the point: the case could be renamed and the strip could still
+    /// print the old word.
+    func testTheTabOrderIsTrackingPlanTargets() {
+        XCTAssertEqual(MealsTab.allCases, [.tracking, .plan, .targets])
         XCTAssertEqual(
             MealsTab.allCases.map(\.displayName),
-            ["Today", "Plan", "Targets"]
+            ["Tracking", "Plan", "Targets"]
         )
     }
 
