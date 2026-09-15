@@ -249,11 +249,24 @@ struct MealDetailSheet: View {
     private var describeSection: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text("Re-describe").eyebrow()
-            TextField("What you ate", text: $descriptionText, axis: .vertical)
+            // The same plain-field placeholder trap the composer hit (#576).
+            // This field is normally seeded with the meal's description, so it
+            // only shows a placeholder once the user clears it, which is exactly
+            // when an ink-strength "What you ate" reads as text they still have.
+            TextField(
+                PlainFieldPlaceholder.title("What you ate"),
+                text: $descriptionText,
+                axis: .vertical
+            )
                 .font(.edBody)
                 .lineLimit(2...6)
                 .textFieldStyle(.plain)
                 .padding(Space.md)
+                .plainFieldPlaceholder(
+                    "What you ate",
+                    isVisible: descriptionText.isEmpty,
+                    padding: Space.md
+                )
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.md, style: .continuous)

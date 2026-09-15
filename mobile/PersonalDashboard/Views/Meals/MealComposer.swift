@@ -127,9 +127,17 @@ struct MealComposer: View {
 
     // MARK: - Input
 
+    /// The example meal shown while the field is empty.
+    ///
+    /// A constant rather than a literal because macOS needs it in two places:
+    /// the field's own title has to be EMPTY there, or AppKit draws this string
+    /// at near-ink strength and the composer reads as pre-filled with a
+    /// breakfast nobody ate (#576). `PlainFieldPlaceholder` owns both halves.
+    static let placeholderExample = "Two eggs on toast with butter and a flat white"
+
     private var field: some View {
         TextField(
-            "Two eggs on toast with butter and a flat white",
+            PlainFieldPlaceholder.title(Self.placeholderExample),
             text: $descriptionText,
             axis: .vertical
         )
@@ -139,6 +147,11 @@ struct MealComposer: View {
         .textFieldStyle(.plain)
         .focused($fieldFocused)
         .padding(Space.md)
+        .plainFieldPlaceholder(
+            Self.placeholderExample,
+            isVisible: descriptionText.isEmpty,
+            padding: Space.md
+        )
         .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
