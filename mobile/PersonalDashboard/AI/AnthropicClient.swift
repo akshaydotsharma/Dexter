@@ -7,7 +7,52 @@ struct AnthropicClient: Sendable {
     static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     static let model = "claude-sonnet-5"
     static let anthropicVersion = "2023-06-01"
-    static let maxTokens = 1024
+    /// Shared output ceiling for every `send` / `stream` caller: the chat loop,
+    /// the capture (Shortcut) loop, the email-ingest loop, both ticket
+    /// extractors and the script normalizer.
+    ///
+    /// ## Measured, 2026-09-15, live API, `claude-sonnet-5` (#554)
+    ///
+    /// This was 1024, chosen before the model returned a `thinking` block.
+    /// Thinking spends the SAME output budget the answer needs, so the old
+    /// number was never measured against the model that runs today. Replayed
+    /// through the SHIPPED system prompt and the SHIPPED 28 tools, against an
+    /// in-memory library of 12 tasks / 8 notes / 2 lists
+    /// (`LiveToolLoopTokenBudgetTests`), `output_tokens` came out as:
+    ///
+    ///   scenario                        n    min   mean   max
+    ///   capture, one task              10    321    416    612
+    ///   capture, three tool calls      10    615   1204   1781
+    ///   capture, one meal               7   1423   1615   1866
+    ///   capture, trip + itinerary       2    550      -   1177
+    ///   loop turn 2 (tool_result)      16     29    145    567
+    ///
+    /// The headline is the first row. The SIMPLEST thing this path does — one
+    /// task, one tool call — already needed 321 to 612 tokens, and the same
+    /// input varied by nearly 2x between runs. Three tool calls reached 1781 and
+    /// a meal reached 1866. So 1024 was not a comfortable ceiling being
+    /// approached; it was a ceiling a routine multi-item capture went straight
+    /// through, silently.
+    ///
+    /// 8192 is 4.4x the measured max. The margin is deliberate, not timid:
+    /// #543 measured 1991 to 3361 on ONE identical meal description across four
+    /// runs, so a distribution's observed max is not its ceiling. It also costs
+    /// nothing. `max_tokens` is a ceiling, not a reservation — billing is on
+    /// tokens generated, so raising it does not raise the bill for any turn
+    /// that was already finishing. The only thing it buys is that a turn which
+    /// needed a little more room gets it.
+    ///
+    /// The same figure as `AnthropicClient+EstimateMeal` and
+    /// `AnthropicClient+DeriveTargets`, which reached it from their own
+    /// measurements.
+    ///
+    /// NOT measured on the chat (streaming) path: the API account ran out of
+    /// credit part-way through the run. Chat sends a near-verbatim copy of the
+    /// capture system prompt and the identical 28 tools, and additionally
+    /// streams a prose reply, so its need is bounded BELOW by the table above,
+    /// never above it. Re-run `testChatStreamOutputTokenDistribution` when
+    /// there is credit, and correct this note if chat lands higher.
+    static let maxTokens = 8192
     // No `temperature`: Sonnet 5 rejects the field with
     // "`temperature` is deprecated for this model" (400). Any extraction rule
     // that relied on low-temperature determinism belongs in code, not sampling.
@@ -21,7 +66,8 @@ struct AnthropicClient: Sendable {
     func send(
         systemPrompt: String,
         messages: [AnthropicMessage],
-        tools: [AnthropicTool]
+        tools: [AnthropicTool],
+        maxTokens: Int = Self.maxTokens
     ) async throws -> AnthropicResponse {
         guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
             throw AnthropicError.notConfigured
@@ -29,7 +75,7 @@ struct AnthropicClient: Sendable {
 
         let body = AnthropicRequest(
             model: Self.model,
-            max_tokens: Self.maxTokens,
+            max_tokens: maxTokens,
             system: systemPrompt,
             messages: messages,
             tools: tools
@@ -123,7 +169,8 @@ struct AnthropicClient: Sendable {
     func stream(
         systemPrompt: String,
         messages: [AnthropicMessage],
-        tools: [AnthropicTool]
+        tools: [AnthropicTool],
+        maxTokens: Int = Self.maxTokens
     ) -> AsyncThrowingStream<AnthropicStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
@@ -134,7 +181,7 @@ struct AnthropicClient: Sendable {
 
                     let body = AnthropicStreamingRequest(
                         model: Self.model,
-                        max_tokens: Self.maxTokens,
+                        max_tokens: maxTokens,
                         system: systemPrompt,
                         messages: messages,
                         tools: tools,
@@ -171,6 +218,11 @@ struct AnthropicClient: Sendable {
                     var currentEvent: String = "message"
                     var currentData: String = ""
                     var blocks: [Int: AccumulatingBlock] = [:]
+                    // `stop_reason` arrives on `message_delta`, one record
+                    // BEFORE `message_stop`. It used to be dropped, so every
+                    // `.done` reported `stopReason: nil` and no consumer could
+                    // tell a finished turn from a truncated one (#554).
+                    var terminal = TerminalSignal()
 
                     func flush() {
                         guard !currentData.isEmpty else {
@@ -181,6 +233,7 @@ struct AnthropicClient: Sendable {
                             eventName: currentEvent,
                             dataLine: currentData,
                             blocks: &blocks,
+                            terminal: &terminal,
                             continuation: continuation
                         )
                         currentEvent = "message"
@@ -229,6 +282,7 @@ struct AnthropicClient: Sendable {
         eventName: String,
         dataLine: String,
         blocks: inout [Int: AccumulatingBlock],
+        terminal: inout TerminalSignal,
         continuation: AsyncThrowingStream<AnthropicStreamEvent, Error>.Continuation
     ) {
         guard let data = dataLine.data(using: .utf8) else { return }
@@ -293,15 +347,25 @@ struct AnthropicClient: Sendable {
             continuation.yield(.toolUse(name: name, input: value))
 
         case "message_delta":
-            // Body: { type, delta: { stop_reason?, ... }, usage? }
-            // We don't yield here — `message_stop` is the canonical terminator
-            // and carries enough signal for our consumers.
-            break
+            // Body: { type, delta: { stop_reason?, ... }, usage: { output_tokens } }
+            // This is the ONLY record that carries `stop_reason` and the final
+            // `output_tokens`. `message_stop` carries neither, so both are
+            // cached here and yielded from the terminator below (#554).
+            struct Payload: Decodable {
+                struct Delta: Decodable { let stop_reason: String? }
+                struct Usage: Decodable { let output_tokens: Int? }
+                let delta: Delta?
+                let usage: Usage?
+            }
+            guard let p = try? Self.decoder.decode(Payload.self, from: data) else { return }
+            if let reason = p.delta?.stop_reason { terminal.stopReason = reason }
+            if let tokens = p.usage?.output_tokens { terminal.outputTokens = tokens }
 
         case "message_stop":
-            // No useful body fields for the chat surface; carry the stop_reason
-            // through if we have one cached, otherwise nil.
-            continuation.yield(.done(stopReason: nil))
+            continuation.yield(.done(
+                stopReason: terminal.stopReason,
+                outputTokens: terminal.outputTokens
+            ))
 
         case "error":
             struct Payload: Decodable {
@@ -383,13 +447,25 @@ struct AnthropicStreamingRequest: Encodable {
 enum AnthropicStreamEvent: Sendable {
     case textDelta(String)
     case toolUse(name: String, input: AnthropicJSONValue)
-    case done(stopReason: String?)
+    /// Terminator. `stopReason` is Anthropic's own (`end_turn`, `tool_use`,
+    /// `max_tokens`, …); `outputTokens` is the turn's billed output count,
+    /// which the token-budget measurement in `LiveToolLoopTokenBudgetTests`
+    /// reads (#554).
+    case done(stopReason: String?, outputTokens: Int?)
     case error(String)
 }
 
 /// Per-block accumulator. We retain `type` + `name` from `content_block_start`
 /// so that on `content_block_stop` we know whether to emit a `.toolUse` (for
 /// `type == "tool_use"`) and have the tool's name without re-walking events.
+/// What the stream learned from `message_delta` and must hand to the
+/// terminator. Separate from `AccumulatingBlock` because it is per-message,
+/// not per-content-block.
+private struct TerminalSignal {
+    var stopReason: String?
+    var outputTokens: Int?
+}
+
 private struct AccumulatingBlock {
     let type: String
     let name: String?
@@ -536,6 +612,16 @@ struct AnthropicTool: Codable {
 struct AnthropicResponse: Decodable {
     let content: [AnthropicContentBlock]
     let stop_reason: String?
+    /// Billed token counts. Optional because every stub response in the test
+    /// suite predates it. Read by the token-budget measurement (#554); the app
+    /// itself only needs `stop_reason`.
+    let usage: AnthropicUsage?
+}
+
+/// The `usage` object on a message response. Only `output_tokens` is modelled:
+/// it is the number the output ceiling is set from.
+struct AnthropicUsage: Decodable {
+    let output_tokens: Int?
 }
 
 /// Recursive JSON value. Load-bearing because tool inputs are arbitrary

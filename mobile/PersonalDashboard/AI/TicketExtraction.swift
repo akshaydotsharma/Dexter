@@ -665,11 +665,29 @@ struct TicketExtraction {
 
         let messages = [AnthropicMessage(role: "user", content: userContent)]
 
+        // Takes the shared ceiling, which #554 raised from 1024 to a measured
+        // 8192. A multi-segment ticket emits one tool call carrying ~18 fields
+        // PER SEGMENT, so this is among the largest single objects any caller
+        // asks for — 1024 could not have held a two-leg read with its thinking
+        // block, and the failure would have looked like a bad extraction rather
+        // than a short one.
         let response = try await anthropic.send(
             systemPrompt: Self.systemPrompt,
             messages: messages,
             tools: [Self.extractTicketTool]
         )
+
+
+        // A cut-off turn is not a usable read (#554). The non-streaming API
+        // returns the tool_use block with whatever input JSON it had managed to
+        // generate, so a truncated extraction hands back a HALF-READ ticket —
+        // plausible in every field it did fill, missing the ones it never
+        // reached, and indistinguishable from a complete read once written.
+        // Throwing lets the caller degrade, which is what it already does for
+        // every other failure here.
+        if response.stop_reason == "max_tokens" {
+            throw AnthropicError.http(0, "extract_ticket was cut off at the output limit")
+        }
 
         // Read the first extract_ticket tool call. The single-tool + explicit
         // instruction reliably yields a tool call; if the model instead emits
