@@ -447,15 +447,40 @@ final class MultiLegBoardingPassTests: XCTestCase {
 
     /// A seated event ticket fills all three slots with its own facts, and the group
     /// then has to survive on the back rather than vanish.
+    ///
+    /// Uses a stadium-style QR payload, not `outboundPayload`: a full BCBP
+    /// barcode now routes an attached document to the boarding-pass layout
+    /// instead (#520), which has no Section/Row slots at all, so a real
+    /// boarding pass can no longer stand in for the case this test targets.
     func testAFullEventFacePushesTheGroupToTheBack() {
+        var meta = TicketMeta()
+        meta.section = "26b"
+        meta.row = "D"
+        meta.boardingGroup = "5"
+        let fields = TicketCardFields(
+            card: attachedDocumentCard(meta: meta, seat: "312", barcodePayload: "STADIUM-QR-26B-D-312")
+        )
+
+        XCTAssertEqual(fields.auxiliary.map(\.label), ["Section", "Row", "Seat"])
+        XCTAssertTrue(fields.back.contains { $0.label == "Group" && $0.value == "5" })
+    }
+
+    /// Pins #520: an attached document whose barcode decodes as a full BCBP
+    /// boarding pass takes the `.boardingPass` layout, not `.event` —
+    /// `attachedDocumentCard`'s default `outboundPayload` is exactly that kind
+    /// of barcode. Without this, the routing #520 introduced has no coverage
+    /// left on the attached-document path: the test above switched to a
+    /// stadium payload so it could pin the `.event` ordering, and every other
+    /// `attachedDocumentCard` test only checks that "Group" is present, which
+    /// holds under either layout and so would not catch #520 regressing.
+    func testAnAttachedBCBPPassTakesTheBoardingPassLayout() {
         var meta = TicketMeta()
         meta.section = "26b"
         meta.row = "D"
         meta.boardingGroup = "5"
         let fields = TicketCardFields(card: attachedDocumentCard(meta: meta, seat: "312"))
 
-        XCTAssertEqual(fields.auxiliary.map(\.label), ["Section", "Row", "Seat"])
-        XCTAssertTrue(fields.back.contains { $0.label == "Group" && $0.value == "5" })
+        XCTAssertEqual(fields.auxiliary.map(\.label), ["Seat", "Gate", "Group"])
     }
 
     /// An event ticket with no group prints no empty group slot.
@@ -485,14 +510,22 @@ final class MultiLegBoardingPassTests: XCTestCase {
         return TicketCardData(item)
     }
 
-    /// A document attached to a task or a trip stop, which is the `.event` layout
-    /// whatever the document turns out to be.
-    private func attachedDocumentCard(meta: TicketMeta, seat: String) -> TicketCardData {
+    /// A document attached to a task or a trip stop. `.event` layout by
+    /// default — but only because `outboundPayload` is a full BCBP string, and
+    /// since #520 `TicketCardData` routes a BCBP-decodable barcode to the
+    /// `.boardingPass` layout instead, whatever kind of record it is attached to.
+    /// A caller testing the event layout itself must pass a barcode that does
+    /// NOT decode as BCBP (see `testAFullEventFacePushesTheGroupToTheBack`).
+    private func attachedDocumentCard(
+        meta: TicketMeta,
+        seat: String,
+        barcodePayload: String? = nil
+    ) -> TicketCardData {
         let ticket = LocalTaskTicket(
             todoClientUUID: UUID(),
             itineraryItemUUID: UUID(),
             attachmentPath: "task-tickets/a.pdf",
-            barcodePayload: outboundPayload,
+            barcodePayload: barcodePayload ?? outboundPayload,
             barcodeSymbology: "pdf417",
             eventTitle: "EK315",
             eventDate: Date(),
