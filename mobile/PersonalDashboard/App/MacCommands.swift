@@ -77,6 +77,10 @@ struct DexterCommands: Commands {
     private static let sections: [AppSection] = [
         .chat, .today, .tasks, .notes, .lists,
         .itineraries, .finance, .vocabulary, .activity,
+        // Meals (#543) goes AFTER the ninth entry on purpose. The first nine
+        // take Cmd-1 through Cmd-9, so inserting it next to Finance where it
+        // sits in the sidebar would silently move four existing shortcuts.
+        .meals,
         .settings, .helpCenter,
     ]
 

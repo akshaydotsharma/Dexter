@@ -102,6 +102,11 @@ struct InlineDropdownRow: View {
     /// Renders in the accent rather than the ink. For a row that performs an
     /// action instead of choosing a value, like "Multiple people…".
     var isAction: Bool = false
+    /// The section's own accent, for the checkmark and for an action row.
+    /// Defaults to Finance, which is where the control was first used; a
+    /// dropdown on another section passes its own so the control does not carry
+    /// a second section's hue into the surface.
+    var accent: Color = Tokens.accentFinance
     let action: () -> Void
 
     #if os(macOS)
@@ -115,13 +120,13 @@ struct InlineDropdownRow: View {
                     .frame(width: 24, alignment: .leading)
                 Text(label)
                     .font(.edBody)
-                    .foregroundStyle(isAction ? Tokens.accentFinance : Tokens.ink)
+                    .foregroundStyle(isAction ? accent : Tokens.ink)
                     .lineLimit(1)
                 Spacer(minLength: Space.sm)
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Tokens.accentFinance)
+                        .foregroundStyle(accent)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -146,7 +151,7 @@ struct InlineDropdownRow: View {
         case .symbol(let name):
             Image(systemName: name)
                 .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(isAction ? Tokens.accentFinance : Tokens.muted)
+                .foregroundStyle(isAction ? accent : Tokens.muted)
         case .none:
             Color.clear.frame(width: 0, height: 0)
         }

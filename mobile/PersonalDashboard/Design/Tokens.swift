@@ -30,6 +30,10 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     /// scripted today. Spelling it out here keeps the board reachable from
     /// `mac-open-for-verification.sh visionboard`, the QA path this feature needs.
     case visionBoard = "visionboard"
+    /// Meal logging (#543). Raw value is the default `"meals"`, which is already
+    /// lowercase, so `LAUNCH_SECTION=meals` and `dexter://focus/meals/<uuid>`
+    /// both resolve without the explicit spelling `visionBoard` needs above.
+    case meals
     case settings
     case helpCenter
 
@@ -49,6 +53,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .finance:     return "Finance"
         case .vocabulary:  return "Vocabulary"
         case .visionBoard: return "Vision Board"
+        case .meals:       return "Meals"
         case .settings:    return "Settings"
         case .helpCenter:  return "Help center"
         }
@@ -70,6 +75,8 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .vocabulary:  return "character.book.closed"
         // Three rectangles at different sizes: literally the board.
         case .visionBoard: return "rectangle.3.group"
+        // A place setting: the section is about what you ate, not about food.
+        case .meals:       return "fork.knife"
         case .settings:    return "gearshape"
         case .helpCenter:  return "questionmark.circle"
         }
@@ -147,6 +154,22 @@ enum Tokens {
     /// their own hue families (see `state(for:)` and `priorityWashHue(for:)`),
     /// which is what keeps three simultaneous signals legible on one card.
     static let accentVision    = Color.paper(0x456F0D, 0xA9C46B)
+    /// Meals section accent (#543). Azure, hue 210 degrees.
+    ///
+    /// Picked by family, not by degrees. Once every other section is placed —
+    /// Today red 0, Notes amber 38, Vision moss 86, Finance emerald 163, Lists
+    /// teal 175, Tasks indigo 244, Trips violet 265, Wallet magenta 295,
+    /// Activity plum 335 — the one empty FAMILY left on the wheel is true blue:
+    /// the 70-degree band between a cyan-green and a blue-violet holds nothing.
+    /// 210 sits in the middle of it, 35 degrees from each neighbour, which is
+    /// the largest balanced gap available.
+    ///
+    /// Green was the obvious hue for a food surface and is deliberately not
+    /// used. A grass green near 120 lands 34 degrees from Vision moss and 43
+    /// from Finance emerald, so it would be the THIRD green in a twelve-row
+    /// sidebar. A reader picks a row out by its colour family long before they
+    /// could measure a hue, and three greens is a family nobody can index.
+    static let accentMeals     = Color.paper(0x0C5AA8, 0x60ABF6)
     /// The Vision Board's canvas lattice, at rest and while something is being
     /// moved or resized (#446, revised in review 2026-08-06).
     ///
@@ -301,6 +324,7 @@ enum Tokens {
         case .finance:     return accentFinance
         case .vocabulary:  return accentVocabulary
         case .visionBoard: return accentVision
+        case .meals:       return accentMeals
         case .settings:    return accentSettings
         case .helpCenter:  return accentHelp
         }
