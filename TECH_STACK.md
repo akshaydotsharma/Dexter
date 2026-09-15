@@ -42,7 +42,7 @@ The companion iOS app talks to the same Express backend over REST + SSE.
 | **Framework** | **SwiftUI** | Declarative UI, `@Observable` view-models. |
 | **Networking** | **URLSession** | `bytes(for:)` for streaming chat (SSE). |
 | **Project gen** | **xcodegen** | `.xcodeproj` is regenerated from `mobile/project.yml`. |
-| **Distribution** | **Free dev signing** | OTA install via Cloudflare quick tunnel (`mobile/ota/ship.sh`). 7-day profile rotation. |
+| **Distribution** | **Free dev signing** | `devicectl` install over cable or LAN wifi (`mobile/ota/ship-lan.sh`). 7-day profile rotation. |
 
 ---
 
