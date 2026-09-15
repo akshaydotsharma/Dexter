@@ -304,24 +304,28 @@ final class MealsCalendarTests: XCTestCase {
         )
     }
 
-    /// The three tabs, in the order the strip prints them (#567, renamed #569).
+    /// The four tabs, in the order the strip prints them (#567, renamed #569,
+    /// Trends added #545).
     ///
-    /// No Trends: its content was always History's (#565). No History either:
-    /// it is a thing you look at and come back from, not a place the content
-    /// settles, so #567 moved it to the section chrome and #569 removed it once
-    /// it was clear the charts behind it were unbuilt. A navigation tab
-    /// reappearing here would undo both.
+    /// Trends is a PLACE the content can be: a window, a table and a chart you
+    /// settle in front of. That is what earns a tab. History was not, which is
+    /// why #567 moved it into the section chrome and #569 removed it; a
+    /// navigation control reappearing here would undo both.
+    ///
+    /// Trends sits second, directly after Tracking, because the two are the same
+    /// subject at two lengths: one day, then many. Targets stays last, because it
+    /// is setup rather than reading.
     ///
     /// The first tab is Tracking, not Today. It shows whichever day the date
     /// control selected, so a name meaning one particular day was a label
     /// contradicting its own content. Asserting the display string and not only
     /// the case is the point: the case could be renamed and the strip could still
     /// print the old word.
-    func testTheTabOrderIsTrackingPlanTargets() {
-        XCTAssertEqual(MealsTab.allCases, [.tracking, .plan, .targets])
+    func testTheTabOrderIsTrackingTrendsPlanTargets() {
+        XCTAssertEqual(MealsTab.allCases, [.tracking, .trends, .plan, .targets])
         XCTAssertEqual(
             MealsTab.allCases.map(\.displayName),
-            ["Tracking", "Plan", "Targets"]
+            ["Tracking", "Trends", "Plan", "Targets"]
         )
     }
 
