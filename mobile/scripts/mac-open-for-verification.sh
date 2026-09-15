@@ -42,9 +42,12 @@
 #      a running instance would not quit, no window ever appeared (and the
 #      screen is not locked), or the window title does not match. Fails loud.
 #   2  the screen is locked — verification could not be attempted, this is
-#      NOT a claim that the wrong surface is open
-#   3  the window WAS found with the right title, but the screenshot capture
-#      itself failed — the right surface is open, only the proof photo failed
+#      NOT a claim that the wrong surface is open. Checked both when the
+#      window comes back missing/untitled AND when a screenshot capture
+#      fails outright — a lock does not always blank the window title (#587)
+#   3  the window WAS found with the right title, the screen was NOT locked,
+#      but the screenshot capture itself failed — the right surface is open,
+#      only the proof photo failed
 set -euo pipefail
 
 SECTION="${1:-tasks}"
@@ -165,6 +168,27 @@ for w in wins {
 }
 SWIFT
 
+# Whether the screen is locked right now. Two call sites need this (#587): the
+# window probe coming back empty/untitled, and a screencapture that fails
+# outright. A lock can produce either symptom — the window probe reads the
+# same as the #577 Spaces bug, and a locked capture reads as a genuine
+# screenshot failure — so the check is hoisted here instead of duplicated.
+#
+# Detection: CGSessionCopyCurrentDictionary's CGSSessionScreenIsLocked key —
+# the standard lightweight lock check, no login/AppleScript dialog involved,
+# and no new dependency: `swift -` is already used throughout this script.
+# (python3 was considered but the system python3 has no PyObjC/Quartz, so it
+# cannot see this API without adding a dependency.) The key is simply ABSENT
+# when unlocked, hence the `?? false` default.
+screen_is_locked() {
+    /usr/bin/swift - <<'SWIFT' 2>/dev/null || echo false
+import CoreGraphics
+import Foundation
+let dict = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+print((dict["CGSSessionScreenIsLocked"] as? Bool) ?? false)
+SWIFT
+}
+
 # --- quit any running instance, by pid ---
 #
 # Escalation policy, and the window count is what licenses it. A polite
@@ -244,22 +268,8 @@ done
 # above, but no amount of activating fixes it, and it is not the script's or the
 # build's fault. Check for it whenever the window is missing or came back with
 # no title, so it is never reported as "the wrong surface is open" (#577).
-#
-# Detection: CGSessionCopyCurrentDictionary's CGSSessionScreenIsLocked key —
-# the standard lightweight lock check, no login/AppleScript dialog involved,
-# and no new dependency: `swift -` is already used throughout this script.
-# (python3 was considered but the system python3 has no PyObjC/Quartz, so it
-# cannot see this API without adding a dependency.) The key is simply ABSENT
-# when unlocked, hence the `?? false` default.
 if [ -z "$WIN" ] || [ -z "$(echo "$WIN" | cut -f3)" ]; then
-    LOCKED="$(/usr/bin/swift - <<'SWIFT' 2>/dev/null || echo false
-import CoreGraphics
-import Foundation
-let dict = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
-print((dict["CGSSessionScreenIsLocked"] as? Bool) ?? false)
-SWIFT
-)"
-    if [ "$LOCKED" = "true" ]; then
+    if [ "$(screen_is_locked)" = "true" ]; then
         echo "FAIL: the screen is locked. Verification could not be completed — this is NOT a claim"
         echo "      that the wrong surface is open, and NOT a build/launch failure. Unlock the screen"
         echo "      and re-run this script."
@@ -290,8 +300,21 @@ sleep 2
 # read as "verification failed". #577: one run got exactly this far
 # (`==> window: 2797 1482x861 Meals`) and then died on `could not create image
 # from window`, under `set -e`, with no distinguishing message at all.
+#
+# #587: a locked screen does not always blank the window title, so the window
+# assertion above can pass and the screen still be locked when capture is
+# attempted — that same run is the one that surfaced this gap. Check the lock
+# BEFORE printing anything, so a lock is reported as exit 2, not exit 3. Only
+# an unlocked, genuinely failed capture reaches the exit-3 message below.
 SHOT="$OUT_DIR/$SECTION.png"
 if ! screencapture -x -o -l "$(echo "$WIN" | cut -f1)" "$SHOT"; then
+    if [ "$(screen_is_locked)" = "true" ]; then
+        echo "FAIL: the screen is locked. Verification could not be completed — this is NOT a claim"
+        echo "      that the wrong surface is open, and NOT a build/launch failure. The window"
+        echo "      assertion passed ('$TITLE'), but the screen was locked when capture was attempted."
+        echo "      Unlock the screen and re-run this script."
+        exit 2
+    fi
     echo "FAIL: the window assertion PASSED — DexterMac is open on '$TITLE' (pid $PID), the right"
     echo "      surface — but capturing a screenshot of it failed. This is a capture problem, not a"
     echo "      verification failure. Look at the window directly, or re-run to retry the capture."
