@@ -230,7 +230,13 @@ struct MealsView: View {
         .macSectionChrome("Meals") {
             #if os(macOS)
             HStack(spacing: Space.xs) {
-                macDateButton
+                // Withheld on the Plan tab for the reason `chromeControls`
+                // gives. The `if` sits INSIDE the HStack deliberately: the whole
+                // trailing closure is one `ToolbarItem`, and a multi-statement
+                // body would distribute the toolbar across each branch (#597).
+                if tab != .plan {
+                    macDateButton
+                }
             }
             #endif
         }
@@ -276,13 +282,20 @@ struct MealsView: View {
     #if os(iOS)
     @ViewBuilder
     private var chromeControls: some View {
-        TopBarIconButton(
-            systemName: "calendar",
-            accessibilityLabel: dateControlAccessibilityLabel,
-            action: openCalendar,
-            label: dateControlLabel
-        )
-        .popover(isPresented: $showingCalendar) { calendarPopover }
+        // Withheld on the Plan tab, which puts its month grid on the screen
+        // itself (#599). Two controls picking the same day is worse than one in
+        // either position: the chrome one would name a day the grid below it
+        // already shows, and the user would have to work out which of them they
+        // had last touched.
+        if tab != .plan {
+            TopBarIconButton(
+                systemName: "calendar",
+                accessibilityLabel: dateControlAccessibilityLabel,
+                action: openCalendar,
+                label: dateControlLabel
+            )
+            .popover(isPresented: $showingCalendar) { calendarPopover }
+        }
     }
     #endif
 
@@ -311,41 +324,20 @@ struct MealsView: View {
 
     #endif
 
-    /// One control, two calendars behind it (#599).
-    ///
-    /// The Plan tab gets a grid that can reach a future month and that marks a
-    /// day by which MEALS are planned; every other tab gets the tracking grid,
-    /// which stops at today and marks a day by the calories logged on it.
-    ///
-    /// Two views rather than one with a flag, because the difference is a RULE
-    /// and not a setting: `MealCalendar.isSelectable` refuses a future day
-    /// because a meal you have not eaten is not a log entry, and a boolean
-    /// parameter would leave that rule as something every call site has to pass
-    /// correctly. See the note on `MealPlanCalendar`.
-    @ViewBuilder
+    /// The tracking month grid. The Plan tab has no popover: its calendar is on
+    /// the screen (#599).
     private var calendarPopover: some View {
-        if tab == .plan {
-            MealPlanCalendarPopover(
-                month: $planMonth,
-                selectedDay: $planDay,
-                readings: MealPlanDay.readings(in: allPlanEntries),
-                today: Date()
-            )
-        } else {
-            MealCalendarPopover(
-                month: $visibleMonth,
-                selectedDay: $selectedDay,
-                readings: MealCalendar.readings(in: allMeals),
-                today: Date()
-            )
-        }
+        MealCalendarPopover(
+            month: $visibleMonth,
+            selectedDay: $selectedDay,
+            readings: MealCalendar.readings(in: allMeals),
+            today: Date()
+        )
     }
 
-    /// The day the chrome control is currently naming and picking: the plan's on
-    /// the Plan tab, the log's everywhere else.
-    private var chromeDay: Date {
-        tab == .plan ? planDay : selectedDay
-    }
+    /// The day the chrome control names. Only the tracking day now, since the
+    /// control is withheld on the one tab that has another.
+    private var chromeDay: Date { selectedDay }
 
     /// The selected day, always (#567, widened in #569).
     ///
@@ -388,21 +380,16 @@ struct MealsView: View {
     private var dateControlAccessibilityLabel: String {
         let day = chromeDay
         let date = Self.dayFormatter.string(from: day)
-        let noun = tab == .plan ? "Choose a day to plan." : "Choose a day."
         if Calendar.current.isDateInToday(day) {
-            return "\(noun) Showing today, \(date)"
+            return "Choose a day. Showing today, \(date)"
         }
-        return "\(noun) Showing \(Self.relativeDayName(day)), \(date). Not today"
+        return "Choose a day. Showing \(Self.relativeDayName(day)), \(date). Not today"
     }
 
     /// Always re-point the grid at the day on screen before opening, so it never
     /// reopens on a month the user paged to and abandoned.
     private func openCalendar() {
-        if tab == .plan {
-            planMonth = MealPlanCalendar.monthStart(of: planDay)
-        } else {
-            visibleMonth = MealCalendar.monthStart(of: selectedDay)
-        }
+        visibleMonth = MealCalendar.monthStart(of: selectedDay)
         showingCalendar = true
     }
 
@@ -502,6 +489,7 @@ struct MealsView: View {
             allTargets: allTargets,
             allEntries: allPlanEntries,
             selectedDay: $planDay,
+            visibleMonth: $planMonth,
             chat: planChat
         )
     }

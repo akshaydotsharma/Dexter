@@ -1,37 +1,43 @@
 import SwiftUI
 
-/// The conversation that helps decide what to eat, at the top of the Plan tab
-/// (#599).
+/// The conversation that helps decide what to eat (#599).
 ///
-/// ### Why it is inline and not a sheet
+/// ### Where it lives, and why it moved twice
 ///
-/// It started as a sheet off a button, and that was wrong for one reason: this
-/// chat is ABOUT the day underneath it. A sheet covers the thing being
-/// discussed, so every answer had to restate what the plan already showed, and
-/// adding a suggestion meant dismissing the sheet to find out where it landed.
-/// Inline, the cards and the tiles are on one page — you add a meal and watch
-/// the tile fill in.
+/// It began as a sheet off a button, which covered the thing being discussed: a
+/// full-screen sheet meant every answer had to restate what the plan already
+/// showed, and adding a suggestion meant dismissing it to find out where the
+/// meal landed.
 ///
-/// It also stops the chat being a place you have to decide to go to. A panel at
-/// the top of an empty day is an invitation; a button is a question.
+/// Then it sat inline at the top of the tab, which fixed that and cost something
+/// else: the plan is the content, and a chat above it pushed four tiles and a
+/// calendar below the fold on every visit, whether or not anybody wanted to
+/// talk.
+///
+/// It is now the body of `MealPlanChatOverlay` — a floating button at the bottom
+/// right and a local panel over the corner of the plan. That keeps the plan
+/// whole AND keeps it visible behind the conversation, which is the property the
+/// sheet lost and the inline panel paid too much for.
 ///
 /// ### Why it has no scroll view of its own
 ///
-/// It is a block in the tab's page scroll, so the turns grow the page rather
-/// than filling a fixed box with a second scrollbar inside the first. Nested
-/// scrolling is unpleasant on a trackpad and ambiguous on a phone, and a chat
-/// that is three exchanges long does not need its own viewport. The page scrolls
-/// to the newest turn, which the tab owns because the tab owns the scroll.
+/// The overlay owns the scrolling, so this is a plain column. The turns and the
+/// opener are the same in either container, which is why this view survived both
+/// moves unchanged.
 ///
 /// ### It writes nothing by itself
 ///
 /// The model has one tool and that tool proposes. `onAdd` is the ONLY path from
-/// here to the store, and it fires on a tap. See `MealPlanAdvisor`.
+/// here to the store, and it fires on a tap, with the day and the meal the card
+/// was set to. See `MealPlanAdvisor`.
 struct MealPlanChatPanel: View {
 
     @Bindable var model: MealPlanChatModel
 
-    /// How the Add button names the day: "today", "tomorrow", "Thursday 18 Sep".
+    /// The day a suggestion's picker starts on: whatever the calendar is
+    /// showing. The card can be pointed anywhere; this is only the default.
+    let defaultDay: Date
+    /// How the opener names that day: "today", "tomorrow", "Thursday 18 Sep".
     let dayLabel: String
     /// True when targets are set, for the opener's one-line summary.
     let hasTargets: Bool
@@ -41,13 +47,12 @@ struct MealPlanChatPanel: View {
     let hasPlan: Bool
 
     var onSend: () -> Void
-    var onAdd: (MealPlanSuggestion) -> Void
+    var onAdd: (MealPlanSuggestion, Date, MealType) -> Void
 
     @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            header
             if model.isEmpty {
                 opener
             } else {
@@ -59,35 +64,8 @@ struct MealPlanChatPanel: View {
                     .foregroundStyle(Tokens.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            inputRow
         }
-        .padding(Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.lg)
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: Space.sm) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Tokens.mutedSoft)
-            Text("What should I eat?").eyebrow()
-            Spacer(minLength: 0)
-            if !model.isEmpty {
-                Button {
-                    model.reset()
-                } label: {
-                    Text("Clear")
-                        .font(.edCaption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Tokens.muted)
-                .accessibilityLabel("Clear this conversation")
-            }
-        }
     }
 
     // MARK: - The empty state
@@ -163,35 +141,13 @@ struct MealPlanChatPanel: View {
                 ForEach(turn.suggestions) { suggestion in
                     MealPlanSuggestionCard(
                         suggestion: suggestion,
-                        dayLabel: dayLabel,
+                        defaultDay: defaultDay,
                         wasAdded: model.wasAdded(suggestion),
-                        onAdd: { onAdd(suggestion) }
+                        onAdd: { day, mealType in onAdd(suggestion, day, mealType) }
                     )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    // MARK: - Input
-
-    private var inputRow: some View {
-        HStack(spacing: Space.sm) {
-            ChatInputBar(
-                text: $model.draftInput,
-                isSending: model.isSending,
-                onSend: onSend,
-                focused: $inputFocused
-            )
-            if model.isSending {
-                Button {
-                    model.cancel()
-                } label: {
-                    Image(systemName: "stop.fill")
-                }
-                .buttonStyle(EdIconButtonStyle(tint: Tokens.danger))
-                .accessibilityLabel("Stop")
-            }
         }
     }
 }

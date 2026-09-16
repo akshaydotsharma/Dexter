@@ -7,10 +7,18 @@ import SwiftUI
 /// read side by side as the scope is switched, and a change to one that is not a
 /// change to the other is the kind of drift nobody notices until a row clips.
 enum MealPlanMetrics {
-    /// Height of one square in the month grid. Shorter than the Tracking
-    /// calendar's 48, because this cell carries a numeral and four pips rather
-    /// than a numeral, a calorie figure and a bar.
-    static let monthCell: CGFloat = 42
+    /// Height of one square in the month grid.
+    ///
+    /// 32, well under the Tracking calendar's 48, and the gap is earned: that
+    /// cell carries a numeral, a calorie figure and a quantity bar, and this one
+    /// carries a numeral and four 5pt pips.
+    ///
+    /// The height is the whole reason this number is tuned rather than copied.
+    /// The grid is the FIRST thing on the tab now, not a popover, so six rows of
+    /// it are paid for out of the space the day's meals need: at 42 the tiles
+    /// started below the fold of a 652pt window, which made a calendar put there
+    /// to orient you the thing you had to scroll past.
+    static let monthCell: CGFloat = 32
     /// Height of one day cell in the week strip. Taller: it carries a weekday,
     /// a numeral and the pips, and it is the cell the user actually aims at.
     static let weekCell: CGFloat = 60

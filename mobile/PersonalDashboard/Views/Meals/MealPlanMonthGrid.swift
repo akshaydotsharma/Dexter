@@ -36,12 +36,12 @@ struct MealPlanMonthGrid: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
+        VStack(alignment: .leading, spacing: Space.sm) {
             header
             weekdayRow
             grid
         }
-        .padding(Space.lg)
+        .padding(Space.md)
         .frame(maxWidth: MealPlanMetrics.maxWidth, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
@@ -67,7 +67,7 @@ struct MealPlanMonthGrid: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
-                .frame(width: 32, height: 32)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

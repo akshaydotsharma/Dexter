@@ -3,63 +3,62 @@ import SwiftUI
 /// Fixed metrics for the plan board (#599).
 ///
 /// Held here rather than as literals inside the tile for the reason every other
-/// metrics table in this app gives: the minimum tile width and the row cap are
-/// read together — the cap only makes sense at that width — and a change to one
-/// that is not a change to the other is the kind of drift nobody notices until a
-/// tile clips.
+/// metrics table in this app gives: the rail width and the row's corner radius
+/// are read together — the rail has to look like part of the block, not a line
+/// beside it — and a change to one that is not a change to the other is the kind
+/// of drift nobody notices until a corner clips.
 enum MealPlanBoardMetrics {
-    /// Narrowest a tile may be before the grid drops a column.
-    ///
-    /// 260 fits a dish name and its calorie figure on one line at `.edBody`
-    /// without truncating, and it gives an iPhone at 390 pt exactly ONE column,
-    /// which is correct: two 170 pt tiles would truncate every name they hold.
-    /// A Mac detail pane gets two or three.
-    static let tileMinWidth: CGFloat = 260
-
-    /// Gap between tiles, both axes.
+    /// Gap between tiles. They stack vertically, so this is the day's rhythm.
     static let gutter: CGFloat = Space.md
 
     /// How many blocks a tile lists before it folds into a count.
     ///
-    /// Four, which is more than breakfast, lunch or dinner ever holds and is the
-    /// point at which a tile of snacks stops being glanceable. The rest are
-    /// reachable in one tap, and the count says how many there are.
-    static let visibleRowCap = 4
+    /// Six, raised from four when the tiles went full width: a stacked tile has
+    /// the room, and the cap exists to stop a day of snacks pushing the rest of
+    /// the day off the screen, not to ration a surface that can afford them.
+    static let visibleRowCap = 6
 
     /// The meal-type dot on a tile header.
     static let dot: CGFloat = 7
+
+    /// Width of the colour rail down the leading edge of a block.
+    ///
+    /// The rail IS the identity. It replaced a tick and a radio glyph, which
+    /// were controls occupying the place the eye lands first on a row whose job
+    /// is to be read rather than operated.
+    static let rail: CGFloat = 3
+
+    /// Corner radius of one block. Smaller than a card, so a block reads as an
+    /// entry inside the tile rather than as a card floating on another card.
+    static let blockRadius: CGFloat = Radius.sm
+
+    /// How much of the meal type's hue the block's fill carries.
+    ///
+    /// Low, and it has to stay low. Hue on every other Meals surface means a
+    /// VERDICT about a quantity, and the meal-type family exists precisely so
+    /// identity can be shown without entering that palette. A wash strong enough
+    /// to read as "this is coloured in" would start competing with the red and
+    /// amber the Tracking tab spends on readings.
+    static let blockFill: Double = 0.07
+    static let blockStroke: Double = 0.22
 }
 
 /// One meal type's blocks on the selected day (#599).
 ///
-/// ### Why a tile and not a section of rows
+/// ### Why the tiles stack rather than sit in a grid
 ///
-/// The plan is four things, and the question it answers is "which of them is
-/// still empty". A list of sections answers that only by scrolling to the end of
-/// each one; four tiles answer it at a glance, because an empty tile LOOKS
-/// empty. It also gives the day a fixed shape — four boxes, always in the same
-/// order — so nothing below the fold moves as blocks are added.
+/// They were a two-column adaptive grid, which put breakfast beside lunch and
+/// wasted the width on a Mac to save a scroll on a phone. Stacked, each tile
+/// gets the full pane, which is what the blocks inside need: a dish name, four
+/// figures and a row of ingredient pills do not fit across half a window without
+/// truncating one of the three.
 ///
-/// The rows inside used to be the Tasks and Notes row construction, which was
-/// wrong for a reason that is not cosmetic: those rows carry a title and a state
-/// and nothing else, and a planned meal has to carry its numbers. A row that
-/// cannot show 520 kcal is a row that makes the user open something to find out
-/// whether the day adds up.
-///
-/// ### Two controls, both real Buttons
-///
-/// The tick and the row. Neither is a tap GESTURE on a container, which matters
-/// beyond taste: macOS SwiftUI ignores synthetic clicks on tap-gesture controls,
-/// so a tile built that way could not be driven by an automated pass at all.
-///
-/// Skip, delete and edit are NOT here. They live in the detail sheet the row
-/// opens, because a tile that carried an overflow menu per row would spend its
-/// width on controls instead of on the numbers it exists to show.
+/// It also restores the order of an actual day as a vertical reading, which is
+/// how a day is read.
 struct MealPlanTile: View {
     let slot: MealPlanSlot
     var onAdd: () -> Void
     var onOpen: (LocalMealPlanEntry) -> Void
-    var onToggleEaten: (LocalMealPlanEntry) -> Void
 
     private var visible: [LocalMealPlanEntry] {
         Array(slot.entries.prefix(MealPlanBoardMetrics.visibleRowCap))
@@ -69,9 +68,9 @@ struct MealPlanTile: View {
         max(slot.entries.count - MealPlanBoardMetrics.visibleRowCap, 0)
     }
 
-    /// The tile's own totals, over the blocks that count and carry numbers.
-    /// Nil when nothing in the tile has any, which is when the footer is
-    /// withheld rather than drawn as a row of zeros.
+    /// The tile's own totals, over the blocks that count and carry numbers. Nil
+    /// when nothing in the tile has any, which is when the figure is withheld
+    /// rather than drawn as a zero.
     private var totals: MealNutrients? {
         let counted = slot.counted.compactMap(\.plannedNutrients)
         guard !counted.isEmpty else { return nil }
@@ -79,31 +78,26 @@ struct MealPlanTile: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        VStack(alignment: .leading, spacing: slot.isEmpty ? Space.xs : Space.md) {
             header
 
             if slot.isEmpty {
                 emptyBody
             } else {
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: Space.sm) {
                     ForEach(visible, id: \.clientUUID) { entry in
-                        MealPlanTileRow(
-                            entry: entry,
-                            onOpen: { onOpen(entry) },
-                            onToggleEaten: { onToggleEaten(entry) }
-                        )
+                        MealPlanBlock(entry: entry, onOpen: { onOpen(entry) })
                     }
                 }
                 if hidden > 0 {
                     Text("+\(hidden) more")
                         .font(.edCaption)
                         .foregroundStyle(Tokens.mutedSoft)
-                        .padding(.top, Space.xxs)
                 }
-                if let totals { footer(totals) }
             }
         }
-        .padding(Space.lg)
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, slot.isEmpty ? Space.md : Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
@@ -111,6 +105,18 @@ struct MealPlanTile: View {
 
     // MARK: - Header
 
+    /// The plus sits in the LEADING cluster, beside the meal it adds to, and the
+    /// calorie figure takes the trailing edge.
+    ///
+    /// It was the other way round, which is the conventional arrangement and was
+    /// wrong here for a specific reason: the chat's floating button lives in the
+    /// bottom-right corner, so a trailing-aligned plus on whichever tile happens
+    /// to sit at that height is covered by it. A primary action that is
+    /// unreachable at some scroll positions and not others is worse than an
+    /// unconventional one that is always reachable.
+    ///
+    /// Beside the word it also reads as what it is — "add to breakfast" — which
+    /// a plus at the far end of a wide row does not.
     private var header: some View {
         HStack(spacing: Space.sm) {
             Circle()
@@ -118,28 +124,46 @@ struct MealPlanTile: View {
                 .frame(width: MealPlanBoardMetrics.dot, height: MealPlanBoardMetrics.dot)
             Text(slot.mealType.displayName)
                 .eyebrow()
+            addButton
             Spacer(minLength: Space.sm)
-            Button(action: onAdd) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .semibold))
+            if let totals {
+                Text("\(MealFormat.calories(totals.calories)) kcal")
+                    .font(.edFootnoteStrong)
                     .foregroundStyle(Tokens.inkSoft)
-                    .frame(width: 26, height: 26)
-                    .background(Tokens.surface2, in: Circle())
-                    .overlay(Circle().stroke(Tokens.border, lineWidth: 0.5))
-                    .contentShape(Circle())
+                    .monospacedDigit()
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Add \(slot.mealType.displayName.lowercased())")
         }
+    }
+
+    /// The plus, in the meal type's own hue.
+    ///
+    /// It was a `surface2` circle on a `surface` card, which is a two-step
+    /// difference in the palette and read as absent: the control most likely to
+    /// be looked for on an empty tile was the hardest thing on it to see. The
+    /// hue ties it to the tile it belongs to and lifts it clear of the card in
+    /// one move, and it stays inside the meal-type family, so it still cannot be
+    /// mistaken for a verdict.
+    private var addButton: some View {
+        Button(action: onAdd) {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(slot.mealType.tint)
+                .frame(width: 22, height: 22)
+                .background(slot.mealType.tint.opacity(0.16), in: Circle())
+                .overlay(Circle().stroke(slot.mealType.tint.opacity(0.45), lineWidth: 0.75))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add \(slot.mealType.displayName.lowercased())")
     }
 
     // MARK: - Empty
 
     /// The empty state is a BUTTON, not a label.
     ///
-    /// The plus in the header is small and sits where the eye lands last. An
-    /// empty tile is mostly empty space, and that space is the obvious place to
-    /// aim at, so it does the same thing rather than nothing.
+    /// The plus sits where the eye lands last. An empty tile is mostly empty
+    /// space, and that space is the obvious thing to aim at, so it does the same
+    /// job rather than nothing.
     private var emptyBody: some View {
         Button(action: onAdd) {
             HStack(spacing: Space.sm) {
@@ -148,166 +172,162 @@ struct MealPlanTile: View {
                     .foregroundStyle(Tokens.mutedSoft)
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, Space.sm)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("No \(slot.mealType.displayName.lowercased()) planned. Add one")
     }
-
-    // MARK: - Footer
-
-    /// The tile's macro rung, in the fixed order every Meals surface prints
-    /// them. Never sorted by value: position is how a nutrient is identified
-    /// once colour has been spent elsewhere.
-    ///
-    /// Neutral, never a verdict. A tile is one part of a day, and a verdict is
-    /// about the whole of one — painting breakfast amber for being under a
-    /// DAY's protein target would be reading the wrong number against the wrong
-    /// thing.
-    private func footer(_ totals: MealNutrients) -> some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            Rectangle()
-                .fill(Tokens.divider)
-                .frame(height: 0.5)
-            HStack(spacing: Space.xs) {
-                ForEach(Nutrient.macrosInOrder) { nutrient in
-                    MealStatPill(
-                        label: nutrient.displayName,
-                        value: MealFormat.value(totals[nutrient], for: nutrient),
-                        variant: .neutral,
-                        fillsWidth: true
-                    )
-                }
-            }
-        }
-        .padding(.top, Space.xxs)
-    }
 }
 
-/// One planned block inside a tile (#599).
+/// One planned meal, drawn as a calendar block (#599).
 ///
-/// A tick and a row, and the row carries the numbers. Everything else about the
-/// block — skip, delete, the ingredients, the recipe — is one tap away in the
-/// detail sheet, because a tile has room for a name and a figure and not for a
-/// control strip.
-struct MealPlanTileRow: View {
+/// ### Why a rail and a wash rather than a tick
+///
+/// The row used to open with a circle you could tap to mark the meal eaten. That
+/// put a CONTROL in the position the eye lands on first, on a row whose job is to
+/// be read: what is this, what does it cost me, what do I need to buy. It also
+/// meant the most prominent thing on the row was the least used.
+///
+/// A calendar entry solves the same problem by colouring the block and leaving
+/// it alone, so that is what this is: a coloured rail, a tinted fill, and the
+/// content. The state is still there and still editable — it lives in the sheet
+/// the block opens, beside the delete, which is where a decision about the block
+/// belongs rather than under a stray tap.
+///
+/// ### What it shows without being opened
+///
+/// The dish, its four numbers, and the key ingredients as pills. Those three
+/// answer the questions a plan is consulted for. The recipe, the breakdown, the
+/// note and the state all need a reason to be looked at, so they wait behind the
+/// tap.
+struct MealPlanBlock: View {
     let entry: LocalMealPlanEntry
     var onOpen: () -> Void
-    var onToggleEaten: () -> Void
 
+    private var tint: Color { entry.mealTypeEnum.tint }
     private var isSkipped: Bool { entry.statusEnum == .skipped }
 
     var body: some View {
-        HStack(alignment: .top, spacing: Space.sm) {
-            tick
-            Button(action: onOpen) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.title)
-                        .font(.edBodyMedium)
-                        .foregroundStyle(isSkipped ? Tokens.muted : Tokens.ink)
-                        .strikethrough(isSkipped, color: Tokens.mutedSoft)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                    detailLine
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // A Button wrapping bare Text is tappable only on the glyphs
-                // without this, so the gap beside a short name would do nothing
-                // (#530).
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(spokenRow)
-            .accessibilityHint("Opens this planned meal")
-        }
-        .padding(.vertical, Space.sm)
-        .opacity(isSkipped ? 0.55 : 1)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Tokens.divider)
-                .frame(height: 0.5)
-        }
-    }
+        Button(action: onOpen) {
+            HStack(alignment: .top, spacing: 0) {
+                RoundedRectangle(cornerRadius: MealPlanBoardMetrics.rail / 2, style: .continuous)
+                    .fill(tint)
+                    .frame(width: MealPlanBoardMetrics.rail)
 
-    private var tick: some View {
-        Button(action: onToggleEaten) {
-            Image(systemName: entry.statusEnum.sfSymbol)
-                .font(.system(size: 15, weight: .regular))
-                // Green on an eaten block and nothing else. `Tokens.success` is
-                // a verdict colour everywhere else on this surface, and spending
-                // it here is deliberate: a ticked block IS a verdict, on whether
-                // the plan was followed.
-                .foregroundStyle(entry.statusEnum == .eaten ? Tokens.success : Tokens.mutedSoft)
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    titleRow
+                    if let nutrients = entry.plannedNutrients {
+                        Text(Self.macroLine(nutrients))
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                    } else {
+                        Text("No numbers yet")
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.mutedSoft)
+                    }
+                    if !entry.ingredients.isEmpty { ingredientPills }
+                }
+                .padding(.leading, Space.md)
+                .padding(.trailing, Space.md)
+                .padding(.vertical, Space.sm + 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(
+                tint.opacity(MealPlanBoardMetrics.blockFill),
+                in: RoundedRectangle(cornerRadius: MealPlanBoardMetrics.blockRadius, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: MealPlanBoardMetrics.blockRadius, style: .continuous)
+                    .stroke(tint.opacity(MealPlanBoardMetrics.blockStroke), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: MealPlanBoardMetrics.blockRadius, style: .continuous))
+            .opacity(isSkipped ? 0.5 : 1)
+            // A Button wrapping bare Text is tappable only on the glyphs without
+            // this, so the gap beside a short name would do nothing (#530).
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isSkipped)
-        .accessibilityLabel(
-            entry.statusEnum == .eaten
-                ? "Mark \(entry.title) as not eaten"
-                : "Mark \(entry.title) as eaten"
-        )
-        .accessibilityAddTraits(entry.statusEnum == .eaten ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel(spokenBlock)
+        .accessibilityHint("Opens the recipe and the rest of this meal")
     }
 
-    /// The numbers, or what is missing instead of them.
-    ///
-    /// A block with no numbers says so rather than printing zeros. That is the
-    /// state a hand-typed block starts in, and it is also the prompt to open the
-    /// block and estimate it, so it has to be visible from the tile.
-    @ViewBuilder
-    private var detailLine: some View {
-        if isSkipped {
-            Text("Skipped")
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-        } else if let nutrients = entry.plannedNutrients {
-            Text(Self.macroLine(nutrients))
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-        } else {
-            Text("No numbers yet")
-                .font(.edCaption)
-                .foregroundStyle(Tokens.mutedSoft)
+    private var titleRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            Text(entry.title)
+                .font(.edBodyMedium)
+                .foregroundStyle(Tokens.ink)
+                .strikethrough(isSkipped, color: Tokens.mutedSoft)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Space.sm)
+            if let nutrients = entry.plannedNutrients {
+                Text("\(MealFormat.calories(nutrients.calories)) kcal")
+                    .font(.edFootnoteStrong)
+                    .foregroundStyle(Tokens.ink)
+                    .monospacedDigit()
+                    .fixedSize()
+            }
         }
     }
 
-    /// "480 kcal · 32 P · 54 C · 14 F".
+    /// The key ingredients, on the block rather than behind it.
     ///
-    /// Initials rather than words, and that is a concession to width this
-    /// surface can afford exactly here: the tile row is the one place in Meals
-    /// where four figures have to fit beside a dish name. The full words are on
-    /// the tile's own footer rung two lines below, on the detail sheet, and in
-    /// the accessibility label, so the initial is never the only place a
-    /// nutrient is named.
-    static func macroLine(_ nutrients: MealNutrients) -> String {
-        "\(MealFormat.calories(nutrients.calories)) kcal"
-            + " · \(MealFormat.grams(nutrients.proteinG)) P"
-            + " · \(MealFormat.grams(nutrients.carbsG)) C"
-            + " · \(MealFormat.grams(nutrients.fatG)) F"
+    /// This is the half of a plan that is not about nutrition: a block that says
+    /// "chicken rice, 620 kcal" tells you nothing about whether you can make it
+    /// tonight. Four pills do.
+    ///
+    /// They sit on the block's own tinted ground, so they take `surface` rather
+    /// than `surface2` — `surface2` against a wash reads as a smudge rather than
+    /// as a separate object.
+    private var ingredientPills: some View {
+        ChipFlowLayout(spacing: Space.xs) {
+            ForEach(entry.ingredients, id: \.self) { ingredient in
+                Text(ingredient)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .padding(.horizontal, Space.sm)
+                    .padding(.vertical, 3)
+                    .background(Tokens.surface, in: Capsule())
+                    .overlay(Capsule().stroke(tint.opacity(0.28), lineWidth: 0.5))
+            }
+        }
+        .padding(.top, 2)
+        .accessibilityHidden(true)
     }
 
-    /// The whole row in one sentence, so a reader is not handed a name, four
-    /// numbers and a state as six separate stops.
-    private var spokenRow: String {
-        var parts = [entry.title]
-        if isSkipped {
-            parts.append("skipped")
-        } else {
-            if entry.statusEnum == .eaten { parts.append("eaten") }
-            if let nutrients = entry.plannedNutrients {
-                parts.append("about \(MealFormat.calories(nutrients.calories)) kilocalories")
-                for nutrient in Nutrient.macrosInOrder {
-                    parts.append("\(MealFormat.grams(nutrients[nutrient])) grams \(nutrient.displayName.lowercased())")
-                }
-            } else {
-                parts.append("no numbers yet")
+    /// "46 P · 80 C · 7 F".
+    ///
+    /// Initials rather than words, and that is a concession to width this
+    /// surface can afford exactly here: the calorie figure has the end of the
+    /// title row, so the macros get one line under it and have to fit beside
+    /// ingredient pills. The full words are on the detail sheet and in the
+    /// accessibility label, so a nutrient is never named only by its initial.
+    static func macroLine(_ nutrients: MealNutrients) -> String {
+        "\(MealFormat.grams(nutrients.proteinG)) P"
+            + " · \(MealFormat.grams(nutrients.carbsG)) C"
+            + " · \(MealFormat.grams(nutrients.fatG)) F"
+            + " · \(MealFormat.grams(nutrients.fibreG)) Fib"
+    }
+
+    /// The whole block in one sentence, so a reader is not handed a name, four
+    /// numbers and six pills as eleven separate stops.
+    private var spokenBlock: String {
+        var parts = ["\(entry.mealTypeEnum.displayName), \(entry.title)"]
+        if isSkipped { parts.append("skipped") }
+        if entry.statusEnum == .eaten { parts.append("eaten") }
+        if let nutrients = entry.plannedNutrients {
+            parts.append("about \(MealFormat.calories(nutrients.calories)) kilocalories")
+            for nutrient in Nutrient.macrosInOrder {
+                parts.append("\(MealFormat.grams(nutrients[nutrient])) grams \(nutrient.displayName.lowercased())")
             }
+        } else {
+            parts.append("no numbers yet")
+        }
+        if !entry.ingredients.isEmpty {
+            parts.append("needs \(entry.ingredients.joined(separator: ", "))")
         }
         return parts.joined(separator: ", ")
     }

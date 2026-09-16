@@ -33,7 +33,6 @@ struct MealPlanBoard: View {
 
     var onAdd: (MealType) -> Void
     var onOpen: (LocalMealPlanEntry) -> Void
-    var onToggleEaten: (LocalMealPlanEntry) -> Void
     /// Copy another day's plan onto this one. The offset is in days, so -1 is
     /// the day before and -7 is this day last week.
     var onCopyDay: (Int) -> Void
@@ -41,21 +40,20 @@ struct MealPlanBoard: View {
 
     private var calendar: Calendar { Calendar.current }
 
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: MealPlanBoardMetrics.tileMinWidth), spacing: MealPlanBoardMetrics.gutter)]
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: Space.lg) {
             header
             if plan.blocksWithNutrition > 0 { dayTotals }
-            LazyVGrid(columns: columns, spacing: MealPlanBoardMetrics.gutter) {
+            // Stacked, not a grid. The blocks inside need the full pane: a dish
+            // name, four figures and a row of ingredient pills do not fit across
+            // half a window without truncating one of the three. See the note on
+            // `MealPlanTile`.
+            VStack(alignment: .leading, spacing: MealPlanBoardMetrics.gutter) {
                 ForEach(plan.slots) { slot in
                     MealPlanTile(
                         slot: slot,
                         onAdd: { onAdd(slot.mealType) },
-                        onOpen: onOpen,
-                        onToggleEaten: onToggleEaten
+                        onOpen: onOpen
                     )
                 }
             }
@@ -66,6 +64,9 @@ struct MealPlanBoard: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            // One line, not two. The calendar above this already carries the
+            // month and the selected square, so repeating the full date here
+            // would state the same fact twice within one screen.
             VStack(alignment: .leading, spacing: 2) {
                 Text(dayTitle)
                     .font(.edTitle)

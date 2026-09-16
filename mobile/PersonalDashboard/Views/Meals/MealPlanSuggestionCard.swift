@@ -6,23 +6,47 @@ import SwiftUI
 ///
 /// Everything on it is actionable in a way a sentence is not: the meal type
 /// decides which slot it lands in, the ingredients are what gets carried onto
-/// the block, the numbers are what makes the planned day add up, and the button
+/// the block, the numbers are what makes the planned day add up, and the footer
 /// is the whole point. Prose carrying the same four things would have to be
 /// parsed by the reader before it could be used.
 ///
-/// ### The Add button says which day
+/// ### The card chooses where it lands
 ///
-/// Because the sheet can be open over a calendar showing a different one, and a
-/// suggestion silently landing on the wrong day corrupts two days at once while
-/// neither one looks wrong. The same reasoning `MealChatCard` applies to a meal
-/// logged onto a day that is not today.
+/// Day and meal type are pickers ON the card, not assumptions the surface makes
+/// behind it. The chat floats over whatever day the calendar happens to be on,
+/// and a conversation ranges over several: you ask what to have this week and
+/// get a breakfast, a lunch and something for Saturday. An Add that silently
+/// used the day underneath would scatter those three onto one square and give
+/// the user no way to notice, because the card disappears behind the overlay the
+/// moment it is tapped.
+///
+/// Both default to the sensible thing — the day in view, the type the model
+/// chose — so the common case is still one tap.
 struct MealPlanSuggestionCard: View {
     let suggestion: MealPlanSuggestion
-    /// The day the Add button will write to, already named for the button.
-    let dayLabel: String
-    /// True once it has been added, which swaps the button for a confirmation.
+    /// The day the pickers start on: whatever the calendar is showing.
+    let defaultDay: Date
+    /// True once it has been added, which swaps the footer for a confirmation.
     let wasAdded: Bool
-    var onAdd: () -> Void
+    var onAdd: (Date, MealType) -> Void
+
+    @State private var day: Date
+    @State private var mealType: MealType
+    @State private var loaded = false
+
+    init(
+        suggestion: MealPlanSuggestion,
+        defaultDay: Date,
+        wasAdded: Bool,
+        onAdd: @escaping (Date, MealType) -> Void
+    ) {
+        self.suggestion = suggestion
+        self.defaultDay = defaultDay
+        self.wasAdded = wasAdded
+        self.onAdd = onAdd
+        _day = State(initialValue: Calendar.current.startOfDay(for: defaultDay))
+        _mealType = State(initialValue: suggestion.mealType)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
@@ -56,7 +80,7 @@ struct MealPlanSuggestionCard: View {
                 .foregroundStyle(Tokens.muted)
             }
 
-            bottomRow
+            footer
         }
         .padding(Space.lg)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
@@ -70,9 +94,9 @@ struct MealPlanSuggestionCard: View {
         VStack(alignment: .leading, spacing: Space.xs) {
             HStack(spacing: Space.sm) {
                 Circle()
-                    .fill(suggestion.mealType.tint)
+                    .fill(mealType.tint)
                     .frame(width: 6, height: 6)
-                Text(suggestion.mealType.displayName)
+                Text(mealType.displayName)
                     .eyebrow()
                 Spacer(minLength: 0)
             }
@@ -132,25 +156,82 @@ struct MealPlanSuggestionCard: View {
         .accessibilityElement(children: .contain)
     }
 
-    // MARK: - Bottom
+    // MARK: - Footer
 
     @ViewBuilder
-    private var bottomRow: some View {
+    private var footer: some View {
         if wasAdded {
-            SuccessRow(label: "Added to \(dayLabel)")
+            SuccessRow(label: "Added to \(mealType.displayName.lowercased()) on \(Self.dayLabel(day))")
         } else {
-            HStack(spacing: Space.sm) {
-                Spacer(minLength: 0)
-                Button(action: onAdd) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Add to \(dayLabel)")
+            VStack(alignment: .leading, spacing: Space.sm) {
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+
+                // Wrapped so the three controls stack rather than squeeze when
+                // the overlay is narrow. A date picker that has shrunk below its
+                // own text is unusable, and this row carries one.
+                ChipFlowLayout(spacing: Space.sm) {
+                    DatePicker("Day", selection: $day, displayedComponents: [.date])
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .accessibilityLabel("Day to add this meal to")
+
+                    Menu {
+                        Picker("Meal", selection: $mealType) {
+                            ForEach(MealType.allCases) { type in
+                                Text(type.displayName).tag(type)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    } label: {
+                        HStack(spacing: Space.xs) {
+                            Text(mealType.displayName)
+                                .font(.edFootnote)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundStyle(Tokens.ink)
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, 6)
+                        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                                .stroke(Tokens.border, lineWidth: 0.5)
+                        )
                     }
+                    .menuStyleCompat()
+                    .accessibilityLabel("Meal to add this to, currently \(mealType.displayName)")
+
+                    Button {
+                        onAdd(day, mealType)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Add")
+                        }
+                    }
+                    .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+                    .accessibilityLabel("Add \(suggestion.title) to \(mealType.displayName) on \(Self.dayLabel(day))")
                 }
-                .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-                .accessibilityLabel("Add \(suggestion.title) to \(dayLabel)")
             }
         }
     }
+
+    /// "today", "tomorrow", or the weekday and date. The same phrasing the tab
+    /// uses, so one meal is never described two ways on one screen.
+    static func dayLabel(_ day: Date, calendar: Calendar = .current) -> String {
+        if calendar.isDateInToday(day) { return "today" }
+        if calendar.isDateInTomorrow(day) { return "tomorrow" }
+        if calendar.isDateInYesterday(day) { return "yesterday" }
+        return shortDay.string(from: day)
+    }
+
+    private static let shortDay: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE d MMM"
+        return f
+    }()
 }

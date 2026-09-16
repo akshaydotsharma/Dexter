@@ -3,26 +3,29 @@ import SwiftData
 
 /// The Plan tab (#599).
 ///
-/// ### What it is
+/// ### The shape of it
 ///
-/// A calendar of meals you intend to eat, and a chat that helps you decide what
-/// they should be. One day at a time: the chat at the top, the day's four tiles
-/// under it, and what the day needs from a shop at the foot.
+/// A month calendar at the top, the day's four meals stacked under it, and the
+/// chat floating over the bottom corner. Each of those three went somewhere else
+/// first, and each moved for the same reason: the PLAN is the content, and the
+/// two things around it kept pushing it off the screen.
 ///
-/// ### It has no calendar of its own
+/// The calendar was a Week/Month strip, then a popover in the section chrome.
+/// On the screen it costs a fixed block of height and answers the question the
+/// tab opens on — which day am I looking at — without a tap.
 ///
-/// The day is chosen in the section chrome, by the same control Tracking uses.
-/// The tab used to carry a Week/Month strip inline as well, which was two
-/// calendars on one surface: the second one pushed the day's content down the
-/// screen every time it was on show, and the chrome control sat above it naming
-/// a different day. Now there is one control, and `MealsView` points it at this
-/// tab's day while this tab is showing.
+/// The chat was a sheet, then an inline panel at the top. As a floating button
+/// it costs one corner, and the panel it opens covers part of the plan instead
+/// of all of it, so a suggestion can be added and the tile filling in is visible
+/// in the same glance.
 ///
-/// The plan's day and Tracking's day are still separate VALUES. That control
-/// cannot reach a future day on Tracking, because the composer writes to it and
-/// a meal is a record of something already eaten (#592); a plan lives in the
-/// future. Same control, two days, and the calendar behind it allows the future
-/// on this tab and not on that one.
+/// ### The day
+///
+/// Owned by the section, and separate from Tracking's day. That one cannot move
+/// past today, because the composer writes to it and a meal is a record of
+/// something already eaten (#592); a plan lives in the future. The chrome's date
+/// control is withheld while this tab shows, because this tab has a calendar of
+/// its own and two controls picking one day is worse than one in either place.
 ///
 /// ### Nothing here writes on its own
 ///
@@ -41,32 +44,30 @@ struct MealPlanView: View {
     let allTargets: [MealTargets]
     let allEntries: [LocalMealPlanEntry]
 
-    /// The day being planned. Owned by the section, because the chrome's date
-    /// control drives it.
+    /// The day being planned, and the month the grid is on. Both owned by the
+    /// section: the day so it survives a tab switch, the month so paging away
+    /// and coming back does not reset it.
     @Binding var selectedDay: Date
+    @Binding var visibleMonth: Date
 
-    /// Owned by the section so the conversation survives a tab switch. See the
-    /// note on `MealPlanChatPanel`.
+    /// Owned by the section so the conversation survives a tab switch.
     @Bindable var chat: MealPlanChatModel
 
     @State private var editorTarget: MealPlanEditorTarget?
+    @State private var chatOpen = false
     @State private var errorMessage: String?
 
     private var plans: MealPlanService { .default() }
     private var calendar: Calendar { Calendar.current }
 
     var body: some View {
-        ScrollViewReader { proxy in
+        ZStack(alignment: .bottomTrailing) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
-                    MealPlanChatPanel(
-                        model: chat,
-                        dayLabel: shortDayLabel,
-                        hasTargets: MealTargets.inForce(on: selectedDay, among: allTargets) != nil,
-                        hasHistory: !allMeals.isEmpty,
-                        hasPlan: !selectedPlan.isEmpty,
-                        onSend: send,
-                        onAdd: add
+                    MealPlanMonthGrid(
+                        month: $visibleMonth,
+                        selectedDay: $selectedDay,
+                        readings: MealPlanDay.readings(in: allEntries)
                     )
 
                     if let errorMessage {
@@ -81,27 +82,32 @@ struct MealPlanView: View {
                         targets: MealTargets.inForce(on: selectedDay, among: allTargets),
                         onAdd: { editorTarget = .new(day: selectedDay, mealType: $0) },
                         onOpen: { editorTarget = .existing($0) },
-                        onToggleEaten: toggleEaten,
                         onCopyDay: copyDay,
                         onClearDay: clearDay
-                    )
-
-                    MealPlanNeedsCard(
-                        ingredients: MealPlanDay.ingredients(in: selectedPlan.all),
-                        blocksWithoutIngredients: selectedPlan.counted.filter { $0.ingredients.isEmpty }.count
                     )
                 }
                 .padding(.horizontal, Space.lg)
                 .padding(.top, Space.xs)
                 .padding(.bottom, BottomTabBarMetrics.scrollBottomInset)
             }
-            // The panel has no viewport of its own, so keeping the newest turn
-            // in view is the PAGE's job. Scrolling to the last turn rather than
-            // to a bottom anchor is deliberate here: the board sits below the
-            // chat, and anchoring to the page bottom during a reply would drag
-            // the user away from the answer and down to the tiles.
-            .onChange(of: chat.turns.last?.text) { _, _ in scrollToNewestTurn(proxy) }
-            .onChange(of: chat.turns.count) { _, _ in scrollToNewestTurn(proxy) }
+
+            MealPlanChatOverlay(
+                model: chat,
+                defaultDay: selectedDay,
+                dayLabel: shortDayLabel,
+                hasTargets: MealTargets.inForce(on: selectedDay, among: allTargets) != nil,
+                hasHistory: !allMeals.isEmpty,
+                hasPlan: !selectedPlan.isEmpty,
+                onSend: send,
+                onAdd: add,
+                isOpen: $chatOpen
+            )
+        }
+        // Picking a day is what the grid is for, and a day picked while the chat
+        // is open is almost always a day the user wants to LOOK at. Closing the
+        // panel gets it out of the way of the answer.
+        .onChange(of: selectedDay) { _, _ in
+            if chatOpen { withAnimation(.easeOut(duration: 0.2)) { chatOpen = false } }
         }
         .sheet(item: $editorTarget) { target in
             MealPlanEntrySheet(target: target)
@@ -112,26 +118,17 @@ struct MealPlanView: View {
         }
     }
 
-    private func scrollToNewestTurn(_ proxy: ScrollViewProxy) {
-        guard let id = chat.turns.last?.id else { return }
-        withAnimation(.easeOut(duration: 0.2)) {
-            proxy.scrollTo(id, anchor: .bottom)
-        }
-    }
-
     // MARK: - Derived
 
     private var selectedPlan: MealPlanDay {
         MealPlanDay.onDay(selectedDay, in: allEntries)
     }
 
-    /// How the chat's Add button names the day: "today", "tomorrow", or the
-    /// weekday and date.
+    /// How the chat's opener names the day: "today", "tomorrow", or the weekday
+    /// and date. The same phrasing `MealPlanSuggestionCard` uses, so one day is
+    /// never described two ways on one screen.
     private var shortDayLabel: String {
-        if calendar.isDateInToday(selectedDay) { return "today" }
-        if calendar.isDateInTomorrow(selectedDay) { return "tomorrow" }
-        if calendar.isDateInYesterday(selectedDay) { return "yesterday" }
-        return Self.shortDay.string(from: selectedDay)
+        MealPlanSuggestionCard.dayLabel(selectedDay, calendar: calendar)
     }
 
     // MARK: - Chat
@@ -140,8 +137,8 @@ struct MealPlanView: View {
     ///
     /// Not cached, and that is the point: the user can add a suggestion, change
     /// the plan and ask again, and the next turn has to be told about the day as
-    /// it is NOW rather than as it was when the panel first rendered. It is
-    /// arithmetic over arrays already in memory, so it costs nothing to rebuild.
+    /// it is NOW rather than as it was when the panel opened. It is arithmetic
+    /// over arrays already in memory, so it costs nothing to rebuild.
     private func send() {
         chat.send(
             context: MealPlanContext.build(
@@ -154,18 +151,19 @@ struct MealPlanView: View {
         )
     }
 
-    /// Write a suggestion onto the day.
+    /// Write a suggestion onto the day and meal the CARD was set to, which need
+    /// not be the day the calendar is on.
     ///
     /// The `why` is deliberately NOT carried across. It is an argument for a
     /// choice, and once the choice is made it stops being true of the plan: a
     /// block reading "you are short on protein today" a week later is a note
     /// about a day that has been and gone. The prep note IS carried, because
     /// soaking the beans is still true on the night.
-    private func add(_ suggestion: MealPlanSuggestion) {
+    private func add(_ suggestion: MealPlanSuggestion, day: Date, mealType: MealType) {
         perform {
             try plans.addEntry(
-                date: selectedDay,
-                mealType: suggestion.mealType,
+                date: day,
+                mealType: mealType,
                 title: suggestion.title,
                 ingredients: suggestion.ingredients,
                 notes: suggestion.prepNote,
@@ -186,13 +184,6 @@ struct MealPlanView: View {
     // The view holds no copy of a block's state: SwiftData's change notification
     // repaints the tiles, so there is nothing here that can drift out of step
     // with the store.
-
-    private func toggleEaten(_ entry: LocalMealPlanEntry) {
-        perform {
-            try plans.setStatus(entry.statusEnum == .eaten ? .planned : .eaten, on: entry)
-            Haptics.tick()
-        }
-    }
 
     private func copyDay(offsetDays: Int) {
         perform {
