@@ -32,6 +32,9 @@ enum MealPlanMetrics {
     static let pageFraction: CGFloat = 0.62
     /// Gap between months in the reel.
     static let pageGutter: CGFloat = Space.lg
+    /// The least a neighbouring month may show on each side. On a narrow card
+    /// this is what the neighbours get, and the centre month takes the rest.
+    static let minimumPeek: CGFloat = Space.lg + Space.sm
     /// How much of a neighbouring month is left visible. Enough to read the
     /// month's name and the shape of its weeks; not enough to be mistaken for
     /// something you can act on.

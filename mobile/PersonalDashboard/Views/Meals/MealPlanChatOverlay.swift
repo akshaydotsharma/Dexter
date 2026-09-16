@@ -84,6 +84,13 @@ struct MealPlanChatOverlay: View {
     /// One control in one place for both directions. A separate X inside the
     /// panel would put the way out somewhere different from the way in, and the
     /// glyph swap says which state you are in without a label.
+    /// The chat button, in the Meals accent with a speech bubble.
+    ///
+    /// It was a dark circle carrying `sparkles`, which on a phone put it a
+    /// centimetre from the capture button in the tab bar — same shape, same
+    /// near-black fill, same glyph — so the two read as one control duplicated.
+    /// The bubble says conversation rather than AI, and the accent separates it
+    /// from the app-wide button without leaving the palette.
     private var floatingButton: some View {
         Button {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
@@ -91,14 +98,14 @@ struct MealPlanChatOverlay: View {
             }
             if isOpen { inputFocused = true }
         } label: {
-            Image(systemName: isOpen ? "xmark" : "sparkles")
-                .font(.system(size: isOpen ? 16 : 19, weight: .semibold))
+            Image(systemName: isOpen ? "xmark" : "bubble.left.and.text.bubble.right.fill")
+                .font(.system(size: isOpen ? 16 : 18, weight: .semibold))
                 .foregroundStyle(Tokens.accentFg)
                 .frame(
                     width: MealPlanChatMetrics.buttonSize,
                     height: MealPlanChatMetrics.buttonSize
                 )
-                .background(Tokens.ink, in: Circle())
+                .background(Tokens.accent(for: .meals), in: Circle())
                 .shadowMd()
                 .contentShape(Circle())
         }

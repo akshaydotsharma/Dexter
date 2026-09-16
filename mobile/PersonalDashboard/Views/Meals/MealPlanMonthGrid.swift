@@ -69,12 +69,24 @@ struct MealPlanMonthGrid: View {
 
     private var calendar: Calendar { Calendar.current }
 
-    /// Width of one month. Capped, because a month that widens without limit is
-    /// worse than a narrow one: seven flexible columns across a 2000pt window
-    /// put 280pt between a numeral and its neighbour, and a calendar is read by
+    /// Width of one month.
+    ///
+    /// Capped at the top, because a month that widens without limit is worse
+    /// than a narrow one: seven flexible columns across a 2000pt window put
+    /// 280pt between a numeral and its neighbour, and a calendar is read by
     /// proximity.
+    ///
+    /// Floored at the bottom by the card minus one peek, which is what makes
+    /// this work on a phone. At a plain fraction of a 370pt card the centre
+    /// month got 229pt and the neighbours took the rest, and their rows of pips
+    /// ran straight into the centre month's — one continuous line of circles
+    /// across the card, which is the exact opposite of what the pips are for.
+    /// The wheel is a luxury of a wide window; on a narrow one the month you are
+    /// on takes the room and the neighbours are a hint at the edge.
     private var pageWidth: CGFloat {
-        min(MealPlanMetrics.maxWidth, max(cardWidth * MealPlanMetrics.pageFraction, 200))
+        let peeked = cardWidth - MealPlanMetrics.minimumPeek * 2
+        let fractional = cardWidth * MealPlanMetrics.pageFraction
+        return min(MealPlanMetrics.maxWidth, max(peeked, fractional, 200))
     }
 
     private var pageStep: CGFloat { pageWidth + MealPlanMetrics.pageGutter }
