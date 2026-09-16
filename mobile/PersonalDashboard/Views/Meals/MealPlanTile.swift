@@ -41,10 +41,6 @@ enum MealPlanBoardMetrics {
     /// amber the Tracking tab spends on readings.
     static let blockFill: Double = 0.07
     static let blockStroke: Double = 0.22
-
-    /// The dash of the ghost add row, so it reads as a block that is not
-    /// there yet rather than as a block drawn in a lighter colour.
-    static let ghostDash: [CGFloat] = [4, 3]
 }
 
 /// One meal type's blocks on the selected day (#599).
@@ -85,7 +81,18 @@ struct MealPlanTile: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             header
 
-            if !slot.isEmpty {
+            // The one mark between the title line and the meals under it.
+            //
+            // The dashed ghost row used to do this job as a side effect of
+            // being a control, which is a lot of ink for a separation: a
+            // hairline says the same thing and says nothing else.
+            Rectangle()
+                .fill(Tokens.border)
+                .frame(height: 1)
+
+            if slot.isEmpty {
+                emptyBody
+            } else {
                 VStack(alignment: .leading, spacing: Space.sm) {
                     ForEach(visible, id: \.clientUUID) { entry in
                         MealPlanBlock(entry: entry, onOpen: { onOpen(entry) })
@@ -97,8 +104,6 @@ struct MealPlanTile: View {
                         .foregroundStyle(Tokens.mutedSoft)
                 }
             }
-
-            addRow
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
@@ -109,13 +114,12 @@ struct MealPlanTile: View {
 
     // MARK: - Header
 
-    /// The tile's title line: which meal, and what it costs so far.
+    /// The title line: which meal, what it costs so far, and the add.
     ///
-    /// No control sits in it. The plus was here, immediately after the word,
-    /// and it read as a glyph stuck to the end of a label rather than as a
-    /// button: a header is a thing you read, and a button inside one has to
-    /// earn its place against the reading. The add moved down to the ghost row,
-    /// where an add belongs — at the end of the list it appends to.
+    /// The plus takes the trailing edge, which is where a section's own action
+    /// sits everywhere else in this app, and the calorie figure moves in beside
+    /// it. Both are trailing because both are about the tile as a whole, and the
+    /// leading cluster is left to say only what the tile IS.
     private var header: some View {
         HStack(spacing: Space.sm) {
             Circle()
@@ -123,73 +127,61 @@ struct MealPlanTile: View {
                 .frame(width: MealPlanBoardMetrics.dot, height: MealPlanBoardMetrics.dot)
             Text(slot.mealType.displayName)
                 .eyebrow()
+
             Spacer(minLength: Space.sm)
+
             if let totals {
                 Text("\(MealFormat.calories(totals.calories)) kcal")
                     .font(.edFootnoteStrong)
                     .foregroundStyle(Tokens.inkSoft)
                     .monospacedDigit()
             }
+            addButton
         }
     }
 
-    // MARK: - Add
+    /// The plus, in the meal type's own hue.
+    ///
+    /// It was a `surface2` circle on a `surface` card, which is a two-step
+    /// difference in the palette and read as absent: the control most likely to
+    /// be looked for on an empty tile was the hardest thing on it to see. The
+    /// hue ties it to the tile it belongs to and lifts it clear of the card in
+    /// one move, and it stays inside the meal-type family, so it still cannot be
+    /// mistaken for a verdict.
+    private var addButton: some View {
+        Button(action: onAdd) {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(slot.mealType.tint)
+                .frame(width: 22, height: 22)
+                .background(slot.mealType.tint.opacity(0.16), in: Circle())
+                .overlay(Circle().stroke(slot.mealType.tint.opacity(0.45), lineWidth: 0.75))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add \(slot.mealType.displayName.lowercased())")
+    }
 
-    /// The add, as a ghosted block at the end of the tile.
+    // MARK: - Empty
+
+    /// The empty state is a BUTTON, not a label.
     ///
-    /// ### Why it is a row and not a plus
-    ///
-    /// A tile is a list of blocks, and this is the next one: same width, same
-    /// corner, same leading edge, drawn as an outline because it is not there
-    /// yet. That is a shape the surface already teaches, so it needs no label to
-    /// explain what tapping it does.
-    ///
-    /// It also fixes what a corner plus could not. The chat's floating button
-    /// owns the bottom-right corner, so a trailing plus on whichever tile sits
-    /// at that height is covered by it. A full-width row cannot be blocked: the
-    /// glyph may sit under the button, but the row is the target.
-    ///
-    /// ### Why the empty tile says something different
-    ///
-    /// It is one control with two labels. On an empty tile the row states the
-    /// fact there is to state — nothing is planned — because that is what the
-    /// user came to find out, and the plus beside it says what to do about it.
-    /// Once blocks exist the fact is visible above, so the row names the action
-    /// instead.
-    private var addRow: some View {
+    /// The plus sits at the far end of the title line, where the eye lands last.
+    /// An empty tile is mostly empty space, and that space is the obvious thing
+    /// to aim at, so it does the same job rather than nothing.
+    private var emptyBody: some View {
         Button(action: onAdd) {
             HStack(spacing: Space.sm) {
-                Image(systemName: "plus")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(slot.mealType.tint)
-                    .frame(width: 20, height: 20)
-                    .background(slot.mealType.tint.opacity(0.16), in: Circle())
-                    .overlay(Circle().stroke(slot.mealType.tint.opacity(0.45), lineWidth: 0.75))
-
-                Text(slot.isEmpty ? "No items added" : "Add \(slot.mealType.displayName.lowercased())")
+                Text("No items added")
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.mutedSoft)
-
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, Space.sm + 2)
-            .padding(.vertical, Space.xs + 1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: MealPlanBoardMetrics.blockRadius, style: .continuous)
-                    .strokeBorder(
-                        Tokens.border,
-                        style: StrokeStyle(lineWidth: 1, dash: MealPlanBoardMetrics.ghostDash)
-                    )
-            )
+            .padding(.vertical, 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-            slot.isEmpty
-                ? "No \(slot.mealType.displayName.lowercased()) planned. Add one"
-                : "Add \(slot.mealType.displayName.lowercased())"
-        )
+        .accessibilityLabel("No \(slot.mealType.displayName.lowercased()) planned. Add one")
     }
 }
 

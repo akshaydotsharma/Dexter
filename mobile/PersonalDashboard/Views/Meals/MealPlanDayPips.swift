@@ -24,10 +24,23 @@ enum MealPlanMetrics {
     static let weekCell: CGFloat = 60
     /// Gap between squares, in both calendars.
     static let gutter: CGFloat = Space.xs
-    /// The month grid stops widening past this, matching
-    /// `MealCalendarMetrics.maxWidth` so the two calendars in this section are
-    /// the same object at the same size.
+    /// One month stops widening past this, matching `MealCalendarMetrics.maxWidth`
+    /// so the two calendars in this section are the same object at the same size.
     static let maxWidth: CGFloat = 460
+    /// How much of the card's width one month takes, until the cap bites. The
+    /// remainder is what the two neighbouring months show through.
+    static let pageFraction: CGFloat = 0.62
+    /// Gap between months in the reel.
+    static let pageGutter: CGFloat = Space.lg
+    /// How much of a neighbouring month is left visible. Enough to read the
+    /// month's name and the shape of its weeks; not enough to be mistaken for
+    /// something you can act on.
+    static let neighbourOpacity: Double = 0.3
+    /// How far back a neighbouring month sits.
+    static let neighbourScale: CGFloat = 0.94
+    /// How long one step takes. Long enough to be seen as a direction, short
+    /// enough that holding the chevron still steps at a usable rate.
+    static let slideDuration: Double = 0.28
     /// Diameter of one meal-type pip.
     static let pip: CGFloat = 5
     /// Gap between pips.
