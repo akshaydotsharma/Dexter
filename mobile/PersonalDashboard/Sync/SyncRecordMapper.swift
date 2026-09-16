@@ -87,6 +87,12 @@ enum SyncRecordMapper {
         // differ between the phone and the Mac make every verdict on one of them
         // wrong without looking wrong.
         out += try map("MealTargets", payload.mealTargets ?? []) { $0.clientUUID }
+        // #599. Already a String on the model, like the two above. A block's
+        // ingredients travel inside the record as a blob, so a block and its
+        // ingredient list are one sync unit and last write wins on the whole
+        // list — the same call `LocalList`, `LocalVisionBlock` and `LocalMeal`
+        // all make about the arrays they own.
+        out += try map("LocalMealPlanEntry", payload.mealPlanEntries ?? []) { $0.clientUUID }
 
         return out
     }

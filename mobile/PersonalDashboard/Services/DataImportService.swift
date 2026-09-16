@@ -255,6 +255,10 @@ final class DataImportService {
         /// "nothing to import" and refuse the only copy of them there is.
         case meals
         case mealTargets
+        /// #599. Same reason again: an archive carrying only a planned week
+        /// would otherwise report "nothing to import" and refuse the only copy
+        /// of it there is.
+        case mealPlanEntries
 
         var id: String { rawValue }
 
@@ -280,6 +284,7 @@ final class DataImportService {
             case .recurringTasks:    return "Recurring tasks"
             case .meals:             return "Meals"
             case .mealTargets:       return "Nutrition targets"
+            case .mealPlanEntries:   return "Planned meals"
             }
         }
 
@@ -305,6 +310,7 @@ final class DataImportService {
             case .recurringTasks:    return "repeat"
             case .meals:             return "fork.knife"
             case .mealTargets:       return "target"
+            case .mealPlanEntries:   return "calendar.badge.clock"
             }
         }
     }
@@ -435,6 +441,7 @@ final class DataImportService {
         // #542. Both key on a String `clientUUID`, like the expense models above.
         let existingMealIDs        = try existingStringUUIDs(LocalMeal.self,        keyPath: \.clientUUID)
         let existingMealTargetIDs  = try existingStringUUIDs(MealTargets.self,      keyPath: \.clientUUID)
+        let existingMealPlanIDs    = try existingStringUUIDs(LocalMealPlanEntry.self, keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -468,6 +475,7 @@ final class DataImportService {
         record(.recurringTasks,    (payload.recurringTasks ?? []).map(\.clientUUID),   existing: existingRecurringTaskIDs)
         record(.meals,             (payload.meals ?? []).map(\.clientUUID),            existing: existingMealIDs)
         record(.mealTargets,       (payload.mealTargets ?? []).map(\.clientUUID),      existing: existingMealTargetIDs)
+        record(.mealPlanEntries,   (payload.mealPlanEntries ?? []).map(\.clientUUID),  existing: existingMealPlanIDs)
 
         return (skip, repair)
     }
@@ -525,6 +533,7 @@ final class DataImportService {
         let existingVisionBlockUUIDs = mode == .replaceMatching ? [] : try existingUUIDs(LocalVisionBlock.self,   keyPath: \.clientUUID)
         let existingMealUUIDs        = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalMeal.self,    keyPath: \.clientUUID)
         let existingMealTargetUUIDs  = mode == .replaceMatching ? [] : try existingStringUUIDs(MealTargets.self,  keyPath: \.clientUUID)
+        let existingMealPlanUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalMealPlanEntry.self, keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
@@ -902,6 +911,42 @@ final class DataImportService {
                 modelContext.insert(targets)
             }
 
+            // #599: the planned meals. Rows only, like the logged ones, and
+            // `date` is written back VERBATIM for the same anchoring reason —
+            // re-anchoring here would read a UTC midnight in the restoring
+            // device's calendar and shift the day west of UTC (#506).
+            //
+            // `ingredientsData` is assigned after construction so the
+            // initialiser's `ingredients` accessor cannot decode and re-encode
+            // it, which would drop anything this build does not know about.
+            for dto in payload.mealPlanEntries ?? [] where !existingMealPlanUUIDs.contains(dto.clientUUID) {
+                let entry = LocalMealPlanEntry(
+                    clientUUID: dto.clientUUID,
+                    date: dto.date,
+                    mealType: dto.mealType,
+                    slotIndex: dto.slotIndex,
+                    title: dto.title,
+                    notes: dto.notes,
+                    recipe: dto.recipe,
+                    status: dto.status,
+                    hasNutrition: dto.hasNutrition,
+                    calories: dto.calories,
+                    proteinG: dto.proteinG,
+                    carbsG: dto.carbsG,
+                    fatG: dto.fatG,
+                    fibreG: dto.fibreG,
+                    sugarG: dto.sugarG,
+                    sodiumMg: dto.sodiumMg,
+                    satFatG: dto.satFatG,
+                    source: dto.source,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt
+                )
+                entry.ingredientsData = dto.ingredientsData
+                entry.itemsData = dto.itemsData
+                modelContext.insert(entry)
+            }
+
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
                 let restoredPath = try restoreReceipt(for: dto, archiveEntries: preview.entries)
                 if let written = restoredPath.writtenPath { writtenReceiptPaths.append(written) }
@@ -1184,6 +1229,7 @@ final class DataImportService {
         try deleteMatching(RecurringTask.self,    ids: Set((payload.recurringTasks ?? []).map(\.clientUUID)),    key: \.clientUUID)
         try deleteMatching(LocalMeal.self,        ids: Set((payload.meals ?? []).map(\.clientUUID)),             key: \.clientUUID)
         try deleteMatching(MealTargets.self,      ids: Set((payload.mealTargets ?? []).map(\.clientUUID)),       key: \.clientUUID)
+        try deleteMatching(LocalMealPlanEntry.self, ids: Set((payload.mealPlanEntries ?? []).map(\.clientUUID)),  key: \.clientUUID)
         try deleteMatching(LocalProcessedEmail.self, ids: Set((payload.processedEmails ?? []).map(\.messageKey)), key: \.messageKey)
     }
 
@@ -1279,6 +1325,7 @@ final class DataImportService {
             "RecurringTask":        payload.recurringTasks?.count ?? 0,
             "LocalMeal":            payload.meals?.count ?? 0,
             "MealTargets":          payload.mealTargets?.count ?? 0,
+            "LocalMealPlanEntry":   payload.mealPlanEntries?.count ?? 0,
         ]
     }
 

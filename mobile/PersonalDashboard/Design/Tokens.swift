@@ -305,6 +305,53 @@ enum Tokens {
     static let mealTypeDinner    = Color.paper(0xB420AA, 0xF47CEC)
     static let mealTypeSnack     = Color.paper(0x58637C, 0xA8AFBE)
 
+    // MARK: Nutrient identity hues (#599)
+
+    /// One hue per macro, for the pills on a planned meal.
+    ///
+    /// ### A third family, and why it is allowed
+    ///
+    /// Two colour families already exist on Meals: the VERDICT family
+    /// (`danger`/`warning`/`success`), which says whether a quantity is right,
+    /// and the MEAL TYPE family above, which says which meal a thing belongs
+    /// to. This is a third: it says WHICH NUTRIENT a figure is.
+    ///
+    /// It is confined to surfaces that carry no verdict — the plan, where every
+    /// figure is a forecast about a day that has not happened, so there is
+    /// nothing for a colour to be mistaken for. On Tracking, where a number is
+    /// read against a target, `MealStatPill` keeps the verdict palette and
+    /// these are not used. Moving them there would put two meanings on one
+    /// colour, which is the one thing a palette cannot survive.
+    ///
+    /// ### Why they are dots and hairlines, not fills
+    ///
+    /// Four tinted blocks in a row on a block that already carries a meal-type
+    /// rail is five colours inside one card. The hue rides on a 6pt dot and a
+    /// hairline instead, which is enough to group and tell apart at a glance
+    /// while the card stays quiet.
+    ///
+    /// Hues are picked for separation from each other AND from the meal-type
+    /// rail they sit beside: teal 195°, lime 80°, gold 45°, rose 345°.
+    static let nutrientProtein = Color.paper(0x0E7490, 0x67E8F9)
+    static let nutrientFibre   = Color.paper(0x4D7C0F, 0xBEF264)
+    static let nutrientCarbs   = Color.paper(0xA16207, 0xFCD34D)
+    static let nutrientFat     = Color.paper(0xBE185D, 0xF9A8D4)
+
+    /// The hue for one nutrient, or a neutral for the four that have none.
+    ///
+    /// Sugar, sodium and saturated fat deliberately stay grey. They are read on
+    /// a plan far less often than the macros, and giving every tracked number a
+    /// colour would leave the row with no hierarchy at all.
+    static func nutrientTint(for nutrient: Nutrient) -> Color {
+        switch nutrient {
+        case .protein: return nutrientProtein
+        case .carbs:   return nutrientCarbs
+        case .fat:     return nutrientFat
+        case .fibre:   return nutrientFibre
+        case .calories, .sugar, .sodium, .saturatedFat: return muted
+        }
+    }
+
     // MARK: Vision Board state hues (#446)
 
     /// Block state: Ongoing. Steel cyan (192°). Cool family, deliberately

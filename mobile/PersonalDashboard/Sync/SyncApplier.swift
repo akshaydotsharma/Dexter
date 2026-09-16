@@ -311,6 +311,12 @@ struct SyncApplier {
             case "MealTargets":
                 payload.mealTargets = (payload.mealTargets ?? [])
                     + [try decoder.decode(DataArchive.MealTargetsDTO.self, from: data)]
+            // #599. A peer on a build that predates the plan hits the `default`
+            // arm below and skips these ops with a log line, which is the same
+            // graceful degrade every model added after v1 gets.
+            case "LocalMealPlanEntry":
+                payload.mealPlanEntries = (payload.mealPlanEntries ?? [])
+                    + [try decoder.decode(DataArchive.MealPlanEntryDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -498,6 +504,11 @@ struct SyncApplier {
         // has something to be judged against.
         case "LocalMeal":            return try deleteString(LocalMeal.self, id: recordID, key: \.clientUUID)
         case "MealTargets":          return try deleteString(MealTargets.self, id: recordID, key: \.clientUUID)
+        // #599. A String `clientUUID` again, so the string path. Deleting a
+        // planned block deletes the block only: it owns nothing, and the meal
+        // that was eventually logged against it is a separate row on a separate
+        // table that nobody here should touch.
+        case "LocalMealPlanEntry":   return try deleteString(LocalMealPlanEntry.self, id: recordID, key: \.clientUUID)
         default:
             SyncLog.line("SyncApplier: cannot delete unknown entity \(entity)")
             return false

@@ -93,6 +93,12 @@ enum DataArchive {
         var meals: [MealDTO]? = nil
         var mealTargets: [MealTargetsDTO]? = nil
 
+        // MARK: Added in #599 — planned meals.
+        // Optional like every field added after v1, so an archive written before
+        // the plan existed decodes with nil and imports as "nothing planned"
+        // rather than failing the whole restore.
+        var mealPlanEntries: [MealPlanEntryDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -633,6 +639,47 @@ enum DataArchive {
         let updatedAt: Date
     }
 
+    /// One planned meal (#599).
+    ///
+    /// `date` travels as the stored UTC day ANCHOR and is written back verbatim
+    /// on restore, never re-anchored — the same contract `MealDTO.date` carries,
+    /// and for the same reason: passing it through `WallClock.dayAnchor(from:)`
+    /// on the restoring device would read a UTC midnight in that device's
+    /// calendar and shift the day west of UTC, which is #506 on the restore path.
+    ///
+    /// `ingredientsData` travels as its RAW blob, like `MealDTO.itemsData`, so a
+    /// byte-for-byte round trip cannot drop anything a later build adds to the
+    /// payload. Decoding and re-encoding it here would silently discard it.
+    struct MealPlanEntryDTO: Codable {
+        let clientUUID: String
+        let date: Date
+        let mealType: String
+        let slotIndex: Int
+        let title: String
+        let ingredientsData: Data?
+        let notes: String?
+        /// #599. Optional because a block need not have one, not because the
+        /// field is additive.
+        let recipe: String?
+        /// #599. The per-dish breakdown as its RAW blob, for the same reason
+        /// `MealDTO.itemsData` travels raw: a byte-for-byte round trip cannot
+        /// drop a `MealItemEntry` field a later build adds.
+        let itemsData: Data?
+        let status: String
+        let hasNutrition: Bool
+        let calories: Double
+        let proteinG: Double
+        let carbsG: Double
+        let fatG: Double
+        let fibreG: Double
+        let sugarG: Double
+        let sodiumMg: Double
+        let satFatG: Double
+        let source: String
+        let createdAt: Date
+        let updatedAt: Date
+    }
+
     struct VocabDTO: Codable {
         let clientUUID: UUID
         let term: String
@@ -776,6 +823,11 @@ enum DataArchive {
         // them against.
         "LocalMeal",
         "MealTargets",
+        // #599. The plan is user-authored content and nothing else holds it: a
+        // week typed into the calendar exists only in this table, so leaving it
+        // out would make it the one part of Meals a restore could not bring
+        // back — the gap that cost eight vision blocks in #449.
+        "LocalMealPlanEntry",
     ]
 
     static func makeEncoder() -> JSONEncoder {

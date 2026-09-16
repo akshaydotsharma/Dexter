@@ -370,6 +370,12 @@ final class SwiftDataStore {
         // devices makes every verdict on one of them wrong.
         LocalMeal.self,
         MealTargets.self,
+        // Meal planning (#599). One more new table and, again, no change to
+        // anything above it. A planned meal is its own model rather than a flag
+        // on `LocalMeal` because every roll-up over that table sums it without
+        // asking what kind of row it holds, so a planned dinner sitting there
+        // would land in Thursday's calories before Thursday happened.
+        LocalMealPlanEntry.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

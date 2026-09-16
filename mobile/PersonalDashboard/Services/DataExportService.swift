@@ -231,6 +231,9 @@ final class DataExportService {
         // #542: logged meals and the daily targets they are judged against.
         let meals       = try modelContext.fetch(FetchDescriptor<LocalMeal>())
         let mealTargets = try modelContext.fetch(FetchDescriptor<MealTargets>())
+        // #599: the planned meals. Nothing else in the store holds them, so a
+        // week typed into the plan calendar lives here or nowhere.
+        let mealPlanEntries = try modelContext.fetch(FetchDescriptor<LocalMealPlanEntry>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -273,6 +276,7 @@ final class DataExportService {
         let recurringTaskDTOs: [DataArchive.RecurringTaskDTO] = recurringTasks.map(Self.dto)
         let mealDTOs: [DataArchive.MealDTO] = meals.map(Self.dto)
         let mealTargetsDTOs: [DataArchive.MealTargetsDTO] = mealTargets.map(Self.dto)
+        let mealPlanDTOs: [DataArchive.MealPlanEntryDTO] = mealPlanEntries.map(Self.dto)
 
         return DataArchive.Payload(
             tasks: taskDTOs,
@@ -298,7 +302,8 @@ final class DataExportService {
             taskTickets: taskTicketDTOs,
             visionBlocks: visionBlockDTOs,
             meals: mealDTOs,
-            mealTargets: mealTargetsDTOs
+            mealTargets: mealTargetsDTOs,
+            mealPlanEntries: mealPlanDTOs
         )
     }
 
@@ -331,6 +336,7 @@ final class DataExportService {
             "RecurringTask":        payload.recurringTasks?.count ?? 0,
             "LocalMeal":            payload.meals?.count ?? 0,
             "MealTargets":          payload.mealTargets?.count ?? 0,
+            "LocalMealPlanEntry":   payload.mealPlanEntries?.count ?? 0,
         ]
     }
 
@@ -680,6 +686,40 @@ final class DataExportService {
             groundingSourcesData: meal.groundingSourcesData,
             createdAt: meal.createdAt,
             updatedAt: meal.updatedAt
+        )
+    }
+
+    /// #599. `ingredientsData` is carried verbatim for the same reason a meal's
+    /// `itemsData` is: a byte-for-byte round trip cannot drop anything a later
+    /// build adds to the payload.
+    ///
+    /// `hasNutrition` is written out beside the eight rather than inferred from
+    /// them on restore. A planned fast and a block nobody put numbers on both
+    /// read as eight zeros, and only one of those is a claim about the meal.
+    private static func dto(_ entry: LocalMealPlanEntry) -> DataArchive.MealPlanEntryDTO {
+        DataArchive.MealPlanEntryDTO(
+            clientUUID: entry.clientUUID,
+            date: entry.date,
+            mealType: entry.mealType,
+            slotIndex: entry.slotIndex,
+            title: entry.title,
+            ingredientsData: entry.ingredientsData,
+            notes: entry.notes,
+            recipe: entry.recipe,
+            itemsData: entry.itemsData,
+            status: entry.status,
+            hasNutrition: entry.hasNutrition,
+            calories: entry.calories,
+            proteinG: entry.proteinG,
+            carbsG: entry.carbsG,
+            fatG: entry.fatG,
+            fibreG: entry.fibreG,
+            sugarG: entry.sugarG,
+            sodiumMg: entry.sodiumMg,
+            satFatG: entry.satFatG,
+            source: entry.source,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt
         )
     }
 

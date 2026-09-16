@@ -56,21 +56,33 @@ struct MealTrendsFilterBar: View {
         return selection.bandLabel()
     }
 
+    /// The far end of the custom range's lower bound. A date, not nil, because
+    /// `ClosedRange` needs one; far enough back that it can never bite.
+    private static let distantPast = Date(timeIntervalSince1970: 0)
+
     private var customPicker: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             Text("Custom range").eyebrow()
-            DatePicker(
-                "From",
-                selection: $selection.customStart,
-                in: ...Date(),
-                displayedComponents: .date
-            )
-            DatePicker(
-                "To",
-                selection: $selection.customEnd,
-                in: ...Date(),
-                displayedComponents: .date
-            )
+            // Dexter's own calendar on both ends, not the system one. A range
+            // has no day after today: there are no meals logged in the future.
+            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                Text("From").eyebrow()
+                EdDayPicker(
+                    day: $selection.customStart,
+                    accessibilityName: "From",
+                    tint: Tokens.accentMeals,
+                    bounds: Self.distantPast...Date()
+                )
+            }
+            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                Text("To").eyebrow()
+                EdDayPicker(
+                    day: $selection.customEnd,
+                    accessibilityName: "To",
+                    tint: Tokens.accentMeals,
+                    bounds: Self.distantPast...Date()
+                )
+            }
             Button("Apply") {
                 selection.period = .custom
                 showingCustom = false
