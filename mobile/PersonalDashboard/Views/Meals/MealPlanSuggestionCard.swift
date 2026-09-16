@@ -169,13 +169,16 @@ struct MealPlanSuggestionCard: View {
                     .frame(height: 0.5)
 
                 // Wrapped so the three controls stack rather than squeeze when
-                // the overlay is narrow. A date picker that has shrunk below its
-                // own text is unusable, and this row carries one.
+                // the overlay is narrow. The day field measures at its natural
+                // width here for the same reason: filling the row would put the
+                // meal menu and the Add button on lines of their own.
                 ChipFlowLayout(spacing: Space.sm) {
-                    DatePicker("Day", selection: $day, displayedComponents: [.date])
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .accessibilityLabel("Day to add this meal to")
+                    EdDayPicker(
+                        day: $day,
+                        accessibilityName: "Day to add this meal to",
+                        tint: mealType.tint,
+                        fillsWidth: false
+                    )
 
                     Menu {
                         Picker("Meal", selection: $mealType) {

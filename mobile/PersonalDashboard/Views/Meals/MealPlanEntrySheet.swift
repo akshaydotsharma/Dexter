@@ -73,8 +73,10 @@ struct MealPlanEntrySheet: View {
     /// The eight, as strings. Held as text so a half-typed "1." is not rounded
     /// to 1 under the user's caret on every keystroke.
     @State private var values: [Nutrient: String] = [:]
-    /// True when the block currently carries numbers. Decides whether an
-    /// untouched disclosure means "leave them" or "there are none".
+    /// True when the numbers on screen came from the model or from a block
+    /// that already had them. It decides the estimate button's wording and the
+    /// provenance a new block is saved with — NOT whether numbers are written.
+    /// What gets written is whatever is in the fields; see `nutrientsToWrite`.
     @State private var hasNumbers = false
 
     @State private var phase: Phase = .idle
@@ -113,11 +115,10 @@ struct MealPlanEntrySheet: View {
                             titleSection
                             daySection
                             estimateSection
-                            if hasNumbers { numbersSection }
+                            numbersSection
                             ingredientsSection
                             recipeSection
                             notesSection
-                            if !isNew { statusSection }
                             if let errorMessage {
                                 Text(errorMessage)
                                     .font(.edFootnote)
@@ -185,10 +186,12 @@ struct MealPlanEntrySheet: View {
     private var daySection: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Day").eyebrow()
-            DatePicker("Day", selection: $day, displayedComponents: [.date])
-                .labelsHidden()
-                .datePickerStyle(.compact)
-                .accessibilityLabel("Day this meal is planned for")
+            // Dexter's own calendar, not the system one. See `EdDayPicker`.
+            EdDayPicker(
+                day: $day,
+                accessibilityName: "Day this meal is planned for",
+                tint: mealType.tint
+            )
         }
     }
 
@@ -238,38 +241,65 @@ struct MealPlanEntrySheet: View {
 
     // MARK: - Numbers
 
+    /// The eight, always here and always editable.
+    ///
+    /// ### Why it is not behind the estimate
+    ///
+    /// It used to appear only once an estimate had filled it in, which made the
+    /// model the only way to put numbers on a planned meal. That is wrong twice
+    /// over: the user often KNOWS the figures — a packet, a brand, a dish they
+    /// have logged fifty times — and the estimate costs money and a few seconds
+    /// to reach a worse answer than the one they already have. A plan you can
+    /// only complete by asking is not a plan you own.
+    ///
+    /// ### Five fields, then three
+    ///
+    /// Calories and the four macros are what a plan is read against, so they
+    /// are on the surface. Sugar, sodium and saturated fat are real and tracked,
+    /// and are typed by hand roughly never, so they wait behind a disclosure
+    /// rather than making the common case scroll past them.
     private var numbersSection: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text(values[.calories].map { MealItemDraft.number($0) }.map { MealFormat.calories($0) } ?? "0")
-                    .font(.edDisplay)
-                    .foregroundStyle(Tokens.ink)
-                    .monospacedDigit()
-                Text("kcal")
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.muted)
-                Spacer(minLength: 0)
-            }
-            .accessibilityElement(children: .combine)
-
-            HStack(spacing: Space.sm) {
-                ForEach(Nutrient.macrosInOrder) { nutrient in
-                    MealStatPill(
-                        label: nutrient.displayName,
-                        value: MealFormat.value(MealItemDraft.number(values[nutrient] ?? ""), for: nutrient),
-                        variant: .neutral,
-                        fillsWidth: true
-                    )
+                Text("Nutrition").eyebrow()
+                Spacer(minLength: Space.sm)
+                if anyNumberEntered {
+                    Button("Clear", action: clearNumbers)
+                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                 }
             }
 
-            if !items.isEmpty { breakdown }
+            // The same pills the block draws, so the sheet is a preview of what
+            // you will see on the plan rather than a second way of stating it.
+            if let preview = enteredNutrients {
+                VStack(alignment: .leading, spacing: Space.sm) {
+                    HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                        Text(MealFormat.calories(preview.calories))
+                            .font(.edDisplay)
+                            .foregroundStyle(Tokens.ink)
+                            .monospacedDigit()
+                        Text("kcal")
+                            .font(.edFootnote)
+                            .foregroundStyle(Tokens.muted)
+                        Spacer(minLength: 0)
+                    }
+                    .accessibilityElement(children: .combine)
+
+                    MealPlanNutrientPills(nutrients: preview, compact: false)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: Space.sm) {
+                ForEach(Self.keyNutrients) { nutrient in
+                    numberField(for: nutrient)
+                }
+            }
 
             Button {
                 withAnimation(.easeOut(duration: 0.15)) { showingNumbers.toggle() }
             } label: {
                 HStack(spacing: Space.xs) {
-                    Text(showingNumbers ? "Hide the eight" : "Edit the numbers")
+                    Text(showingNumbers ? "Fewer" : "Sugar, sodium and saturated fat")
                     Image(systemName: showingNumbers ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                 }
@@ -278,25 +308,50 @@ struct MealPlanEntrySheet: View {
 
             if showingNumbers {
                 VStack(alignment: .leading, spacing: Space.sm) {
-                    ForEach(Nutrient.allCases) { nutrient in
-                        MealNumberField(
-                            label: nutrient.displayName,
-                            unit: nutrient.unit,
-                            text: Binding(
-                                get: { values[nutrient] ?? "" },
-                                set: { values[nutrient] = $0 }
-                            )
-                        )
+                    ForEach(Self.minorNutrients) { nutrient in
+                        numberField(for: nutrient)
                     }
-                    Button("Remove the numbers", action: clearNumbers)
-                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                 }
-                .padding(.top, Space.xs)
             }
+
+            if !items.isEmpty { breakdown }
         }
         .padding(Space.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
+    }
+
+    private func numberField(for nutrient: Nutrient) -> some View {
+        MealNumberField(
+            label: nutrient.displayName,
+            unit: nutrient.unit,
+            text: Binding(
+                get: { values[nutrient] ?? "" },
+                set: { values[nutrient] = $0 }
+            )
+        )
+    }
+
+    /// Calories and the macros: the five a plan is read against.
+    private static let keyNutrients: [Nutrient] = [.calories] + Nutrient.macrosInOrder
+    private static let minorNutrients: [Nutrient] = Nutrient.allCases.filter { !keyNutrients.contains($0) }
+
+    /// True once any of the eight carries something. The test every other part
+    /// of this sheet asks, so "has numbers" cannot mean one thing to the save
+    /// and another to the UI.
+    private var anyNumberEntered: Bool {
+        Nutrient.allCases.contains { !(values[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    /// The eight as typed, or nil when none of them is.
+    private var enteredNutrients: MealNutrients? {
+        guard anyNumberEntered else { return nil }
+        var out = MealNutrients.zero
+        for nutrient in Nutrient.allCases {
+            out[nutrient] = MealItemDraft.number(values[nutrient] ?? "")
+        }
+        return out
     }
 
     /// What the estimate thought the meal was made of, with its assumed
@@ -443,24 +498,6 @@ struct MealPlanEntrySheet: View {
         }
     }
 
-    // MARK: - Status
-
-    /// Skip and the eaten tick, on an existing block only.
-    ///
-    /// A new block cannot be skipped: skipping a meal you have not written down
-    /// yet is just not writing it down.
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
-            Text("State").eyebrow()
-            EdTabStrip(
-                tabs: MealPlanStatus.allCases,
-                selection: $status,
-                label: { $0.displayName },
-                accessibilityName: "State"
-            )
-        }
-    }
-
     // MARK: - Footer
 
     private var footer: some View {
@@ -564,18 +601,12 @@ struct MealPlanEntrySheet: View {
     /// The eight as they should be written, or nil for "this block has no
     /// numbers".
     ///
-    /// Nil when the block has none and none were typed. Emptying every field on
-    /// a block that HAD numbers writes zeros, which is what emptying a field
-    /// means; removing them outright is the Remove button, which clears
-    /// `hasNumbers` too, so both paths land here saying the same thing.
-    private var nutrientsToWrite: MealNutrients? {
-        guard hasNumbers else { return nil }
-        var out = MealNutrients.zero
-        for nutrient in Nutrient.allCases {
-            out[nutrient] = MealItemDraft.number(values[nutrient] ?? "")
-        }
-        return out
-    }
+    /// Reads the FIELDS, not a flag. It used to read `hasNumbers`, which was
+    /// set by the estimate, so a user who typed the figures themselves saved a
+    /// block with none: the numbers were on screen and thrown away on Save.
+    /// Emptying every field is how you remove them, which is also what the
+    /// Clear button does.
+    private var nutrientsToWrite: MealNutrients? { enteredNutrients }
 
     private func save() {
         errorMessage = nil
@@ -592,11 +623,9 @@ struct MealPlanEntrySheet: View {
                     status: .planned,
                     nutrients: nutrientsToWrite,
                     items: items,
-                    // The block came from the model whenever the model filled it
-                    // in. `hasNumbers` is the honest test: it is true only after
-                    // an estimate or after the user typed the eight, and the
-                    // second of those is rare enough that mislabelling it costs
-                    // nothing but a provenance string.
+                    // Provenance, not content. On a new block `hasNumbers` is
+                    // true only after an estimate has run, so a user who typed
+                    // the figures themselves is recorded as having done so.
                     source: hasNumbers ? MealPlanSource.chat : MealPlanSource.manual
                 )
             case .existing(let entry):

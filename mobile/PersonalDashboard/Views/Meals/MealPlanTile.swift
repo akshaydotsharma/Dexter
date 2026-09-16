@@ -196,16 +196,19 @@ struct MealPlanTile: View {
 ///
 /// A calendar entry solves the same problem by colouring the block and leaving
 /// it alone, so that is what this is: a coloured rail, a tinted fill, and the
-/// content. The state is still there and still editable — it lives in the sheet
-/// the block opens, beside the delete, which is where a decision about the block
-/// belongs rather than under a stray tap.
+/// content.
 ///
 /// ### What it shows without being opened
 ///
-/// The dish, its four numbers, and the key ingredients as pills. Those three
-/// answer the questions a plan is consulted for. The recipe, the breakdown, the
-/// note and the state all need a reason to be looked at, so they wait behind the
-/// tap.
+/// The dish, its energy as a headline, its macros as named pills, and the key
+/// ingredients under a label. Those answer the questions a plan is consulted
+/// for. The recipe, the breakdown and the note need a reason to be looked at,
+/// so they wait behind the tap.
+///
+/// The skipped treatment stays in the drawing — a struck-through, half-faded
+/// block — but nothing sets it any more: the state control came off the sheet
+/// on request. The model still carries the field, so a way to skip a meal can
+/// return without a migration.
 struct MealPlanBlock: View {
     let entry: LocalMealPlanEntry
     var onOpen: () -> Void
@@ -220,21 +223,18 @@ struct MealPlanBlock: View {
                     .fill(tint)
                     .frame(width: MealPlanBoardMetrics.rail)
 
-                VStack(alignment: .leading, spacing: Space.xs) {
+                VStack(alignment: .leading, spacing: Space.sm) {
                     titleRow
+
                     if let nutrients = entry.plannedNutrients {
-                        Text(Self.macroLine(nutrients))
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                        MealPlanNutrientPills(nutrients: nutrients)
                     } else {
                         Text("No numbers yet")
                             .font(.edCaption)
                             .foregroundStyle(Tokens.mutedSoft)
                     }
-                    if !entry.ingredients.isEmpty { ingredientPills }
+
+                    if !entry.ingredients.isEmpty { ingredientRow }
                 }
                 .padding(.leading, Space.md)
                 .padding(.trailing, Space.md)
@@ -270,12 +270,23 @@ struct MealPlanBlock: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: Space.sm)
             if let nutrients = entry.plannedNutrients {
-                Text("\(MealFormat.calories(nutrients.calories)) kcal")
-                    .font(.edFootnoteStrong)
-                    .foregroundStyle(Tokens.ink)
-                    .monospacedDigit()
-                    .fixedSize()
+                MealPlanCaloriePill(calories: nutrients.calories, tint: tint)
             }
+        }
+    }
+
+    /// The key ingredients, named.
+    ///
+    /// The chips used to float under the numbers with nothing to say what they
+    /// were, so a row reading "chicken thigh · jasmine rice · ginger" could as
+    /// easily have been tags, a note, or what the dish is served with. One
+    /// eyebrow fixes that for the cost of a label.
+    private var ingredientRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            Text("Ingredients")
+                .eyebrow()
+                .fixedSize()
+            ingredientPills
         }
     }
 
@@ -302,20 +313,6 @@ struct MealPlanBlock: View {
         }
         .padding(.top, 2)
         .accessibilityHidden(true)
-    }
-
-    /// "46 P · 80 C · 7 F".
-    ///
-    /// Initials rather than words, and that is a concession to width this
-    /// surface can afford exactly here: the calorie figure has the end of the
-    /// title row, so the macros get one line under it and have to fit beside
-    /// ingredient pills. The full words are on the detail sheet and in the
-    /// accessibility label, so a nutrient is never named only by its initial.
-    static func macroLine(_ nutrients: MealNutrients) -> String {
-        "\(MealFormat.grams(nutrients.proteinG)) P"
-            + " · \(MealFormat.grams(nutrients.carbsG)) C"
-            + " · \(MealFormat.grams(nutrients.fatG)) F"
-            + " · \(MealFormat.grams(nutrients.fibreG)) Fib"
     }
 
     /// The whole block in one sentence, so a reader is not handed a name, four
