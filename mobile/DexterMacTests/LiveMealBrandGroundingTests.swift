@@ -67,6 +67,36 @@ final class LiveMealBrandGroundingTests: XCTestCase {
         }
     }
 
+    /// Two brands in one meal, which is the case that shipped broken (#594).
+    ///
+    /// The real dinner was "zero-cal 100PLUS + SuperYou protein wafer" among
+    /// generic Indian food. Both products were searched, but the stored sources
+    /// were four 100PLUS pages and no wafer at all, because the cap took the
+    /// first four across the whole response and the drink's results came first.
+    /// The meal looked perfectly grounded while the evidence for the product the
+    /// user actually asked about had been dropped.
+    func testAMealNamingTwoBrandsKeepsEvidenceForBoth() async throws {
+        let client = try liveClient()
+
+        let result = try await client.estimateMeal(
+            description: "250 g chicken curry, 2 parathas, zero-cal 100PLUS and a SuperYou protein wafer"
+        )
+
+        let urls = result.groundingSources.map { $0.url.lowercased() + " " + $0.title.lowercased() }
+        print("[#594] two-brand: \(result.groundingSources.count) source(s)")
+        for source in result.groundingSources { print("[#594]   \(source.title) <\(source.url)>") }
+
+        XCTAssertFalse(result.groundingSources.isEmpty, "a two-brand meal must ground")
+        XCTAssertTrue(
+            urls.contains { $0.contains("superyou") || $0.contains("super you") },
+            "SuperYou lost its evidence again: \(urls)"
+        )
+        XCTAssertTrue(
+            urls.contains { $0.contains("100plus") || $0.contains("100 plus") },
+            "100PLUS lost its evidence: \(urls)"
+        )
+    }
+
     /// Household food with no panel anywhere. The rule names this exact case as
     /// one not to search, and the cost of getting it wrong lands on every meal.
     func testAGenericMealIsNotSearched() async throws {

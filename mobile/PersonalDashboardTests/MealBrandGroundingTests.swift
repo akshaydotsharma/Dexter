@@ -101,23 +101,73 @@ final class MealBrandGroundingTests: XCTestCase {
     /// stored on the row, drawn under the meal, written into the archive and
     /// re-broadcast on the next sync pass. This pins the ceiling so a later
     /// change to the reader cannot quietly lift it again.
-    func testSourcesAreCappedSoOneMealIsNotABibliography() {
+    func testOneSearchCannotSpendMoreThanItsShare() {
         let many = (1...30).map { ("Result \($0)", "https://example.com/\($0)") }
 
         let sources = WebSearchGrounding.sources(inContent: [Self.resultBlock(results: many)])
 
-        XCTAssertEqual(sources.count, WebSearchGrounding.maxStoredSources)
-        XCTAssertLessThanOrEqual(WebSearchGrounding.maxStoredSources, 6, "a provenance list, not an audit log")
+        XCTAssertEqual(sources.count, WebSearchGrounding.maxPerSearch)
+        XCTAssertLessThanOrEqual(WebSearchGrounding.maxStoredSources, 8, "a provenance list, not an audit log")
         XCTAssertEqual(
             sources.map(\.url),
-            (1...WebSearchGrounding.maxStoredSources).map { "https://example.com/\($0)" },
-            "results arrive ranked, so the cap keeps the highest-ranked ones"
+            (1...WebSearchGrounding.maxPerSearch).map { "https://example.com/\($0)" },
+            "results arrive ranked, so a search keeps its highest-ranked ones"
         )
     }
 
-    /// The cap counts what is KEPT, not what was seen, so duplicates filling the
-    /// early blocks cannot starve it down to fewer real sources.
-    func testTheCapCountsDistinctSourcesNotRawResults() {
+    /// The regression the live run found, and the reason the quota is per search
+    /// rather than first-come.
+    ///
+    /// "zero-cal 100PLUS + SuperYou protein wafer" runs one search per product.
+    /// The real response returned 20 results with all ten 100PLUS pages ahead of
+    /// the first SuperYou page, so a flat first-four cap stored four drinks and
+    /// dropped the wafer entirely, while the assumptions line still discussed
+    /// the wafer. That failure is invisible from the outside: a grounded meal
+    /// with four real citations is what success looks like.
+    func testEverySearchedProductKeepsItsOwnEvidence() {
+        let drink = (1...10).map { ("100PLUS result \($0)", "https://example.com/drink\($0)") }
+        let wafer = (1...10).map { ("SuperYou result \($0)", "https://example.com/wafer\($0)") }
+
+        let sources = WebSearchGrounding.sources(inContent: [
+            Self.resultBlock(results: drink),
+            Self.resultBlock(results: wafer)
+        ])
+
+        let urls = sources.map(\.url)
+        XCTAssertTrue(
+            urls.contains(where: { $0.contains("drink") }),
+            "the first product must survive"
+        )
+        XCTAssertTrue(
+            urls.contains(where: { $0.contains("wafer") }),
+            "the SECOND product must survive: this is the bug the live run found"
+        )
+        XCTAssertEqual(urls.filter { $0.contains("drink") }.count, WebSearchGrounding.maxPerSearch)
+        XCTAssertEqual(urls.filter { $0.contains("wafer") }.count, WebSearchGrounding.maxPerSearch)
+    }
+
+    /// Three products still fit, because the overall ceiling is not what decides
+    /// a normal meal.
+    func testThreeSearchedProductsAllSurvive() {
+        let blocks = ["a", "b", "c"].map { tag in
+            Self.resultBlock(results: (1...6).map { ("\(tag)\($0)", "https://example.com/\(tag)\($0)") })
+        }
+
+        let sources = WebSearchGrounding.sources(inContent: blocks)
+
+        for tag in ["a", "b", "c"] {
+            XCTAssertTrue(
+                sources.contains { $0.url.contains("/\(tag)") },
+                "product \(tag) lost its evidence"
+            )
+        }
+        XCTAssertLessThanOrEqual(sources.count, WebSearchGrounding.maxStoredSources)
+    }
+
+    /// A search's quota counts what it KEEPS, not what it was handed, so a
+    /// result page full of repeats cannot spend the allowance and leave the
+    /// search represented by less than it actually found.
+    func testRepeatsDoNotSpendASearchesQuota() {
         let content = [
             Self.resultBlock(results: Array(repeating: ("Same", "https://example.com/same"), count: 9)),
             Self.resultBlock(results: (1...9).map { ("Other \($0)", "https://example.com/o\($0)") })
@@ -125,8 +175,16 @@ final class MealBrandGroundingTests: XCTestCase {
 
         let sources = WebSearchGrounding.sources(inContent: content)
 
-        XCTAssertEqual(sources.count, WebSearchGrounding.maxStoredSources)
-        XCTAssertEqual(Set(sources.map(\.url)).count, sources.count, "no duplicate survives the cap")
+        XCTAssertEqual(Set(sources.map(\.url)).count, sources.count, "no duplicate survives")
+        XCTAssertEqual(
+            sources.filter { $0.url.hasPrefix("https://example.com/o") }.count,
+            WebSearchGrounding.maxPerSearch,
+            "the second search still gets its full share"
+        )
+        XCTAssertEqual(
+            sources.filter { $0.url == "https://example.com/same" }.count, 1,
+            "the first search had only one distinct page to give"
+        )
     }
 
     // MARK: - The resume decision

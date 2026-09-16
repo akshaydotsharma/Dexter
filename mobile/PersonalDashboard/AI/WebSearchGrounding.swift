@@ -104,10 +104,24 @@ enum WebSearchGrounding {
     /// re-broadcast on the next sync pass, to say something four of them
     /// already say.
     ///
-    /// Four is the number the UI can show without becoming a bibliography, and
+    /// Six is the number the UI can show without becoming a bibliography, and
     /// it is enough for the user's actual question on seeing "Published
-    /// nutrition", which is "whose, and can I open it".
-    static let maxStoredSources = 4
+    /// nutrition", which is "whose, and can I open it". It is `maxUses` searches
+    /// times `maxPerSearch`, with a spare row: the ceiling should never be what
+    /// decides a normal two-product meal, only what stops a pathological one.
+    static let maxStoredSources = 6
+
+    /// How many sources one search may contribute.
+    ///
+    /// Two, so a meal naming two products keeps evidence for both. This is the
+    /// number that actually protects the second product; `maxStoredSources` is
+    /// only a backstop.
+    ///
+    /// Two rather than one because the top hit for a packaged product is often
+    /// a retail listing rather than a nutrition panel (the SuperYou search
+    /// returned an Amazon page first), and a second row usually carries the
+    /// figures.
+    static let maxPerSearch = 2
 
     /// The content-block type that carries a completed search.
     static let resultBlockType = "web_search_tool_result"
@@ -179,15 +193,34 @@ enum WebSearchGrounding {
     /// returns two sources and can never show this, which is why the number
     /// comes from the live run and not from the tests.
     ///
-    /// The first few win because search results arrive ranked, so truncating
-    /// keeps the pages the model was most likely to read. This is a provenance
-    /// list the user can open, not an audit log of every page fetched.
+    /// The quota is PER SEARCH, not first-come across the whole response, and
+    /// that distinction is the whole correctness of this function.
+    ///
+    /// One meal can name two products: "zero-cal 100PLUS + SuperYou protein
+    /// wafer" runs one search for each. The results arrive in query order, so a
+    /// flat first-N cap spent every slot on the drink and threw away every page
+    /// for the wafer. The meal then showed four sources, all of them about the
+    /// thing the user was least interested in, while the assumptions line talked
+    /// about a product with no source behind it. Nothing looked broken: a
+    /// grounded meal with four real citations is exactly what success looks
+    /// like. Taking a slice per block means every product that was searched
+    /// keeps its own evidence.
+    ///
+    /// Within one search the first few win, because results arrive ranked. This
+    /// is a provenance list the user can open, not an audit log of every page
+    /// fetched: the tail of a single query is near-duplicates and drift (that
+    /// 100PLUS search returned pages for Sprite Zero and an unrelated energy
+    /// drink at positions 7 and 10).
     static func sources(inContent content: [AnthropicJSONValue]) -> [WebSearchSource] {
         var seen = Set<String>()
         var out: [WebSearchSource] = []
         for block in content {
-            for source in sources(inResultBlock: block) where seen.insert(source.url).inserted {
+            var keptFromThisSearch = 0
+            for source in sources(inResultBlock: block) {
+                guard keptFromThisSearch < maxPerSearch else { break }
+                guard seen.insert(source.url).inserted else { continue }
                 out.append(source)
+                keptFromThisSearch += 1
                 if out.count == maxStoredSources { return out }
             }
         }
