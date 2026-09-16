@@ -514,7 +514,10 @@ private struct ListSummaryRow: View {
     }
 }
 
-private struct ListDetailContent: View {
+/// Internal rather than `private` so `ArchivedListDetailTests` can host the
+/// real view against an in-memory store (#597). It takes its view model as a
+/// parameter already, so nothing else had to move to make it testable.
+struct ListDetailContent: View {
     @Bindable var viewModel: ListsViewModel
     let listId: UUID
     // Tap-below inline draft state. Modelled the same way as TasksView:
@@ -540,7 +543,13 @@ private struct ListDetailContent: View {
     #endif
 
     var body: some View {
-        if let list = viewModel.lists.first(where: { $0.id == listId }) {
+        // `viewModel.list(id:)`, NOT a search of `viewModel.lists`: an archived
+        // list opened from the Archive lives in `archivedLists`, so the active
+        // collection resolves nil and this falls through to "List not found"
+        // while the window title above already reads the list's name (#597).
+        // #374 made this exact change in `ListsView`'s outer branch and left
+        // this inner copy behind.
+        if let list = viewModel.list(id: listId) {
             VStack(spacing: 0) {
                 // Header strip — count + "Edit" affordance is implicit via long-press.
                 // Tapping the strip while a draft is active dismisses the draft.
@@ -666,11 +675,23 @@ private struct ListDetailContent: View {
                 )
             }
         } else {
-            Spacer()
-            Text("List not found")
-                .font(.edBody)
-                .foregroundStyle(Tokens.muted)
-            Spacer()
+            // ONE container, not three loose children (#597).
+            //
+            // A multi-statement `ViewBuilder` body flattens into the parent
+            // `VStack` as separate views, and the `.macDetailChrome` applied to
+            // `ListDetailContent` is then distributed to EACH of them: the
+            // window drew three back chevrons and three action runs. The found
+            // branch above returns a single `VStack`, which is why an active
+            // list never showed it. Keep any future fallback wrapped the same
+            // way.
+            VStack(spacing: 0) {
+                Spacer()
+                Text("List not found")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.muted)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
