@@ -259,6 +259,16 @@ targets:
       # read targets and has no way to derive them, which is the same half-a-
       # feature #542's note warns about for the service.
       - path: PersonalDashboard/AI/AnthropicClient+DeriveTargets.swift
+      # Meal planning (#599). The @Model, the status enum and the MealPlanDay
+      # value types all live under Models/ and ride the glob at the top of this
+      # list; the service, the chat model and the three AI files do not. Without
+      # them the Mac holds the planned blocks and has no way to write one, which
+      # is the same half-a-feature #542's note warns about.
+      - path: PersonalDashboard/Services/MealPlanService.swift
+      - path: PersonalDashboard/ViewModels/MealPlanChatModel.swift
+      - path: PersonalDashboard/AI/MealPlanSuggestion.swift
+      - path: PersonalDashboard/AI/MealPlanContext.swift
+      - path: PersonalDashboard/AI/MealPlanAdvisor.swift
       - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift

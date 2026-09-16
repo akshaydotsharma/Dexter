@@ -61,10 +61,21 @@ enum MealsTab: String, CaseIterable, Identifiable {
 /// opens on today, and the date control in the section chrome names the day and
 /// reaches any earlier one. Trends is the window: a period filter, an average
 /// against target, a balance table and the callouts that come out of it (#545).
-/// Targets holds the setup offer or the eight derived numbers. Plan has no
-/// feature behind it at all and renders a panel saying so; it is a TAB rather
-/// than a section because that reserves the slot without adding a permanently
-/// empty row to a twelve-section sidebar.
+/// Plan is the plan: a calendar of meals you intend to eat, and a chat that
+/// helps you decide what they should be (#599). Targets holds the setup offer or
+/// the eight derived numbers.
+///
+/// Plan is a TAB rather than a section because that keeps the whole of Meals
+/// behind one sidebar row: a planned meal, a logged meal and a target are three
+/// views of the same subject, and splitting them across the sidebar would make
+/// the user choose which one they were in before they could look at any of them.
+///
+/// It carries its own selected day, and the chrome's date control is withheld
+/// while it is showing. That control cannot reach a future day, because the
+/// Tracking composer writes to it and a meal is a record of something already
+/// eaten (#592). A plan lives in the future, so it needs a calendar that can go
+/// there, and two controls in one chrome naming two different days is a
+/// contradiction the user has to resolve on every glance.
 ///
 /// Trends makes ZERO API calls. Every number and every sentence on it is
 /// arithmetic over the rows this section already queries, against the targets
@@ -139,6 +150,16 @@ struct MealsView: View {
     /// its states.
     @State private var showingTargets = false
 
+    /// The plan conversation (#599).
+    ///
+    /// Held HERE rather than inside `MealPlanView`, so switching to Trends and
+    /// back does not throw the thread away. A tab switch destroys the tab's
+    /// view; the section survives it. It still ends when the user leaves Meals,
+    /// which is the same call the main chat surface makes — what is worth
+    /// keeping from a plan conversation is the block it produced, and that is on
+    /// the calendar.
+    @State private var planChat = MealPlanChatModel()
+
     var body: some View {
         ZStack {
             Tokens.paper.canvasIgnoresSafeArea()
@@ -161,7 +182,7 @@ struct MealsView: View {
                 switch tab {
                 case .tracking: trackingTab
                 case .trends:   trendsTab
-                case .plan:     scrolling { MealsPlanPlaceholder() }
+                case .plan:     planTab
                 case .targets:  targetsTab
                 }
             }
@@ -180,7 +201,13 @@ struct MealsView: View {
         .macSectionChrome("Meals") {
             #if os(macOS)
             HStack(spacing: Space.xs) {
-                macDateButton
+                // Withheld on the Plan tab for the reason `chromeControls`
+                // gives. The `if` sits INSIDE the HStack deliberately: the whole
+                // trailing closure is one `ToolbarItem`, and a multi-statement
+                // body would distribute the toolbar across each branch (#597).
+                if tab != .plan {
+                    macDateButton
+                }
             }
             #endif
         }
@@ -224,6 +251,12 @@ struct MealsView: View {
     #if os(iOS)
     @ViewBuilder
     private var chromeControls: some View {
+        // Withheld on the Plan tab, which carries its own calendar (#599). That
+        // calendar answers a DIFFERENT question — which day am I planning —
+        // and it can reach a future day, which this one cannot. Two controls in
+        // one chrome naming two different days is a contradiction the user has
+        // to resolve on every glance.
+        if tab != .plan {
         TopBarIconButton(
             systemName: "calendar",
             accessibilityLabel: dateControlAccessibilityLabel,
@@ -237,6 +270,7 @@ struct MealsView: View {
                 readings: MealCalendar.readings(in: allMeals),
                 today: Date()
             )
+        }
         }
     }
     #endif
@@ -401,6 +435,23 @@ struct MealsView: View {
             allMeals: allMeals,
             allTargets: allTargets,
             router: router
+        )
+    }
+
+    // MARK: - Plan
+
+    /// The plan calendar and the chat behind it (#599).
+    ///
+    /// It takes the section's two `@Query` results as plain arrays, exactly as
+    /// Trends does, and declares one query of its own for the planned blocks.
+    /// Nothing about the Tracking day reaches it: the plan has its own selected
+    /// day, because the tracking day cannot move past today and a plan lives in
+    /// the future. See the note on `MealPlanView`.
+    private var planTab: some View {
+        MealPlanView(
+            allMeals: allMeals,
+            allTargets: allTargets,
+            chat: planChat
         )
     }
 
