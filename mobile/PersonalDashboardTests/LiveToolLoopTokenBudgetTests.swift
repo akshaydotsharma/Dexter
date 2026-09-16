@@ -272,7 +272,7 @@ final class LiveToolLoopTokenBudgetTests: XCTestCase {
                 ) {
                     switch event {
                     case .toolUse: toolCalls += 1
-                    case .done(let reason, let output, let usage):
+                    case .done(let reason, let output, let usage, _):
                         stop = reason
                         tokens = output ?? -1
                         try Self.recordSpend(usage, label: "\(scenario.name) run \(run)")

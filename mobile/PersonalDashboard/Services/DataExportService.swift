@@ -675,6 +675,9 @@ final class DataExportService {
             // toggle from true to false changes the record's content hash and
             // therefore reaches every peer.
             containsAlcohol: meal.containsAlcohol,
+            // #594. The raw blob, never the decoded array, so a re-encode here
+            // cannot reorder or drop what the device stored.
+            groundingSourcesData: meal.groundingSourcesData,
             createdAt: meal.createdAt,
             updatedAt: meal.updatedAt
         )

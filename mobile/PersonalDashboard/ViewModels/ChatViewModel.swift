@@ -359,7 +359,14 @@ final class ChatViewModel {
     private func execute(draft: ChatDraft) async -> ChatActionResult {
         let dict = draft.input.objectValue ?? [:]
         do {
-            let outcome = try await executor.run(actionType: draft.actionType, input: dict)
+            let outcome = try await executor.run(
+                actionType: draft.actionType,
+                input: dict,
+                // #594. What the turn actually searched, carried from the
+                // stream to the write. Empty for every draft the model did not
+                // look anything up for.
+                groundingSources: draft.groundingSources
+            )
             return ChatActionResult(
                 id: draft.id,
                 actionType: draft.actionType,

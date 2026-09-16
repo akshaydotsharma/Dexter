@@ -70,6 +70,48 @@ enum MealToolSchema {
       schema. Returning nothing is correct; returning a guess is not.
     """
 
+    /// When to look a product up instead of remembering it, stated once (#594).
+    ///
+    /// Kept apart from `estimateRules` for one reason: `estimateRules` reaches
+    /// all three paths and this rule must reach only the two that can actually
+    /// search. The Shortcut declares no web-search tool, because it runs under a
+    /// hard 22 s timeout and writes without a preview, and telling a model to
+    /// search when it has nothing to search with is how a capture turns into an
+    /// apology instead of a meal.
+    ///
+    /// So this string is interpolated by the composer's prompt and by
+    /// `promptSection(canAskQuestions:canSearchWeb:)` when the path can search,
+    /// and by nothing else. It is still stated exactly ONCE, which is the whole
+    /// point of this file: a second copy in a tool description is the drift
+    /// #475 and #500 each cost a release.
+    static let brandLookupRule = """
+    - BRAND LOOKUP. When the description names a brand, a restaurant chain or a
+      packaged supermarket product ("Guzman y Gomez chicken burrito bowl", "a
+      Big Mac", "Chobani 0% vanilla", "a grande Starbucks latte"), search the
+      web for that product's PUBLISHED nutrition before you estimate, and build
+      the item from the figures you find. A branded description looks specific,
+      so a figure you recalled reads as a figure you looked up. That is the
+      worst kind of wrong number: it invites more trust than a guess and gives
+      the user nothing to check it against.
+    - Prefer the brand's own published figures. Where the brand publishes
+      nothing readable, an established nutrition database is an acceptable
+      source. Name in "assumptions" which one you used, because "the chain
+      says" and "a database says" are different claims and the user is
+      entitled to know which one they are reading.
+    - Do NOT search for generic food: "two eggs on toast", "chicken rice", "a
+      flat white", "dal and two rotis". There is no published panel to find, a
+      search costs money and seconds on every meal, and the portion is what
+      decides the answer anyway.
+    - A published panel is stated per serving or per 100 g, and the user
+      described a portion. Scale the panel to the portion, and say in
+      "assumptions" which serving you scaled from. The panel is a fact and the
+      portion is still your assumption; do not let the first one dress up the
+      second.
+    - When the search finds nothing, or the brand publishes nothing for that
+      item, estimate the way you would without it and say so in "assumptions".
+      Never present a figure you reasoned out as one a brand published.
+    """
+
     /// The meal types advertised to the model, kept in sync with `MealType` so a
     /// returned string always maps back to the enum.
     static var mealTypeList: String {
@@ -91,7 +133,12 @@ enum MealToolSchema {
     ///   every branch that would ask there has to resolve without one and say
     ///   what it did, because a silent success is how a day quietly ends up
     ///   half logged.
-    static func promptSection(canAskQuestions: Bool) -> String {
+    /// - Parameter canSearchWeb: true when this path's request declares the
+    ///   web-search server tool, which chat does and the Shortcut does not
+    ///   (#594). The two are separate flags rather than one "is this chat"
+    ///   switch because they answer different questions, and a path could
+    ///   plausibly gain one without the other.
+    static func promptSection(canAskQuestions: Bool, canSearchWeb: Bool) -> String {
         let vagueRule = canAskQuestions
             ? """
               - A description too vague to estimate ("I had food", "lunch", "something from the canteen") gets NO tool call. Ask exactly ONE short question naming what you need ("What did you have for lunch?") and stop. Do not log a placeholder meal.
@@ -99,6 +146,8 @@ enum MealToolSchema {
             : """
               - A description too vague to estimate ("I had food", "lunch", "something from the canteen") still gets a log_meal call, with an EMPTY items array and no_food_identified true. You cannot ask a question here — there is nobody to answer it — and the fact that they ate is worth keeping even when the number is not recoverable. Never invent numbers to fill the gap.
             """
+
+        let lookupRule = canSearchWeb ? "\n\(brandLookupRule)" : ""
 
         return """
         MEAL LOGGING (log_meal / update_meal / delete_meal):
@@ -109,7 +158,7 @@ enum MealToolSchema {
         - A meal logged in the small hours stays on TODAY unless the user says otherwise. Do not silently move a 01:30 snack to yesterday; the device offers the user that choice on the card. Guessing wrong there is invisible and unfixable.
         - A correction to a meal already in the MEALS TODAY context is update_meal with that meal's UUID, never a second log_meal. "That latte was oat milk" corrects the latte. Re-estimate the WHOLE meal and return the complete items array.
         - delete_meal removes a meal entirely. Use it only when the user wants the record gone, not when they want it corrected.
-        \(vagueRule)
+        \(vagueRule)\(lookupRule)
         - Answer "how many calories do I have left" and "am I short on protein this week" from the MEALS TODAY block in plain text. Do not call a tool to read.
         """
     }

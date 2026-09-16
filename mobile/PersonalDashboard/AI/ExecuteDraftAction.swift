@@ -69,7 +69,15 @@ struct ExecuteDraftAction {
 
     /// Dispatch a parsed tool call onto the right branch. `input` is the
     /// raw decoded JSON object the model returned.
-    func run(actionType: DraftActionType, input: [String: AnthropicJSONValue]) async throws -> DraftActionOutcome {
+    /// - Parameter groundingSources: the pages the calling turn's own web
+    ///   search returned (#594). Defaulted to none, so the Shortcut path, which
+    ///   declares no search tool, is untouched. Only the two meal branches read
+    ///   it; nothing else on this dispatcher has a published figure to credit.
+    func run(
+        actionType: DraftActionType,
+        input: [String: AnthropicJSONValue],
+        groundingSources: [WebSearchSource] = []
+    ) async throws -> DraftActionOutcome {
         switch actionType {
         case .createTodo: return try createTodo(input)
         case .createNote: return try createNote(input)
@@ -96,8 +104,8 @@ struct ExecuteDraftAction {
         case .addExpense: return try await addExpense(input)
         case .addRecurringExpense: return try await addRecurringExpense(input)
         case .clearExpenses: return try clearExpenses(input)
-        case .logMeal: return try logMeal(input)
-        case .updateMeal: return try updateMeal(input)
+        case .logMeal: return try logMeal(input, groundingSources: groundingSources)
+        case .updateMeal: return try updateMeal(input, groundingSources: groundingSources)
         case .deleteMeal: return try deleteMeal(input)
         case .unknown:
             throw DraftExecutionError.invalidArgument(field: "action", reason: "unknown action type")
@@ -518,7 +526,10 @@ struct ExecuteDraftAction {
     /// `clientUUID` as an IDENTITY. A Shortcut that timed out and was re-run
     /// rewrites the row it already made. There is no separate update path to
     /// keep in step, because the create IS the update.
-    private func logMeal(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+    private func logMeal(
+        _ input: [String: AnthropicJSONValue],
+        groundingSources: [WebSearchSource] = []
+    ) throws -> DraftActionOutcome {
         let now = Date()
         guard let description = trimmedString(input["description"]) else {
             throw DraftExecutionError.invalidArgument(
@@ -542,7 +553,8 @@ struct ExecuteDraftAction {
 
         let checked = MealEstimateGuards.check(
             MealToolSchema.estimatedMeal(from: input),
-            fallbackMealType: typeHint ?? MealEstimationService.inferredType(at: now)
+            fallbackMealType: typeHint ?? MealEstimationService.inferredType(at: now),
+            groundingSources: groundingSources
         )
 
         let meals = MealService(store: store)
@@ -596,7 +608,10 @@ struct ExecuteDraftAction {
     /// rather than inserting a second one. `createdAt` stays where it was and
     /// `loggedAt` is preserved, because a correction changes what the meal WAS,
     /// never when it happened.
-    private func updateMeal(_ input: [String: AnthropicJSONValue]) throws -> DraftActionOutcome {
+    private func updateMeal(
+        _ input: [String: AnthropicJSONValue],
+        groundingSources: [WebSearchSource] = []
+    ) throws -> DraftActionOutcome {
         let now = Date()
         let existing = try fetchMeal(input["id"])
 
@@ -624,7 +639,8 @@ struct ExecuteDraftAction {
 
         let checked = MealEstimateGuards.check(
             MealToolSchema.estimatedMeal(from: input),
-            fallbackMealType: typeHint ?? existing.mealTypeEnum
+            fallbackMealType: typeHint ?? existing.mealTypeEnum,
+            groundingSources: groundingSources
         )
 
         let estimation = MealEstimationService(meals: MealService(store: store))

@@ -249,6 +249,10 @@ targets:
       # `Views/Meals`, which goes in as one directory below.
       - path: PersonalDashboard/AI/MealToolSchema.swift
       - path: PersonalDashboard/AI/MealLogSummary.swift
+      # Grounding a branded estimate in published nutrition (#594). The type is
+      # read by `LocalMeal` (globbed), by both estimate paths and by three Meals
+      # views, so the Mac stops compiling `LocalMeal` itself without this entry.
+      - path: PersonalDashboard/AI/WebSearchGrounding.swift
       # Target derivation (#544). The one API call; the six inputs, the review
       # draft and the enums behind the form all live under Models/ and ride the
       # glob at the top of this list. Without this entry the Mac can hold and

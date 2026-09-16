@@ -65,6 +65,18 @@ struct MealLogSummary: Equatable, Sendable {
     /// offers one tap; nothing moves on its own.
     let offersYesterdayMove: Bool
 
+    /// The pages this estimate was grounded in (#594). Empty when the model did
+    /// not look the product up, which is every generic meal.
+    ///
+    /// Carried here for the same reason the numbers are: the chat card must say
+    /// the same thing about a branded meal that the composer's preview said, or
+    /// one branded description gets two different answers depending on which
+    /// surface logged it.
+    let groundingSources: [WebSearchSource]
+
+    /// True when this meal's figures can be traced to a published source.
+    var isGrounded: Bool { !groundingSources.isEmpty }
+
     // MARK: - Display
 
     /// "today", "yesterday", or "3 Sep". Read off the anchor through
@@ -109,7 +121,12 @@ struct MealLogSummary: Equatable, Sendable {
             return "\(head). I need more detail to estimate it, open Meals to fill it in."
         }
 
-        let kcal = MealFormat.calories(nutrients.calories)
+        // A published figure is spoken as it stands. "About" still hedges the
+        // portion, which a lookup does not settle (#594).
+        let kcal = MealFormat.calories(
+            nutrients.calories,
+            isGrounded ? .stated : .estimate
+        )
         let protein = MealFormat.grams(nutrients.proteinG)
         var line = "\(head), about \(kcal) calories and \(protein) grams of protein."
         if let suspectReason, !suspectReason.isEmpty {
@@ -204,6 +221,7 @@ extension MealLogSummary {
         self.duplicateMinutesAgo = duplicateOf.map { other in
             Int((meal.loggedAt.timeIntervalSince(other.loggedAt) / 60).rounded())
         }
+        self.groundingSources = meal.groundingSources
         self.offersYesterdayMove = MealToolSchema.offersYesterdayMove(
             mealType: meal.mealTypeEnum,
             day: meal.date,

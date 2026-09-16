@@ -144,23 +144,55 @@ struct MealDaySummary {
 ///
 /// Typed totals are the exception and are printed as given — see
 /// `MealSource.user`. A number the user knows is not an estimate.
+///
+/// A figure taken from a brand's published panel is the third kind of number
+/// and gets `MealPrecision.stated` too (#594). Rounding it to the nearest 10
+/// would destroy the one thing that makes it worth the search: 574 kcal off a
+/// published panel is 574, and printing 570 says the app worked it out.
 enum MealFormat {
 
-    /// Calories, to the nearest 10.
-    static func calories(_ value: Double) -> String {
-        let rounded = (value / 10).rounded() * 10
-        return String(format: "%.0f", rounded)
+    /// How precisely a figure may be printed (#594).
+    ///
+    /// The rounding is a claim about where the number came from, so it is the
+    /// caller's to make, not this type's to guess.
+    enum Precision: Sendable {
+        /// Derived from a portion the model assumed. Calories round to the
+        /// nearest 10, because an estimate cannot distinguish 343 from 347.
+        case estimate
+        /// Taken from somewhere other than a portion guess: a total the user
+        /// typed, or a panel a brand published. Printed as it stands.
+        case stated
+    }
+
+    /// Calories, to the nearest 10 unless the figure was stated rather than
+    /// guessed.
+    static func calories(_ value: Double, _ precision: Precision = .estimate) -> String {
+        switch precision {
+        case .estimate:
+            let rounded = (value / 10).rounded() * 10
+            return String(format: "%.0f", rounded)
+        case .stated:
+            return String(format: "%.0f", value.rounded())
+        }
     }
 
     /// Grams or milligrams, to the whole unit.
+    ///
+    /// No precision parameter, because there is nothing for one to change: a
+    /// gram is already the finest unit any of these seven are stated in, on a
+    /// published panel as much as in an estimate.
     static func grams(_ value: Double) -> String {
         String(format: "%.0f", value.rounded())
     }
 
     /// One nutrient's value with its unit, e.g. "72 g" or "1,900 mg".
-    static func value(_ value: Double, for nutrient: Nutrient) -> String {
+    static func value(
+        _ value: Double,
+        for nutrient: Nutrient,
+        precision: Precision = .estimate
+    ) -> String {
         switch nutrient {
-        case .calories: return "\(calories(value)) kcal"
+        case .calories: return "\(calories(value, precision)) kcal"
         default:        return "\(grams(value)) \(nutrient.unit)"
         }
     }

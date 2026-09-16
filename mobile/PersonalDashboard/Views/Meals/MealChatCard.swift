@@ -85,11 +85,17 @@ struct MealChatCard: View {
         "Logged · \(summary.mealType.displayName)"
     }
 
+    /// How this meal's figures are printed, decided the one way every Meals
+    /// surface decides it (#594).
+    private var precision: MealFormat.Precision {
+        MealGrounding.precision(isGrounded: summary.isGrounded)
+    }
+
     // MARK: - The numbers
 
     private var headline: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-            Text(MealFormat.calories(summary.nutrients.calories))
+            Text(MealFormat.calories(summary.nutrients.calories, precision))
                 .font(.edDisplay)
                 .foregroundStyle(Tokens.ink)
                 .monospacedDigit()
@@ -97,6 +103,12 @@ struct MealChatCard: View {
                 .font(.edFootnote)
                 .foregroundStyle(Tokens.muted)
             Spacer(minLength: 0)
+            // Chat says what the composer's preview says about the same branded
+            // meal, or one description gets two answers depending on which
+            // surface logged it (#594).
+            if summary.isGrounded {
+                MealGrounding.chip()
+            }
             MealFlagChip(
                 MealFormat.confidenceBand(summary.confidence),
                 systemImage: "gauge.medium",
@@ -114,7 +126,11 @@ struct MealChatCard: View {
             ForEach(Nutrient.macrosInOrder) { nutrient in
                 MealStatPill(
                     label: nutrient.displayName,
-                    value: MealFormat.value(summary.nutrients[nutrient], for: nutrient),
+                    value: MealFormat.value(
+                        summary.nutrients[nutrient],
+                        for: nutrient,
+                        precision: precision
+                    ),
                     variant: .neutral,
                     fillsWidth: true
                 )

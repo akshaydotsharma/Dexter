@@ -289,7 +289,7 @@ struct ChatToDrafts {
 
         Trip-intent override: travel and itinerary phrasings NEVER fall through to draft_note. They go to draft_trip (with a dates ask-back as assistant text if needed) or add_itinerary_item.
 
-        \(MealToolSchema.promptSection(canAskQuestions: false))
+        \(MealToolSchema.promptSection(canAskQuestions: false, canSearchWeb: false))
 
         IMPORTANT RULES:
         1. NEVER perform actions directly - ONLY call tools to create draft proposals

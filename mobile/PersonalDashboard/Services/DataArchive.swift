@@ -590,6 +590,11 @@ enum DataArchive {
         /// "not an alcoholic meal". The same call `ExpenseDTO.hiddenFromFinance`
         /// makes.
         let containsAlcohol: Bool?
+        /// #594. The pages the estimate was grounded in, as their RAW blob, for
+        /// the same reason `itemsData` travels raw: a byte-for-byte round trip
+        /// cannot drop a field `WebSearchSource` gains later. Optional because
+        /// it is additive, like `containsAlcohol` above.
+        let groundingSourcesData: Data?
         let createdAt: Date
         let updatedAt: Date
     }

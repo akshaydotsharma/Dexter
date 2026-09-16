@@ -82,58 +82,116 @@ struct ChatStream {
 
                     var accumulatedText = ""
                     var pendingDrafts: [ChatDraft] = []
+                    var groundingSources: [WebSearchSource] = []
+                    var resumesUsed = 0
+                    var wasTruncated = false
+                    // A stream that ends without its terminator is a connection
+                    // that dropped, not a turn that finished. It released
+                    // nothing before #594 and releases nothing now.
+                    var turnCompleted = false
 
-                    for try await event in anthropic.stream(
-                        systemPrompt: systemPrompt,
-                        messages: messages,
-                        tools: ToolDefinitions.allTools
-                    ) {
-                        switch event {
-                        case .textDelta(let chunk):
-                            accumulatedText += chunk
-                            continuation.yield(.textChunk(chunk))
+                    // One iteration per API call. A turn that used the web
+                    // search server tool can come back paused, which means
+                    // incomplete rather than finished, and the only way to get
+                    // the rest of it is to hand the assistant's own content back
+                    // and ask again (#594). Everything accumulated above spans
+                    // the resumes, because they are one turn as far as the user
+                    // is concerned.
+                    resumeLoop: while true {
+                        var stopReason: String?
+                        var assistantContent: [AnthropicJSONValue] = []
+                        turnCompleted = false
 
-                        case .toolUse(let name, let input):
-                            guard let actionType = ToolDefinitions.toolToActionType[name] else {
-                                // Unknown tool name from the model — surface
-                                // as an error event but keep the stream open
-                                // so any in-flight text still reaches the UI.
-                                continuation.yield(.error("Unknown tool: \(name)"))
-                                continue
+                        for try await event in anthropic.stream(
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            tools: ToolDefinitions.chatTools
+                        ) {
+                            switch event {
+                            case .textDelta(let chunk):
+                                accumulatedText += chunk
+                                continuation.yield(.textChunk(chunk))
+
+                            case .toolUse(let name, let input):
+                                guard let actionType = ToolDefinitions.toolToActionType[name] else {
+                                    // Unknown tool name from the model — surface
+                                    // as an error event but keep the stream open
+                                    // so any in-flight text still reaches the UI.
+                                    continuation.yield(.error("Unknown tool: \(name)"))
+                                    continue
+                                }
+                                let preview = ChatDraft.makePreview(actionType: actionType, input: input)
+                                let draft = ChatDraft(
+                                    actionType: actionType,
+                                    input: input,
+                                    preview: preview
+                                )
+                                // Held, not yielded. See the note on `run`.
+                                pendingDrafts.append(draft)
+
+                            case .webSearchResult(let sources):
+                                // A server tool, already run by Anthropic.
+                                // Nothing to execute and no draft to make: the
+                                // only thing it leaves behind is what the
+                                // estimate is traceable to (#594).
+                                for source in sources where !groundingSources.contains(source) {
+                                    groundingSources.append(source)
+                                }
+
+                            case .done(let reason, _, _, let content):
+                                stopReason = reason
+                                assistantContent = content
+                                turnCompleted = true
+
+                            case .error(let msg):
+                                continuation.yield(.error(msg))
                             }
-                            let preview = ChatDraft.makePreview(actionType: actionType, input: input)
-                            let draft = ChatDraft(
-                                actionType: actionType,
-                                input: input,
-                                preview: preview
-                            )
-                            // Held, not yielded. See the note on `run`.
-                            pendingDrafts.append(draft)
-
-                        case .done(let stopReason, _, _):
-                            // A cut-off turn releases NOTHING. Its last tool
-                            // block is incomplete by definition, and the ones
-                            // before it belong to a turn the model never
-                            // finished reasoning about.
-                            guard stopReason != "max_tokens" else {
-                                pendingDrafts.removeAll()
-                                continuation.yield(.truncated)
-                                continue
-                            }
-                            for draft in pendingDrafts {
-                                continuation.yield(.draft(draft))
-                            }
-                            // Trailing assistant text ending in "?" is a
-                            // clarifying question only when the model didn't
-                            // propose any drafts this turn.
-                            let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let followUp: String? = (pendingDrafts.isEmpty && trimmed.hasSuffix("?")) ? trimmed : nil
-                            pendingDrafts.removeAll()
-                            continuation.yield(.done(followUpQuestion: followUp))
-
-                        case .error(let msg):
-                            continuation.yield(.error(msg))
                         }
+
+                        // A cut-off turn releases NOTHING. Its last tool block
+                        // is incomplete by definition, and the ones before it
+                        // belong to a turn the model never finished reasoning
+                        // about.
+                        if stopReason == "max_tokens" {
+                            pendingDrafts.removeAll()
+                            wasTruncated = true
+                            break resumeLoop
+                        }
+
+                        // A pause with nothing to hand back would re-post the
+                        // same request and pause again, so it is treated as the
+                        // end of the turn instead.
+                        guard WebSearchGrounding.shouldResume(
+                            stopReason: stopReason,
+                            resumesUsed: resumesUsed
+                        ), !assistantContent.isEmpty else { break resumeLoop }
+
+                        resumesUsed += 1
+                        messages.append(
+                            AnthropicMessage(
+                                role: "assistant",
+                                content: assistantContent.map(AnthropicContentBlock.raw)
+                            )
+                        )
+                    }
+
+                    if wasTruncated {
+                        continuation.yield(.truncated)
+                    } else if turnCompleted {
+                        // Every meal draft from this turn carries what the turn
+                        // actually searched. Stamped here rather than at the
+                        // tool block, because the search closes BEFORE the
+                        // `log_meal` that used it and can even land in an
+                        // earlier resumed call (#594).
+                        for draft in pendingDrafts {
+                            continuation.yield(.draft(draft.grounded(in: groundingSources)))
+                        }
+                        // Trailing assistant text ending in "?" is a
+                        // clarifying question only when the model didn't
+                        // propose any drafts this turn.
+                        let trimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let followUp: String? = (pendingDrafts.isEmpty && trimmed.hasSuffix("?")) ? trimmed : nil
+                        continuation.yield(.done(followUpQuestion: followUp))
                     }
                     continuation.finish()
                 } catch {
@@ -234,7 +292,7 @@ struct ChatStream {
 
         Trip-intent override: travel and itinerary phrasings NEVER fall through to draft_note. They go to draft_trip (with a dates ask-back if needed) or add_itinerary_item.
 
-        \(MealToolSchema.promptSection(canAskQuestions: true))
+        \(MealToolSchema.promptSection(canAskQuestions: true, canSearchWeb: true))
 
         IMPORTANT RULES:
         1. NEVER perform actions directly - ONLY call tools to create draft proposals
