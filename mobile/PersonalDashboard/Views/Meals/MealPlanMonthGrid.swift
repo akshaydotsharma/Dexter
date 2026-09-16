@@ -51,11 +51,17 @@ struct MealPlanMonthGrid: View {
     /// Injected so a test or a preview can pin "now".
     var today: Date = Date()
 
-    /// How far the reel is dragged from its resting place. Non-zero only during
-    /// a step.
-    @State private var slide: CGFloat = 0
+    /// Where the reel is, in pages, measured from `month` at the centre.
+    ///
+    /// ONE animated number drives the whole carousel: the horizontal offset, and
+    /// every page's turn, scale and fade. That is what makes the slide read as a
+    /// wheel rather than as a slide with two states. If the turn were bound to
+    /// "is this the centre page" instead, it would be true or false with nothing
+    /// in between, so a month would travel flat across the card and then snap
+    /// side-on at the end of its journey.
+    @State private var position: CGFloat = 0
     /// Held so a second tap during the animation cannot start a step from a
-    /// half-slid reel, which would land the offset somewhere between pages.
+    /// half-turned reel, which would land the position between pages.
     @State private var isSliding = false
     /// The card's own width, measured. Seeded small so the first frame cannot
     /// force the card wider than a phone.
@@ -103,32 +109,61 @@ struct MealPlanMonthGrid: View {
 
     private var reel: some View {
         HStack(spacing: MealPlanMetrics.pageGutter) {
-            page(for: MealPlanCalendar.stepMonth(month, by: -1, calendar: calendar), isCurrent: false)
-            page(for: month, isCurrent: true)
-            page(for: MealPlanCalendar.stepMonth(month, by: 1, calendar: calendar), isCurrent: false)
+            ForEach(Self.pageOffsets, id: \.self) { offset in
+                page(
+                    for: MealPlanCalendar.stepMonth(month, by: offset, calendar: calendar),
+                    at: CGFloat(offset) - position
+                )
+            }
         }
-        .offset(x: slide)
+        // The HStack puts page n at n page-steps; moving the whole reel back by
+        // the position lands page n at (n - position) steps, which is exactly
+        // the `distance` each page is drawn from.
+        .offset(x: -position * pageStep)
     }
 
-    private func page(for pageMonth: Date, isCurrent: Bool) -> some View {
-        VStack(spacing: Space.sm) {
+    /// One month, turned by how far it is from the centre.
+    ///
+    /// `distance` is in pages: 0 is the month you are on, -1 is the one to the
+    /// left, and a step walks it smoothly between the two.
+    private func page(for pageMonth: Date, at distance: CGFloat) -> some View {
+        // Past one page the treatment stops deepening. A month two steps out is
+        // off the card anyway, and letting it keep turning would fold it into a
+        // line during the slide.
+        let reach = min(abs(distance), 1)
+        let isCentred = reach < 0.02
+
+        return VStack(spacing: Space.sm) {
             Text(Self.monthFormatter.string(from: pageMonth))
                 .font(.edHeading)
                 .foregroundStyle(Tokens.ink)
                 .accessibilityAddTraits(.isHeader)
 
             weekdayRow
-            grid(for: pageMonth, isCurrent: isCurrent)
+            grid(for: pageMonth, isCentred: isCentred)
         }
         .frame(width: pageWidth)
-        .opacity(isCurrent ? 1 : MealPlanMetrics.neighbourOpacity)
-        // A neighbour sits slightly back, which is the second half of saying
-        // "not this one". Opacity alone left the three months reading as one
-        // continuous grid of numerals at narrow widths, because every column
-        // was the same size and the same distance apart.
-        .scaleEffect(isCurrent ? 1 : MealPlanMetrics.neighbourScale, anchor: .center)
-        .allowsHitTesting(isCurrent)
-        .accessibilityHidden(!isCurrent)
+        .opacity(1 - reach * (1 - MealPlanMetrics.neighbourOpacity))
+        .scaleEffect(1 - reach * (1 - MealPlanMetrics.neighbourScale), anchor: .center)
+        // The turn. A neighbour faces INWARD, hinged on the edge nearest the
+        // centre, so the wheel curves away from the reader on both sides rather
+        // than flat months being pushed sideways. The anchor flips as a page
+        // crosses the centre, which cannot be seen: the angle is zero there.
+        .rotation3DEffect(
+            .degrees(Double(clamped(distance)) * MealPlanMetrics.neighbourTilt),
+            axis: (x: 0, y: 1, z: 0),
+            anchor: distance > 0 ? .leading : .trailing,
+            perspective: MealPlanMetrics.reelPerspective
+        )
+        // Only the centred month is a control. A turned month is foreshortened
+        // and half clipped, and a square you can only half see is not one you
+        // should be able to book a dinner on.
+        .allowsHitTesting(isCentred)
+        .accessibilityHidden(!isCentred)
+    }
+
+    private func clamped(_ distance: CGFloat) -> CGFloat {
+        max(-1, min(1, distance))
     }
 
     /// The card's edges dissolve rather than cut.
@@ -194,7 +229,7 @@ struct MealPlanMonthGrid: View {
         .accessibilityHidden(true)
     }
 
-    private func grid(for pageMonth: Date, isCurrent: Bool) -> some View {
+    private func grid(for pageMonth: Date, isCentred: Bool) -> some View {
         let columns = Array(
             repeating: GridItem(.flexible(), spacing: MealPlanMetrics.gutter),
             count: 7
@@ -202,7 +237,7 @@ struct MealPlanMonthGrid: View {
         return LazyVGrid(columns: columns, spacing: MealPlanMetrics.gutter) {
             ForEach(MealPlanCalendar.monthSlots(forMonthOf: pageMonth, calendar: calendar)) { slot in
                 if let day = slot.day {
-                    cell(for: day, isCurrent: isCurrent)
+                    cell(for: day, isCentred: isCentred)
                 } else {
                     Color.clear
                         .frame(height: MealPlanMetrics.monthCell)
@@ -215,11 +250,11 @@ struct MealPlanMonthGrid: View {
 
     // MARK: - One day
 
-    private func cell(for day: Date, isCurrent: Bool) -> some View {
+    private func cell(for day: Date, isCentred: Bool) -> some View {
         let reading = MealPlanDay.reading(for: day, in: readings)
         // Only the centred month can hold the selection. Without this the same
         // day would draw selected twice as it passed through the reel.
-        let isSelected = isCurrent && calendar.isDate(day, inSameDayAs: selectedDay)
+        let isSelected = isCentred && calendar.isDate(day, inSameDayAs: selectedDay)
         let isToday = calendar.isDate(day, inSameDayAs: today)
 
         return Button {
@@ -272,17 +307,20 @@ struct MealPlanMonthGrid: View {
         isSliding = true
 
         withAnimation(.easeInOut(duration: MealPlanMetrics.slideDuration)) {
-            slide = months > 0 ? -pageStep : pageStep
+            position = months > 0 ? 1 : -1
         } completion: {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 month = MealPlanCalendar.stepMonth(month, by: months, calendar: calendar)
-                slide = 0
+                position = 0
             }
             isSliding = false
         }
     }
+
+    /// The months the reel holds, as offsets from the centre.
+    private static let pageOffsets: [Int] = [-1, 0, 1]
 
     // MARK: - Formatters
 

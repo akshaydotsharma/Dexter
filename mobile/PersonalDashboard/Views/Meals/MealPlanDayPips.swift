@@ -37,7 +37,16 @@ enum MealPlanMetrics {
     /// something you can act on.
     static let neighbourOpacity: Double = 0.3
     /// How far back a neighbouring month sits.
-    static let neighbourScale: CGFloat = 0.94
+    static let neighbourScale: CGFloat = 0.9
+    /// How far a neighbouring month is turned, in degrees.
+    ///
+    /// Moderate on purpose. Past about 40 degrees a grid of numerals stops
+    /// reading as a month and becomes texture, and the point of showing the
+    /// neighbours is that you can see WHICH months they are.
+    static let neighbourTilt: Double = 34
+    /// How strong the vanishing point is. Higher is a wider lens: the turn
+    /// reads at a smaller angle, at the cost of the near edge ballooning.
+    static let reelPerspective: CGFloat = 0.6
     /// How long one step takes. Long enough to be seen as a direction, short
     /// enough that holding the chevron still steps at a usable rate.
     static let slideDuration: Double = 0.28
