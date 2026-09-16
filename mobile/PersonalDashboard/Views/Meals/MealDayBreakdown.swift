@@ -16,9 +16,15 @@ import SwiftUI
 ///
 /// ### What stays outside it
 ///
-/// The composer. Estimating a meal onto a day that has ended is a legitimate
-/// thing to want, but the primary path has to stay one field and one button, so
-/// the composer belongs to Today alone and is not part of "a day".
+/// The composer, which since #592 appears on every day this view can be handed.
+/// It is still not part of "a day", and the reason is a division of jobs rather
+/// than a restriction: this view reads a day and the composer writes to one. A
+/// caller that only wants to show a day gets one, without also offering a write
+/// it did not ask for.
+///
+/// The composer also has to state the day it is writing to, which is its own
+/// label's job and would be a second, quieter claim if it were made down here in
+/// the read-only card.
 struct MealDayBreakdown: View {
 
     let summary: MealDaySummary

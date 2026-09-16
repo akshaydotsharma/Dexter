@@ -71,12 +71,19 @@ enum MealsTab: String, CaseIterable, Identifiable {
 /// record beside them, which is what lets it recompute freely and what stops two
 /// numbers on one screen disagreeing.
 ///
-/// ### Why the composer is only on today
+/// ### Why the composer is on every day
 ///
-/// Estimating a meal onto a day that has ended is a legitimate thing to want,
-/// but the primary path has to stay one field and one button, and a composer
-/// that silently logs to March is worse than one that is not there. So the tab
-/// reads any day and writes only to today.
+/// It reads any day and writes to any day (#592). Until then it wrote only to
+/// today, because the primary path has to stay one field and one button and a
+/// composer that silently logs to March is worse than one that is not there.
+/// What changed is not the risk, it is that the composer now answers it: on any
+/// day but today its eyebrow states the date it is writing to, and the estimate
+/// preview states it again beside the Log button. Nothing here is silent any
+/// more, so nothing has to be withheld.
+///
+/// The day is still chosen in exactly one place, the calendar in the section
+/// chrome. The composer has no day control of its own and must not gain one, or
+/// the surface would hold two answers to which day a meal belongs to.
 ///
 /// ### Targets
 ///
@@ -293,10 +300,15 @@ struct MealsView: View {
     ///
     /// #569 traded a strong visual signal for a constant one: the date used to
     /// APPEAR when you moved off today, and now it is always there, so its
-    /// presence no longer carries the distinction. Sighted users get it from the
-    /// composer, which is absent on any day but today. A screen-reader user has
-    /// no such cue, so this says it in words rather than leaving the date to be
-    /// compared against a today the reader has to already know.
+    /// presence no longer carries the distinction. The composer used to carry it
+    /// instead, by being absent on any day but today, and #592 put it on every
+    /// day. So the sighted cue is now a sentence rather than a difference: the
+    /// composer's eyebrow reads "What did you eat on Monday, 14 Sep?" off today
+    /// and "What did you eat?" on it.
+    ///
+    /// A screen-reader user reaching this control has met neither cue yet, which
+    /// is why it still says "not today" in words rather than leaving the date to
+    /// be compared against a today the reader has to already know.
     private var dateControlAccessibilityLabel: String {
         let date = Self.dayFormatter.string(from: selectedDay)
         return isSelectedToday
@@ -348,24 +360,22 @@ struct MealsView: View {
     /// One day in full, and by default that day is today.
     ///
     /// The tab opens on today and every block follows
-    /// whichever day is selected: the composer's presence, the day card, the meal
-    /// list and each row's breakdown. Nothing here knows about a second tab,
-    /// because there is not one any more.
+    /// whichever day is selected: the composer and the day it writes to, the day
+    /// card, the meal list and each row's breakdown. Nothing here knows about a
+    /// second tab, because there is not one any more.
     private var trackingTab: some View {
         dayScroll {
             VStack(alignment: .leading, spacing: Space.lg) {
-                // The composer only appears on today. Estimating a meal onto a
-                // day that has ended is a legitimate thing to want, but the
-                // primary path has to stay one field and one button, and a
-                // composer that silently logs to March is worse than one that is
-                // not there.
-                if isSelectedToday {
-                    MealComposer(
-                        day: selectedDay,
-                        existingOnDay: selectedSummary.all,
-                        onLogged: { _ in }
-                    )
-                }
+                // The composer follows the selected day like every other block
+                // on this tab (#592). It is safe off today because it says which
+                // day it is writing to: the eyebrow names the date, and the
+                // estimate preview names it again beside the Log button. It is
+                // handed the day and nothing else, so it cannot choose one.
+                MealComposer(
+                    day: selectedDay,
+                    existingOnDay: selectedSummary.all,
+                    onLogged: { _ in }
+                )
 
                 MealDayBreakdown(
                     summary: selectedSummary,

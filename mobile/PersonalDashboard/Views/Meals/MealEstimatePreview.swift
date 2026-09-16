@@ -52,6 +52,9 @@ struct MealItemLine: View {
 struct MealEstimatePreview: View {
     let checked: CheckedMealEstimate
     let description: String
+    /// Which day the Log button writes to, in words, when that day is not today
+    /// (#592). Nil on today.
+    let dayNote: String?
     let onDiscard: () -> Void
     let onConfirm: () -> Void
 
@@ -83,6 +86,10 @@ struct MealEstimatePreview: View {
 
             if let reason = checked.suspectReason {
                 suspectBlock(reason)
+            }
+
+            if let dayNote {
+                dayTargetBlock(dayNote)
             }
 
             actions
@@ -167,6 +174,26 @@ struct MealEstimatePreview: View {
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// Which day this writes to, stated where the user commits (#592).
+    ///
+    /// Only on a day that is not today, and directly above the button rather
+    /// than beside it. Beside it, the line competes with two controls for the
+    /// width of a phone and is the part that truncates; above it, it has a full
+    /// line and is the last thing read before the tap.
+    ///
+    /// This is the second of the two statements that let the composer leave
+    /// today at all, the first being its own eyebrow. It is in the accent the
+    /// section uses for meal type, so it is not read as a warning: logging onto
+    /// an earlier day is the thing the user asked for, not a risk being flagged.
+    private func dayTargetBlock(_ note: String) -> some View {
+        Label(note, systemImage: "calendar")
+            .font(.edFootnoteStrong)
+            .foregroundStyle(Tokens.accentMeals)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
     }
 
     /// Discard sits immediately left of the primary, not marooned at the far
