@@ -1,30 +1,31 @@
 import SwiftUI
 
-/// One day's plan, in full (#599).
+/// One day's plan, as four tiles (#599).
 ///
-/// Four slots in the order of an actual day, each holding its blocks and an add
-/// row. The skeleton is the same on an empty day as on a full one, so nothing
-/// below the fold moves as blocks are added and an unplanned Lunch is visible
-/// as a gap rather than as an absence.
+/// ### Why a grid and not a column of sections
 ///
-/// ### Why the planned total carries no verdict
+/// The plan is four things and the question it answers is "which of them is
+/// still empty". A column answers that only by scrolling to the end of each
+/// section; four tiles answer it at a glance. The grid is adaptive, so a phone
+/// gets one column and a Mac detail pane gets two or three, and the tile order
+/// is the order of an actual day in every case.
+///
+/// ### Why the day's total carries no verdict
 ///
 /// Every other total on this surface is read against a target and tinted:
 /// `MealStatPill` draws amber for under, green for on track, red for over. That
-/// is right for a day that has HAPPENED, where falling short is a fact about
-/// the day.
+/// is right for a day that has HAPPENED, where falling short is a fact about the
+/// day.
 ///
 /// A plan is different in a way that matters. A half-planned day is the normal
-/// state of a plan — you write down dinner on Sunday and fill the rest in
-/// later — so a verdict would paint amber on almost every day almost all of the
-/// time, and a warning that is always on is a warning nobody reads. Worse, it
-/// would be saying something false: the day is not short on calories, it is
-/// short on PLANNING, and those want opposite responses.
+/// state of a plan, so a verdict would paint amber on almost every day almost
+/// all of the time, and a warning that is always on is a warning nobody reads.
+/// Worse, it would be naming the wrong shortage: the day is not short on
+/// calories, it is short on PLANNING, and those want opposite responses.
 ///
-/// So the figures are neutral, and the reading is one plain sentence about what
-/// is left to plan. The verdict arrives on the Tracking tab, once the meals are
-/// real.
-struct MealPlanDayPanel: View {
+/// So the figures are neutral and the reading is one plain sentence about what
+/// is left to plan. The verdict arrives on Tracking, once the meals are real.
+struct MealPlanBoard: View {
     let plan: MealPlanDay
     let targets: MealTargets?
     /// Injected so a preview or a test can pin "now".
@@ -33,18 +34,30 @@ struct MealPlanDayPanel: View {
     var onAdd: (MealType) -> Void
     var onOpen: (LocalMealPlanEntry) -> Void
     var onToggleEaten: (LocalMealPlanEntry) -> Void
-    var onSkip: (LocalMealPlanEntry) -> Void
-    var onDuplicate: (LocalMealPlanEntry) -> Void
-    var onDelete: (LocalMealPlanEntry) -> Void
+    /// Copy another day's plan onto this one. The offset is in days, so -1 is
+    /// the day before and -7 is this day last week.
+    var onCopyDay: (Int) -> Void
+    var onClearDay: () -> Void
 
     private var calendar: Calendar { Calendar.current }
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: MealPlanBoardMetrics.tileMinWidth), spacing: MealPlanBoardMetrics.gutter)]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.lg) {
             header
-            if plan.blocksWithNutrition > 0 { plannedTotals }
-            ForEach(plan.slots) { slot in
-                slotSection(slot)
+            if plan.blocksWithNutrition > 0 { dayTotals }
+            LazyVGrid(columns: columns, spacing: MealPlanBoardMetrics.gutter) {
+                ForEach(plan.slots) { slot in
+                    MealPlanTile(
+                        slot: slot,
+                        onAdd: { onAdd(slot.mealType) },
+                        onOpen: onOpen,
+                        onToggleEaten: onToggleEaten
+                    )
+                }
             }
         }
     }
@@ -52,16 +65,61 @@ struct MealPlanDayPanel: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(dayTitle)
-                .font(.edTitle)
-                .foregroundStyle(Tokens.ink)
-            Text(Self.longDate.string(from: plan.day))
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.muted)
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dayTitle)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                Text(Self.longDate.string(from: plan.day))
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+
+            Spacer(minLength: Space.sm)
+            dayMenu
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Copy and Clear, behind one glyph beside the day they act on.
+    ///
+    /// Copy was a labelled button in the action bar and read as noise: it sat
+    /// beside the chat with no day attached to it, so "Copy" was a verb with no
+    /// object. Here it names its source ("Copy yesterday's plan here") and sits
+    /// next to the day it will write to, which is the whole of what it was
+    /// missing.
+    ///
+    /// It is a menu rather than two buttons because both actions are bulk writes
+    /// that are easy to reach for by accident: a copy onto the wrong day leaves
+    /// blocks to delete one at a time.
+    private var dayMenu: some View {
+        Menu {
+            Button {
+                onCopyDay(-1)
+            } label: {
+                Label("Copy yesterday's plan here", systemImage: "arrow.left.arrow.right")
+            }
+            Button {
+                onCopyDay(-7)
+            } label: {
+                Label("Copy this day last week", systemImage: "calendar.badge.clock")
+            }
+            if !plan.isEmpty {
+                Divider()
+                Button(role: .destructive, action: onClearDay) {
+                    Label("Clear this day", systemImage: "trash")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Tokens.mutedSoft)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .menuStyleCompat()
+        .accessibilityLabel("More actions for this day")
     }
 
     /// "Today", "Tomorrow", "Yesterday" or the weekday. The full date sits under
@@ -77,11 +135,10 @@ struct MealPlanDayPanel: View {
 
     // MARK: - What the day adds up to
 
-    private var plannedTotals: some View {
+    private var dayTotals: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             HStack(spacing: Space.xs) {
-                Text("Planned")
-                    .eyebrow()
+                Text("Planned").eyebrow()
                 Spacer(minLength: 0)
                 if plan.blocksWithoutNutrition > 0 {
                     MealFlagChip(
@@ -92,9 +149,9 @@ struct MealPlanDayPanel: View {
                 }
             }
 
-            // The headline figure, then the four macros as pills. The same
-            // shape `MealChatCard` uses, so a planned day and a logged meal
-            // present their numbers as one object rather than as two designs.
+            // The headline figure, then the four macros as pills. The same shape
+            // `MealChatCard` uses, so a planned day and a logged meal present
+            // their numbers as one object rather than as two designs.
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
                 Text(MealFormat.calories(plan.totals.calories))
                     .font(.edDisplay)
@@ -136,7 +193,7 @@ struct MealPlanDayPanel: View {
         .paperBorder(Tokens.border, radius: Radius.lg)
     }
 
-    /// Stated once per day, not once per block. The figures on a plan are an
+    /// Stated once per day, not once per tile. The figures on a plan are an
     /// estimate of a meal nobody has eaten, and a surface that showed them like
     /// logged figures would be claiming a precision it has not got.
     static let roughnessNote =
@@ -159,58 +216,6 @@ struct MealPlanDayPanel: View {
         return calories >= 0
             ? "\(caloriePart) and \(proteinPart) still to plan."
             : "\(caloriePart), \(proteinPart)."
-    }
-
-    // MARK: - One slot
-
-    private func slotSection(_ slot: MealPlanSlot) -> some View {
-        VStack(alignment: .leading, spacing: RowMetrics.interRowSpacing) {
-            HStack(spacing: Space.sm) {
-                Circle()
-                    .fill(slot.mealType.tint)
-                    .frame(width: 6, height: 6)
-                Text(slot.mealType.displayName)
-                    .eyebrow()
-                Spacer(minLength: 0)
-                if slot.entries.count > 1 {
-                    Text("\(slot.entries.count)")
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.mutedSoft)
-                        .monospacedDigit()
-                }
-            }
-            .padding(.horizontal, RowMetrics.rowBlockHeaderPadding)
-            .padding(.bottom, Space.xs)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-
-            ForEach(slot.entries, id: \.clientUUID) { entry in
-                MealPlanEntryRow(
-                    entry: entry,
-                    onOpen: { onOpen(entry) },
-                    onToggleEaten: { onToggleEaten(entry) },
-                    onSkip: { onSkip(entry) },
-                    onDuplicate: { onDuplicate(entry) },
-                    onDelete: { onDelete(entry) }
-                )
-            }
-
-            GhostAddRow(
-                label: addLabel(for: slot),
-                minHeight: 40
-            ) {
-                onAdd(slot.mealType)
-            }
-        }
-        .padding(.horizontal, RowMetrics.rowBlockPadding)
-    }
-
-    /// "Add breakfast" on an empty slot, "Add another snack" on one that
-    /// already has something. Naming the meal rather than saying "Add" keeps
-    /// four identical rows on one screen distinguishable by ear.
-    private func addLabel(for slot: MealPlanSlot) -> String {
-        let meal = slot.mealType.displayName.lowercased()
-        return slot.isEmpty ? "Add \(meal)" : "Add another \(meal)"
     }
 
     // MARK: - Formatters

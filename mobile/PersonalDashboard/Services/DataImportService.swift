@@ -927,6 +927,7 @@ final class DataImportService {
                     slotIndex: dto.slotIndex,
                     title: dto.title,
                     notes: dto.notes,
+                    recipe: dto.recipe,
                     status: dto.status,
                     hasNutrition: dto.hasNutrition,
                     calories: dto.calories,
@@ -942,6 +943,7 @@ final class DataImportService {
                     updatedAt: dto.updatedAt
                 )
                 entry.ingredientsData = dto.ingredientsData
+                entry.itemsData = dto.itemsData
                 modelContext.insert(entry)
             }
 

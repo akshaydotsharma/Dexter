@@ -325,8 +325,12 @@ final class MealPlanDataLayerTests: XCTestCase {
         XCTAssertTrue(made.allSatisfy { $0.source == MealPlanSource.copy })
     }
 
-    /// A logged meal becomes a block with its estimate attached, and its items
-    /// become the ingredient list.
+    /// A logged meal becomes a block with its estimate AND its breakdown
+    /// attached, and with NO ingredients.
+    ///
+    /// The dishes are not the ingredients: "chicken rice" is one dish made of
+    /// four things. Mapping item names onto the ingredient list would put
+    /// "Poached chicken" on a shopping list, which is not a thing anybody buys.
     func testPlanningALoggedMealCopiesItsNumbers() throws {
         let meals = MealService(store: store)
         let logged = try meals.addMeal(
@@ -346,7 +350,12 @@ final class MealPlanDataLayerTests: XCTestCase {
 
         XCTAssertEqual(block.title, "Chicken rice")
         XCTAssertEqual(block.mealTypeEnum, .dinner)
-        XCTAssertEqual(block.ingredients, ["Poached chicken", "Jasmine rice"])
+        XCTAssertEqual(block.ingredients, [], "Dishes are not ingredients.")
+        XCTAssertEqual(
+            block.items.map(\.name),
+            ["Poached chicken", "Jasmine rice"],
+            "The breakdown travels, so the block can show what the meal was made of."
+        )
         XCTAssertEqual(block.plannedNutrients?.calories, 620)
         XCTAssertEqual(block.source, MealPlanSource.copy)
     }
@@ -376,6 +385,69 @@ final class MealPlanDataLayerTests: XCTestCase {
 
         XCTAssertEqual(try service.entries(on: day).count, 0)
         XCTAssertEqual(try service.entries(on: tomorrow).count, 1)
+    }
+
+    // MARK: - The estimate's other two answers
+
+    /// The recipe is a double optional on the update path, like the note, so an
+    /// erased recipe can be told apart from one left alone (#444, #488).
+    func testRecipeRoundTripsAndClears() throws {
+        let entry = try service.addEntry(
+            date: day,
+            mealType: .dinner,
+            title: "Dal",
+            recipe: "Soak the dal\nSimmer for 40 minutes"
+        )
+        XCTAssertEqual(entry.recipe, "Soak the dal\nSimmer for 40 minutes")
+
+        // Leave it alone.
+        try service.updateEntry(entry, title: "Dal tadka")
+        XCTAssertNotNil(entry.recipe)
+
+        // Clear it.
+        try service.updateEntry(entry, recipe: .some(""))
+        XCTAssertNil(entry.recipe, "An emptied recipe field clears the recipe.")
+    }
+
+    /// The breakdown is the same `MealItemEntry` a logged meal carries, so a
+    /// planned block and a logged one can be shown in one shape.
+    func testItemsRoundTripAndClear() throws {
+        let entry = try service.addEntry(
+            date: day,
+            mealType: .lunch,
+            title: "Chicken rice",
+            nutrients: MealNutrients(calories: 620),
+            items: [
+                MealItemEntry(name: "Poached chicken", portionQuantity: 150, portionUnit: "g", calories: 250),
+                MealItemEntry(name: "Jasmine rice", portionQuantity: 200, portionUnit: "g", calories: 370)
+            ]
+        )
+        XCTAssertEqual(entry.items.map(\.name), ["Poached chicken", "Jasmine rice"])
+
+        try service.updateEntry(entry, items: [])
+        XCTAssertEqual(entry.items, [], "An empty array clears the breakdown.")
+        XCTAssertNil(entry.itemsData, "A block with no breakdown stores nothing at all.")
+    }
+
+    /// A copy carries everything the estimate produced, because a copy makes no
+    /// API call and the numbers have to come from somewhere.
+    func testCopyCarriesRecipeAndBreakdown() throws {
+        try service.addEntry(
+            date: day,
+            mealType: .dinner,
+            title: "Dal",
+            ingredients: ["toor dal", "tomato"],
+            recipe: "Soak the dal",
+            nutrients: MealNutrients(calories: 400),
+            items: [MealItemEntry(name: "Dal", portionQuantity: 300, portionUnit: "g", calories: 400)]
+        )
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: day)!
+        let made = try service.copyDay(from: day, to: tomorrow)
+
+        XCTAssertEqual(made.first?.recipe, "Soak the dal")
+        XCTAssertEqual(made.first?.ingredients, ["toor dal", "tomato"])
+        XCTAssertEqual(made.first?.items.map(\.name), ["Dal"])
+        XCTAssertEqual(made.first?.plannedNutrients?.calories, 400)
     }
 
     // MARK: - Ranges

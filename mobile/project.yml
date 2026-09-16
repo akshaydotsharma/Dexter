@@ -265,6 +265,8 @@ targets:
       # them the Mac holds the planned blocks and has no way to write one, which
       # is the same half-a-feature #542's note warns about.
       - path: PersonalDashboard/Services/MealPlanService.swift
+      - path: PersonalDashboard/Services/MealPlanEstimationService.swift
+      - path: PersonalDashboard/AI/AnthropicClient+PlanMeal.swift
       - path: PersonalDashboard/ViewModels/MealPlanChatModel.swift
       - path: PersonalDashboard/AI/MealPlanSuggestion.swift
       - path: PersonalDashboard/AI/MealPlanContext.swift

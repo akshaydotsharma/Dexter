@@ -92,6 +92,36 @@ final class LocalMealPlanEntry {
     /// what to prep the night before. Nil when empty.
     var notes: String?
 
+    /// How to make it, when the estimate offered a method. Nil otherwise, which
+    /// is most blocks: a meal that is bought, or one the user already knows how
+    /// to cook, has no recipe worth storing.
+    ///
+    /// Plain text with one step per line rather than a structured list. A recipe
+    /// on a PLAN is a reminder, not a document to follow at the hob: it exists so
+    /// that a dish suggested on Sunday is still makeable on Thursday. Structuring
+    /// it would invite quantities, timings and substitutions, none of which this
+    /// surface is going to keep up to date.
+    var recipe: String?
+
+    /// JSON-encoded `[MealItemEntry]`: the per-dish breakdown the estimate made.
+    ///
+    /// The same type `LocalMeal.itemsData` carries, deliberately. A planned meal
+    /// and a logged one are broken down by the same estimator against the same
+    /// rules (`MealToolSchema`), so the detail sheet can show a planned block's
+    /// components in the same shape Tracking shows a logged meal's, and a block
+    /// that later becomes a real meal carries its breakdown across.
+    ///
+    /// Optional, and nil means no breakdown was made, which is a real state: a
+    /// block the user typed a title into and never estimated. Read and write
+    /// through `items`, which turns nil and a decode failure both into the empty
+    /// array.
+    ///
+    /// ⚠️ NOT the source of the eight totals. The totals are their own columns,
+    /// for the reason `LocalMeal` spells out: the split across items is a guess
+    /// the user can correct one dish at a time, and every roll-up reads the
+    /// totals directly rather than decoding a payload per row.
+    var itemsData: Data?
+
     /// `MealPlanStatus.rawValue`. Raw for the same reason `mealType` is, and
     /// read through `statusEnum`, which reads an unknown value as `.planned` —
     /// the state that claims the least.
@@ -153,6 +183,8 @@ final class LocalMealPlanEntry {
         title: String,
         ingredientsData: Data? = nil,
         notes: String? = nil,
+        recipe: String? = nil,
+        itemsData: Data? = nil,
         status: String = MealPlanStatus.planned.rawValue,
         hasNutrition: Bool = false,
         calories: Double = 0,
@@ -176,6 +208,8 @@ final class LocalMealPlanEntry {
         self.title = title
         self.ingredientsData = ingredientsData
         self.notes = notes
+        self.recipe = recipe
+        self.itemsData = itemsData
         self.status = status
         self.hasNutrition = hasNutrition
         self.calories = calories
@@ -229,6 +263,19 @@ final class LocalMealPlanEntry {
         }
         set {
             ingredientsData = newValue.isEmpty ? nil : (try? JSONEncoder().encode(newValue))
+        }
+    }
+
+    /// Read/write the per-dish breakdown. Nil and a decode failure both read as
+    /// empty, and setting an empty array clears the blob back to nil so a block
+    /// with no breakdown stores nothing. Mirrors `LocalMeal.items`.
+    var items: [MealItemEntry] {
+        get {
+            guard let itemsData, !itemsData.isEmpty else { return [] }
+            return (try? JSONDecoder().decode([MealItemEntry].self, from: itemsData)) ?? []
+        }
+        set {
+            itemsData = newValue.isEmpty ? nil : (try? JSONEncoder().encode(newValue))
         }
     }
 

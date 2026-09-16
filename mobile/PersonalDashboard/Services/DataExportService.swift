@@ -705,6 +705,8 @@ final class DataExportService {
             title: entry.title,
             ingredientsData: entry.ingredientsData,
             notes: entry.notes,
+            recipe: entry.recipe,
+            itemsData: entry.itemsData,
             status: entry.status,
             hasNutrition: entry.hasNutrition,
             calories: entry.calories,

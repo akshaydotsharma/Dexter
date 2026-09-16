@@ -122,6 +122,17 @@ struct MealsView: View {
     @Query(sort: [SortDescriptor(\MealTargets.effectiveFrom, order: .forward)])
     private var allTargets: [MealTargets]
 
+    /// Every planned block. Queried HERE rather than inside `MealPlanView` so
+    /// the chrome's date control can mark the days that hold a plan without the
+    /// tab being on screen, and so one query feeds both the control and the tab
+    /// (#442, #599).
+    @Query(
+        sort: [
+            SortDescriptor(\LocalMealPlanEntry.date, order: .forward),
+            SortDescriptor(\LocalMealPlanEntry.slotIndex, order: .forward)
+        ]
+    ) private var allPlanEntries: [LocalMealPlanEntry]
+
     @State private var tab: MealsTab = .tracking
 
     /// The day Today is showing, device-local midnight. Starts on today and
@@ -134,6 +145,24 @@ struct MealsView: View {
     /// selected day each time the popover opens, so it never reopens somewhere
     /// the user did not leave it.
     @State private var visibleMonth: Date = MealCalendar.monthStart(of: Date())
+
+    /// The day the Plan tab is showing, device-local midnight (#599).
+    ///
+    /// A SECOND day, held apart from `selectedDay`, and that separation is the
+    /// load-bearing part. The tracking day can never move past today, because
+    /// the composer writes to it and a meal is a record of something already
+    /// eaten (#592). A plan lives in the future. One value would either freeze
+    /// the plan at today or point the composer at a day it must never write to.
+    ///
+    /// The chrome's date control drives whichever of the two the current tab is
+    /// on, so it still reads as ONE control — which is what it looks like, and
+    /// what the user asked for.
+    @State private var planDay: Date = Calendar.current.startOfDay(for: Date())
+
+    /// The month the PLAN popover is on. Held apart from `visibleMonth` for the
+    /// same reason the days are: paging the plan's calendar into next month must
+    /// not move the tracking calendar, which cannot go there.
+    @State private var planMonth: Date = MealPlanCalendar.monthStart(of: Date())
 
     /// The month grid, anchored to the date control in the section chrome.
     @State private var showingCalendar = false
@@ -201,13 +230,7 @@ struct MealsView: View {
         .macSectionChrome("Meals") {
             #if os(macOS)
             HStack(spacing: Space.xs) {
-                // Withheld on the Plan tab for the reason `chromeControls`
-                // gives. The `if` sits INSIDE the HStack deliberately: the whole
-                // trailing closure is one `ToolbarItem`, and a multi-statement
-                // body would distribute the toolbar across each branch (#597).
-                if tab != .plan {
-                    macDateButton
-                }
+                macDateButton
             }
             #endif
         }
@@ -221,6 +244,8 @@ struct MealsView: View {
         // rather than waiting to be dismissed. Also fires for the "Today" button
         // and the deep link, where closing an already-closed popover is a no-op.
         .onChange(of: selectedDay) { _, _ in showingCalendar = false }
+        // The same rule for the Plan tab's day, which the same control picks.
+        .onChange(of: planDay) { _, _ in showingCalendar = false }
         .sheet(item: $openMeal) { meal in
             MealDetailSheet(meal: meal)
                 #if os(iOS)
@@ -251,27 +276,13 @@ struct MealsView: View {
     #if os(iOS)
     @ViewBuilder
     private var chromeControls: some View {
-        // Withheld on the Plan tab, which carries its own calendar (#599). That
-        // calendar answers a DIFFERENT question — which day am I planning —
-        // and it can reach a future day, which this one cannot. Two controls in
-        // one chrome naming two different days is a contradiction the user has
-        // to resolve on every glance.
-        if tab != .plan {
         TopBarIconButton(
             systemName: "calendar",
             accessibilityLabel: dateControlAccessibilityLabel,
             action: openCalendar,
             label: dateControlLabel
         )
-        .popover(isPresented: $showingCalendar) {
-            MealCalendarPopover(
-                month: $visibleMonth,
-                selectedDay: $selectedDay,
-                readings: MealCalendar.readings(in: allMeals),
-                today: Date()
-            )
-        }
-        }
+        .popover(isPresented: $showingCalendar) { calendarPopover }
     }
     #endif
 
@@ -295,7 +306,32 @@ struct MealsView: View {
         }
         .help(dateControlAccessibilityLabel)
         .accessibilityLabel(dateControlAccessibilityLabel)
-        .popover(isPresented: $showingCalendar) {
+        .popover(isPresented: $showingCalendar) { calendarPopover }
+    }
+
+    #endif
+
+    /// One control, two calendars behind it (#599).
+    ///
+    /// The Plan tab gets a grid that can reach a future month and that marks a
+    /// day by which MEALS are planned; every other tab gets the tracking grid,
+    /// which stops at today and marks a day by the calories logged on it.
+    ///
+    /// Two views rather than one with a flag, because the difference is a RULE
+    /// and not a setting: `MealCalendar.isSelectable` refuses a future day
+    /// because a meal you have not eaten is not a log entry, and a boolean
+    /// parameter would leave that rule as something every call site has to pass
+    /// correctly. See the note on `MealPlanCalendar`.
+    @ViewBuilder
+    private var calendarPopover: some View {
+        if tab == .plan {
+            MealPlanCalendarPopover(
+                month: $planMonth,
+                selectedDay: $planDay,
+                readings: MealPlanDay.readings(in: allPlanEntries),
+                today: Date()
+            )
+        } else {
             MealCalendarPopover(
                 month: $visibleMonth,
                 selectedDay: $selectedDay,
@@ -305,7 +341,11 @@ struct MealsView: View {
         }
     }
 
-    #endif
+    /// The day the chrome control is currently naming and picking: the plan's on
+    /// the Plan tab, the log's everywhere else.
+    private var chromeDay: Date {
+        tab == .plan ? planDay : selectedDay
+    }
 
     /// The selected day, always (#567, widened in #569).
     ///
@@ -326,8 +366,10 @@ struct MealsView: View {
     /// stating the day is the whole job. The date is also the more honest answer:
     /// a weekday never said WHICH week, and "15 Sep" does, in fewer characters.
     /// The weekday survives in the accessibility label and on the day card.
+    /// Reads whichever day the current tab is on, so one control can name two
+    /// of them without ever naming the wrong one (#599).
     private var dateControlLabel: String {
-        Self.chromeDayFormatter.string(from: selectedDay)
+        Self.chromeDayFormatter.string(from: chromeDay)
     }
 
     /// Where the difference between today and an older day still lives.
@@ -344,16 +386,23 @@ struct MealsView: View {
     /// is why it still says "not today" in words rather than leaving the date to
     /// be compared against a today the reader has to already know.
     private var dateControlAccessibilityLabel: String {
-        let date = Self.dayFormatter.string(from: selectedDay)
-        return isSelectedToday
-            ? "Choose a day. Showing today, \(date)"
-            : "Choose a day. Showing \(dayTitle), \(date). Not today"
+        let day = chromeDay
+        let date = Self.dayFormatter.string(from: day)
+        let noun = tab == .plan ? "Choose a day to plan." : "Choose a day."
+        if Calendar.current.isDateInToday(day) {
+            return "\(noun) Showing today, \(date)"
+        }
+        return "\(noun) Showing \(Self.relativeDayName(day)), \(date). Not today"
     }
 
     /// Always re-point the grid at the day on screen before opening, so it never
     /// reopens on a month the user paged to and abandoned.
     private func openCalendar() {
-        visibleMonth = MealCalendar.monthStart(of: selectedDay)
+        if tab == .plan {
+            planMonth = MealPlanCalendar.monthStart(of: planDay)
+        } else {
+            visibleMonth = MealCalendar.monthStart(of: selectedDay)
+        }
         showingCalendar = true
     }
 
@@ -451,6 +500,8 @@ struct MealsView: View {
         MealPlanView(
             allMeals: allMeals,
             allTargets: allTargets,
+            allEntries: allPlanEntries,
+            selectedDay: $planDay,
             chat: planChat
         )
     }
@@ -581,10 +632,20 @@ struct MealsView: View {
     }
 
     private var dayTitle: String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(selectedDay) { return "Today" }
-        if calendar.isDateInYesterday(selectedDay) { return "Yesterday" }
-        return Self.weekdayFormatter.string(from: selectedDay)
+        Self.relativeDayName(selectedDay)
+    }
+
+    /// "Today", "Yesterday", "Tomorrow", or the weekday.
+    ///
+    /// Static and day-agnostic since #599, because the chrome control now names
+    /// either the tracking day or the plan day and both need the same phrasing.
+    /// Tomorrow is in the list for the plan's sake: it is a day the tracking
+    /// calendar can never reach and the plan's most common one.
+    static func relativeDayName(_ day: Date, calendar: Calendar = .current) -> String {
+        if calendar.isDateInToday(day) { return "Today" }
+        if calendar.isDateInYesterday(day) { return "Yesterday" }
+        if calendar.isDateInTomorrow(day) { return "Tomorrow" }
+        return Self.weekdayFormatter.string(from: day)
     }
 
     /// `selectedDay` is a device-local midnight, never a stored anchor, so a

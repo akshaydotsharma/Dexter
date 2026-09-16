@@ -1,27 +1,35 @@
 import SwiftUI
 
-/// What the week or the month on screen needs from a shop (#599).
+/// What the selected day needs from a shop (#599).
 ///
 /// ### Deliberately not a shopping list
 ///
-/// The user asked for the ingredients they will need, roughly — "not the whole
-/// list, just maybe the main ingredients". So there are no quantities, no units,
-/// no tick boxes and no aisle. Each of those turns a strip you glance at into a
-/// document you have to maintain, and none of them is knowable from a block that
-/// says "chicken rice" anyway.
+/// The ask was the ingredients needed, roughly, and not the whole list. So there
+/// are no quantities, no units, no aisle and no tick boxes. Each of those turns
+/// a strip you glance at into a document you have to maintain, and none of them
+/// is knowable from a block that says "chicken rice" anyway.
 ///
-/// The number beside a name is a count of MEALS, never an amount of food, which
-/// is why it is spoken as "in 4 meals". It is there because "chicken thigh, in
-/// four meals" is a shopping decision and "chicken thigh" on its own is not.
+/// A number beside a name is a count of MEALS, never an amount of food, which is
+/// why it is spoken as "in 2 meals". It is there because "chicken thigh, in two
+/// meals" is a shopping decision and "chicken thigh" on its own is not.
 ///
 /// Lists already exist in this app, and a user who wants a real shopping list
-/// with tick boxes has a better one there. This is the answer to "what is this
-/// week made of".
-struct MealPlanIngredientsCard: View {
+/// with tick boxes has a better one there. This answers "what is this day made
+/// of".
+///
+/// ### Where the names come from
+///
+/// The estimate, not the user. A block is typed as a dish — "chicken rice" — and
+/// the model breaks it into what has to be bought. So this card fills itself in
+/// as the day is planned, and a block that was never estimated contributes
+/// nothing to it, which is the prompt to go and estimate it.
+struct MealPlanNeedsCard: View {
 
     let ingredients: [MealPlanIngredient]
-    /// What the roll-up covers, for the caption: "this week", "September".
-    let scopeLabel: String
+    /// True when the day holds blocks that carry no ingredients at all, so the
+    /// card can say the list is short because the plan is, rather than letting
+    /// the user read it as complete.
+    let blocksWithoutIngredients: Int
 
     /// How many names are shown before the card folds.
     ///
@@ -46,7 +54,7 @@ struct MealPlanIngredientsCard: View {
         } else {
             VStack(alignment: .leading, spacing: Space.md) {
                 HStack(spacing: Space.sm) {
-                    Text("Ingredients \(scopeLabel)").eyebrow()
+                    Text("What you'll need").eyebrow()
                     Spacer(minLength: 0)
                     Text("\(ingredients.count)")
                         .font(.edCaption)
@@ -72,7 +80,7 @@ struct MealPlanIngredientsCard: View {
                     .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                 }
 
-                Text("From the meals planned \(scopeLabel). Skipped meals are left out.")
+                Text(caption)
                     .font(.edCaption)
                     .foregroundStyle(Tokens.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -82,6 +90,16 @@ struct MealPlanIngredientsCard: View {
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
             .paperBorder(Tokens.border, radius: Radius.lg)
         }
+    }
+
+    /// The caption names the gap when there is one. A list that is short because
+    /// two blocks were never estimated looks exactly like a complete list, and
+    /// only one of those is safe to shop from.
+    private var caption: String {
+        let base = "The key ingredients for this day's meals. Skipped meals are left out."
+        guard blocksWithoutIngredients > 0 else { return base }
+        let noun = blocksWithoutIngredients == 1 ? "meal has" : "meals have"
+        return base + " \(blocksWithoutIngredients) planned \(noun) no ingredients yet."
     }
 
     /// The count rides INSIDE the chip rather than on a second line, and it is

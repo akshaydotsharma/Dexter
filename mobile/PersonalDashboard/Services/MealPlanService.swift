@@ -68,8 +68,10 @@ struct MealPlanService {
         title: String,
         ingredients: [String] = [],
         notes: String? = nil,
+        recipe: String? = nil,
         status: MealPlanStatus = .planned,
         nutrients: MealNutrients? = nil,
+        items: [MealItemEntry] = [],
         source: String = MealPlanSource.manual,
         clientUUID: String? = nil
     ) throws -> LocalMealPlanEntry {
@@ -85,8 +87,10 @@ struct MealPlanService {
             existing.title         = cleanTitle
             existing.ingredients   = Self.cleaned(ingredients)
             existing.notes         = notes?.trimmedNonEmptyPlanField
+            existing.recipe        = recipe?.trimmedNonEmptyPlanField
             existing.statusEnum    = status
             existing.plannedNutrients = nutrients
+            existing.items         = items
             existing.source        = source
             existing.updatedAt     = Date()
             try save()
@@ -101,11 +105,13 @@ struct MealPlanService {
             slotIndex: try nextSlotIndex(on: anchoredDay, mealType: mealType),
             title: cleanTitle,
             notes: notes?.trimmedNonEmptyPlanField,
+            recipe: recipe?.trimmedNonEmptyPlanField,
             status: status.rawValue,
             source: source
         )
         row.ingredients = Self.cleaned(ingredients)
         row.plannedNutrients = nutrients
+        row.items = items
         store.context.insert(row)
         try save()
         return row
@@ -131,8 +137,10 @@ struct MealPlanService {
         title: String? = nil,
         ingredients: [String]? = nil,
         notes: String?? = nil,
+        recipe: String?? = nil,
         status: MealPlanStatus? = nil,
         nutrients: MealNutrients?? = nil,
+        items: [MealItemEntry]? = nil,
         source: String? = nil
     ) throws {
         // Held before the write so the OLD pair can be renumbered too when a
@@ -162,6 +170,18 @@ struct MealPlanService {
         }
         if let notes {
             entry.notes = notes?.trimmedNonEmptyPlanField
+        }
+        // A double optional for the same reason `notes` is one: a recipe the
+        // user erased is a different request from a recipe they left alone, and
+        // collapsing the two makes a deletion inexpressible (#444, #488).
+        if let recipe {
+            entry.recipe = recipe?.trimmedNonEmptyPlanField
+        }
+        // A plain optional, because an EMPTY array already means "clear the
+        // breakdown" and is a different value from nil. Same call `ingredients`
+        // makes above.
+        if let items {
+            entry.items = items
         }
         if let status {
             entry.statusEnum = status
@@ -244,11 +264,13 @@ struct MealPlanService {
                     title: entry.title,
                     ingredients: entry.ingredients,
                     notes: entry.notes,
+                    recipe: entry.recipe,
                     // A copy is something to do, never something already done.
                     // Carrying `.eaten` across would tick a meal on a day that
                     // has not happened.
                     status: .planned,
                     nutrients: entry.plannedNutrients,
+                    items: entry.items,
                     source: MealPlanSource.copy
                 )
             )
@@ -276,9 +298,14 @@ struct MealPlanService {
             date: day,
             mealType: mealType ?? meal.mealTypeEnum,
             title: meal.mealDescription,
-            ingredients: meal.items.map(\.name),
+            // The dishes are NOT the ingredients: "chicken rice" is one dish
+            // made of four things. A logged meal has no ingredient list — there
+            // was nothing to shop for by the time it was logged — so the block
+            // starts without one and the user can estimate for it.
+            ingredients: [],
             status: .planned,
             nutrients: meal.needsDetail ? nil : meal.nutrients,
+            items: meal.items,
             source: MealPlanSource.copy
         )
     }

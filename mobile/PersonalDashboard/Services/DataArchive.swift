@@ -658,6 +658,13 @@ enum DataArchive {
         let title: String
         let ingredientsData: Data?
         let notes: String?
+        /// #599. Optional because a block need not have one, not because the
+        /// field is additive.
+        let recipe: String?
+        /// #599. The per-dish breakdown as its RAW blob, for the same reason
+        /// `MealDTO.itemsData` travels raw: a byte-for-byte round trip cannot
+        /// drop a `MealItemEntry` field a later build adds.
+        let itemsData: Data?
         let status: String
         let hasNutrition: Bool
         let calories: Double
