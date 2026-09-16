@@ -41,8 +41,20 @@ struct MealPlanMonthGrid: View {
             weekdayRow
             grid
         }
+        // The GRID is capped; the CARD is not. The card used to carry the cap
+        // itself, so on a wide window it sat as a narrow block in the top-left
+        // corner while the day's tiles below it ran the full width, and the
+        // first thing on the tab read as a stray panel rather than as the
+        // header of the page. The card now spans the row like every tile under
+        // it and centres the month inside, so the column has one edge.
+        //
+        // The cap stays on the grid because a month that widens without limit
+        // is worse than a narrow one: seven flexible columns across a 2000pt
+        // window put 280pt between a numeral and its neighbour, and a calendar
+        // is read by proximity.
+        .frame(maxWidth: MealPlanMetrics.maxWidth)
         .padding(Space.md)
-        .frame(maxWidth: MealPlanMetrics.maxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
     }
