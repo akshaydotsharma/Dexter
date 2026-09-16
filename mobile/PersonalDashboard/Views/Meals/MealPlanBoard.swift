@@ -184,21 +184,11 @@ struct MealPlanBoard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text(Self.roughnessNote)
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(Space.lg)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.lg)
     }
-
-    /// Stated once per day, not once per tile. The figures on a plan are an
-    /// estimate of a meal nobody has eaten, and a surface that showed them like
-    /// logged figures would be claiming a precision it has not got.
-    static let roughnessNote =
-        "Planned figures are rough. A meal is estimated properly when you log it on Tracking."
 
     /// "About 800 kcal and 60 g protein still to plan", or nil with no targets.
     ///
