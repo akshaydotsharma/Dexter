@@ -135,17 +135,24 @@ extension View {
     /// (the same split Reminders uses: a grouped action pill + a separate
     /// control). No-op on iOS, where the in-view detail header owns this chrome
     /// (issue #291).
+    ///
+    /// `title` and `subtitle` are `@autoclosure` so iOS does not pay for chrome it
+    /// does not draw (#614). A Swift argument is evaluated at the call site
+    /// whether or not the callee uses it, and the note editor was passing
+    /// `note.updatedAt.formatted(.relative(presentation: .named))` here on every
+    /// body pass — which on iOS means a relative-date format, per keystroke,
+    /// thrown away. Deferring it costs nothing and fixes every caller at once.
     @ViewBuilder
     func macDetailChrome<Actions: View>(
-        title: String,
-        subtitle: String? = nil,
+        title: @autoclosure () -> String,
+        subtitle: @autoclosure () -> String? = nil,
         onBack: @escaping () -> Void,
         @ViewBuilder actions: () -> Actions = { EmptyView() }
     ) -> some View {
         #if os(macOS)
         self
-            .navigationTitle(title)
-            .navigationSubtitle(subtitle ?? "")
+            .navigationTitle(title())
+            .navigationSubtitle(subtitle() ?? "")
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Button(action: onBack) {
