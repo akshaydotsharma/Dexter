@@ -67,6 +67,15 @@ struct MealPlanChatOverlay: View {
     @Binding var isOpen: Bool
     @FocusState private var inputFocused: Bool
 
+    /// True when the greeting stands in for the transcript (#606).
+    ///
+    /// An error keeps the transcript on screen even with no turns, which is a
+    /// real state: a send that fails before the first turn lands would otherwise
+    /// swallow the reason and show a greeting instead.
+    private var showsWelcome: Bool {
+        model.isEmpty && model.errorMessage == nil
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             #if os(macOS)
@@ -113,19 +122,26 @@ struct MealPlanChatOverlay: View {
                     .fill(Tokens.divider)
                     .frame(height: 0.5)
 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        MealPlanChatPanel(
-                            model: model,
-                            defaultDay: defaultDay,
-                            onAdd: onAdd
-                        )
-                        .padding(Space.lg)
+                if showsWelcome {
+                    // Centred in what is left of the screen, not placed at the
+                    // top of a scroll view that has nothing to scroll (#606).
+                    MealPlanChatWelcome()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            MealPlanChatPanel(
+                                model: model,
+                                defaultDay: defaultDay,
+                                onAdd: onAdd
+                            )
+                            .padding(Space.lg)
+                        }
+                        .onChange(of: model.turns.last?.text) { _, _ in scrollToNewest(proxy) }
+                        .onChange(of: model.turns.count) { _, _ in scrollToNewest(proxy) }
                     }
-                    .onChange(of: model.turns.last?.text) { _, _ in scrollToNewest(proxy) }
-                    .onChange(of: model.turns.count) { _, _ in scrollToNewest(proxy) }
+                    .frame(maxHeight: .infinity)
                 }
-                .frame(maxHeight: .infinity)
 
                 Rectangle()
                     .fill(Tokens.divider)
@@ -247,18 +263,24 @@ struct MealPlanChatOverlay: View {
                 .fill(Tokens.divider)
                 .frame(height: 0.5)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    MealPlanChatPanel(
-                        model: model,
-                        defaultDay: defaultDay,
-                        onAdd: onAdd
-                    )
-                    .padding(Space.lg)
+            if showsWelcome {
+                MealPlanChatWelcome(compact: true)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Space.xl)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        MealPlanChatPanel(
+                            model: model,
+                            defaultDay: defaultDay,
+                            onAdd: onAdd
+                        )
+                        .padding(Space.lg)
+                    }
+                    .frame(maxHeight: MealPlanChatMetrics.transcriptMaxHeight)
+                    .onChange(of: model.turns.last?.text) { _, _ in scrollToNewest(proxy) }
+                    .onChange(of: model.turns.count) { _, _ in scrollToNewest(proxy) }
                 }
-                .frame(maxHeight: MealPlanChatMetrics.transcriptMaxHeight)
-                .onChange(of: model.turns.last?.text) { _, _ in scrollToNewest(proxy) }
-                .onChange(of: model.turns.count) { _, _ in scrollToNewest(proxy) }
             }
 
             Rectangle()
