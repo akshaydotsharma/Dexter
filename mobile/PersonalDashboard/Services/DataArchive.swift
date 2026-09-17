@@ -575,6 +575,17 @@ enum DataArchive {
         let loggedAt: Date
         let mealType: String
         let mealDescription: String
+        /// #603. The dish in a few words, as the estimate named it.
+        ///
+        /// Optional because it is additive, like `containsAlcohol` below: an
+        /// archive written before this field existed carries no key, and the
+        /// row reads back with no short name, which is exactly what it had.
+        ///
+        /// A `var` with a default rather than a `let`, so every existing
+        /// construction site — the exporter, the fixtures in
+        /// `MealDataLayerTests` — keeps compiling and keeps meaning what it
+        /// meant. The same call `CheckedMealEstimate.groundingSources` makes.
+        var title: String? = nil
         let calories: Double
         let proteinG: Double
         let carbsG: Double

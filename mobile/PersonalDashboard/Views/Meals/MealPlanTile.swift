@@ -262,11 +262,17 @@ struct MealPlanBlock: View {
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-            Text(entry.title)
+            // Shortened, not the whole title (#603). A block is a row in a
+            // stack of four tiles, and a title typed as a sentence ("leftover
+            // chicken curry with the rice from Sunday, plus a salad") pushed
+            // the calorie pill onto its own line and the ingredients off the
+            // bottom. The full title is in the sheet this block opens.
+            Text(MealDisplayName.short(for: entry))
                 .font(.edBodyMedium)
                 .foregroundStyle(Tokens.ink)
                 .strikethrough(isSkipped, color: Tokens.mutedSoft)
                 .multilineTextAlignment(.leading)
+                .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: Space.sm)
             if let nutrients = entry.plannedNutrients {

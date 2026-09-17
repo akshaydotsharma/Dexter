@@ -297,7 +297,11 @@ struct MealPlanService {
         try addEntry(
             date: day,
             mealType: mealType ?? meal.mealTypeEnum,
-            title: meal.mealDescription,
+            // The short NAME, not the verbatim description (#603). A plan block
+            // is titled with what the dish is called, and a logged meal's text
+            // is a sentence about what was eaten. Copying the sentence across
+            // made a block whose title wrapped over three lines.
+            title: MealDisplayName.short(for: meal),
             // The dishes are NOT the ingredients: "chicken rice" is one dish
             // made of four things. A logged meal has no ingredient list — there
             // was nothing to shop for by the time it was logged — so the block

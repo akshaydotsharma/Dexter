@@ -92,6 +92,15 @@ struct EstimatedMeal: Decodable, Sendable, Equatable {
     /// it could not tell. A user-picked type always wins over this.
     let mealType: String?
 
+    /// The dish in a few words, for the row a list draws (#603).
+    ///
+    /// Asked for in the same call that estimates the meal, so it costs nothing:
+    /// the model has already read the description and broken it into dishes by
+    /// the time it answers. Nil when the model did not name it, which
+    /// `MealDisplayName` handles rather than treating as an error — a meal with
+    /// no short name is still a meal.
+    let title: String?
+
     let items: [EstimatedMealItem]
 
     /// True when the meal contains beer, wine, spirits or a mixed drink.
@@ -120,6 +129,7 @@ struct EstimatedMeal: Decodable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case mealType         = "meal_type"
+        case title
         case items
         case containsAlcohol  = "contains_alcohol"
         case confidence
@@ -130,6 +140,7 @@ struct EstimatedMeal: Decodable, Sendable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         mealType         = try c.decodeIfPresent(String.self, forKey: .mealType)
+        title            = try c.decodeIfPresent(String.self, forKey: .title)
         items            = try c.decodeIfPresent([EstimatedMealItem].self, forKey: .items) ?? []
         containsAlcohol  = try c.decodeIfPresent(Bool.self, forKey: .containsAlcohol)
         confidence       = try c.decodeIfPresent(String.self, forKey: .confidence)
@@ -140,6 +151,7 @@ struct EstimatedMeal: Decodable, Sendable, Equatable {
     /// Memberwise init for tests and for the needs-detail fallback.
     init(
         mealType: String? = nil,
+        title: String? = nil,
         items: [EstimatedMealItem] = [],
         containsAlcohol: Bool? = nil,
         confidence: String? = nil,
@@ -147,6 +159,7 @@ struct EstimatedMeal: Decodable, Sendable, Equatable {
         noFoodIdentified: Bool? = nil
     ) {
         self.mealType = mealType
+        self.title = title
         self.items = items
         self.containsAlcohol = containsAlcohol
         self.confidence = confidence
@@ -508,6 +521,7 @@ extension AnthropicClient {
         Schema:
         {
           "meal_type": "lunch",
+          "title": "Eggs on toast and a flat white",
           "items": [
             {
               "name": "Poached egg",

@@ -61,6 +61,11 @@ struct MealService {
         loggedAt: Date = Date(),
         mealType: MealType,
         mealDescription: String,
+        /// The dish in a few words (#603). Written on EVERY upsert, including
+        /// as nil: a re-estimate whose answer carried no short name must not
+        /// keep the previous answer's, or the row would be titled after a meal
+        /// it no longer describes. The same call `groundingSources` makes below.
+        title: String? = nil,
         nutrients: MealNutrients = .zero,
         items: [MealItemEntry] = [],
         confidence: Double = 0,
@@ -83,6 +88,7 @@ struct MealService {
             existing.loggedAt        = loggedAt
             existing.mealTypeEnum    = mealType
             existing.mealDescription = mealDescription
+            existing.title           = title?.trimmedNonEmptyMealField
             existing.nutrients       = nutrients
             existing.items           = items
             existing.confidence      = clampedConfidence
@@ -108,6 +114,7 @@ struct MealService {
             loggedAt: loggedAt,
             mealType: mealType.rawValue,
             mealDescription: mealDescription,
+            title: title?.trimmedNonEmptyMealField,
             confidence: clampedConfidence,
             source: source,
             needsDetail: needsDetail,

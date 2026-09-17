@@ -299,14 +299,19 @@ struct ActivityView: View {
         // four rows a day genuinely drowns the feed after a real week of use,
         // that is a later decision with evidence behind it.
         //
-        // The description is the title because a meal has no other name — it is
-        // what the user typed and what a re-estimate runs against — and the
-        // meal type takes the snippet slot below it.
+        // The meal's short name is the title and the meal type takes the
+        // snippet slot below it. It was the verbatim description until #603,
+        // which is the text a re-estimate runs against rather than a name.
         for meal in meals {
             out.append(ActivityItem(
                 id: UUID(uuidString: meal.clientUUID) ?? UUID(),
                 type: .meal,
-                title: meal.mealDescription,
+                // The short name, the same one the Meals list draws (#603).
+                // The feed is a list of rows a sentence per row makes
+                // unreadable, and it is the one surface where a meal sits
+                // beside a task and an expense, so it has the least room of
+                // any of them.
+                title: MealDisplayName.short(for: meal),
                 snippet: meal.mealTypeEnum.displayName,
                 parent: nil,
                 // When it was LOGGED, like expenses and itinerary rows, not

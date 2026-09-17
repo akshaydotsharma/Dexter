@@ -662,6 +662,7 @@ final class DataExportService {
             loggedAt: meal.loggedAt,
             mealType: meal.mealType,
             mealDescription: meal.mealDescription,
+            title: meal.title,
             calories: meal.calories,
             proteinG: meal.proteinG,
             carbsG: meal.carbsG,

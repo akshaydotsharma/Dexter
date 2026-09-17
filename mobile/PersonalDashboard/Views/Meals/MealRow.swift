@@ -186,10 +186,19 @@ struct MealRow: View {
                     // Rung 1: what the meal is, and what it cost.
                     HStack(alignment: .top, spacing: Space.md) {
                         VStack(alignment: .leading, spacing: Space.xs) {
-                            Text(meal.mealDescription)
+                            // The dish, not the sentence (#603). A day holds
+                            // five of these, and five verbatim descriptions
+                            // stacked is a paragraph with times down the side.
+                            // The whole text is one tap away, on the sheet this
+                            // row opens, which is where it can be read rather
+                            // than scanned. `MealDisplayName` decides what the
+                            // name is, so this row and the plan block and the
+                            // activity feed cannot name one meal three ways.
+                            Text(MealDisplayName.short(for: meal))
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
                                 .multilineTextAlignment(.leading)
+                                .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
 
                             Text(Self.timeFormatter.string(from: meal.loggedAt))
@@ -416,6 +425,9 @@ struct MealRow: View {
     /// by #560: the meal, its description and its calories, then what is wrong
     /// with it. The seven nutrients are custom content, not part of this
     /// sentence — see the note on `body`.
+    /// #603 deliberately did NOT shorten this. The name on screen exists
+    /// because five sentences do not scan; a reader hearing one row at a time
+    /// has no such problem, and the full description says more.
     var accessibilityText: String {
         var parts = [meal.mealTypeEnum.displayName, meal.mealDescription]
         if meal.needsDetail {

@@ -154,6 +154,10 @@ struct MealEstimationService {
             loggedAt: loggedAt,
             mealType: checked.mealType,
             mealDescription: description.trimmingCharacters(in: .whitespacesAndNewlines),
+            // #603. The name every list draws. Written on every save, including
+            // a re-estimate, so the short name and the numbers always describe
+            // the same answer.
+            title: checked.title,
             nutrients: checked.nutrients,
             items: checked.items,
             confidence: checked.confidence,
@@ -194,6 +198,8 @@ struct MealEstimationService {
             loggedAt: loggedAt,
             mealType: meal.mealTypeEnum,
             mealDescription: meal.mealDescription,
+            // #603. A repeat is the same dish, so it keeps the same name.
+            title: meal.title,
             nutrients: meal.nutrients,
             items: meal.items,
             confidence: meal.confidence,

@@ -852,6 +852,7 @@ final class DataImportService {
                     loggedAt: dto.loggedAt,
                     mealType: dto.mealType,
                     mealDescription: dto.mealDescription,
+                    title: dto.title,
                     calories: dto.calories,
                     proteinG: dto.proteinG,
                     carbsG: dto.carbsG,
