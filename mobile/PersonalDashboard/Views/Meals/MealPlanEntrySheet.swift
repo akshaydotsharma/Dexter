@@ -59,6 +59,25 @@ struct MealPlanEntrySheet: View {
     @State private var mealType: MealType = .breakfast
     @State private var day: Date = Date()
     @State private var title: String = ""
+    /// The dish in a few words, as the estimate named it (#603). Held rather
+    /// than shown: the sheet is where the user's own words live, and the short
+    /// name is what the TILE prints.
+    @State private var shortTitle: String?
+
+    /// The typed title the held `shortTitle` was made from.
+    ///
+    /// A name describes the words it came from, so editing the words has to
+    /// discard it. Comparing against this is how, rather than clearing the name
+    /// from an `onChange`: `load()` sets the title and the name in the same
+    /// pass, and an `onChange` fires AFTER that pass, so it would throw away the
+    /// stored name of every block the moment it was opened.
+    @State private var namedTitle: String = ""
+
+    /// The name to write: the held one while it still describes what is typed,
+    /// and nil once the words have moved on. The naming pass fills that nil in.
+    private var titleToWrite: String? {
+        trimmedTitle == namedTitle ? shortTitle : nil
+    }
     @State private var ingredients: [String] = []
     @State private var ingredientDraft: String = ""
     @State private var notes: String = ""
@@ -545,6 +564,8 @@ struct MealPlanEntrySheet: View {
             day = entry.deviceDay
             mealType = entry.mealTypeEnum
             title = entry.title
+            shortTitle = entry.shortTitle
+            namedTitle = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
             ingredients = entry.ingredients
             notes = entry.notes ?? ""
             recipe = entry.recipe ?? ""
@@ -588,6 +609,8 @@ struct MealPlanEntrySheet: View {
                 }
 
                 items = planned.estimate.items
+                shortTitle = planned.estimate.title
+                namedTitle = dish
                 ingredients = planned.ingredients
                 if let newRecipe = planned.recipe { recipe = newRecipe }
                 for nutrient in Nutrient.allCases {
@@ -621,6 +644,7 @@ struct MealPlanEntrySheet: View {
                     date: day,
                     mealType: mealType,
                     title: title,
+                    shortTitle: titleToWrite,
                     ingredients: ingredients,
                     notes: notes,
                     recipe: recipe,
@@ -638,6 +662,11 @@ struct MealPlanEntrySheet: View {
                     date: day,
                     mealType: mealType,
                     title: title,
+                    // `.some(...)`, so a title edited without a re-estimate
+                    // CLEARS the stored name rather than leaving the block
+                    // labelled after the words it used to hold. The naming pass
+                    // picks it up again (#603).
+                    shortTitle: .some(titleToWrite),
                     ingredients: ingredients,
                     // `.some(...)` all the way down: the sheet always knows the
                     // state of both text fields, so "leave it alone" is never

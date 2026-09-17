@@ -256,6 +256,17 @@ struct MealsView: View {
         // showing Meals when the focus is written.
         .onAppear { consumeFocus() }
         .onChange(of: router.focus) { _, _ in consumeFocus() }
+        // Name whatever is still unnamed, once per launch (#603).
+        //
+        // Here rather than at app start for two reasons. It is only ever read
+        // on this surface, so a user who never opens Meals never pays for it;
+        // and a `.task` on the section runs while the user is already reading
+        // the tab, so the one call it makes is never in front of anything.
+        //
+        // The guard is a static, not `@State`: the section is rebuilt on every
+        // tab switch and on every keystroke in the chat, and a per-view flag
+        // would fire the pass again each time the view was recreated.
+        .task { await Self.nameUnnamedMealsOnce() }
         // Picking a day is the popover's whole purpose, so it closes on the pick
         // rather than waiting to be dismissed. Also fires for the "Today" button
         // and the deep link, where closing an already-closed popover is a no-op.
@@ -571,6 +582,26 @@ struct MealsView: View {
     /// is stored here as a string, so the match is case-insensitive:
     /// `MealService` lowercases what it writes, but a row that arrived from a
     /// peer or a tool call need not have.
+    /// True once the naming pass has run in this process.
+    ///
+    /// `nonisolated(unsafe)` is read and written only from the main actor —
+    /// `nameUnnamedMealsOnce()` is `@MainActor` — so there is no race to
+    /// protect against, and an actor-isolated global would make a one-line
+    /// guard an async hop.
+    nonisolated(unsafe) private static var hasNamedMeals = false
+
+    /// Run the naming pass at most once per launch.
+    ///
+    /// Silent in both directions. Nothing on screen is waiting for it: the rows
+    /// already print their own shortened words, and a pass that fails leaves
+    /// them exactly as they are for the next launch to try again.
+    @MainActor
+    private static func nameUnnamedMealsOnce() async {
+        guard !hasNamedMeals else { return }
+        hasNamedMeals = true
+        await MealNamingService.default().runOnce()
+    }
+
     private func consumeFocus() {
         guard router.focus?.section == .meals, let focus = router.focus else { return }
         router.focus = nil

@@ -73,6 +73,27 @@ final class LocalMealPlanEntry {
     /// same dodge `LocalMeal.mealDescription` makes.
     var title: String
 
+    /// The dish in a few words, as the estimate named it (#603).
+    ///
+    /// `title` is what the USER typed, verbatim, and it is what the plan sheet
+    /// shows and edits. This is what a TILE prints, because a block is a row in
+    /// a stack of four tiles and a title typed as a sentence ("leftover chicken
+    /// curry with the rice from Sunday, plus a salad") pushes the calorie pill
+    /// onto its own line and the ingredients off the bottom.
+    ///
+    /// Nil means nobody has named it yet, which is every block typed and not
+    /// estimated, and every block written before this field existed.
+    /// `MealNamingService` fills those in one batched call, and until it does
+    /// `MealDisplayName` shortens the typed title instead. Read it through that
+    /// resolver, never directly, so one block is never named two ways.
+    ///
+    /// Additive and OPTIONAL, which is the safe kind of SwiftData migration: an
+    /// optional attribute gets NULL on every existing row and nothing else on
+    /// the model moves. The non-optional fields below carry `= false` / `= 0` on
+    /// their declarations for the opposite reason (#555); an optional has no
+    /// such gap.
+    var shortTitle: String?
+
     /// JSON-encoded `[String]`: the MAIN ingredients, not a shopping list.
     ///
     /// Optional, and nil means none were named, which is a real state — "eat
@@ -181,6 +202,7 @@ final class LocalMealPlanEntry {
         mealType: String,
         slotIndex: Int = 0,
         title: String,
+        shortTitle: String? = nil,
         ingredientsData: Data? = nil,
         notes: String? = nil,
         recipe: String? = nil,
@@ -206,6 +228,7 @@ final class LocalMealPlanEntry {
         self.mealType = mealType
         self.slotIndex = slotIndex
         self.title = title
+        self.shortTitle = shortTitle
         self.ingredientsData = ingredientsData
         self.notes = notes
         self.recipe = recipe

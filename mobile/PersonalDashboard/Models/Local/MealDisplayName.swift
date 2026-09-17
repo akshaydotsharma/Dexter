@@ -53,10 +53,17 @@ enum MealDisplayName {
 
     /// The name for one planned block.
     ///
-    /// The title IS the user's words here, so there is no stored short form and
-    /// no item fallback: shortening is the whole of the work. The plan sheet
-    /// shows the full title in its field, which is where the rest of it lives.
+    /// Same order as a logged meal's, one step shorter: the stored name, then
+    /// the typed title when it is already short, then a truncation. There is no
+    /// item fallback, because a block's items are a forecast of a dish the user
+    /// has already named in their own words.
+    ///
+    /// The plan sheet shows the full typed title in its field, which is where
+    /// the rest of it lives.
     static func short(for entry: LocalMealPlanEntry) -> String {
+        if let stored = entry.shortTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !stored.isEmpty {
+            return shorten(stored)
+        }
         let trimmed = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled" : shorten(trimmed)
     }

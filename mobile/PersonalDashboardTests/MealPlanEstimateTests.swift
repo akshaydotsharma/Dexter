@@ -60,13 +60,25 @@ final class MealPlanEstimateTests: XCTestCase {
         )
     }
 
-    /// `items` is the only required field. Ingredients and a recipe are answers
-    /// the model may honestly not have: a bought meal has nothing to shop for,
-    /// and an obvious method needs no steps.
-    func testOnlyTheItemsAreRequired() {
+    /// The name and the items are required and nothing else is (#603).
+    ///
+    /// Ingredients and a recipe are answers the model may honestly not have: a
+    /// bought meal has nothing to shop for, and an obvious method needs no
+    /// steps. A NAME is different — every block has one, because every block is
+    /// drawn in a list — so it is required rather than hoped for. A rule the
+    /// model keeps dropping belongs in the schema, not in prose.
+    func testTheNameAndTheItemsAreRequired() {
         let required = AnthropicClient.planMealTool.input_schema
             .objectValue?["required"]?.arrayValue?.compactMap(\.stringValue)
-        XCTAssertEqual(required, ["items"])
+        XCTAssertEqual(required, ["title", "items"])
+    }
+
+    /// And the name is a real property of the schema, not just a word in the
+    /// tool's description.
+    func testTheSchemaCarriesTheNameAsAProperty() {
+        let properties = AnthropicClient.planMealTool.input_schema
+            .objectValue?["properties"]?.objectValue
+        XCTAssertNotNil(properties?["title"])
     }
 
     /// No web search is declared. A plan's figures are a forecast that gets

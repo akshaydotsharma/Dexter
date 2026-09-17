@@ -217,6 +217,10 @@ struct MealPlanView: View {
                 date: day,
                 mealType: mealType,
                 title: suggestion.title,
+                // A suggestion's title IS a dish name — the advisor is held to
+                // the same rule the estimate is — so the block is named the
+                // moment it lands and never reaches the naming pass (#603).
+                shortTitle: suggestion.title,
                 ingredients: suggestion.ingredients,
                 notes: suggestion.prepNote,
                 status: .planned,

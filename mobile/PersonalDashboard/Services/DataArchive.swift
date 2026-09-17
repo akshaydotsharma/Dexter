@@ -667,6 +667,10 @@ enum DataArchive {
         let mealType: String
         let slotIndex: Int
         let title: String
+        /// #603. The dish in a few words. Optional because it is additive, like
+        /// `MealDTO.title`, and a `var` with a default so every existing
+        /// construction site keeps compiling.
+        var shortTitle: String? = nil
         let ingredientsData: Data?
         let notes: String?
         /// #599. Optional because a block need not have one, not because the

@@ -66,6 +66,11 @@ struct MealPlanService {
         date: Date,
         mealType: MealType,
         title: String,
+        /// The dish in a few words (#603). Written on every upsert, including as
+        /// nil: a re-estimate that came back without a name must not keep the
+        /// previous answer's, or the tile would be titled after a meal it no
+        /// longer describes.
+        shortTitle: String? = nil,
         ingredients: [String] = [],
         notes: String? = nil,
         recipe: String? = nil,
@@ -85,6 +90,7 @@ struct MealPlanService {
             existing.date          = anchoredDay
             existing.mealTypeEnum  = mealType
             existing.title         = cleanTitle
+            existing.shortTitle    = shortTitle?.trimmedNonEmptyPlanField
             existing.ingredients   = Self.cleaned(ingredients)
             existing.notes         = notes?.trimmedNonEmptyPlanField
             existing.recipe        = recipe?.trimmedNonEmptyPlanField
@@ -135,6 +141,11 @@ struct MealPlanService {
         date: Date? = nil,
         mealType: MealType? = nil,
         title: String? = nil,
+        /// Double optional, like the two text fields below it: nil leaves the
+        /// stored name alone, `.some(nil)` clears it. A title edit that is not
+        /// re-estimated arrives as `.some(nil)`, because the old name described
+        /// the old words (#603).
+        shortTitle: String?? = nil,
         ingredients: [String]? = nil,
         notes: String?? = nil,
         recipe: String?? = nil,
@@ -154,6 +165,9 @@ struct MealPlanService {
             let clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty else { throw MealPlanServiceError.emptyTitle }
             entry.title = clean
+        }
+        if let shortTitle {
+            entry.shortTitle = shortTitle?.trimmedNonEmptyPlanField
         }
         if let nutrients {
             if let nutrients, nutrients.hasNegativeValue { throw MealPlanServiceError.invalidNutrients }
@@ -297,11 +311,12 @@ struct MealPlanService {
         try addEntry(
             date: day,
             mealType: mealType ?? meal.mealTypeEnum,
-            // The short NAME, not the verbatim description (#603). A plan block
-            // is titled with what the dish is called, and a logged meal's text
-            // is a sentence about what was eaten. Copying the sentence across
-            // made a block whose title wrapped over three lines.
-            title: MealDisplayName.short(for: meal),
+            title: meal.mealDescription,
+            // Both halves travel (#603): the description is what the user said
+            // and stays the block's own title, and the meal's short NAME comes
+            // across as the name, so the block reads on a tile from the moment
+            // it is made rather than waiting for a naming pass.
+            shortTitle: MealDisplayName.short(for: meal),
             // The dishes are NOT the ingredients: "chicken rice" is one dish
             // made of four things. A logged meal has no ingredient list — there
             // was nothing to shop for by the time it was logged — so the block
