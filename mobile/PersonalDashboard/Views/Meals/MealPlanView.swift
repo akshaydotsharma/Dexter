@@ -94,10 +94,6 @@ struct MealPlanView: View {
             MealPlanChatOverlay(
                 model: chat,
                 defaultDay: selectedDay,
-                dayLabel: shortDayLabel,
-                hasTargets: MealTargets.inForce(on: selectedDay, among: allTargets) != nil,
-                hasHistory: !allMeals.isEmpty,
-                hasPlan: !selectedPlan.isEmpty,
                 onSend: send,
                 onAdd: add,
                 isOpen: $chatOpen
