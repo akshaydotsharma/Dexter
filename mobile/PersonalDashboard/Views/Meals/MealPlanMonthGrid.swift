@@ -98,23 +98,80 @@ struct MealPlanMonthGrid: View {
     }
 
     var body: some View {
-        reel
-            .frame(width: cardWidth, alignment: .center)
-            .clipped()
-            .mask(edgeFade)
-            .padding(.vertical, Space.md)
-            .frame(maxWidth: .infinity)
-            .background(widthReader)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-            .paperBorder(Tokens.border, radius: Radius.lg)
-            .overlay(alignment: .leading) {
-                stepButton(icon: "chevron.left", label: "Previous month") { step(-1) }
-                    .padding(.leading, Space.sm)
-            }
-            .overlay(alignment: .trailing) {
-                stepButton(icon: "chevron.right", label: "Next month") { step(1) }
-                    .padding(.trailing, Space.sm)
-            }
+        VStack(spacing: 0) {
+            reel
+                .frame(width: cardWidth, alignment: .center)
+                .clipped()
+                .mask(edgeFade)
+                .padding(.vertical, Space.md)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    stepButton(icon: "chevron.left", label: "Previous month") { step(-1) }
+                        .padding(.leading, Space.sm)
+                }
+                .overlay(alignment: .trailing) {
+                    stepButton(icon: "chevron.right", label: "Next month") { step(1) }
+                        .padding(.trailing, Space.sm)
+                }
+
+            todayRow
+        }
+        .frame(maxWidth: .infinity)
+        .background(widthReader)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.lg)
+    }
+
+    // MARK: - Today
+
+    /// "Today" as a named destination, not as a date to hunt for (#605).
+    ///
+    /// The reel steps forward without limit, which is the whole proposition of a
+    /// plan calendar and also the thing that makes getting back expensive: three
+    /// taps out and the current month is somewhere behind you with nothing
+    /// pointing at it. Every other day control in this app already carries this
+    /// shortcut — see `EdDayPickerCalendar.footer` — so the Plan calendar was
+    /// the one place a user had to page home by hand.
+    ///
+    /// It does TWO things, and both are needed. Selecting today without moving
+    /// the reel would leave the selection on a month that is not on screen, and
+    /// moving the reel without selecting would land you on the right month with
+    /// the wrong day still driving the tiles below.
+    ///
+    /// It is DISABLED when the calendar is already on today rather than removed,
+    /// so it can never be a control that does nothing and the card can never
+    /// change height under the tiles below it. Taking the row away moved the
+    /// whole day's plan up the screen every time today was selected, which is a
+    /// bigger interruption than a faded word in a corner.
+    private var todayRow: some View {
+        HStack(spacing: Space.sm) {
+            Spacer(minLength: 0)
+            Button("Today", action: goToToday)
+                .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                .disabled(isOnToday)
+                .opacity(isOnToday ? 0.35 : 1)
+                .accessibilityHint("Selects today and returns the calendar to this month")
+        }
+        .padding(.horizontal, Space.sm)
+        .padding(.bottom, Space.sm)
+    }
+
+    /// True when both halves of "today" already hold: the day is selected AND
+    /// the month it lives in is the one on screen. Either one being false is a
+    /// reason to offer the control.
+    private var isOnToday: Bool {
+        calendar.isDate(selectedDay, inSameDayAs: today)
+            && calendar.isDate(month, equalTo: today, toGranularity: .month)
+    }
+
+    private func goToToday() {
+        guard !isSliding else { return }
+        let start = calendar.startOfDay(for: today)
+        withAnimation(.easeOut(duration: 0.18)) {
+            selectedDay = start
+            month = MealPlanCalendar.monthStart(of: start, calendar: calendar)
+            position = 0
+        }
     }
 
     // MARK: - The reel
@@ -274,29 +331,14 @@ struct MealPlanMonthGrid: View {
                 selectedDay = calendar.startOfDay(for: day)
             }
         } label: {
-            VStack(spacing: 3) {
-                Text(Self.dayNumberFormatter.string(from: day))
-                    .font(reading.isEmpty ? .edFootnote : .edFootnoteStrong)
-                    .foregroundStyle(reading.isEmpty ? Tokens.mutedSoft : Tokens.ink)
-                    .monospacedDigit()
+            VStack(spacing: 2) {
+                numeralDisc(for: day, reading: reading, isSelected: isSelected, isToday: isToday)
                 Spacer(minLength: 0)
                 MealPlanDayPips(reading: reading)
             }
-            .padding(.vertical, Space.xs)
             .padding(.horizontal, 2)
             .frame(maxWidth: .infinity)
             .frame(height: MealPlanMetrics.monthCell)
-            .background {
-                RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-                    .fill(isSelected ? Tokens.surface2 : Color.clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
-                            .stroke(
-                                isSelected ? Tokens.borderStrong : (isToday ? Tokens.border : Color.clear),
-                                lineWidth: isSelected ? 1 : 0.5
-                            )
-                    )
-            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -304,6 +346,47 @@ struct MealPlanMonthGrid: View {
             "\(Self.spokenDayFormatter.string(from: day)), \(MealPlanDayPips.spokenSummary(reading))"
         )
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// The day's numeral, in the disc every Dexter calendar draws it in (#605).
+    ///
+    /// A filled circle in the section accent for the day you are on, a ring for
+    /// today, nothing otherwise — the grammar `EdDayPickerCalendar`,
+    /// `TripCalendarPopover` and `TaskCalendarPopover` already share. This grid
+    /// used to draw both states as bordered ROUNDED RECTANGLES over the whole
+    /// square, which made it the only calendar in the app where a day was not a
+    /// circle, and which left the selected day and today separated by a stroke
+    /// weight rather than by a shape.
+    ///
+    /// Selected and today are drawn as one OR the other, never both. Today
+    /// while selected is already the loudest thing on the grid; a ring around a
+    /// filled disc would add a second mark to say something the fill has said.
+    private func numeralDisc(
+        for day: Date,
+        reading: MealPlanReading,
+        isSelected: Bool,
+        isToday: Bool
+    ) -> some View {
+        ZStack {
+            if isSelected {
+                Circle().fill(Tokens.accent(for: .meals))
+            } else if isToday {
+                Circle().strokeBorder(Tokens.borderStrong, lineWidth: 1)
+            }
+            Text(Self.dayNumberFormatter.string(from: day))
+                .font(reading.isEmpty && !isSelected ? .edFootnote : .edFootnoteStrong)
+                .foregroundStyle(numeralInk(reading: reading, isSelected: isSelected))
+                .monospacedDigit()
+        }
+        .frame(width: MealPlanMetrics.dayDisc, height: MealPlanMetrics.dayDisc)
+    }
+
+    /// A day with blocks on it is drawn in ink and one without in `mutedSoft`,
+    /// which is the reading that survives the disc: the fill says where you are,
+    /// the weight says where the plan is.
+    private func numeralInk(reading: MealPlanReading, isSelected: Bool) -> Color {
+        if isSelected { return Tokens.accentFg }
+        return reading.isEmpty ? Tokens.mutedSoft : Tokens.ink
     }
 
     // MARK: - Actions

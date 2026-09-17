@@ -53,6 +53,19 @@ enum MealPlanMetrics {
     /// How long one step takes. Long enough to be seen as a direction, short
     /// enough that holding the chevron still steps at a usable rate.
     static let slideDuration: Double = 0.28
+    /// Diameter of the disc a day's numeral sits in (#605).
+    ///
+    /// The disc is what brings this calendar into the grammar
+    /// `EdDayPickerCalendar` set and every other Dexter calendar follows: a ring
+    /// for today, a filled circle for the day you are on. It replaced a bordered
+    /// square, which was this app's only calendar drawing a day as a rectangle.
+    ///
+    /// 22 rather than the day picker's 32, and the constraint is `monthCell`.
+    /// The square is 32 tall and has to hold the disc AND the four pips, which
+    /// is what this grid has that a plain day picker does not: 22 + 2 + 5 fits
+    /// in 32 with a point to spare. Raising the square to fit a bigger disc is
+    /// the one move that is not available — see the note on `monthCell`.
+    static let dayDisc: CGFloat = 22
     /// Diameter of one meal-type pip.
     static let pip: CGFloat = 5
     /// Gap between pips.
