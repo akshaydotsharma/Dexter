@@ -201,10 +201,6 @@ struct MealRow: View {
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
 
-                            Text(Self.timeFormatter.string(from: meal.loggedAt))
-                                .font(.edCaption)
-                                .foregroundStyle(Tokens.muted)
-                                .monospacedDigit()
                         }
 
                         Spacer(minLength: Space.sm)
@@ -245,24 +241,25 @@ struct MealRow: View {
                         breakdownRow
                     }
 
+                    // The reason the row is flagged, and the only prose left on
+                    // it (#609).
+                    //
+                    // The assumptions note used to share this slot when there
+                    // was no warning to show. It is a paragraph — what the
+                    // estimate assumed about portions, oil, a default serving —
+                    // and on a row it could only ever be one truncated line,
+                    // which is a sentence nobody can finish reading and the
+                    // widest thing on the card. It is in full on the sheet this
+                    // row opens, which is where a reader goes to argue with an
+                    // estimate.
+                    //
+                    // A WARNING is not a footnote and stays: it is the condition
+                    // the figures above are read under.
                     if let reason = meal.suspectReason {
-                        // The reason the row is flagged, so it sits a rung above
-                        // the assumptions note that shares this slot.
                         Text(reason)
                             .font(.edFootnote)
                             .foregroundStyle(Tokens.warning)
                             .fixedSize(horizontal: false, vertical: true)
-                    } else if let note = meal.assumptionsNote {
-                        // One muted line, and only when there is no warning to
-                        // show in the same slot. This is where a clamped value
-                        // is surfaced: a repaired meal is NOT suspect, so it has
-                        // no `suspectReason`, and the repair sentence is written
-                        // to the front of this note for exactly that reason.
-                        Text(note)
-                            .font(.edCaption)
-                            .foregroundStyle(Tokens.muted)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
                     }
                 }
             }
@@ -328,25 +325,28 @@ struct MealRow: View {
         .padding(.top, 2)
     }
 
-    /// One group on one line, pills at their natural width, left aligned.
+    /// One group on one line, the pills sharing it evenly (#610).
     ///
-    /// NOT the day card's even `fillsWidth` split, and the reason is measured:
-    /// an even three-across share of this column is 103 pt and the "Saturated
-    /// fat" pill wants 123 pt, so the even grid truncates its label to
-    /// "SATURATED F…" at 390 pt. At natural width the three come to 274 pt of
-    /// 324 pt and the four macros to 258 pt, so both lines have room to spare.
-    /// The grouping is carried by the two lines themselves, which is what it
-    /// was ever carried by; an even grid was only ever the tidier way to draw
-    /// it. `testEveryPillFitsItsLineAtPhoneWidth` pins both sums.
+    /// They were at their natural width from #561, which left a ragged right
+    /// edge on both lines and three different widths inside one group. That was
+    /// a workaround for a label: an even three-across share of this column is
+    /// 103pt and a pill labelled "Saturated fat" wants 123pt, so the even grid
+    /// truncated it at 390pt.
+    ///
+    /// `Nutrient.shortLabel` prints "Sat fat" instead, which fits the even
+    /// share, so the grid is available again. Four across and three across are
+    /// different widths BETWEEN the two lines, and that is the grouping doing
+    /// its job: the macros and the ceilings are two readings, not seven numbers
+    /// in a heap. `testEveryPillFitsItsLineAtPhoneWidth` pins the measurement.
     private func pillLine(_ group: [Nutrient]) -> some View {
         HStack(spacing: Space.sm) {
             ForEach(group) { nutrient in
                 MealStatPill(
-                    label: nutrient.displayName,
-                    value: Self.reading(nutrient, of: meal)
+                    label: nutrient.shortLabel,
+                    value: Self.reading(nutrient, of: meal),
+                    fillsWidth: true
                 )
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -443,6 +443,10 @@ struct MealRow: View {
     /// Times read in the device zone: `loggedAt` is a true instant, unlike the
     /// meal's day, which is a UTC anchor and must never reach a device-local
     /// formatter (#506).
+    ///
+    /// Kept here, and read by `MealDetailSheet` alone since #609 took the time
+    /// off the row. It stays on this type because the rule above is about how
+    /// a MEAL's time is formatted, wherever it is drawn.
     static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .none
