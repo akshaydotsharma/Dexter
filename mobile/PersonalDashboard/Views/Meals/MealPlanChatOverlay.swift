@@ -20,9 +20,22 @@ enum MealPlanChatMetrics {
     static let transcriptMaxHeight: CGFloat = 420
 }
 
-/// The plan chat, as a floating button and a local overlay (#599).
+/// The plan chat: one button, two shapes (#599).
 ///
-/// ### Why this shape
+/// ### The phone gets a whole screen, the Mac gets a corner
+///
+/// They are not the same problem. A Mac window has room for a conversation
+/// beside the plan, and keeping the plan visible while you talk about it is the
+/// reason the panel is local. A phone has no beside: the same panel there is a
+/// 380pt box with a transcript squeezed into a few lines, which is a chat you
+/// fight rather than one you use.
+///
+/// So on iOS the button opens a full-screen conversation that behaves like every
+/// other chat the user owns — a title, an X, the transcript, the field at the
+/// bottom — and on macOS it stays the local overlay. Both run the same turns,
+/// the same input and the same add path; only the container differs.
+///
+/// ### Why the old shape
 ///
 /// The chat is a detour with a destination, and the destination is the plan
 /// underneath it. A sheet hid the plan; an inline panel pushed it below the
@@ -47,10 +60,6 @@ struct MealPlanChatOverlay: View {
 
     /// The day a suggestion's picker starts on.
     let defaultDay: Date
-    let dayLabel: String
-    let hasTargets: Bool
-    let hasHistory: Bool
-    let hasPlan: Bool
 
     var onSend: () -> Void
     var onAdd: (MealPlanSuggestion, Date, MealType) -> Void
@@ -60,6 +69,7 @@ struct MealPlanChatOverlay: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
+            #if os(macOS)
             if isOpen {
                 scrim
                 panel
@@ -71,11 +81,98 @@ struct MealPlanChatOverlay: View {
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            #endif
             floatingButton
                 .padding(.trailing, Space.lg)
                 .padding(.bottom, BottomTabBarMetrics.fabBottomInset)
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $isOpen) {
+            fullScreenChat
+        }
+        #endif
     }
+
+    #if os(iOS)
+
+    // MARK: - The phone's chat
+
+    /// A conversation with nothing else on the screen.
+    ///
+    /// The transcript scrolls, the field is pinned under it and rises with the
+    /// keyboard, and the way out is the X in the title row — the arrangement
+    /// every chat app has settled on, which is worth more here than being
+    /// different.
+    private var fullScreenChat: some View {
+        ZStack {
+            Tokens.paper.canvasIgnoresSafeArea()
+
+            VStack(spacing: 0) {
+                fullScreenHeader
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        MealPlanChatPanel(
+                            model: model,
+                            defaultDay: defaultDay,
+                            onAdd: onAdd
+                        )
+                        .padding(Space.lg)
+                    }
+                    .onChange(of: model.turns.last?.text) { _, _ in scrollToNewest(proxy) }
+                    .onChange(of: model.turns.count) { _, _ in scrollToNewest(proxy) }
+                }
+                .frame(maxHeight: .infinity)
+
+                Rectangle()
+                    .fill(Tokens.divider)
+                    .frame(height: 0.5)
+                inputRow
+            }
+        }
+        .onAppear { inputFocused = true }
+    }
+
+    private var fullScreenHeader: some View {
+        HStack(spacing: Space.sm) {
+            Text("What should I eat?")
+                .font(.edBodyMedium)
+                .foregroundStyle(Tokens.ink)
+                .accessibilityAddTraits(.isHeader)
+
+            Spacer(minLength: Space.sm)
+
+            if !model.isEmpty {
+                Button { model.reset() } label: {
+                    Text("Clear").font(.edFootnote)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Tokens.muted)
+                .accessibilityLabel("Clear this conversation")
+            }
+
+            Button {
+                inputFocused = false
+                isOpen = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Tokens.inkSoft)
+                    .frame(width: 30, height: 30)
+                    .background(Tokens.surface2, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close the meal chat")
+        }
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.md)
+    }
+
+    #endif
 
     // MARK: - The button
 
@@ -114,6 +211,8 @@ struct MealPlanChatOverlay: View {
         .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
     }
 
+    #if os(macOS)
+
     // MARK: - The scrim
 
     private var scrim: some View {
@@ -140,11 +239,6 @@ struct MealPlanChatOverlay: View {
                     MealPlanChatPanel(
                         model: model,
                         defaultDay: defaultDay,
-                        dayLabel: dayLabel,
-                        hasTargets: hasTargets,
-                        hasHistory: hasHistory,
-                        hasPlan: hasPlan,
-                        onSend: onSend,
                         onAdd: onAdd
                     )
                     .padding(Space.lg)
@@ -165,6 +259,8 @@ struct MealPlanChatOverlay: View {
         .shadowLg()
     }
 
+    #endif
+
     private func scrollToNewest(_ proxy: ScrollViewProxy) {
         guard let id = model.turns.last?.id else { return }
         withAnimation(.easeOut(duration: 0.2)) {
@@ -172,6 +268,7 @@ struct MealPlanChatOverlay: View {
         }
     }
 
+    #if os(macOS)
     private var header: some View {
         HStack(spacing: Space.sm) {
             Image(systemName: "sparkles")
@@ -194,6 +291,7 @@ struct MealPlanChatOverlay: View {
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
     }
+    #endif
 
     private var inputRow: some View {
         HStack(spacing: Space.sm) {

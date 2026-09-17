@@ -21,9 +21,12 @@ import SwiftUI
 ///
 /// ### Why it has no scroll view of its own
 ///
-/// The overlay owns the scrolling, so this is a plain column. The turns and the
-/// opener are the same in either container, which is why this view survived both
-/// moves unchanged.
+/// The container owns the scrolling, so this is a plain column of turns. That is
+/// all it is now: the explainer and the three example prompts came off on
+/// request, because a chat that opens onto a paragraph about itself is a chat
+/// you have to get past before you can type. An empty conversation is empty, the
+/// caret is already in the field, and the first thing on screen is your own
+/// question.
 ///
 /// ### It writes nothing by itself
 ///
@@ -37,27 +40,11 @@ struct MealPlanChatPanel: View {
     /// The day a suggestion's picker starts on: whatever the calendar is
     /// showing. The card can be pointed anywhere; this is only the default.
     let defaultDay: Date
-    /// How the opener names that day: "today", "tomorrow", "Thursday 18 Sep".
-    let dayLabel: String
-    /// True when targets are set, for the opener's one-line summary.
-    let hasTargets: Bool
-    /// True when anything at all has been logged, same reason.
-    let hasHistory: Bool
-    /// True when the day in view already holds blocks.
-    let hasPlan: Bool
-
-    var onSend: () -> Void
     var onAdd: (MealPlanSuggestion, Date, MealType) -> Void
-
-    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            if model.isEmpty {
-                opener
-            } else {
-                transcript
-            }
+            transcript
             if let error = model.errorMessage {
                 Text(error)
                     .font(.edFootnote)
@@ -67,53 +54,6 @@ struct MealPlanChatPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    // MARK: - The empty state
-
-    /// What the chat knows, said plainly, and three ways in.
-    ///
-    /// Stating the context is not decoration. A chat that silently knows your
-    /// targets and your last fortnight reads as a generic assistant until it
-    /// proves otherwise, and the first question is the one most likely to be
-    /// wasted asking something it could already answer.
-    private var opener: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            Text(openerBody)
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.muted)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ChipFlowLayout(spacing: Space.sm) {
-                ForEach(Self.examples, id: \.self) { example in
-                    ExampleChip(text: example) {
-                        model.draftInput = example
-                        onSend()
-                    }
-                }
-            }
-        }
-    }
-
-    private var openerBody: String {
-        var parts: [String] = []
-        parts.append(hasTargets
-            ? "Knows your daily targets"
-            : "You have not set targets yet, so suggestions go on taste and habit")
-        parts.append(hasHistory
-            ? "and what you logged over the last fortnight."
-            : "and nothing is logged yet, so say what you usually eat.")
-        parts.append(hasPlan
-            ? "It can see what is already planned for \(dayLabel)."
-            : "Nothing is planned for \(dayLabel) yet.")
-        parts.append("Nothing is added until you tap Add.")
-        return parts.joined(separator: " ")
-    }
-
-    private static let examples = [
-        "What should I have for dinner?",
-        "Something high in protein and quick",
-        "Plan the rest of this day"
-    ]
 
     // MARK: - Turns
 
