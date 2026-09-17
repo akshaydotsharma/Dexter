@@ -170,6 +170,29 @@ enum Tokens {
     /// sidebar. A reader picks a row out by its colour family long before they
     /// could measure a hue, and three greens is a family nobody can index.
     static let accentMeals     = Color.paper(0x0C5AA8, 0x60ABF6)
+
+    /// The Plan tab's floating chat button (#604).
+    ///
+    /// A white disc in BOTH themes, with the light-mode azure as its glyph.
+    /// Deliberately not an adaptive `Color.paper(light, dark)` pair, for the
+    /// same reason `ticketStub` is not one: this is a physical object floating
+    /// over the plan rather than a surface belonging to it, and an object that
+    /// changed colour with the theme would stop reading as the same button.
+    ///
+    /// ### Why it spends no hue
+    ///
+    /// It was drawn in `accentMeals`, which is also the deep-link pulse, so it
+    /// neither separated from the surface nor meant anything. The obvious
+    /// replacements are worse: orange is next door to the `warning` amber this
+    /// section spends on "under target", and violet is already the Lunch and
+    /// Dinner identity on the same screen. White claims none of the palette and
+    /// cannot be read as a flag.
+    ///
+    /// The glyph takes the LIGHT azure in both themes because the disc is white
+    /// in both: `accentMeals`'s dark value is a pastel picked to sit on
+    /// near-black, and it has nothing like enough contrast on white.
+    static let mealChatFab     = Color(hex: 0xFFFFFF)
+    static let mealChatFabInk  = Color(hex: 0x0C5AA8)
     /// The Vision Board's canvas lattice, at rest and while something is being
     /// moved or resized (#446, revised in review 2026-08-06).
     ///

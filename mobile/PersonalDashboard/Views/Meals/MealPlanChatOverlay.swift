@@ -181,13 +181,22 @@ struct MealPlanChatOverlay: View {
     /// One control in one place for both directions. A separate X inside the
     /// panel would put the way out somewhere different from the way in, and the
     /// glyph swap says which state you are in without a label.
-    /// The chat button, in the Meals accent with a speech bubble.
+    /// The chat button: a white disc carrying a speech bubble (#604).
     ///
     /// It was a dark circle carrying `sparkles`, which on a phone put it a
     /// centimetre from the capture button in the tab bar — same shape, same
     /// near-black fill, same glyph — so the two read as one control duplicated.
-    /// The bubble says conversation rather than AI, and the accent separates it
-    /// from the app-wide button without leaving the palette.
+    /// The bubble says conversation rather than AI.
+    ///
+    /// It then spent a release in `accentMeals`, which is also the deep-link
+    /// pulse colour, and it did not separate from the plan it floats over. The
+    /// white disc does, in both themes, and it claims none of the section's
+    /// palette. See `Tokens.mealChatFab` for why white rather than orange or
+    /// violet, and why the disc does not follow the theme.
+    ///
+    /// The ground does NOT change when the panel opens. Only the glyph does. A
+    /// control that changed colour on being pressed would read as a second
+    /// control appearing where the first one was.
     private var floatingButton: some View {
         Button {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
@@ -197,12 +206,16 @@ struct MealPlanChatOverlay: View {
         } label: {
             Image(systemName: isOpen ? "xmark" : "bubble.left.and.text.bubble.right.fill")
                 .font(.system(size: isOpen ? 16 : 18, weight: .semibold))
-                .foregroundStyle(Tokens.accentFg)
+                .foregroundStyle(Tokens.mealChatFabInk)
                 .frame(
                     width: MealPlanChatMetrics.buttonSize,
                     height: MealPlanChatMetrics.buttonSize
                 )
-                .background(Tokens.accent(for: .meals), in: Circle())
+                .background(Tokens.mealChatFab, in: Circle())
+                // The hairline is what keeps a white disc from dissolving into
+                // the near-white card it can end up sitting over in light mode.
+                // The shadow alone does that job on paper and not on a card.
+                .overlay(Circle().strokeBorder(Tokens.borderStrong, lineWidth: 0.5))
                 .shadowMd()
                 .contentShape(Circle())
         }
