@@ -7,16 +7,22 @@ import Foundation
 /// reached yet would look identical, so the day panel could never say how much
 /// of the day is still ahead of you.
 ///
-/// ### Why `eaten` is not "logged"
+/// ### `eaten` DOES write a meal now (#612)
 ///
-/// Ticking a block says you ate what you planned. It does NOT write a
-/// `LocalMeal`, and it must not be read as if it had. The plan records intent
-/// and the log records nutrition, and the two answer different questions: "did
-/// I do what I said" against "what did that cost me". Collapsing them would put
-/// a meal in the day's totals that nobody estimated.
+/// It did not until #612, and the reason it did not was sound as far as it
+/// went: the plan records intent and the log records nutrition, so collapsing
+/// them would put a meal in the day's totals that nobody estimated.
 ///
-/// Logging a planned meal for real is the composer's job on the Tracking tab,
-/// and it stays that way.
+/// What that missed is that somebody DID estimate it. A block carries the eight
+/// totals, the per-dish breakdown, the day and the meal type, all worked out
+/// when it was written. Re-typing it into the composer buys a second estimate
+/// of the same dish, at the price of a call, a few seconds, and two sets of
+/// numbers for one dinner that can disagree with each other.
+///
+/// So ticking a block copies it into a `LocalMeal` and records which one on
+/// `LocalMealPlanEntry.loggedMealUUID`. The two tables stay separate and the
+/// block stays where it is — see `MealPlanService.logAsMeal`. Unticking deletes
+/// the meal the block itself wrote, and nothing else.
 enum MealPlanStatus: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     /// Written down, not yet resolved. Every block starts here.
     case planned

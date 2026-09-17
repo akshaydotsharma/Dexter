@@ -558,6 +558,7 @@ enum ToolDefinitions {
     /// `MealEstimateGuards.check`. Nothing about plausibility, portions or
     /// bounds is judged here or in the prose below — the guards own all of it.
     private static let mealEstimateProperties: [String: AnthropicJSONValue] = [
+        "title": string("The meal in three to six words, as a dish is named on a menu (\"Eggs on toast and a flat white\"). This is what a LIST shows, so it must read as a name and not as a sentence: no quantities, no \"I had\", no trailing full stop, never longer than about 40 characters and never a copy of the description."),
         "items": arrayOf(
             MealToolSchema.itemSchema,
             description: "One object per DISTINCT dish or drink in the description, with its assumed portion and its own eight nutrient values. Empty array ONLY when no_food_identified is true."
@@ -604,7 +605,7 @@ enum ToolDefinitions {
                 "description": string("What the user said they ate, VERBATIM."),
                 "date": string("ISO 8601 day the meal was eaten (e.g. 2026-09-14). Use today's date when the user did not say. Never a future date.")
             ]) { current, _ in current },
-            required: ["id", "meal_type", "description", "date", "items", "contains_alcohol", "confidence", "assumptions"]
+            required: ["id", "meal_type", "description", "date", "title", "items", "contains_alcohol", "confidence", "assumptions"]
         )
     )
 
@@ -635,7 +636,7 @@ enum ToolDefinitions {
                 "meal_type": string("One of \(MealToolSchema.mealTypeList). Set when the correction changes it; otherwise repeat the meal's current type."),
                 "date": string("OPTIONAL ISO 8601 day, only when the correction MOVES the meal to another day. Use an empty string to leave the day alone.")
             ]) { current, _ in current },
-            required: ["id", "description", "items", "contains_alcohol", "confidence", "assumptions"]
+            required: ["id", "description", "title", "items", "contains_alcohol", "confidence", "assumptions"]
         )
     )
 

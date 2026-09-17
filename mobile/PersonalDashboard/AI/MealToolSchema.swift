@@ -35,7 +35,33 @@ enum MealToolSchema {
     ///
     /// Verbatim from #543's prompt. Do not paraphrase it into a tool
     /// description: paraphrasing is how the two paths start to disagree.
+    /// What a meal is CALLED, stated once (#603).
+    ///
+    /// Held apart from `estimateRules` because three paths need the rule and
+    /// only two of them are estimating. It reaches the composer's prompt and
+    /// both meal tools through `estimateRules` below, the plan tool through its
+    /// own schema, and `AnthropicClient.nameMeals` — which names meals already
+    /// stored and asks for nothing else — directly.
+    ///
+    /// The whole point of the field is that a LIST cannot print a sentence. A
+    /// day holds five meals and a description is what the user said, so five of
+    /// them stacked is a paragraph with times down the side. Shortening the
+    /// sentence on the device instead is the fallback, not the answer: it cuts
+    /// at a word boundary wherever the character count runs out, which on "two
+    /// eggs on toast with butter and…" hides the half that says what the meal
+    /// was.
+    static let titleRule = """
+    - "title": the meal in three to six words, as a dish is named on a menu
+      ("Eggs on toast and a flat white", "Chicken rice", "Dal, rice and
+      salad"). This is what the app prints in a LIST, so it must read as a
+      name and not as a sentence: no quantities, no brand of butter, no "I
+      had", no trailing full stop. Never longer than about 40 characters, and
+      never a copy of the description. Name what was eaten even when the
+      portions are a guess.
+    """
+
     static let estimateRules = """
+    \(titleRule)
     - "items": one object per DISTINCT dish or drink in the description.
       Break the meal down rather than returning one lumped row: "chicken rice
       and a teh tarik" is two items, not one. A decomposed estimate is more
@@ -241,8 +267,12 @@ enum MealToolSchema {
         let assumptions = input["assumptions"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let title = input["title"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
         return EstimatedMeal(
             mealType: input["meal_type"]?.stringValue,
+            title: (title?.isEmpty ?? true) ? nil : title,
             items: items,
             containsAlcohol: boolValue(input["contains_alcohol"]),
             confidence: input["confidence"]?.stringValue,

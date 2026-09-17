@@ -125,6 +125,14 @@ enum MealGuardFailure: Equatable, Sendable {
 struct CheckedMealEstimate: Equatable, Sendable {
     var mealType: MealType
 
+    /// The dish in a few words, as the model named it (#603), or nil when it
+    /// named nothing. Carried through untouched: there is nothing here for a
+    /// guard to check, because a short name makes no numeric claim.
+    ///
+    /// Defaulted, so every existing construction site and every test fixture
+    /// keeps compiling and keeps meaning what it meant.
+    var title: String? = nil
+
     /// Items after clamping. Nutrient totals are the sum of these, always.
     var items: [MealItemEntry]
 
@@ -285,6 +293,11 @@ enum MealEstimateGuards {
         let containsAlcohol = estimate.containsAlcohol ?? false
         let note = estimate.assumptions?.trimmingCharacters(in: .whitespacesAndNewlines)
         let assumptions = (note?.isEmpty ?? true) ? nil : note
+        // Trimmed and emptied to nil here rather than at the two call sites, so
+        // "the model returned a blank title" and "the model returned no title"
+        // are the same state everywhere downstream.
+        let rawTitle = estimate.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = (rawTitle?.isEmpty ?? true) ? nil : rawTitle
 
         // The model could not name a food. Nothing to check: there are no
         // numbers. Save the description with zero nutrients and ask for detail.
@@ -295,6 +308,7 @@ enum MealEstimateGuards {
         if estimate.noFoodIdentified == true || estimate.items.isEmpty {
             return CheckedMealEstimate(
                 mealType: mealType,
+                title: title,
                 items: [],
                 nutrients: .zero,
                 confidence: 0,
@@ -361,6 +375,7 @@ enum MealEstimateGuards {
 
         return CheckedMealEstimate(
             mealType: mealType,
+            title: title,
             items: items,
             nutrients: totals,
             confidence: estimate.numericConfidence,

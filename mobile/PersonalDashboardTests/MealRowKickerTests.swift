@@ -62,13 +62,41 @@ final class MealRowKickerTests: XCTestCase {
 
     /// A description short enough for one line stays on one line under every
     /// type, so the widest word cannot push the shortest description over.
+    ///
+    /// Measured on the NAME rather than on the row, and that is a change #609
+    /// forced. The row used to grow by a body line when the name wrapped,
+    /// because the name column was the tallest thing in its `HStack`. With the
+    /// time gone the column is at most two lines of `.edBody` (39pt), and the
+    /// calorie block beside it — a heading and its eyebrow — is 44pt, so the
+    /// row's height is floored by the calories and no longer answers this
+    /// question at all. Asserting on the row would pass whatever the name did.
     func testAShortDescriptionStaysOnOneLineUnderEveryType() throws {
+        for type in MealType.allCases {
+            let short = try nameHeight(of: meal("Coffee", type: type))
+            let twoLines = try nameHeight(of: meal("Two eggs on sourdough with avocado", type: type))
+            XCTAssertGreaterThan(
+                twoLines - short, 10,
+                "\"Coffee\" wrapped under \(type.displayName)"
+            )
+            XCTAssertLessThan(twoLines - short, 40)
+        }
+    }
+
+    /// And the row is no taller for the wrap, which is the floor described
+    /// above stated as its own assertion rather than left implied.
+    func testTheRowHeightSurvivesATwoLineName() throws {
         let short = try height(of: meal("Coffee", type: .snack))
         let twoLines = try height(of: meal("Two eggs on sourdough with avocado", type: .snack))
-        // The two-line case is taller by about one body line. If "Coffee" had
-        // wrapped, the two would be equal.
-        XCTAssertGreaterThan(twoLines - short, 10)
-        XCTAssertLessThan(twoLines - short, 40)
+        XCTAssertEqual(twoLines, short, accuracy: 4)
+    }
+
+    /// The name as the row draws it, at the width the name column gets.
+    private func nameHeight(of meal: LocalMeal) throws -> CGFloat {
+        let name = Text(MealDisplayName.short(for: meal))
+            .font(.edBody)
+            .lineLimit(2)
+            .frame(width: 200, alignment: .leading)
+        return try XCTUnwrap(ImageRenderer(content: name).uiImage?.size.height)
     }
 
     // MARK: - The vertical rhythm

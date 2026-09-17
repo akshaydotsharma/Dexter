@@ -152,6 +152,16 @@ extension AnthropicClient {
         input_schema: .object([
             "type": .string("object"),
             "properties": .object([
+                // #603. The plan needs a name for the same reason the log does:
+                // a block is a row in a stack of tiles, and the title the user
+                // typed can be a sentence. The rule is `MealToolSchema.titleRule`,
+                // which the tool description already carries through
+                // `estimateRules`, so this is the schema key and not a second
+                // statement of the rule.
+                "title": .object([
+                    "type": .string("string"),
+                    "description": .string("The meal in three to six words, as a dish is named on a menu. Never a copy of what the user typed and never a sentence.")
+                ]),
                 "items": .object([
                     "type": .string("array"),
                     "items": MealToolSchema.itemSchema,
@@ -184,7 +194,7 @@ extension AnthropicClient {
                     "description": .string("True, with an EMPTY items array, when the title names nothing edible. Do not invent a meal to fill the schema.")
                 ])
             ]),
-            "required": .array([.string("items")])
+            "required": .array([.string("title"), .string("items")])
         ])
     )
 

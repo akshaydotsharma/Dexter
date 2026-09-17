@@ -62,6 +62,25 @@ enum Nutrient: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
         }
     }
 
+    /// The name for a narrow box (#610).
+    ///
+    /// Identical to `displayName` for seven of the eight. "Saturated fat" is
+    /// the one that does not fit: a pill sized to it is 123pt, and an even
+    /// three-across share of a phone-width card is 103pt, so for two releases
+    /// the Watch row was drawn at RAGGED widths to stop the label truncating
+    /// (#561). That treated the layout as the problem when the label was.
+    ///
+    /// "Sat fat" is how a nutrition panel abbreviates it, it fits an even
+    /// share at every width the app runs at, and the full name is still what
+    /// `displayName` gives every surface with room for it — including the
+    /// spoken label, so a reader never hears the abbreviation.
+    var shortLabel: String {
+        switch self {
+        case .saturatedFat: return "Sat fat"
+        default:            return displayName
+        }
+    }
+
     /// The unit every stored value for this nutrient is in. Storage carries a
     /// bare `Double`, so this is the only place that says what the number
     /// means: grams for the macros, milligrams for sodium, kcal for energy.

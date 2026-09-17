@@ -271,6 +271,12 @@ targets:
       - path: PersonalDashboard/AI/MealPlanSuggestion.swift
       - path: PersonalDashboard/AI/MealPlanContext.swift
       - path: PersonalDashboard/AI/MealPlanAdvisor.swift
+      # Naming stored meals (#603). The batched call and the pass that runs it.
+      # `MealDisplayName` rides the Models glob at the top of this list; these
+      # two do not, and without them the Mac draws the truncated fallback
+      # forever while the phone shows real dish names.
+      - path: PersonalDashboard/AI/AnthropicClient+NameMeals.swift
+      - path: PersonalDashboard/Services/MealNamingService.swift
       - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift

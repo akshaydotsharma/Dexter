@@ -245,25 +245,22 @@ struct MealDayCard: View {
         return summary.totals.calories > calorieTarget ? Tokens.danger : Tokens.muted
     }
 
-    /// The three ceilings.
+    /// The three ceilings, sharing the line evenly (#610).
     ///
-    /// ### Why the pills are not an even three-across split
+    /// ### Why this went ragged and came back
     ///
-    /// They were, and it truncated "Saturated fat" to "SATURATE…" on every
-    /// iPhone, in both the targets-set and the no-targets state, from #543
-    /// until #561. The numbers: at a 390 pt screen the card is 358 pt, its own
-    /// padding leaves 326 pt inside, and an even split of that between three
-    /// pills is 103.33 pt each. The "Saturated fat" pill needs 123 pt. For the
-    /// even grid to fit, the screen would have to be 449 pt, and no iPhone is.
+    /// An even three-across split truncated "Saturated fat" to "SATURATE…" on
+    /// every iPhone from #543 until #561. The numbers: at a 390pt screen the
+    /// card is 358pt, its own padding leaves 326pt inside, an even split is
+    /// 103.33pt each, and the "Saturated fat" pill needs 123pt. #561 fixed the
+    /// truncation by letting the pills take their natural width, which fixed
+    /// the symptom and left three boxes at three widths under one eyebrow.
     ///
-    /// The variant was not the cause and is not the cure: a neutral pill and a
-    /// verdict pill both measure 123 x 48 pt, because the variant changes four
-    /// colours and nothing else while both the label and the value keep
-    /// `lineLimit(1)`.
+    /// The cause was the LABEL. `Nutrient.shortLabel` prints "Sat fat" in a
+    /// box, which fits an even share with room to spare, so the even split is
+    /// available again and nothing truncates. The full name is still what a
+    /// reader hears — see the pill's nutrient initialiser.
     ///
-    /// At natural width the three come to 274 pt of 326 pt, so they fit with
-    /// room to spare. The cost is a ragged right edge, which is the trade the
-    /// meal row already took in #560, so the two surfaces now agree.
     /// `MealDayCardWatchRowTests` pins the measurement.
     private var watchRow: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
@@ -273,10 +270,10 @@ struct MealDayCard: View {
                     MealStatPill(
                         nutrient: nutrient,
                         value: summary.totals[nutrient],
-                        target: target(for: nutrient)
+                        target: target(for: nutrient),
+                        fillsWidth: true
                     )
                 }
-                Spacer(minLength: 0)
             }
         }
     }

@@ -64,6 +64,10 @@ struct MealPlanEstimationService {
             date: day,
             mealType: mealType ?? planned.estimate.mealType,
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            // #603. What the tile prints. The typed title stays verbatim above
+            // it, because that is the text the user recognises and the text a
+            // re-estimate runs against.
+            shortTitle: planned.estimate.title,
             ingredients: planned.ingredients,
             notes: notes,
             recipe: planned.recipe,

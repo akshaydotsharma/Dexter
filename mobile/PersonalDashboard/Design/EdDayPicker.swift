@@ -105,6 +105,41 @@ struct EdDayPickerCalendar: View {
     /// user dismiss a thing they have finished with.
     var onPick: () -> Void = {}
 
+    /// Days that carry something, as device-local midnights (#605).
+    ///
+    /// Drawn by the WEIGHT of the numeral, never by an extra mark. The Plan tab
+    /// needs to say which days have meals on them, and it used to say it with
+    /// four coloured pips under the numeral — which is what forced that
+    /// calendar's cells out of this one's geometry and made it the odd calendar
+    /// in the app. Ink instead of `inkSoft` costs no space at all, so the cell
+    /// stays 32pt and a circle stays a circle.
+    ///
+    /// Empty for every caller that has nothing to mark, which is all of them
+    /// but the plan.
+    var markedDays: Set<Date> = []
+
+    /// True when this draws its own surface, border and popover chrome, which
+    /// is what a POPOVER needs: it floats over the content and has to be a card
+    /// in its own right (#613).
+    ///
+    /// False when a caller is putting it INSIDE a card of its own. The Plan tab
+    /// does: its calendar sits in a full-width surface like the meal tiles under
+    /// it, and a 300pt card drawn on top of that would be a card on a card —
+    /// two borders and a seam where the two greys meet.
+    ///
+    /// Only the chrome is dropped. The 300pt content width stays either way, so
+    /// the digits, the circles and the spacing are the same object in both
+    /// modes.
+    var drawsCard: Bool = true
+
+    /// What a marked day says when it is read aloud, beyond its date.
+    ///
+    /// A closure rather than one string, because the interesting half of a
+    /// marked day is what is ON it ("2 planned, no lunch or dinner"), and that
+    /// differs per day. Returning nil, which is the default, leaves the spoken
+    /// label as the date alone.
+    var spokenDetail: (Date) -> String? = { _ in nil }
+
     @State private var month: Date = Date()
     @State private var seeded = false
 
@@ -116,25 +151,35 @@ struct EdDayPickerCalendar: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
+        let content = VStack(alignment: .leading, spacing: Space.md) {
             header
             weekdayRow
             grid
             footer
         }
         .padding(Space.lg)
+        // Fixed, in BOTH modes. The cells are flexible columns, so a calendar
+        // that took its container's width would spread its circles across a Mac
+        // window and stop reading as a month. This is the width every other
+        // Dexter calendar is drawn at, and it does not move.
         .frame(width: EdDayPickerMetrics.cardWidth)
-        .background(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .fill(Tokens.surface)
-        )
-        .paperBorder(Tokens.border, radius: Radius.lg)
-        .presentationBackground(Tokens.surface)
-        .presentationCompactAdaptation(.popover)
         .onAppear {
             guard !seeded else { return }
             seeded = true
             month = MealCalendar.monthStart(of: day, calendar: calendar)
+        }
+
+        if drawsCard {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                        .fill(Tokens.surface)
+                )
+                .paperBorder(Tokens.border, radius: Radius.lg)
+                .presentationBackground(Tokens.surface)
+                .presentationCompactAdaptation(.popover)
+        } else {
+            content
         }
     }
 
@@ -214,6 +259,8 @@ struct EdDayPickerCalendar: View {
         let isSelected = calendar.isDate(date, inSameDayAs: day)
         let isToday = calendar.isDate(date, inSameDayAs: today)
         let allowed = isAllowed(date)
+        let isMarked = markedDays.contains(calendar.startOfDay(for: date))
+        let detail = spokenDetail(calendar.startOfDay(for: date))
 
         return Button {
             pick(date)
@@ -224,10 +271,8 @@ struct EdDayPickerCalendar: View {
                     Circle().strokeBorder(Tokens.borderStrong, lineWidth: 1)
                 }
                 Text(Self.dayFormatter.string(from: date))
-                    .font(isSelected ? .edFootnoteStrong : .edFootnote)
-                    .foregroundStyle(
-                        isSelected ? Tokens.accentFg : (allowed ? Tokens.inkSoft : Tokens.mutedSoft)
-                    )
+                    .font(isSelected || isMarked ? .edFootnoteStrong : .edFootnote)
+                    .foregroundStyle(numeralInk(isSelected: isSelected, isMarked: isMarked, allowed: allowed))
                     .monospacedDigit()
             }
             .frame(height: EdDayPickerMetrics.cell)
@@ -235,8 +280,21 @@ struct EdDayPickerCalendar: View {
         }
         .buttonStyle(.plain)
         .disabled(!allowed)
-        .accessibilityLabel(Self.spokenFormatter.string(from: date))
+        .accessibilityLabel(
+            [Self.spokenFormatter.string(from: date), detail]
+                .compactMap { $0 }
+                .joined(separator: ", ")
+        )
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// A marked day is drawn in full ink, an ordinary one in `inkSoft`, and a
+    /// day outside the bounds in `mutedSoft`. The selected day's fill decides
+    /// its own contrast and outranks both.
+    private func numeralInk(isSelected: Bool, isMarked: Bool, allowed: Bool) -> Color {
+        if isSelected { return Tokens.accentFg }
+        guard allowed else { return Tokens.mutedSoft }
+        return isMarked ? Tokens.ink : Tokens.inkSoft
     }
 
     private func isAllowed(_ date: Date) -> Bool {

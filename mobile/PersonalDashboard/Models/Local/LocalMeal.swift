@@ -61,6 +61,39 @@ final class LocalMeal {
     /// to avoid clashing with `CustomStringConvertible.description`.
     var mealDescription: String
 
+    /// The dish in a few words, as the estimate named it (#603).
+    ///
+    /// "Eggs on toast and a flat white" for a `mealDescription` of "two eggs on
+    /// toast with butter and a flat white, made at home". It is what every LIST
+    /// draws; the verbatim description is what the detail sheet draws.
+    ///
+    /// ### Why the description could not do both jobs
+    ///
+    /// A day holds five of these rows, and a description is a sentence. Five
+    /// sentences stacked is a paragraph with times down the side, which is the
+    /// state this field was added to fix. Truncating the sentence instead would
+    /// cut it wherever the character count ran out, which on "two eggs on toast
+    /// with butter and…" hides the half that says what the meal WAS.
+    ///
+    /// ### Why it is stored and not derived
+    ///
+    /// The model names the dish in the same call that estimates it, so this
+    /// costs nothing. Deriving it on the device instead would mean joining item
+    /// names, which reads as an ingredient list ("Egg, toast, butter") rather
+    /// than as a dish. `MealDisplayName` still does exactly that as a FALLBACK,
+    /// for every row logged before this field existed and for any answer that
+    /// arrives without one — it is not a substitute, it is a floor.
+    ///
+    /// Additive and OPTIONAL, which is the safe kind of SwiftData migration: an
+    /// optional attribute gets NULL on every existing row and nothing else on
+    /// the model moves. `containsAlcohol` needed a `= false` on its declaration
+    /// because a non-optional attribute with no declared default fails the
+    /// lightweight migration outright (#555); an optional has no such gap.
+    ///
+    /// Nil means "nobody named it". Read it through `MealDisplayName.short(for:)`
+    /// rather than directly, so one meal is never named two ways on one screen.
+    var title: String?
+
     // MARK: - The eight
     //
     // Units per `Nutrient.unit`: kcal for calories, mg for sodium, grams for
@@ -196,6 +229,7 @@ final class LocalMeal {
         loggedAt: Date = Date(),
         mealType: String,
         mealDescription: String,
+        title: String? = nil,
         calories: Double = 0,
         proteinG: Double = 0,
         carbsG: Double = 0,
@@ -223,6 +257,7 @@ final class LocalMeal {
         self.loggedAt = loggedAt
         self.mealType = mealType
         self.mealDescription = mealDescription
+        self.title = title
         self.calories = calories
         self.proteinG = proteinG
         self.carbsG = carbsG

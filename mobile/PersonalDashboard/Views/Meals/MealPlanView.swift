@@ -44,11 +44,13 @@ struct MealPlanView: View {
     let allTargets: [MealTargets]
     let allEntries: [LocalMealPlanEntry]
 
-    /// The day being planned, and the month the grid is on. Both owned by the
-    /// section: the day so it survives a tab switch, the month so paging away
-    /// and coming back does not reset it.
+    /// The day being planned, owned by the section so it survives a tab switch.
+    ///
+    /// There is no month binding beside it any more. The calendar is
+    /// `EdDayPickerCalendar` now, which owns the month it is showing and seeds
+    /// it from this day, so a month held out here would be a second answer to a
+    /// question the control already answers (#605).
     @Binding var selectedDay: Date
-    @Binding var visibleMonth: Date
 
     /// Owned by the section so the conversation survives a tab switch.
     @Bindable var chat: MealPlanChatModel
@@ -64,11 +66,7 @@ struct MealPlanView: View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
-                    MealPlanMonthGrid(
-                        month: $visibleMonth,
-                        selectedDay: $selectedDay,
-                        readings: MealPlanDay.readings(in: allEntries)
-                    )
+                    calendarCard
 
                     if let errorMessage {
                         Text(errorMessage)
@@ -112,6 +110,77 @@ struct MealPlanView: View {
                 .presentationDragIndicator(.visible)
                 #endif
         }
+    }
+
+    // MARK: - The calendar
+
+    /// The app's own calendar, drawn on the Plan tab (#605).
+    ///
+    /// ### Why this is not a calendar of its own any more
+    ///
+    /// It was a three-month reel with four coloured pips under every numeral:
+    /// its own cell height, its own marks for today and for the selected day,
+    /// its own month paging. It was the only calendar in the app where a day was
+    /// not a circle, and it read as a different app's control sitting on a
+    /// Dexter screen.
+    ///
+    /// This is `EdDayPickerCalendar` itself — the same 300pt card, the same 32pt
+    /// circular cells, the same ring for today, the same accent fill for the day
+    /// you are on and the same Today / Tomorrow footer that every other day
+    /// control in this app carries. One calendar, one reading, nothing to learn
+    /// twice.
+    ///
+    /// ### What the pips cost, and what replaced them
+    ///
+    /// A day that carries plans is drawn in full ink rather than getting a mark
+    /// of its own. The pips said WHICH meals were planned, which is more than a
+    /// weight can say, and they are what forced the cells out of the shared
+    /// geometry in the first place. The day panel under this card says the same
+    /// thing in full, for the day you are actually on, and a reader still hears
+    /// it per day through `spokenDetail`.
+    /// Centred (#611).
+    ///
+    /// The card is a fixed 300pt and everything under it is full width, so
+    /// SOMETHING is left over either way. Centred is what reads as deliberate:
+    /// leading put the card a few points off centre on a phone, which looks
+    /// like a layout slip rather than a decision.
+    ///
+    /// The space either side stays EMPTY. Filling a Mac's with the neighbouring
+    /// months is the three-month reel #605 deleted, and it would make this a
+    /// second calendar again on the one platform that has room for one.
+    private var calendarCard: some View {
+        EdDayPickerCalendar(
+            day: $selectedDay,
+            tint: Tokens.accent(for: .meals),
+            markedDays: plannedDays,
+            // The card is drawn HERE, at the tab's width, so the calendar sits
+            // on the same full-width surface the meal tiles under it use. Left
+            // to itself it draws a 300pt card, which on this tab put a small
+            // grey box on a black page above a column of full-width ones (#613).
+            drawsCard: false,
+            spokenDetail: { day in
+                let reading = MealPlanDay.reading(for: day, in: readings)
+                return reading.isEmpty ? nil : reading.spokenSummary
+            }
+        )
+        .frame(maxWidth: .infinity)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.lg)
+    }
+
+    /// Every planned day as a device-local midnight, which is what the calendar
+    /// compares against. Built from the same one-pass table the panel reads, so
+    /// a day cannot be marked here and empty below (#442).
+    private var plannedDays: Set<Date> {
+        Set(
+            readings
+                .filter { !$0.value.isEmpty }
+                .map { Calendar.current.startOfDay(for: WallClock.deviceDay(from: $0.key)) }
+        )
+    }
+
+    private var readings: [Date: MealPlanReading] {
+        MealPlanDay.readings(in: allEntries)
     }
 
     // MARK: - Derived
@@ -161,6 +230,10 @@ struct MealPlanView: View {
                 date: day,
                 mealType: mealType,
                 title: suggestion.title,
+                // A suggestion's title IS a dish name — the advisor is held to
+                // the same rule the estimate is — so the block is named the
+                // moment it lands and never reaches the naming pass (#603).
+                shortTitle: suggestion.title,
                 ingredients: suggestion.ingredients,
                 notes: suggestion.prepNote,
                 status: .planned,
