@@ -153,12 +153,19 @@ struct MealPlanView: View {
             day: $selectedDay,
             tint: Tokens.accent(for: .meals),
             markedDays: plannedDays,
+            // The card is drawn HERE, at the tab's width, so the calendar sits
+            // on the same full-width surface the meal tiles under it use. Left
+            // to itself it draws a 300pt card, which on this tab put a small
+            // grey box on a black page above a column of full-width ones (#613).
+            drawsCard: false,
             spokenDetail: { day in
                 let reading = MealPlanDay.reading(for: day, in: readings)
                 return reading.isEmpty ? nil : reading.spokenSummary
             }
         )
-        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.lg)
     }
 
     /// Every planned day as a device-local midnight, which is what the calendar

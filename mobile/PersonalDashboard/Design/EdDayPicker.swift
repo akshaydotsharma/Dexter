@@ -118,6 +118,20 @@ struct EdDayPickerCalendar: View {
     /// but the plan.
     var markedDays: Set<Date> = []
 
+    /// True when this draws its own surface, border and popover chrome, which
+    /// is what a POPOVER needs: it floats over the content and has to be a card
+    /// in its own right (#613).
+    ///
+    /// False when a caller is putting it INSIDE a card of its own. The Plan tab
+    /// does: its calendar sits in a full-width surface like the meal tiles under
+    /// it, and a 300pt card drawn on top of that would be a card on a card —
+    /// two borders and a seam where the two greys meet.
+    ///
+    /// Only the chrome is dropped. The 300pt content width stays either way, so
+    /// the digits, the circles and the spacing are the same object in both
+    /// modes.
+    var drawsCard: Bool = true
+
     /// What a marked day says when it is read aloud, beyond its date.
     ///
     /// A closure rather than one string, because the interesting half of a
@@ -137,25 +151,35 @@ struct EdDayPickerCalendar: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
+        let content = VStack(alignment: .leading, spacing: Space.md) {
             header
             weekdayRow
             grid
             footer
         }
         .padding(Space.lg)
+        // Fixed, in BOTH modes. The cells are flexible columns, so a calendar
+        // that took its container's width would spread its circles across a Mac
+        // window and stop reading as a month. This is the width every other
+        // Dexter calendar is drawn at, and it does not move.
         .frame(width: EdDayPickerMetrics.cardWidth)
-        .background(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .fill(Tokens.surface)
-        )
-        .paperBorder(Tokens.border, radius: Radius.lg)
-        .presentationBackground(Tokens.surface)
-        .presentationCompactAdaptation(.popover)
         .onAppear {
             guard !seeded else { return }
             seeded = true
             month = MealCalendar.monthStart(of: day, calendar: calendar)
+        }
+
+        if drawsCard {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                        .fill(Tokens.surface)
+                )
+                .paperBorder(Tokens.border, radius: Radius.lg)
+                .presentationBackground(Tokens.surface)
+                .presentationCompactAdaptation(.popover)
+        } else {
+            content
         }
     }
 
