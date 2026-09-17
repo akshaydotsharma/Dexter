@@ -199,23 +199,15 @@ struct FinanceCategoryBarRow: View {
             .font(.edCaption)
             .monospacedDigit()
             .foregroundStyle(Tokens.mutedSoft)
-            // The column is sized for "100%" at the default text size, so this
-            // only ever engages under a larger Dynamic Type setting. Shrinking
-            // by a fifth keeps the value whole where wrapping would split the
-            // number from its sign (#616).
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
-            .frame(width: FinanceBarRowMetrics.share, alignment: .trailing)
+            .fixedColumn(width: FinanceBarRowMetrics.share)
     }
 
     private var amount: some View {
         Text(amountText)
             .font(.edFootnote)
             .monospacedDigit()
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
             .foregroundStyle(isCredit ? Tokens.success : Tokens.inkSoft)
-            .frame(width: FinanceBarRowMetrics.amount, alignment: .trailing)
+            .fixedColumn(width: FinanceBarRowMetrics.amount)
     }
 
     /// A category whose refunds outweighed its spend. Same money as a refunded
