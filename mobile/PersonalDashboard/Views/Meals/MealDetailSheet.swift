@@ -9,29 +9,57 @@ import SwiftData
 /// binding rewrites the field under the caret when it cannot parse one. The
 /// commit happens when the text is read back, not on every keystroke.
 struct MealNumberField: View {
+
+    /// How large the row is set (#623).
+    ///
+    /// Additive, and `.regular` is the shipped row verbatim: the meal detail
+    /// sheet and the targets sheet both name nothing and keep what they had.
+    /// `.large` exists for the Targets page, where the six vitals are the page
+    /// rather than one block inside a sheet, so the whole page is set a rung up.
+    ///
+    /// A knob rather than a second field type. Two near-identical rows would
+    /// drift the moment one of them grew a validation state, and the caret
+    /// behaviour this type exists for is the part nobody would remember to copy.
+    enum Size: Equatable {
+        case regular
+        case large
+    }
+
     let label: String
     let unit: String
     @Binding var text: String
+    var size: Size = .regular
 
     var body: some View {
         HStack(spacing: Space.sm) {
             Text(label)
-                .font(.edFootnote)
+                .font(labelFont)
                 .foregroundStyle(Tokens.inkSoft)
             Spacer(minLength: Space.sm)
             TextField("0", text: $text)
-                .font(.edFootnote)
+                .font(labelFont)
                 .multilineTextAlignment(.trailing)
                 .monospacedDigit()
                 .decimalKeyboard()
                 .textFieldStyle(.plain)
-                .frame(width: 72)
+                .frame(width: size == .large ? 84 : 72)
             Text(unit)
-                .font(.edCaption)
+                .font(size == .large ? .edFootnote : .edCaption)
                 .foregroundStyle(Tokens.muted)
-                .frame(width: 28, alignment: .leading)
+                // Sized to the widest unit any caller passes ("kcal"), at the
+                // font this row is set in. A fixed column is what keeps the
+                // fields of a stack aligned down the page; it has to grow with
+                // the text or the widest unit wraps (#616).
+                .frame(width: size == .large ? 36 : 28, alignment: .leading)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, size == .large ? Space.xs : 2)
+    }
+
+    /// The label and the field are set together, because they are one line of
+    /// one sentence: "Weight, 76, kg". A field a rung under its own label reads
+    /// as placeholder text.
+    private var labelFont: Font {
+        size == .large ? .edBodyMedium : .edFootnote
     }
 }
 

@@ -27,6 +27,16 @@ import SwiftUI
 /// over, which is the one thing `NutrientGoalKind` exists to prevent.
 struct MealStatPill: View {
 
+    /// How large the figure is set. See `size`.
+    enum Size: Equatable {
+        /// `.edFootnoteStrong`, so a row of pills sits under a meal without
+        /// competing with it.
+        case regular
+        /// One semibold rung up, `.edHeading`. For a surface whose subject IS
+        /// the numbers.
+        case large
+    }
+
     /// Which of the three readings this pill is giving.
     enum Variant: Equatable {
         /// No target to read the number against: a grey box with an ink value.
@@ -85,6 +95,24 @@ struct MealStatPill: View {
     /// label, so a caller passing a note folds it into `accessibilityText` too.
     var note: String? = nil
 
+    /// How large the figure is set (#623).
+    ///
+    /// Additive, and `.regular` is exactly what every pill did before this
+    /// existed: the day card, the estimate preview, the meal row and the plan
+    /// board all keep `.edFootnoteStrong` without naming a size. Only the
+    /// Targets page asks for `.large`, because there the eight numbers are the
+    /// page's whole subject rather than a reading printed beside a meal.
+    ///
+    /// The LABEL does not move with it. An eyebrow is a species, not a rung —
+    /// growing it would make the pill's two lines compete for the same job —
+    /// and the label is what sets a pill's width, which a four-across row at
+    /// phone width has none of to spare (#610).
+    ///
+    /// Ignored by `.accent`, which is already the one headline figure on its
+    /// surface and is set at `.edTitle` for that reason. A size knob that could
+    /// shrink it would make "the largest number here" a caller's decision.
+    var size: Size = .regular
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
@@ -122,12 +150,12 @@ struct MealStatPill: View {
         .accessibilityLabel(accessibilityText ?? "\(label), \(value)")
     }
 
-    /// One rung larger for the headline, the shared footnote for everything
-    /// else, so a row of pills has one height by construction.
+    /// One rung larger for the headline, and otherwise whatever the caller's
+    /// `size` asks for, so a row of pills has one height by construction.
     private var valueFont: Font {
         switch variant {
         case .accent: return .edTitle
-        default:      return .edFootnoteStrong
+        default:      return size == .large ? .edHeading : .edFootnoteStrong
         }
     }
 

@@ -517,8 +517,12 @@ struct MealsView: View {
     // MARK: - Targets
 
     /// One tab, two states, and the same subject in both: the setup offer while
-    /// no record exists, the eight derived numbers once one does.
-    /// `MealTargetsSheet` is still the only edit flow, opened from either state.
+    /// no record exists, the page itself once one does.
+    ///
+    /// The page edits (#623). The six vitals are fields on the card and one
+    /// action saves them and re-derives the eight against them, so the sheet is
+    /// no longer the way a weight gets changed. It is still reached from here,
+    /// and it is still the only way to hand-edit one of the eight numbers.
     private var targetsTab: some View {
         scrolling {
             VStack(alignment: .leading, spacing: Space.lg) {
