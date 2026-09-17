@@ -751,8 +751,13 @@ private struct NoteRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        let trimmedBody = (note.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasBody = !trimmedBody.isEmpty
+        // Neither of these trims the whole body any more (#614). Trimming
+        // allocated a second copy of a note up to 10,900 characters long, per
+        // row, to decide whether to draw ONE line of preview. `contains` stops
+        // at the first non-whitespace character, and the snippet builder does
+        // its own leading-whitespace handling.
+        let body = note.content ?? ""
+        let hasBody = body.contains { !$0.isWhitespace }
 
         return VStack(alignment: .leading, spacing: 4) {
             Text((note.title?.isEmpty == false ? note.title! : "Untitled"))
@@ -760,7 +765,7 @@ private struct NoteRow: View {
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1)
             if hasBody {
-                Text(markdownSnippetAttributed(trimmedBody))
+                Text(markdownSnippetAttributed(body))
                     .font(.edSubheadline)
                     .foregroundStyle(Tokens.muted)
                     .lineLimit(1)

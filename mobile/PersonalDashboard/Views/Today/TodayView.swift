@@ -181,7 +181,12 @@ struct TodayView: View {
     // MARK: - Notes card
 
     private var notesCard: some View {
-        let recent = notesVM.notes.sorted(by: { $0.updatedAt > $1.updatedAt }).prefix(3)
+        // A three-element selection, not a full sort (#614). This card only ever
+        // shows three notes, and sorting every note the user has in order to
+        // throw all but three away ran on every render of the Today screen.
+        // Swift Algorithms' `max(count:)` would say this in one line, but it is
+        // not a dependency here, so the selection is spelled out.
+        let recent = Self.mostRecent(notesVM.notes, limit: 3)
 
         return TodayCard(
             section: .notes,
@@ -277,16 +282,52 @@ struct TodayView: View {
         return cal.isDateInToday(date) || date < Date()
     }
 
-    private static func dayString(_ date: Date) -> String {
+    /// The `limit` most recently updated notes, without sorting the rest (#614).
+    ///
+    /// One pass, holding only `limit` candidates. At 47 notes the saving is
+    /// small; the reason to write it this way is that the cost stops growing
+    /// with the note count, and this runs on every render of the Today screen.
+    static func mostRecent(_ notes: [Note], limit: Int) -> [Note] {
+        guard limit > 0 else { return [] }
+        guard notes.count > limit else {
+            return notes.sorted { $0.updatedAt > $1.updatedAt }
+        }
+        var best: [Note] = []
+        best.reserveCapacity(limit + 1)
+        for note in notes {
+            // Newest first, so the weakest candidate is always last.
+            if best.count == limit, let weakest = best.last,
+               note.updatedAt <= weakest.updatedAt {
+                continue
+            }
+            let insertAt = best.firstIndex { note.updatedAt > $0.updatedAt } ?? best.count
+            best.insert(note, at: insertAt)
+            if best.count > limit { best.removeLast() }
+        }
+        return best
+    }
+
+    // Formatters are built once, not per call (#614). `DateFormatter()` costs
+    // hundreds of microseconds to construct, and these run on every render of
+    // the Today header.
+    private static let weekdayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "EEEE"
-        return f.string(from: date)
+        return f
+    }()
+
+    private static let monthDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM d"
+        return f
+    }()
+
+    private static func dayString(_ date: Date) -> String {
+        weekdayFormatter.string(from: date)
     }
 
     private static func dateString(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "MMMM d"
-        return f.string(from: date)
+        monthDayFormatter.string(from: date)
     }
 
     private static var greeting: String {
@@ -482,14 +523,21 @@ private struct TodayTaskRow: View {
         date < Calendar.current.startOfDay(for: Date())
     }
 
+    /// Built once, and only reached on the branch that needs it (#614). The
+    /// old shape constructed a `DateFormatter` before the three early returns,
+    /// so every "Due today" row paid for a formatter it never used.
+    private static let shortDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f
+    }()
+
     private func dueLabel(_ date: Date) -> String {
         let cal = Calendar.current
-        let f = DateFormatter()
         if cal.isDateInToday(date) { return "Due today" }
         if cal.isDateInYesterday(date) { return "Yesterday" }
         if cal.isDateInTomorrow(date) { return "Tomorrow" }
-        f.dateFormat = "MMM d"
-        return f.string(from: date)
+        return Self.shortDateFormatter.string(from: date)
     }
 }
 
@@ -525,10 +573,14 @@ private struct TodayNoteRow: View {
         return AttributedString("Untitled note")
     }
 
-    private func relativeTime(_ date: Date) -> String {
+    private static let shortRelativeFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
-        return "Updated \(f.localizedString(for: date, relativeTo: Date()))"
+        return f
+    }()
+
+    private func relativeTime(_ date: Date) -> String {
+        "Updated \(Self.shortRelativeFormatter.localizedString(for: date, relativeTo: Date()))"
     }
 }
 

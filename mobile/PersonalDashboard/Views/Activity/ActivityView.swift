@@ -139,17 +139,28 @@ struct ActivityView: View {
 
                 Divider().background(Tokens.divider)
 
-                let pageItems = currentPageItems
-                let total = totalAfterFilter
+                // ONE merge + sort per body pass (#614). `combinedItems` walks
+                // every todo, note, list, folder, trip, itinerary item, meal and
+                // expense, so reading it once for the page and again for the
+                // count ran that whole pass twice on every render. A local is
+                // enough and it cannot drift: the `@Query` results stay the only
+                // source of truth, which a `@State` cache would not be.
+                let items = combinedItems
+                let total = items.count
+                let pageItems = visibleCount < total ? Array(items.prefix(visibleCount)) : items
 
                 ScrollView {
-                    // Plain VStack (not LazyVStack) because the dataset is small
-                    // (single-device personal scope, hundreds of items at most).
-                    // LazyVStack + `pinnedViews: [.sectionHeaders]` triggered a
-                    // SwiftUI layout bug where sections with varying row counts
-                    // left reserved blank space until a gesture forced a layout
-                    // pass. Issue #63.
-                    VStack(alignment: .leading, spacing: 0) {
+                    // LazyVStack because the feed is no longer small (#614):
+                    // `visibleCount` grows by a page per scroll, so an eager
+                    // stack built and held every row of every page at once, and
+                    // the load-more sentinel's `onAppear` fired the moment it was
+                    // built rather than when the user reached it, paging the
+                    // whole feed in on the first render.
+                    // Do NOT add `pinnedViews: [.sectionHeaders]`. The pinning is
+                    // what broke before, not the laziness: sections with varying
+                    // row counts left reserved blank space until a gesture forced
+                    // a layout pass. Issue #63.
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         if pageItems.isEmpty {
                             EmptyStateView(filter: filter)
                                 .frame(maxWidth: .infinity)
@@ -398,13 +409,10 @@ struct ActivityView: View {
         return filtered.sorted { $0.sortDate > $1.sortDate }
     }
 
-    private var totalAfterFilter: Int { combinedItems.count }
-
-    private var currentPageItems: [ActivityItem] {
-        let all = combinedItems
-        guard visibleCount < all.count else { return all }
-        return Array(all.prefix(visibleCount))
-    }
+    // The page window and the total are both derived from the single
+    // `combinedItems` local in `body`. They are deliberately NOT computed
+    // properties: each read of one is a full merge + sort, and two of them in
+    // the same body pass is the cost #614 removed.
 
     // MARK: - Expense row text
 

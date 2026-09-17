@@ -302,15 +302,24 @@ struct VisionTileRow: View {
         if days < 0 { return "\(-days)d ago" }
         if days == 0 { return "Today" }
         if days == 1 { return "Tomorrow" }
-        if days <= 6 {
-            let formatter = DateFormatter()
-            formatter.setLocalizedDateFormatFromTemplate("EEE")
-            return formatter.string(from: date)
-        }
-        let formatter = DateFormatter()
-        formatter.setLocalizedDateFormatFromTemplate("d MMM")
-        return formatter.string(from: date)
+        if days <= 6 { return weekdayFormatter.string(from: date) }
+        return dayMonthFormatter.string(from: date)
     }
+
+    // Built once, not per row (#614). The old shape constructed a
+    // `DateFormatter` on every call, and on the "d MMM" branch it constructed
+    // one for the "EEE" branch it had already skipped.
+    private static let weekdayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("EEE")
+        return f
+    }()
+
+    private static let dayMonthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("d MMM")
+        return f
+    }()
 
     /// The wash is decorative; priority's authoritative carrier has always been
     /// the task detail and this label.
