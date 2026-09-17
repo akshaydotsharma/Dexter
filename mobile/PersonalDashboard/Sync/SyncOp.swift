@@ -24,7 +24,7 @@ import CryptoKit
 ///
 /// Dates are not a special case: `DataArchive.makeEncoder()` is configured for
 /// `.iso8601`, so they arrive as strings and round-trip through `.string`.
-indirect enum JSONValue: Codable, Equatable {
+indirect enum JSONValue: Codable, Equatable, Sendable {
     case null
     case bool(Bool)
     case number(Double)

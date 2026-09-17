@@ -65,8 +65,8 @@ final class SyncCoordinator {
 
     /// Recompute status without running a pass. Used when the status screen
     /// appears, so pending counts are current without touching the folder.
-    func refreshStatus() {
-        snapshot = (try? resolvedEngine().snapshot()) ?? SyncStatusSnapshot()
+    func refreshStatus() async {
+        snapshot = (try? await resolvedEngine().snapshot()) ?? SyncStatusSnapshot()
     }
 
     /// Manual refresh from iOS pull-to-refresh or the macOS toolbar / ⌘R (#363).
@@ -192,7 +192,7 @@ final class SyncCoordinator {
         // Refusing to sync is recoverable; applying with no way back is not.
         if SyncSettings.applyEnabled {
             guard await ensurePreflightBackup() else {
-                snapshot = (try? resolvedEngine().snapshot()) ?? snapshot
+                snapshot = (try? await resolvedEngine().snapshot()) ?? snapshot
                 SyncLog.line("SyncCoordinator: pass BLOCKED — apply is on but no pre-flight backup exists")
                 return
             }
@@ -411,8 +411,13 @@ final class SyncCoordinator {
 
     /// Record a local change and make sure a pass follows it.
     private func noteLocalWrite(entities: Set<String>) {
-        guard SyncSettings.enabled else { return }
         guard !Self.isSyncBookkeepingOnly(entities) else { return }
+        // Bumped BEFORE the enabled check, and regardless of it. The engine's
+        // idle gate (#614) reads this to decide whether a pass has anything of
+        // ours to publish, and a write made while sync was switched off is still
+        // a write that has never been published.
+        resolvedEngine().noteLocalWrite()
+        guard SyncSettings.enabled else { return }
         hasUnpublishedWrite = true
         startWriteFlush()
     }

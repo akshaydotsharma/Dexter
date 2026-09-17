@@ -93,7 +93,7 @@ struct SyncStatusSnapshot {
 final class SyncEngine {
 
     /// Local changes found by diffing the store against the shadow table.
-    struct LocalChanges {
+    struct LocalChanges: Sendable {
         var upserts: [SyncRecord] = []
         var deletes: [(entity: String, recordID: String)] = []
 
@@ -107,6 +107,57 @@ final class SyncEngine {
     /// then writes it; two interleaved passes would emit the same change twice
     /// with different Lamport values.
     private var isRunning = false
+
+    /// Bumped by every local write that is not sync's own bookkeeping (#614).
+    ///
+    /// The idle 30-second timer used to run the whole 381ms export-and-hash even
+    /// when nothing had changed, which is a UI freeze bought for nothing. These
+    /// two counters let an idle pass skip the OUTBOUND half.
+    ///
+    /// ⚠️ THIS DOES NOT SKIP THE INBOUND HALF, and it must never be extended to.
+    /// Reading peers is what advances the Lamport clock past anything they have
+    /// said; an outbound-only or inbound-skipping shortcut is the #380 bug.
+    /// The gate here only answers "is there anything of OURS to publish", and it
+    /// answers conservatively.
+    ///
+    /// A counter rather than a flag, deliberately: the generation is read BEFORE
+    /// the diff and stored only after the emit succeeds, so a write that lands
+    /// mid-pass leaves the two unequal and the next pass still publishes it. A
+    /// bool cleared after the emit would swallow that write.
+    private var writeGeneration = 1
+    private var publishedGeneration = 0
+
+    /// When the last real diff ran, for the safety floor below.
+    private var lastFullDiffAt: Date?
+
+    /// How long the gate may go on trusting `didSave` before it does a full diff
+    /// anyway.
+    ///
+    /// ⚠️ THE GATE IS NOT SOUND ON ITS OWN, and this is why. `didSave` fires for
+    /// every save THIS PROCESS makes, which is what the trigger in
+    /// `SyncCoordinator` relies on. It does not fire for a save made by another
+    /// process, and on macOS one user-global store is shared by every instance
+    /// and every worktree, so a second instance's write is invisible here.
+    /// Skipping on the generation alone would let that write go unpublished for
+    /// as long as this process stayed idle.
+    ///
+    /// The floor bounds that. Worst case a foreign write waits this long instead
+    /// of 30 seconds, and the idle cost drops from a full export every 30 seconds
+    /// to one every five minutes. The original "a full diff cannot forget"
+    /// property is kept, just at a coarser period.
+    private let fullDiffFloor: TimeInterval = 300
+
+    /// Whether a pass has anything of ours to publish. Fails towards the work.
+    var hasLocalWorkToPublish: Bool {
+        if writeGeneration != publishedGeneration { return true }
+        guard let lastFullDiffAt else { return true }
+        return Date().timeIntervalSince(lastFullDiffAt) >= fullDiffFloor
+    }
+
+    /// Record that the local store changed. Cheap, and safe to over-call.
+    func noteLocalWrite() {
+        writeGeneration &+= 1
+    }
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -134,26 +185,97 @@ final class SyncEngine {
     /// we forget means that data silently never syncs while the UI still reads
     /// healthy. A full diff cannot forget.
     ///
-    /// Cost is one fetch per model plus a SHA-256 per record, which at personal
-    /// scale is milliseconds. If it ever stops being cheap, the fix is to shard
-    /// the sweep across passes, not to reintroduce per-site hooks.
+    /// Cost is one fetch per model plus a SHA-256 per record. At the scale a real
+    /// store reaches that is NOT milliseconds: measured at 381ms for 2,156
+    /// records, of which 323ms is the hashing alone (#614). `SyncEngine` is
+    /// `@MainActor`, so all of that was blocking the UI, every 30 seconds and
+    /// about 3 seconds after every save. Note autosave saves while you type,
+    /// which is why typing stuttered.
+    ///
+    /// The work is therefore split in two, and the split is the whole point:
+    ///
+    /// - `localDiffInputs()` touches SwiftData and must stay on the main actor,
+    ///   because `ModelContext` is bound to it. Measured at 55ms.
+    /// - `Self.diff(_:)` is `nonisolated` and pure. It takes value types only,
+    ///   so it can run anywhere. Measured at 323ms, and this is the part that
+    ///   moves off the main thread in `computeLocalChangesOffMainActor()`.
+    ///
+    /// This synchronous entry point composes both and is kept as the reference
+    /// implementation: the async path must agree with it record for record, which
+    /// is what `SyncPassCostTests` asserts.
     func computeLocalChanges() throws -> LocalChanges {
+        try Self.diff(localDiffInputs())
+    }
+
+    /// The same diff, with the pure 85% moved off the main thread (#614).
+    ///
+    /// Identical output to `computeLocalChanges()` by construction: same inputs,
+    /// same pure function, just evaluated somewhere else. Only the SwiftData read
+    /// stays on the main actor, because it has to.
+    func computeLocalChangesOffMainActor() async throws -> LocalChanges {
+        let inputs = try localDiffInputs()
+        return try await Task.detached(priority: .utility) {
+            try Self.diff(inputs)
+        }.value
+    }
+
+    /// Everything the diff needs out of SwiftData, as value types.
+    ///
+    /// Shadows are flattened to plain tuples here rather than handed on as
+    /// `@Model` objects, because a `SyncShadow` cannot leave the main actor and
+    /// the whole point is that the diff can.
+    struct DiffInputs: Sendable {
+        let payload: DataArchive.Payload
+        /// key -> content hash, for the "has this record changed" test.
+        let shadowHashByKey: [String: String]
+        /// key -> (entity, recordID), for inferring deletes from orphaned shadows.
+        let shadowIdentityByKey: [String: SyncRecordIdentity]
+    }
+
+    struct SyncRecordIdentity: Sendable {
+        let entity: String
+        let recordID: String
+    }
+
+    /// The SwiftData half. Main actor by necessity.
+    private func localDiffInputs() throws -> DiffInputs {
         let payload = try DataExportService(modelContext: modelContext).buildPayload()
-        let records = try SyncRecordMapper.records(from: payload)
 
         let shadows = try modelContext.fetch(FetchDescriptor<SyncShadow>())
-        var shadowByKey: [String: SyncShadow] = [:]
+        var hashByKey: [String: String] = [:]
+        var identityByKey: [String: SyncRecordIdentity] = [:]
+        hashByKey.reserveCapacity(shadows.count)
+        identityByKey.reserveCapacity(shadows.count)
         for shadow in shadows {
-            shadowByKey[shadow.key] = shadow
+            hashByKey[shadow.key] = shadow.contentHash
+            identityByKey[shadow.key] = SyncRecordIdentity(
+                entity: shadow.entityName, recordID: shadow.recordID
+            )
         }
+
+        return DiffInputs(
+            payload: payload,
+            shadowHashByKey: hashByKey,
+            shadowIdentityByKey: identityByKey
+        )
+    }
+
+    /// The pure half. `nonisolated` so it can run off the main actor.
+    ///
+    /// Byte-for-byte the same decisions the inline version made: a record is an
+    /// upsert when no shadow matches its content hash, and a shadow with no live
+    /// record behind it is a delete.
+    nonisolated static func diff(_ inputs: DiffInputs) throws -> LocalChanges {
+        let records = try SyncRecordMapper.records(from: inputs.payload)
 
         var changes = LocalChanges()
         var seenKeys = Set<String>()
+        seenKeys.reserveCapacity(records.count)
 
         for record in records {
             let key = SyncKey.make(entity: record.entity, recordID: record.recordID)
             seenKeys.insert(key)
-            if let shadow = shadowByKey[key], shadow.contentHash == record.contentHash {
+            if let hash = inputs.shadowHashByKey[key], hash == record.contentHash {
                 continue
             }
             changes.upserts.append(record)
@@ -165,8 +287,14 @@ final class SyncEngine {
         // infers a delete from a peer's log being short: that direction requires
         // an explicit tombstone op, which is the invariant that makes a stale
         // device safe.
-        for shadow in shadows where !seenKeys.contains(shadow.key) {
-            changes.deletes.append((entity: shadow.entityName, recordID: shadow.recordID))
+        // Sorted, not in dictionary order. The ops in a segment are assigned
+        // Lamport values in the order they are appended, so an unstable order
+        // would mint different segment bytes for the same store on two runs.
+        // The inline version this replaced leaned on SwiftData's fetch order,
+        // which is no guarantee either; sorting makes it one.
+        for key in inputs.shadowIdentityByKey.keys.sorted() where !seenKeys.contains(key) {
+            guard let identity = inputs.shadowIdentityByKey[key] else { continue }
+            changes.deletes.append((entity: identity.entity, recordID: identity.recordID))
         }
 
         return changes
@@ -177,7 +305,7 @@ final class SyncEngine {
     @discardableResult
     func runPass(reason: String) async -> SyncStatusSnapshot {
         guard !isRunning else {
-            return (try? snapshot()) ?? SyncStatusSnapshot()
+            return (try? await snapshot()) ?? SyncStatusSnapshot()
         }
         isRunning = true
         defer { isRunning = false }
@@ -202,7 +330,7 @@ final class SyncEngine {
         let health = SyncFolder.health()
         guard health.isUsable else {
             recordPass(started: started, opsOut: 0, opsIn: 0, outcome: health.label)
-            return (try? snapshot()) ?? SyncStatusSnapshot()
+            return (try? await snapshot()) ?? SyncStatusSnapshot()
         }
 
         do {
@@ -266,7 +394,7 @@ final class SyncEngine {
         }
 
         recordPass(started: started, opsOut: opsOut, opsIn: opsIn, outcome: outcome)
-        var result = (try? snapshot()) ?? SyncStatusSnapshot()
+        var result = (try? await snapshot()) ?? SyncStatusSnapshot()
         result.lastPassOpsApplied = opsApplied
         result.isWaitingOnDownloads = waitingOnDownloads
         result.assetsPublished = assets.published
@@ -317,12 +445,28 @@ final class SyncEngine {
         // rather than a gap it would refuse to read past.
         state.nextSegmentSequence = 1
         try modelContext.save()
+        // Deleting shadows is classified as sync bookkeeping, so it does NOT
+        // bump the generation by itself. Re-arm the gate by hand or the
+        // republish this function just set up would be skipped as idle (#614).
+        noteLocalWrite()
     }
 
     private func emitLocalChanges(folder: SyncFolder, state: SyncDeviceState) async throws -> Int {
         try republishIfLogMissing(folder: folder, state: state)
-        let changes = try computeLocalChanges()
-        guard !changes.isEmpty else { return 0 }
+
+        // Read BEFORE the diff, stored only after the emit succeeds. See the
+        // note on `writeGeneration`.
+        let generationBeingPublished = writeGeneration
+        guard hasLocalWorkToPublish else { return 0 }
+
+        let changes = try await computeLocalChangesOffMainActor()
+        lastFullDiffAt = Date()
+        guard !changes.isEmpty else {
+            // Nothing to say, and the diff proved it. Record the generation so
+            // the next idle pass skips the diff entirely.
+            publishedGeneration = generationBeingPublished
+            return 0
+        }
 
         var ops: [SyncOp] = []
         var lamport = state.lamport
@@ -412,6 +556,11 @@ final class SyncEngine {
         state.opsEmitted += ops.count
         state.lastEmitAt = now
         try modelContext.save()
+
+        // Only now, after the segment is on disk AND the shadows match it. Every
+        // `throw` above leaves the generation unequal, so a failed pass is
+        // retried rather than mistaken for an idle one (#614).
+        publishedGeneration = generationBeingPublished
 
         return ops.count
     }
@@ -775,7 +924,7 @@ final class SyncEngine {
 
     /// Build a fresh snapshot for the status UI, recomputing pending changes so
     /// the view shows what sync would do right now rather than at the last pass.
-    func snapshot() throws -> SyncStatusSnapshot {
+    func snapshot() async throws -> SyncStatusSnapshot {
         var snapshot = SyncStatusSnapshot()
         snapshot.health = SyncFolder.health()
 
@@ -792,7 +941,7 @@ final class SyncEngine {
         snapshot.lastPassOpsIn = state.lastPassOpsIn
         snapshot.lastPassOutcome = state.lastPassOutcome
 
-        if let changes = try? computeLocalChanges() {
+        if let changes = try? await computeLocalChangesOffMainActor() {
             snapshot.pendingUpserts = changes.upserts.count
             snapshot.pendingDeletes = changes.deletes.count
             snapshot.pendingByEntity = Dictionary(
