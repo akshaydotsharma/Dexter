@@ -138,16 +138,24 @@ struct MealPlanView: View {
     /// geometry in the first place. The day panel under this card says the same
     /// thing in full, for the day you are actually on, and a reader still hears
     /// it per day through `spokenDetail`.
-    /// Centred (#611).
+    /// ### The space either side, and what now fills it (#621)
     ///
-    /// The card is a fixed 300pt and everything under it is full width, so
-    /// SOMETHING is left over either way. Centred is what reads as deliberate:
-    /// leading put the card a few points off centre on a phone, which looks
-    /// like a layout slip rather than a decision.
+    /// #611 centred the 300pt grid on a full-width card, which stopped it
+    /// reading as a layout slip but left the space empty: 46pt down each side of
+    /// a phone, and most of the card on a Mac detail pane.
     ///
-    /// The space either side stays EMPTY. Filling a Mac's with the neighbouring
-    /// months is the three-month reel #605 deleted, and it would make this a
-    /// second calendar again on the one platform that has room for one.
+    /// It now holds the months either side, turned away and faded, with the step
+    /// controls sitting on them. This is NOT #605's reel coming back. That one
+    /// was a calendar of its own — its own cell, its own pips, its own marks for
+    /// today and for the selected day — and deleting it is what made this tab
+    /// use the app's calendar. What repeats here is `EdDayPickerCalendar`'s own
+    /// month grid, unchanged and at the same 268pt, so there is still exactly
+    /// one description in the app of what a day looks like.
+    ///
+    /// The neighbours carry `markedDays` too, which is the part that earns the
+    /// space rather than merely occupying it: a plan runs over a month boundary
+    /// more often than not, and this answers "what have I already planned for
+    /// next month" without a step.
     private var calendarCard: some View {
         EdDayPickerCalendar(
             day: $selectedDay,
@@ -161,7 +169,11 @@ struct MealPlanView: View {
             spokenDetail: { day in
                 let reading = MealPlanDay.reading(for: day, in: readings)
                 return reading.isEmpty ? nil : reading.spokenSummary
-            }
+            },
+            // The card is full width, so there IS space either side. See the
+            // note above for why filling it with the real months is not the
+            // second calendar #605 deleted.
+            showsNeighbourMonths: true
         )
         .frame(maxWidth: .infinity)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
