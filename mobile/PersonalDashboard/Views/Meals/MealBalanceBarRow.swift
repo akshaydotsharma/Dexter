@@ -10,13 +10,13 @@ enum MealBalanceMetrics {
     static let barHeight: CGFloat = 10
 
     /// Percent-of-target column.
-    static var percent: CGFloat {
-        #if os(macOS)
-        44
-        #else
-        40
-        #endif
-    }
+    ///
+    /// 44 on both platforms, which is the widest string this column can print:
+    /// "1000%" measures 42.9pt in the iOS caption face with `monospacedDigit()`
+    /// and 35.8pt in the macOS one. Four digits are not hypothetical here — the
+    /// track ends at 200% and a row past it pins at the edge and says its real
+    /// percent in this column (#618). The phone was 40 and could not hold them.
+    static let percent: CGFloat = 44
 
     /// Verdict-word column. Wide enough for "On track" at footnote size.
     static var verdict: CGFloat {
@@ -114,16 +114,14 @@ struct MealBalanceBarRow: View {
             .font(.edCaption)
             .monospacedDigit()
             .foregroundStyle(Tokens.mutedSoft)
-            .frame(width: MealBalanceMetrics.percent, alignment: .trailing)
+            .fixedColumn(width: MealBalanceMetrics.percent)
     }
 
     private var verdict: some View {
         Text(row.band?.label ?? "–")
             .font(.edCaption)
             .foregroundStyle(row.band?.tint ?? Tokens.mutedSoft)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .frame(width: MealBalanceMetrics.verdict, alignment: .leading)
+            .fixedColumn(width: MealBalanceMetrics.verdict, alignment: .leading, minimumScale: 0.8)
     }
 
     /// The diverging track.
