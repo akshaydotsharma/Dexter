@@ -24,6 +24,15 @@ enum MealSource {
     /// than by a second call.
     static let chat = "chat"
 
+    /// Written by ticking a planned block on the Plan tab (#612).
+    ///
+    /// The numbers came from the plan's own estimate, made when the block was
+    /// written, so this meal was never estimated at the moment it was logged.
+    /// Kept apart from `repeated` — which copies a meal that was already
+    /// EATEN — because the two say different things about where a figure came
+    /// from, and this one can point at a block the user can still open.
+    static let plan = "plan"
+
     /// Logged hands-free through the Shortcut, via `CaptureService` (#546).
     /// Same tools and same guards as `chat`; kept apart because a meal logged
     /// without anyone looking at the screen is the one most worth being able to

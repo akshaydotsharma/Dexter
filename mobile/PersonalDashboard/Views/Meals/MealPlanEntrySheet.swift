@@ -98,6 +98,12 @@ struct MealPlanEntrySheet: View {
     /// What gets written is whatever is in the fields; see `nutrientsToWrite`.
     @State private var hasNumbers = false
 
+    /// The meal this block has been logged as, or nil (#612). Resolved from the
+    /// store rather than from the block's stored id alone, so a meal deleted on
+    /// Tracking un-ticks the control instead of leaving it ticked at nothing.
+    @State private var loggedMeal: LocalMeal?
+    @State private var isLogging = false
+
     @State private var phase: Phase = .idle
     @State private var errorMessage: String?
     @State private var loaded = false
@@ -138,6 +144,7 @@ struct MealPlanEntrySheet: View {
                             ingredientsSection
                             recipeSection
                             notesSection
+                            logSection
                             if let errorMessage {
                                 Text(errorMessage)
                                     .font(.edFootnote)
@@ -521,6 +528,131 @@ struct MealPlanEntrySheet: View {
         }
     }
 
+    // MARK: - Did you have it?
+
+    /// Log this block as a meal, from the numbers it already carries (#612).
+    ///
+    /// ### Why it is here and not on Tracking
+    ///
+    /// Everything a logged meal needs is already on this block: the day, the
+    /// meal type, the dish, the breakdown and the eight totals. Typing it again
+    /// on the composer buys a second estimate of a meal that has been estimated
+    /// once, at the price of a call, a few seconds, and two sets of numbers for
+    /// one dinner that can disagree.
+    ///
+    /// ### Why it acts immediately
+    ///
+    /// Every other control on this sheet is a FIELD, and fields are applied by
+    /// Save. This is an action: it writes a row in another table, the way Delete
+    /// does. Deferring it to Save would make "Cancel" mean "do not log", which
+    /// is a third meaning for a button that already has two.
+    ///
+    /// ### Why a future block cannot be ticked
+    ///
+    /// A meal is a record of something already eaten. The composer will not
+    /// write to a day past today either, and the model's own date is clamped
+    /// forward for the same reason (#592).
+    @ViewBuilder
+    private var logSection: some View {
+        if case .existing(let entry) = target {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                Button {
+                    toggleLogged(entry)
+                } label: {
+                    HStack(alignment: .top, spacing: Space.md) {
+                        Image(systemName: loggedMeal == nil ? "square" : "checkmark.square.fill")
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(loggedMeal == nil ? Tokens.mutedSoft : Tokens.success)
+                            .frame(width: 22, height: 22)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Did you have this meal?")
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.ink)
+                            Text(logCaption)
+                                .font(.edCaption)
+                                .foregroundStyle(loggedMeal == nil ? Tokens.muted : Tokens.success)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if isLogging {
+                            ProgressView()
+                                #if os(macOS)
+                                .controlSize(.small)
+                                #else
+                                .scaleEffect(0.7)
+                                #endif
+                        }
+                    }
+                    .padding(Space.lg)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+                    .paperBorder(Tokens.border, radius: Radius.lg)
+                    .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canLog || isLogging)
+                .opacity(canLog ? 1 : 0.55)
+                .accessibilityLabel("Did you have this meal?")
+                .accessibilityValue(loggedMeal == nil ? "Not logged" : "Logged")
+                .accessibilityHint(canLog ? "Logs it to the day it was planned for, with no new estimate" : "Only a meal on today or an earlier day can be logged")
+            }
+        }
+    }
+
+    /// What the control says under its question, in the three states it has.
+    private var logCaption: String {
+        guard canLog else {
+            return "Planned for \(Self.dayPhrase.string(from: day)). You can log it on the day."
+        }
+        guard loggedMeal != nil else {
+            if enteredNutrients == nil {
+                return "Logs it onto \(Self.dayPhrase.string(from: day)) with no numbers, since this block has none."
+            }
+            return "Logs it onto \(Self.dayPhrase.string(from: day)) with these numbers. No new estimate."
+        }
+        return "Logged to \(Self.dayPhrase.string(from: day)). Untick to remove it from Tracking."
+    }
+
+    /// Only a block on today or an earlier day. Read from the DAY FIELD rather
+    /// than from the stored block, so moving a block forward in the sheet
+    /// disables the control before the move is even saved.
+    private var canLog: Bool {
+        Calendar.current.startOfDay(for: day) <= Calendar.current.startOfDay(for: Date())
+    }
+
+    private func toggleLogged(_ entry: LocalMealPlanEntry) {
+        errorMessage = nil
+        isLogging = true
+        defer { isLogging = false }
+        do {
+            if loggedMeal == nil {
+                // The block is saved FIRST, so what gets logged is what is on
+                // screen. Without it, an estimate run in this sheet and never
+                // saved would be logged as the numbers the block held before it.
+                try persist()
+                loggedMeal = try plans.logAsMeal(entry)
+                status = entry.statusEnum
+                Haptics.light()
+            } else {
+                try plans.unlogAsMeal(entry)
+                loggedMeal = nil
+                status = entry.statusEnum
+                Haptics.light()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private static let dayPhrase: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE d MMM"
+        return f
+    }()
+
     // MARK: - Footer
 
     private var footer: some View {
@@ -571,6 +703,7 @@ struct MealPlanEntrySheet: View {
             recipe = entry.recipe ?? ""
             status = entry.statusEnum
             items = entry.items
+            loggedMeal = try? plans.loggedMeal(for: entry)
             let stored = entry.plannedNutrients
             hasNumbers = stored != nil
             for nutrient in Nutrient.allCases {
@@ -638,52 +771,62 @@ struct MealPlanEntrySheet: View {
     private func save() {
         errorMessage = nil
         do {
-            switch target {
-            case .new:
-                try plans.addEntry(
-                    date: day,
-                    mealType: mealType,
-                    title: title,
-                    shortTitle: titleToWrite,
-                    ingredients: ingredients,
-                    notes: notes,
-                    recipe: recipe,
-                    status: .planned,
-                    nutrients: nutrientsToWrite,
-                    items: items,
-                    // Provenance, not content. On a new block `hasNumbers` is
-                    // true only after an estimate has run, so a user who typed
-                    // the figures themselves is recorded as having done so.
-                    source: hasNumbers ? MealPlanSource.chat : MealPlanSource.manual
-                )
-            case .existing(let entry):
-                try plans.updateEntry(
-                    entry,
-                    date: day,
-                    mealType: mealType,
-                    title: title,
-                    // `.some(...)`, so a title edited without a re-estimate
-                    // CLEARS the stored name rather than leaving the block
-                    // labelled after the words it used to hold. The naming pass
-                    // picks it up again (#603).
-                    shortTitle: .some(titleToWrite),
-                    ingredients: ingredients,
-                    // `.some(...)` all the way down: the sheet always knows the
-                    // state of both text fields, so "leave it alone" is never
-                    // what it means. An emptied note clears the note, an emptied
-                    // recipe clears the recipe, and an emptied set of numbers
-                    // removes them (#444, #488).
-                    notes: .some(notes),
-                    recipe: .some(recipe),
-                    status: status,
-                    nutrients: .some(nutrientsToWrite),
-                    items: items
-                )
-            }
+            try persist()
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Write the fields, without dismissing.
+    ///
+    /// Split out of `save()` for the log control (#612), which has to commit
+    /// what is on screen BEFORE it copies the block into a meal: an estimate
+    /// run in this sheet and not yet saved would otherwise be logged as the
+    /// numbers the block held before it.
+    private func persist() throws {
+    switch target {
+        case .new:
+            try plans.addEntry(
+                date: day,
+                mealType: mealType,
+                title: title,
+                shortTitle: titleToWrite,
+                ingredients: ingredients,
+                notes: notes,
+                recipe: recipe,
+                status: .planned,
+                nutrients: nutrientsToWrite,
+                items: items,
+                // Provenance, not content. On a new block `hasNumbers` is
+                // true only after an estimate has run, so a user who typed
+                // the figures themselves is recorded as having done so.
+                source: hasNumbers ? MealPlanSource.chat : MealPlanSource.manual
+            )
+        case .existing(let entry):
+            try plans.updateEntry(
+                entry,
+                date: day,
+                mealType: mealType,
+                title: title,
+                // `.some(...)`, so a title edited without a re-estimate
+                // CLEARS the stored name rather than leaving the block
+                // labelled after the words it used to hold. The naming pass
+                // picks it up again (#603).
+                shortTitle: .some(titleToWrite),
+                ingredients: ingredients,
+                // `.some(...)` all the way down: the sheet always knows the
+                // state of both text fields, so "leave it alone" is never
+                // what it means. An emptied note clears the note, an emptied
+                // recipe clears the recipe, and an emptied set of numbers
+                // removes them (#444, #488).
+                notes: .some(notes),
+                recipe: .some(recipe),
+                status: status,
+                nutrients: .some(nutrientsToWrite),
+                items: items
+            )
+    }
     }
 
     private func delete(_ entry: LocalMealPlanEntry) {

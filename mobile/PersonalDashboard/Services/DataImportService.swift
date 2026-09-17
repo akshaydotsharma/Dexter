@@ -928,6 +928,7 @@ final class DataImportService {
                     slotIndex: dto.slotIndex,
                     title: dto.title,
                     shortTitle: dto.shortTitle,
+                    loggedMealUUID: dto.loggedMealUUID,
                     notes: dto.notes,
                     recipe: dto.recipe,
                     status: dto.status,

@@ -262,6 +262,17 @@ struct MealPlanBlock: View {
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            // Logged, said on the block rather than only inside it (#612).
+            // A tick is the one state worth knowing without opening a meal:
+            // it answers "have I dealt with this" for the whole day at a
+            // glance. `success` green, because this is the one mark on the
+            // plan that IS a verdict about a thing that happened.
+            if entry.statusEnum == .eaten {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Tokens.success)
+                    .accessibilityHidden(true)
+            }
             // Shortened, not the whole title (#603). A block is a row in a
             // stack of four tiles, and a title typed as a sentence ("leftover
             // chicken curry with the rice from Sunday, plus a salad") pushed

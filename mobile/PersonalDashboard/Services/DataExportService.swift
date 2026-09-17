@@ -705,6 +705,7 @@ final class DataExportService {
             slotIndex: entry.slotIndex,
             title: entry.title,
             shortTitle: entry.shortTitle,
+            loggedMealUUID: entry.loggedMealUUID,
             ingredientsData: entry.ingredientsData,
             notes: entry.notes,
             recipe: entry.recipe,

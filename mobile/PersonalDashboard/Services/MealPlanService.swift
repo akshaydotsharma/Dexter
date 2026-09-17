@@ -110,6 +110,12 @@ struct MealPlanService {
             mealType: mealType.rawValue,
             slotIndex: try nextSlotIndex(on: anchoredDay, mealType: mealType),
             title: cleanTitle,
+            // On the INSERT path as well as the upsert one above. It was missing
+            // here, so every new block silently dropped the name its estimate
+            // had just returned and fell back to shortening the typed title —
+            // the exact defect #603 exists to remove. Caught by
+            // `MealPlanLoggingTests`, not by the eye.
+            shortTitle: shortTitle?.trimmedNonEmptyPlanField,
             notes: notes?.trimmedNonEmptyPlanField,
             recipe: recipe?.trimmedNonEmptyPlanField,
             status: status.rawValue,
@@ -233,7 +239,135 @@ struct MealPlanService {
         try save()
     }
 
+    // MARK: - Logging a planned meal (#612)
+
+    /// The meal this block was logged as, or nil.
+    ///
+    /// Resolves the stored id every time rather than trusting it. A meal
+    /// deleted from Tracking leaves the id behind on the block, and reading the
+    /// id alone would then show a tick for a row that is not there. Nil here
+    /// means "not logged", whichever way it got that way.
+    func loggedMeal(for entry: LocalMealPlanEntry) throws -> LocalMeal? {
+        guard let id = entry.loggedMealUUID else { return nil }
+        let descriptor = FetchDescriptor<LocalMeal>(
+            predicate: #Predicate { $0.clientUUID == id }
+        )
+        return try store.context.fetch(descriptor).first
+    }
+
+    /// Log this block as a meal, from the numbers it already holds (#612).
+    ///
+    /// ### Why there is no API call here
+    ///
+    /// The block was estimated when it was written: it carries the eight
+    /// totals, the per-dish breakdown, the meal type and the day. Asking the
+    /// model to estimate the same dish again would spend a call and a few
+    /// seconds to arrive at numbers this row already has, and could arrive at
+    /// DIFFERENT ones, which would make the plan and the log disagree about a
+    /// meal they both describe.
+    ///
+    /// ### Why the meal is a copy, not a move
+    ///
+    /// The block stays. A plan is a record of what was intended and the meal is
+    /// a record of what happened, and a day is read for both — see
+    /// `LocalMealPlanEntry`'s own note on why they are two tables. The tick is
+    /// what joins them, through `loggedMealUUID`.
+    ///
+    /// ### Idempotent
+    ///
+    /// A block already logged returns the meal it already wrote. Two taps
+    /// cannot put one dinner in a day twice.
+    ///
+    /// - Parameter now: injected so a test can pin the clock. On the block's own
+    ///   day the meal is stamped at the real time; on an earlier day it takes
+    ///   the hour that meal type is eaten, which is the rule the composer uses
+    ///   for a retrospective log (#592).
+    @discardableResult
+    func logAsMeal(
+        _ entry: LocalMealPlanEntry,
+        meals: MealService? = nil,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) throws -> LocalMeal {
+        if let existing = try loggedMeal(for: entry) { return existing }
+
+        let day = entry.deviceDay
+        let type = entry.mealTypeEnum
+        let loggedAt = calendar.isDate(day, inSameDayAs: now)
+            ? now
+            : MealEstimationService.retrospectiveInstant(for: type, on: day, calendar: calendar)
+
+        let service = meals ?? MealService(store: store)
+        let planned = entry.plannedNutrients
+
+        let meal = try service.addMeal(
+            date: day,
+            loggedAt: loggedAt,
+            mealType: type,
+            // The user's own words stay the meal's description, and the block's
+            // short name comes across as the meal's name, so the row reads the
+            // same in both places without a naming pass (#603).
+            mealDescription: entry.title,
+            title: MealDisplayName.short(for: entry),
+            nutrients: planned ?? .zero,
+            items: entry.items,
+            // A plan's numbers are a forecast of a typical portion, which is a
+            // weaker claim than an estimate made from what was actually eaten.
+            // Stated as a middling confidence rather than borrowed from a field
+            // the block does not have.
+            confidence: planned == nil ? 0 : 0.6,
+            source: MealSource.plan,
+            // A block nobody put numbers on still logs. Losing the fact that you
+            // ate is worse than losing the number, and inventing the number is
+            // worse than both — the same call the composer's failure path makes.
+            needsDetail: planned == nil,
+            clientUUID: nil
+        )
+
+        entry.loggedMealUUID = meal.clientUUID
+        entry.statusEnum = .eaten
+        entry.updatedAt = Date()
+        try save()
+        return meal
+    }
+
+    /// Undo `logAsMeal`: delete the meal it wrote and plan the block again.
+    ///
+    /// Deletes ONLY the meal the block itself wrote, by id. A meal the user
+    /// logged by hand on the same day is not this block's to remove, which is
+    /// the whole reason the link is stored rather than matched.
+    func unlogAsMeal(_ entry: LocalMealPlanEntry, meals: MealService? = nil) throws {
+        if let meal = try loggedMeal(for: entry) {
+            let service = meals ?? MealService(store: store)
+            try service.deleteMeal(meal)
+        }
+        entry.loggedMealUUID = nil
+        entry.statusEnum = .planned
+        entry.updatedAt = Date()
+        try save()
+    }
+
+    /// True when this block may be logged at all.
+    ///
+    /// A meal is a record of something already eaten, so a block planned for a
+    /// later day cannot be one. The same rule the Tracking composer works to,
+    /// where the day control cannot pass today (#592), and the same rule
+    /// `MealToolSchema.resolveDay` enforces on the model by clamping a future
+    /// date back to today.
+    static func canLog(
+        _ entry: LocalMealPlanEntry,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Bool {
+        calendar.startOfDay(for: entry.deviceDay) <= calendar.startOfDay(for: now)
+    }
+
     /// Delete a block, then close the gap it left in its slot.
+    ///
+    /// The meal it logged, if it logged one, is deliberately LEFT ALONE. The
+    /// block is a plan and deleting it says the plan is gone; the meal is a
+    /// record of something that was eaten, and no edit to a plan can make that
+    /// untrue. Untick it first if the meal should go too.
     func deleteEntry(_ entry: LocalMealPlanEntry) throws {
         let day = WallClock.startOfStoredDay(entry.date)
         let type = entry.mealTypeEnum

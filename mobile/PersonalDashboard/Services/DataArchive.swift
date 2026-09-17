@@ -671,6 +671,11 @@ enum DataArchive {
         /// `MealDTO.title`, and a `var` with a default so every existing
         /// construction site keeps compiling.
         var shortTitle: String? = nil
+        /// #612. The meal this block was logged as. Optional and additive, and
+        /// it travels so a restored device knows the tick is already spent —
+        /// without it a restore would offer to log a meal that is in the archive
+        /// beside it.
+        var loggedMealUUID: String? = nil
         let ingredientsData: Data?
         let notes: String?
         /// #599. Optional because a block need not have one, not because the

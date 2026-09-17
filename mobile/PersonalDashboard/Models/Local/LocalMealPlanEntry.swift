@@ -94,6 +94,26 @@ final class LocalMealPlanEntry {
     /// such gap.
     var shortTitle: String?
 
+    /// The `LocalMeal.clientUUID` this block was logged as, or nil (#612).
+    ///
+    /// A planned block can be ticked to say it was eaten, which writes a real
+    /// meal onto the day from the numbers already stored here. This is the link
+    /// back to that row, and it is what makes the tick REVERSIBLE and
+    /// idempotent: untick deletes the meal it names, and a second tick finds the
+    /// meal already there instead of logging the dinner twice.
+    ///
+    /// Not derivable. Matching by day and meal type would find a meal the user
+    /// logged themselves and delete it on an untick, and matching by title would
+    /// break the moment either text was edited.
+    ///
+    /// Nil is the normal state. It stays nil on a block that was never ticked,
+    /// and goes back to nil when one is unticked. It is NOT cleared when the
+    /// meal it names is deleted from Tracking; see `MealPlanService.loggedMeal`,
+    /// which resolves it and treats a missing row as "not logged".
+    ///
+    /// Additive and OPTIONAL, the safe kind of SwiftData migration.
+    var loggedMealUUID: String?
+
     /// JSON-encoded `[String]`: the MAIN ingredients, not a shopping list.
     ///
     /// Optional, and nil means none were named, which is a real state — "eat
@@ -203,6 +223,7 @@ final class LocalMealPlanEntry {
         slotIndex: Int = 0,
         title: String,
         shortTitle: String? = nil,
+        loggedMealUUID: String? = nil,
         ingredientsData: Data? = nil,
         notes: String? = nil,
         recipe: String? = nil,
@@ -229,6 +250,7 @@ final class LocalMealPlanEntry {
         self.slotIndex = slotIndex
         self.title = title
         self.shortTitle = shortTitle
+        self.loggedMealUUID = loggedMealUUID
         self.ingredientsData = ingredientsData
         self.notes = notes
         self.recipe = recipe
