@@ -14,11 +14,16 @@ enum FinanceBarRowMetrics {
     static let name: CGFloat = 150
 
     /// Share-of-period column.
+    ///
+    /// Wide enough for the longest value the column ever prints, "100%", with
+    /// `monospacedDigit()` applied: 35.1pt at the iOS caption size, 29.3pt at
+    /// the macOS one (#616). The old 30pt iOS width was under that, so a
+    /// category at full share wrapped to "100" over "%".
     static var share: CGFloat {
         #if os(macOS)
         34
         #else
-        30
+        38
         #endif
     }
 
@@ -194,6 +199,12 @@ struct FinanceCategoryBarRow: View {
             .font(.edCaption)
             .monospacedDigit()
             .foregroundStyle(Tokens.mutedSoft)
+            // The column is sized for "100%" at the default text size, so this
+            // only ever engages under a larger Dynamic Type setting. Shrinking
+            // by a fifth keeps the value whole where wrapping would split the
+            // number from its sign (#616).
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
             .frame(width: FinanceBarRowMetrics.share, alignment: .trailing)
     }
 

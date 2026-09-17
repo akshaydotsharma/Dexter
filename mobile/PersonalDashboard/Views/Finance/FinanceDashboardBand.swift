@@ -156,6 +156,11 @@ struct FinanceDashboardBand: View {
                     .font(.system(size: 10, weight: .semibold))
                 Text(formatDelta(delta))
                     .font(.edFootnote)
+                    // Four characters at most, and the header row can squeeze
+                    // it when the eyebrow is a long custom range. Fixed so the
+                    // chip never splits "100" from "%" (#616).
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .foregroundStyle(chipColor)
             .padding(.horizontal, Space.sm)
