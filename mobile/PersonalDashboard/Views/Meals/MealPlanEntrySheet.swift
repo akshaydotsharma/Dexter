@@ -113,8 +113,8 @@ struct MealPlanEntrySheet: View {
                         VStack(alignment: .leading, spacing: Space.lg) {
                             mealTypeSection
                             titleSection
-                            daySection
                             estimateSection
+                            daySection
                             numbersSection
                             ingredientsSection
                             recipeSection
@@ -199,44 +199,48 @@ struct MealPlanEntrySheet: View {
 
     /// The one API call in this sheet, and the one control that spends money.
     ///
-    /// Labelled by what it will DO rather than by what it is ("Estimate with
-    /// Dexter", not "AI"), and it states what comes back, because a button that
-    /// costs a few seconds and a few cents should say what it is buying.
+    /// ### Why it sits directly under the dish
+    ///
+    /// The sheet is read top to bottom as the order of the work: what are you
+    /// having, work it out, which day, what it costs. It used to ask for the day
+    /// in between, which put a field nobody had a question about between the
+    /// dish and the control that acts on it (#607).
+    ///
+    /// ### Why it is a full-width slab
+    ///
+    /// It was a small secondary button in a row with empty space beside it,
+    /// under a grey sentence explaining itself. That made the one control that
+    /// fills the rest of the sheet in look like the least important thing on it.
+    /// The explanation came off with it: a button that says what it will do does
+    /// not need a paragraph saying the same thing more slowly.
     private var estimateSection: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
+        Button(action: estimate) {
             HStack(spacing: Space.sm) {
-                Button(action: estimate) {
-                    HStack(spacing: Space.xs) {
-                        if phase == .estimating {
-                            ProgressView()
-                                #if os(macOS)
-                                .controlSize(.small)
-                                #else
-                                .scaleEffect(0.7)
-                                #endif
-                        } else {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        Text(estimateLabel)
-                    }
+                if phase == .estimating {
+                    ProgressView()
+                        #if os(macOS)
+                        .controlSize(.small)
+                        #else
+                        .scaleEffect(0.7)
+                        #endif
+                        .tint(Tokens.accentFg)
+                } else {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13, weight: .semibold))
                 }
-                .buttonStyle(EdButtonStyle(kind: hasNumbers ? .secondary : .primary, size: .sm))
-                .disabled(!canEstimate)
-                .opacity(canEstimate ? 1 : 0.5)
-                Spacer(minLength: 0)
+                Text(estimateLabel)
             }
-
-            Text("Dexter works out the nutrition, the key ingredients and a recipe when the method is not obvious. You can edit all of it afterwards.")
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .fixedSize(horizontal: false, vertical: true)
         }
+        .buttonStyle(MealEstimateButtonStyle())
+        .disabled(!canEstimate)
+        .opacity(canEstimate ? 1 : 0.45)
+        .accessibilityLabel(estimateLabel)
+        .accessibilityHint("Works out the nutrition, the key ingredients and a recipe. You can edit all of it afterwards.")
     }
 
     private var estimateLabel: String {
         if phase == .estimating { return "Working it out…" }
-        return hasNumbers ? "Estimate again" : "Estimate with Dexter"
+        return hasNumbers ? "Estimate again" : "Estimate"
     }
 
     // MARK: - Numbers
@@ -660,5 +664,44 @@ struct MealPlanEntrySheet: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+/// The plan sheet's Estimate control (#607).
+///
+/// ### Why it is not `EdButtonStyle(kind: .primary)`
+///
+/// The primary style is the app's ink-on-paper slab, and it is what the Add and
+/// Save buttons in this sheet's footer wear. Estimate is not one of those: it
+/// does not commit anything, it goes and fetches. Drawing it in the same ink as
+/// the footer's Save would put two identical-looking slabs on one sheet with
+/// completely different consequences, which is the one mistake a form cannot
+/// afford to invite.
+///
+/// So it takes a green ground and a taller box. The height is the point as much
+/// as the colour: this is a control you press once and then wait on, and a 6pt
+/// vertical padding reads as a link with a background rather than as something
+/// with a press in it.
+///
+/// ### Green here is not a verdict
+///
+/// On the Tracking surfaces hue means a reading of a quantity against a target,
+/// and green means "on track". That rule does not reach this sheet: the plan
+/// palette is identity-only (see `MealPlanNutrientPills`), and a filled control
+/// under the dish field is not a mark on a number. It cannot be confused with a
+/// verdict because there is no quantity for it to be a verdict ABOUT.
+struct MealEstimateButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.edBodyMedium)
+            .foregroundStyle(Tokens.accentFg)
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+            .frame(maxWidth: .infinity)
+            .background(
+                Tokens.success.opacity(configuration.isPressed ? 0.82 : 1),
+                in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+            )
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
