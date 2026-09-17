@@ -218,13 +218,20 @@ struct ChatResultCard: View {
         let warning: Bool
     }
 
+    /// Built once, not per result card (#614).
+    private static let chipDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d, h:mm a"
+        return f
+    }()
+
     private func makeChips() -> [ResultChip] {
         var chips: [ResultChip] = []
         if let due = result.dueDate {
             let isWarning = due.timeIntervalSinceNow < 24 * 3600 && due.timeIntervalSinceNow > 0
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MMM d, h:mm a"
-            chips.append(ResultChip(text: formatter.string(from: due), icon: "calendar", warning: isWarning))
+            chips.append(ResultChip(
+                text: Self.chipDateFormatter.string(from: due), icon: "calendar", warning: isWarning
+            ))
         }
         if let tag = result.tag {
             chips.append(ResultChip(text: tag, icon: "tag", warning: false))

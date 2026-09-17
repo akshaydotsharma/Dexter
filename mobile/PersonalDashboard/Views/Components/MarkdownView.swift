@@ -224,11 +224,37 @@ func markdownInlineText(_ source: String) -> Text {
 // the rest through Foundation's inline markdown parser so inline
 // formatting renders as styled text.
 
+/// The first line with something on it, without splitting the whole string (#614).
+///
+/// `components(separatedBy: .newlines)` materialises EVERY line of the note in
+/// order to use one of them, and this runs for each note row that scrolls into
+/// view. The real store's longest note is 10,902 characters and the preview is a
+/// single line, so the split was the whole cost.
+///
+/// Stops at the first line that is not all whitespace, so a note that starts
+/// with text reads exactly one line. `isNewline` rather than a literal "\n", so
+/// CRLF and the Unicode line separators behave as they did before.
+func firstNonBlankLine(of source: String) -> String? {
+    var lineStart = source.startIndex
+    var index = source.startIndex
+    var sawNonWhitespace = false
+
+    while index < source.endIndex {
+        let character = source[index]
+        if character.isNewline {
+            if sawNonWhitespace { return String(source[lineStart..<index]) }
+            index = source.index(after: index)
+            lineStart = index
+            continue
+        }
+        if !character.isWhitespace { sawNonWhitespace = true }
+        index = source.index(after: index)
+    }
+    return sawNonWhitespace ? String(source[lineStart..<source.endIndex]) : nil
+}
+
 func markdownSnippetAttributed(_ source: String) -> AttributedString {
-    let firstLine = source
-        .components(separatedBy: .newlines)
-        .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-        ?? source
+    let firstLine = firstNonBlankLine(of: source) ?? source
     let stripped = stripMarkdownBlockPrefix(firstLine)
     if let attr = try? AttributedString(
         markdown: stripped,

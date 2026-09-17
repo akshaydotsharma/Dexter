@@ -237,9 +237,7 @@ private struct RecurringExpenseRow: View {
     private var secondaryLine: String {
         var pieces = ["\(template.categoryEnum.displayName) · on the \(ordinal(template.dayOfMonth))"]
         if let end = template.endDate {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "d MMM yyyy"
-            pieces.append("until \(fmt.string(from: end))")
+            pieces.append("until \(Self.endDateFormatter.string(from: end))")
         }
         if !template.isActive {
             pieces.append("paused")
@@ -248,13 +246,26 @@ private struct RecurringExpenseRow: View {
     }
 
     private var amountLabel: String {
-        let formatter = NumberFormatter()
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 2
-        formatter.numberStyle = .decimal
-        let amount = formatter.string(from: NSNumber(value: template.amount)) ?? String(format: "%.2f", template.amount)
+        let amount = Self.amountFormatter.string(from: NSNumber(value: template.amount))
+            ?? String(format: "%.2f", template.amount)
         return "\(template.currency.uppercased()) \(amount)/mo"
     }
+
+    // Built once, not per row (#614). `accessibilityLabel` reads both of these
+    // as well, so each row was constructing four formatters, not two.
+    private static let endDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+
+    private static let amountFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        f.numberStyle = .decimal
+        return f
+    }()
 
     private var accessibilityLabel: String {
         "\(primaryLine), \(amountLabel), \(secondaryLine). Tap to edit."

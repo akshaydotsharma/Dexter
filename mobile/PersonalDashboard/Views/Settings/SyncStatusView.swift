@@ -66,7 +66,7 @@ struct SyncStatusView: View {
                 }
             }
         }
-        .onAppear { coordinator.refreshStatus() }
+        .task { await coordinator.refreshStatus() }
     }
     #endif
 
@@ -111,7 +111,7 @@ struct SyncStatusView: View {
             .formStyle(.grouped)
         }
         .frame(width: Self.popoverSize.width, height: Self.popoverSize.height)
-        .onAppear { coordinator.refreshStatus() }
+        .task { await coordinator.refreshStatus() }
     }
     #endif
 

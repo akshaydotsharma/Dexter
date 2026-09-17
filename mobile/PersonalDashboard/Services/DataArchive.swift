@@ -40,7 +40,7 @@ enum DataArchive {
         var excludedModels: [String]? = nil
     }
 
-    struct Payload: Codable {
+    struct Payload: Codable, Sendable {
         var tasks: [TaskDTO]
         var notes: [NoteDTO]
         var noteFolders: [NoteFolderDTO]

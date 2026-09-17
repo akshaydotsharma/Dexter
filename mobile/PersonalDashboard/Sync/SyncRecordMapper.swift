@@ -5,7 +5,7 @@ import Foundation
 /// Everything downstream of here is entity-agnostic: the diff, the oplog and the
 /// status UI all work on `SyncRecord`, which is what keeps them from growing a
 /// 13-way switch each.
-struct SyncRecord {
+struct SyncRecord: Sendable {
     let entity: String
     let recordID: String
     let json: JSONValue

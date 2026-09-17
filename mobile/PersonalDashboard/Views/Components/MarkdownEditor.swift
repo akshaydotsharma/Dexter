@@ -56,7 +56,8 @@ struct MarkdownEditor: UIViewRepresentable {
             // `noteMarkdown`, not `.text`: the display string carries U+FFFC
             // object-replacement characters where images sit, which is not what
             // the note stores (#395).
-            context.coordinator.parent.text = tv.noteMarkdown
+            tv.invalidateNoteMarkdownCache()
+            context.coordinator.parent.text = tv.currentNoteMarkdown
         }
         toolbar.frame = CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44)
         toolbar.autoresizingMask = .flexibleWidth
@@ -86,7 +87,8 @@ struct MarkdownEditor: UIViewRepresentable {
         }
         tv.onImageInserted = { [weak tv] in
             guard let tv else { return }
-            context.coordinator.parent.text = tv.noteMarkdown
+            tv.invalidateNoteMarkdownCache()
+            context.coordinator.parent.text = tv.currentNoteMarkdown
             tv.refreshPlaceholder()
             tv.invalidateIntrinsicContentSize()
         }
@@ -101,7 +103,7 @@ struct MarkdownEditor: UIViewRepresentable {
         // holds a whole `![](note-images/…)` token, so comparing the two would
         // never match on a note containing an image and this would reload and
         // reset the cursor on every SwiftUI pass.
-        if uiView.noteMarkdown != text {
+        if uiView.currentNoteMarkdown != text {
             // Preserve cursor position across SwiftUI-driven re-renders.
             let savedRange = uiView.selectedRange
             uiView.setNoteMarkdown(text)
@@ -124,10 +126,22 @@ struct MarkdownEditor: UIViewRepresentable {
     /// that hasn't been width-constrained yet and the text spills off-screen
     /// as one infinite line. We measure with the proposed width so the
     /// textView wraps and only then ask SwiftUI for vertical space.
+    ///
+    /// ⚠️ `UITextView.sizeThatFits` on a non-scrolling view lays out the WHOLE
+    /// document, so this is O(note), not O(viewport) (#614). SwiftUI calls this
+    /// several times per layout pass, with different proposals, and a layout pass
+    /// happens on every keystroke. On a 10,900 character note that was the single
+    /// most expensive thing typing did.
+    ///
+    /// The measurement is therefore memoised on (width, content). Repeat calls
+    /// within one pass are free, which is where the wins are: the cache is
+    /// expected to MISS across keystrokes, because the content genuinely changed,
+    /// and re-measuring then is correct. Hashing the string is O(note) too, but
+    /// string hashing runs at memory speed while TextKit layout does not.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: PaddedTextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0, width.isFinite else { return nil }
-        let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        return CGSize(width: width, height: max(measured.height, minHeight))
+        let height = uiView.measuredHeight(fittingWidth: width)
+        return CGSize(width: width, height: max(height, minHeight))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -141,8 +155,15 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            parent.text = textView.noteMarkdown
-            (textView as? PaddedTextView)?.refreshPlaceholder()
+            // The user's own edit does not go through the `text` /
+            // `attributedText` setters, so the memo has to be dropped by hand
+            // here. Dropped BEFORE the read, so the read repopulates it and the
+            // `updateUIView` that follows this keystroke hits the cache instead
+            // of walking the note a second time (#614).
+            let padded = textView as? PaddedTextView
+            padded?.invalidateNoteMarkdownCache()
+            parent.text = padded?.currentNoteMarkdown ?? textView.noteMarkdown
+            padded?.refreshPlaceholder()
         }
 
         /// Return-key list continuation. Pressing Return on a list line inserts
@@ -161,8 +182,10 @@ struct MarkdownEditor: UIViewRepresentable {
             // `applyDisplayString` rather than `.text =`: assigning a plain String
             // discards every inline image attachment in the note (#395).
             textView.applyDisplayString(edit.text, selection: edit.selection)
-            parent.text = textView.noteMarkdown
-            (textView as? PaddedTextView)?.refreshPlaceholder()
+            let padded = textView as? PaddedTextView
+            padded?.invalidateNoteMarkdownCache()
+            parent.text = padded?.currentNoteMarkdown ?? textView.noteMarkdown
+            padded?.refreshPlaceholder()
             textView.invalidateIntrinsicContentSize()
             return false
         }
@@ -282,6 +305,71 @@ final class PaddedTextView: UITextView {
         }
     }
 
+    /// The note's markdown, serialised at most once per change (#614).
+    ///
+    /// `noteMarkdown` walks the whole attributed string and rebuilds the markdown
+    /// with string appends, so it is O(note). It used to run two or three times
+    /// per keystroke: once in `textViewDidChange` to publish the binding, again in
+    /// `updateUIView` to decide whether the binding had diverged, and a third time
+    /// from the format toolbar. On a 10,900 character note that is most of a
+    /// frame budget spent re-deriving a string we had already derived.
+    ///
+    /// The cache is cleared by the `text` / `attributedText` setters below and by
+    /// `textViewDidChange`, which between them cover every way the content can
+    /// change. A stale entry is therefore not reachable: if you add a new mutation
+    /// path, clear this in it.
+    private var cachedNoteMarkdown: String?
+
+    /// Bumped once per content change. The key both memos are built on.
+    ///
+    /// A counter, not a hash of the text. `UITextView.text` bridges the whole
+    /// `NSTextStorage` into a fresh Swift `String` on every read, so hashing it
+    /// to key a cache costs about as much as the work being cached: measured at
+    /// 0.35ms per call on a 10,900 character note, which is most of what the memo
+    /// was supposed to save. Incrementing an `Int` is free.
+    private var contentGeneration: Int = 0
+
+    /// `noteMarkdown`, memoised. Prefer this everywhere on the hot path.
+    var currentNoteMarkdown: String {
+        if let cachedNoteMarkdown { return cachedNoteMarkdown }
+        let value = noteMarkdown
+        cachedNoteMarkdown = value
+        return value
+    }
+
+    /// Declare that the content changed, and drop everything derived from it.
+    ///
+    /// ⚠️ EVERY mutation path must reach this. The setters below call it, and the
+    /// coordinator calls it for the user's own typing, which does not go through
+    /// any setter. A path that forgets it does not produce a slow editor, it
+    /// produces a note that saves the wrong body.
+    func invalidateNoteMarkdownCache() {
+        cachedNoteMarkdown = nil
+        contentGeneration &+= 1
+    }
+
+    /// Last height measured, keyed on what it was measured from (#614).
+    ///
+    /// One entry, not a dictionary: SwiftUI re-measures the same view at the same
+    /// width repeatedly within a single layout pass, and that repetition is what
+    /// this exists to collapse. Keeping older widths would only grow the memo for
+    /// the rotation that already invalidated them.
+    private var measuredHeightMemo: (width: CGFloat, generation: Int, height: CGFloat)?
+
+    /// Height this text view needs at `width`, laid out at most once per change.
+    func measuredHeight(fittingWidth width: CGFloat) -> CGFloat {
+        if let memo = measuredHeightMemo,
+           memo.width == width,
+           memo.generation == contentGeneration {
+            return memo.height
+        }
+        let measured = sizeThatFits(
+            CGSize(width: width, height: .greatestFiniteMagnitude)
+        ).height
+        measuredHeightMemo = (width: width, generation: contentGeneration, height: measured)
+        return measured
+    }
+
     /// Derive the placeholder's visibility from the text on EVERY assignment,
     /// including the programmatic ones (#424).
     ///
@@ -294,6 +382,7 @@ final class PaddedTextView: UITextView {
         get { super.attributedText }
         set {
             super.attributedText = newValue
+            invalidateNoteMarkdownCache()
             refreshPlaceholder()
         }
     }
@@ -302,6 +391,7 @@ final class PaddedTextView: UITextView {
         get { super.text }
         set {
             super.text = newValue
+            invalidateNoteMarkdownCache()
             refreshPlaceholder()
         }
     }
