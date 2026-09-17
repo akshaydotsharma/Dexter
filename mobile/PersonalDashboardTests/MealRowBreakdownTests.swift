@@ -199,54 +199,70 @@ final class MealRowBreakdownTests: XCTestCase {
 
     // MARK: - Phone width
 
-    /// Each of the two lines fits the column at phone width.
+    /// Every pill fits its line's EVEN share at phone width (#610).
     ///
-    /// The breakdown is two FIXED lines now, four across then three across, so
-    /// a pill that runs out of room cannot wrap away from it: `MealStatPill`
-    /// sets `lineLimit(1)` on both its label and its value, so the label
-    /// truncates instead. This is the assertion that stands in for looking at
-    /// the row.
+    /// The breakdown is two fixed lines, four across then three across, and
+    /// since #610 each line is shared evenly rather than drawn at natural
+    /// widths. A pill that runs out of room cannot wrap away from it:
+    /// `MealStatPill` sets `lineLimit(1)` on both its label and its value, so
+    /// the label truncates instead. This is the assertion that stands in for
+    /// looking at the row.
     ///
-    /// It also records why the pills are not the day card's even
-    /// `fillsWidth` split. An even three-across share of this column is
-    /// 102.7 pt and "Saturated fat" wants 123 pt, so that construction
-    /// truncates the one nutrient whose name is hardest to guess from a stub.
-    ///
-    /// The column is the 390 pt phone width less the row's own horizontal
+    /// The column is the 390pt phone width less the row's own horizontal
     /// padding and the icon gutter.
     func testEveryPillFitsItsLineAtPhoneWidth() throws {
-        let column: CGFloat = 390 - (Space.lg * 2) - 22 - Space.md
-        try assertLineFits(Nutrient.macrosInOrder, inColumn: column)
-        try assertLineFits(Nutrient.ceilingsInOrder, inColumn: column)
+        try assertEvenShareFits(Nutrient.macrosInOrder)
+        try assertEvenShareFits(Nutrient.ceilingsInOrder)
     }
 
-    /// The pills sit at their natural width with one gap between each, so the
-    /// line fits when the widths and the gaps do.
-    private func assertLineFits(_ group: [Nutrient], inColumn column: CGFloat) throws {
-        var total = Space.sm * CGFloat(group.count - 1)
+    /// Every pill in the group measures no wider than the even share of its
+    /// own line, so nothing truncates when the line is split evenly.
+    private func assertEvenShareFits(_ group: [Nutrient]) throws {
+        let column: CGFloat = 390 - (Space.lg * 2) - 22 - Space.md
+        let evenShare = (column - Space.sm * CGFloat(group.count - 1)) / CGFloat(group.count)
         for nutrient in group {
-            total += try naturalWidth(of: nutrient)
+            XCTAssertLessThanOrEqual(
+                try naturalWidth(of: nutrient), evenShare,
+                "\(nutrient.shortLabel) needs more than the \(evenShare) pt an even \(group.count)-across share gives it"
+            )
         }
+    }
+
+    /// The LABEL was the thing that did not fit, and the short one is the fix.
+    ///
+    /// Pinned in both directions so a tidy-up back to `displayName` on the
+    /// pills fails here rather than on the screen: the full name overruns the
+    /// even share, the short one does not.
+    func testTheFullSaturatedFatLabelIsWhatOverranTheEvenShare() throws {
+        let column: CGFloat = 390 - (Space.lg * 2) - 22 - Space.md
+        let evenShare = (column - Space.sm * 2) / 3
+
+        XCTAssertGreaterThan(
+            try naturalWidth(labelled: Nutrient.saturatedFat.displayName), evenShare,
+            "\"Saturated fat\" was never going to fit an even three-across share"
+        )
         XCTAssertLessThanOrEqual(
-            total, column,
-            "the \(group.count) pills need \(total) pt of a \(column) pt column and one would truncate"
+            try naturalWidth(of: .saturatedFat), evenShare,
+            "\"Sat fat\" is the whole of the fix and it has to fit"
         )
     }
 
-    /// An even split of the same column truncates "Saturated fat", which is why
-    /// this row does not use one. Pinned so that a later tidy-up towards the
-    /// day card's grid fails here rather than on the screen.
-    func testAnEvenThreeAcrossSplitWouldTruncateSaturatedFat() throws {
-        let column: CGFloat = 390 - (Space.lg * 2) - 22 - Space.md
-        let evenShare = (column - Space.sm * 2) / 3
-        XCTAssertGreaterThan(try naturalWidth(of: .saturatedFat), evenShare)
+    /// A reader still hears the full name. The short label is a drawing
+    /// decision and must never reach the spoken reading.
+    func testTheShortLabelOnlyShortensSaturatedFat() {
+        for nutrient in Nutrient.allCases where nutrient != .saturatedFat {
+            XCTAssertEqual(nutrient.shortLabel, nutrient.displayName, "\(nutrient)")
+        }
+        XCTAssertEqual(Nutrient.saturatedFat.displayName, "Saturated fat")
+        XCTAssertEqual(Nutrient.saturatedFat.shortLabel, "Sat fat")
     }
 
     private func naturalWidth(of nutrient: Nutrient) throws -> CGFloat {
-        let pill = MealStatPill(
-            label: nutrient.displayName,
-            value: MealRow.reading(nutrient, of: meal())
-        )
+        try naturalWidth(labelled: nutrient.shortLabel, value: MealRow.reading(nutrient, of: meal()))
+    }
+
+    private func naturalWidth(labelled label: String, value: String = "43 g") throws -> CGFloat {
+        let pill = MealStatPill(label: label, value: value)
         return try XCTUnwrap(ImageRenderer(content: pill).uiImage?.size.width)
     }
 

@@ -2,7 +2,7 @@ import XCTest
 import SwiftUI
 @testable import PersonalDashboard
 
-/// The day card's Watch row fits the card at phone width (#561).
+/// The day card's Watch row fits the card at phone width (#561, revised #610).
 ///
 /// ### The defect this pins shut
 ///
@@ -11,6 +11,15 @@ import SwiftUI
 /// targets-set and the no-targets state, from #543 until #561. It was correct
 /// only on the Mac, where the window is wide enough, so nothing caught it: the
 /// surface the defect was on is the surface nobody develops against.
+///
+/// ### What changed in #610
+///
+/// #561 fixed the truncation by letting the pills take their natural width,
+/// which left three boxes at three widths under one eyebrow. The cause was
+/// never the layout, it was the label: `Nutrient.shortLabel` prints "Sat fat"
+/// in a box, which fits the even share, so the even split is back and nothing
+/// truncates. These tests now pin THAT, and pin the full label as the thing
+/// that overran, so a change back to `displayName` fails here.
 ///
 /// ### Why it is a measurement and not a screenshot
 ///
@@ -21,12 +30,12 @@ import SwiftUI
 /// pills through `ImageRenderer` and compare their natural widths against the
 /// column the card actually gives them.
 ///
-/// ### Why the even-split case is pinned too
+/// ### Why the long label is pinned too
 ///
-/// An even grid is tidier and it is what the row looked like for two releases.
-/// The pull to restore it is real, so the measurement that rules it out is
-/// asserted here rather than only written in a comment: a tidy-up back towards
-/// `fillsWidth: true` fails in the suite instead of on someone's phone.
+/// "Saturated fat" is the correct name and the pull to print it in the box is
+/// real. The measurement that rules it out is asserted rather than only written
+/// in a comment, so restoring it fails in the suite instead of on someone's
+/// phone. A reader hears the full name either way.
 @MainActor
 final class MealDayCardWatchRowTests: XCTestCase {
 
@@ -75,10 +84,37 @@ final class MealDayCardWatchRowTests: XCTestCase {
         return try XCTUnwrap(ImageRenderer(content: pill).uiImage?.size)
     }
 
+    /// A pill built with an arbitrary label, for measuring what a label costs.
+    private func naturalWidth(labelled label: String) throws -> CGFloat {
+        let pill = MealStatPill(
+            label: label,
+            value: MealFormat.value(summary.totals[.saturatedFat], for: .saturatedFat)
+        )
+        return try XCTUnwrap(ImageRenderer(content: pill).uiImage?.size.width)
+    }
+
+    /// The even three-across share of the card's inner column.
+    private var evenShare: CGFloat { (column - Space.sm * 2) / 3 }
+
     // MARK: - The fix
 
-    /// The three ceilings, at natural width with one gap between each, fit the
-    /// card's inner column. This is the assertion the fix has to keep true.
+    /// Every ceiling pill fits an EVEN three-across share, with and without
+    /// targets. This is the assertion the row's `fillsWidth: true` rests on.
+    func testEveryWatchPillFitsTheEvenShareAtPhoneWidth() throws {
+        for withTarget in [true, false] {
+            for nutrient in Nutrient.ceilingsInOrder {
+                let width = try naturalSize(of: nutrient, withTarget: withTarget).width
+                XCTAssertLessThanOrEqual(
+                    width, evenShare,
+                    "\(nutrient.shortLabel) needs \(width) pt of a \(evenShare) pt share"
+                    + (withTarget ? " with targets set" : " with no targets")
+                )
+            }
+        }
+    }
+
+    /// And the whole row still fits the column, which is the same statement
+    /// from the other end.
     func testTheWatchRowFitsTheCardAtPhoneWidth() throws {
         for withTarget in [true, false] {
             var total = Space.sm * CGFloat(Nutrient.ceilingsInOrder.count - 1)
@@ -95,28 +131,19 @@ final class MealDayCardWatchRowTests: XCTestCase {
 
     // MARK: - What must not come back
 
-    /// An even three-across split does not fit, which is why the row does not
-    /// use one. A change back to `fillsWidth: true` fails here.
-    func testAnEvenThreeAcrossSplitWouldTruncateSaturatedFat() throws {
-        let evenShare = (column - Space.sm * 2) / 3
-        let widest = try naturalSize(of: .saturatedFat, withTarget: true).width
+    /// The LABEL is what overran, not the layout. A change back to
+    /// `displayName` on the pills fails here.
+    func testTheFullSaturatedFatLabelDoesNotFitTheEvenShare() throws {
+        let full = try naturalWidth(labelled: Nutrient.saturatedFat.displayName)
+        let short = try naturalWidth(labelled: Nutrient.saturatedFat.shortLabel)
 
         XCTAssertGreaterThan(
-            widest, evenShare,
-            "an even split gives \(evenShare) pt and the pill needs \(widest) pt"
+            full, evenShare,
+            "\"Saturated fat\" needs \(full) pt of a \(evenShare) pt share"
         )
-    }
-
-    /// And no iPhone is wide enough to rescue the even split. Stated as the
-    /// screen width it would take, so the number is checkable against a device
-    /// list rather than against intuition.
-    func testNoPhoneIsWideEnoughForTheEvenSplit() throws {
-        let widest = try naturalSize(of: .saturatedFat, withTarget: true).width
-        let neededScreen = widest * 3 + Space.sm * 2 + Space.lg * 4
-
-        XCTAssertGreaterThan(
-            neededScreen, 440,
-            "the even split needs a \(neededScreen) pt screen, which would change this verdict"
+        XCTAssertLessThanOrEqual(
+            short, evenShare,
+            "\"Sat fat\" needs \(short) pt of a \(evenShare) pt share"
         )
     }
 
@@ -137,7 +164,6 @@ final class MealDayCardWatchRowTests: XCTestCase {
     /// Sugar and Sodium always fitted, under either construction. The fix is
     /// about one label, and this says so.
     func testSugarAndSodiumFitEvenTheEvenSplit() throws {
-        let evenShare = (column - Space.sm * 2) / 3
         for nutrient in [Nutrient.sugar, .sodium] {
             XCTAssertLessThanOrEqual(
                 try naturalSize(of: nutrient, withTarget: true).width, evenShare,

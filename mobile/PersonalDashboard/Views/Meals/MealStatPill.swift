@@ -185,7 +185,10 @@ extension MealStatPill {
             spoken = reading
         }
         self.init(
-            label: nutrient.displayName,
+            // The SHORT label, so the pills of a row can share the line evenly
+            // (#610). The spoken reading above is built from `displayName`, so
+            // a reader still hears "Saturated fat" in full.
+            label: nutrient.shortLabel,
             value: MealFormat.value(value, for: nutrient),
             variant: verdict.map(Variant.verdict) ?? .neutral,
             fillsWidth: fillsWidth,
