@@ -179,7 +179,7 @@ final class MealPlanDayTests: XCTestCase {
     func testSpokenSummaryNamesTheGap() throws {
         try plan("Porridge", type: .breakfast)
         try plan("Chicken rice", type: .lunch)
-        let spoken = MealPlanDayPips.spokenSummary(try today().reading)
+        let spoken = try today().reading.spokenSummary
         XCTAssertTrue(spoken.contains("no dinner or snack"), spoken)
     }
 

@@ -105,6 +105,27 @@ struct EdDayPickerCalendar: View {
     /// user dismiss a thing they have finished with.
     var onPick: () -> Void = {}
 
+    /// Days that carry something, as device-local midnights (#605).
+    ///
+    /// Drawn by the WEIGHT of the numeral, never by an extra mark. The Plan tab
+    /// needs to say which days have meals on them, and it used to say it with
+    /// four coloured pips under the numeral — which is what forced that
+    /// calendar's cells out of this one's geometry and made it the odd calendar
+    /// in the app. Ink instead of `inkSoft` costs no space at all, so the cell
+    /// stays 32pt and a circle stays a circle.
+    ///
+    /// Empty for every caller that has nothing to mark, which is all of them
+    /// but the plan.
+    var markedDays: Set<Date> = []
+
+    /// What a marked day says when it is read aloud, beyond its date.
+    ///
+    /// A closure rather than one string, because the interesting half of a
+    /// marked day is what is ON it ("2 planned, no lunch or dinner"), and that
+    /// differs per day. Returning nil, which is the default, leaves the spoken
+    /// label as the date alone.
+    var spokenDetail: (Date) -> String? = { _ in nil }
+
     @State private var month: Date = Date()
     @State private var seeded = false
 
@@ -214,6 +235,8 @@ struct EdDayPickerCalendar: View {
         let isSelected = calendar.isDate(date, inSameDayAs: day)
         let isToday = calendar.isDate(date, inSameDayAs: today)
         let allowed = isAllowed(date)
+        let isMarked = markedDays.contains(calendar.startOfDay(for: date))
+        let detail = spokenDetail(calendar.startOfDay(for: date))
 
         return Button {
             pick(date)
@@ -224,10 +247,8 @@ struct EdDayPickerCalendar: View {
                     Circle().strokeBorder(Tokens.borderStrong, lineWidth: 1)
                 }
                 Text(Self.dayFormatter.string(from: date))
-                    .font(isSelected ? .edFootnoteStrong : .edFootnote)
-                    .foregroundStyle(
-                        isSelected ? Tokens.accentFg : (allowed ? Tokens.inkSoft : Tokens.mutedSoft)
-                    )
+                    .font(isSelected || isMarked ? .edFootnoteStrong : .edFootnote)
+                    .foregroundStyle(numeralInk(isSelected: isSelected, isMarked: isMarked, allowed: allowed))
                     .monospacedDigit()
             }
             .frame(height: EdDayPickerMetrics.cell)
@@ -235,8 +256,21 @@ struct EdDayPickerCalendar: View {
         }
         .buttonStyle(.plain)
         .disabled(!allowed)
-        .accessibilityLabel(Self.spokenFormatter.string(from: date))
+        .accessibilityLabel(
+            [Self.spokenFormatter.string(from: date), detail]
+                .compactMap { $0 }
+                .joined(separator: ", ")
+        )
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// A marked day is drawn in full ink, an ordinary one in `inkSoft`, and a
+    /// day outside the bounds in `mutedSoft`. The selected day's fill decides
+    /// its own contrast and outranks both.
+    private func numeralInk(isSelected: Bool, isMarked: Bool, allowed: Bool) -> Color {
+        if isSelected { return Tokens.accentFg }
+        guard allowed else { return Tokens.mutedSoft }
+        return isMarked ? Tokens.ink : Tokens.inkSoft
     }
 
     private func isAllowed(_ date: Date) -> Bool {

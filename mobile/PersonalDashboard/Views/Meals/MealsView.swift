@@ -133,7 +133,22 @@ struct MealsView: View {
         ]
     ) private var allPlanEntries: [LocalMealPlanEntry]
 
-    @State private var tab: MealsTab = .tracking
+    /// The tab on screen.
+    ///
+    /// Seeded from `LAUNCH_MEALS_TAB` when it is set, the same hook
+    /// `ListsView.selectedListId` and `NotesView` take for `LAUNCH_LIST_ID` and
+    /// `LAUNCH_FOLDER_ID`. `LAUNCH_SECTION=meals` reaches this section and lands
+    /// on Tracking, so without this the Plan, Trends and Targets tabs could only
+    /// be reached by a synthetic click — which on macOS resolves by z-order and
+    /// lands in whichever instance is on top, i.e. often the wrong app. An env
+    /// var makes every tab photographable with no input at all.
+    @State private var tab: MealsTab = {
+        if let raw = ProcessInfo.processInfo.environment["LAUNCH_MEALS_TAB"],
+           let seeded = MealsTab(rawValue: raw.lowercased()) {
+            return seeded
+        }
+        return .tracking
+    }()
 
     /// The day Today is showing, device-local midnight. Starts on today and
     /// never moves past it, because a meal you have not eaten is not a log entry.
@@ -158,11 +173,6 @@ struct MealsView: View {
     /// on, so it still reads as ONE control — which is what it looks like, and
     /// what the user asked for.
     @State private var planDay: Date = Calendar.current.startOfDay(for: Date())
-
-    /// The month the PLAN popover is on. Held apart from `visibleMonth` for the
-    /// same reason the days are: paging the plan's calendar into next month must
-    /// not move the tracking calendar, which cannot go there.
-    @State private var planMonth: Date = MealPlanCalendar.monthStart(of: Date())
 
     /// The month grid, anchored to the date control in the section chrome.
     @State private var showingCalendar = false
@@ -489,7 +499,6 @@ struct MealsView: View {
             allTargets: allTargets,
             allEntries: allPlanEntries,
             selectedDay: $planDay,
-            visibleMonth: $planMonth,
             chat: planChat
         )
     }

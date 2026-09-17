@@ -212,6 +212,37 @@ struct MealPlanReading: Equatable, Sendable {
 
     /// Every meal type has something counted in it.
     var isComplete: Bool { coveredTypes.count == MealType.allCases.count }
+
+    /// What a day's plan reads as, in words (#599, moved here in #605).
+    ///
+    /// Says which meals are MISSING rather than which are present, once the day
+    /// has anything on it at all. That is the actionable half: a user checking a
+    /// plan by ear is looking for the gap, and "breakfast, lunch and dinner
+    /// planned" makes them work out the fourth themselves.
+    ///
+    /// It lived on the pips view until the Plan tab took the app's shared
+    /// calendar, which draws no pips. The sentence was never about the pips: it
+    /// is what this reading SAYS, so it belongs on the reading, where the
+    /// calendar's `spokenDetail` can reach it without a view in between.
+    var spokenSummary: String {
+        if isEmpty { return "nothing planned" }
+        if counted == 0 {
+            return "\(skipped) skipped, nothing else planned"
+        }
+
+        var parts: [String] = []
+        if isComplete {
+            parts.append("all four meals planned")
+        } else {
+            let missing = MealType.allCases
+                .filter { !coveredTypes.contains($0) }
+                .map { $0.displayName.lowercased() }
+            parts.append("\(counted) planned, no \(missing.joined(separator: " or "))")
+        }
+        if eaten > 0 { parts.append("\(eaten) eaten") }
+        if skipped > 0 { parts.append("\(skipped) skipped") }
+        return parts.joined(separator: ", ")
+    }
 }
 
 extension MealPlanDay {
