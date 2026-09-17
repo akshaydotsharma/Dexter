@@ -273,20 +273,14 @@ struct MealTargetsSheet: View {
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .paperBorder(Tokens.border, radius: Radius.md)
 
-            if !draft.rationale.isEmpty {
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    Text("How these were worked out").eyebrow()
-                    Text(draft.rationale)
-                        .font(.edSubheadline)
-                        .foregroundStyle(Tokens.inkSoft)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(Space.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                .paperBorder(Tokens.border, radius: Radius.md)
-            }
-
+            // The rationale paragraph used to sit here, and on the Targets
+            // page under the same heading (#623). It is still DERIVED, still
+            // stored on the record and still passed through `saveTargets` — it
+            // is the audit trail for why a target is what it is. It is no
+            // longer printed, on either surface: it restated in prose what the
+            // six fields above already say, it was the longest block on a
+            // screen whose subject is eight numbers, and two surfaces printing
+            // the same paragraph made the sheet read as a copy of the page.
             Text("Past days are read against whichever targets are current. Changing these changes how earlier days look.")
                 .font(.edCaption)
                 .foregroundStyle(Tokens.muted)
@@ -390,6 +384,70 @@ struct MealTargetsSheet: View {
     }
 }
 
+/// The geometry of a vital row on the Targets page (#623).
+///
+/// ### Why the page divides a row differently from the sheet
+///
+/// The sheet puts the label at its natural width, springs the gap, and gives
+/// every control a fixed 180pt box. That works at `.edFootnote`, where the
+/// longest label, "Biological sex", is 86pt wide. A rung up at `.edBodyMedium`
+/// it is 106pt, the widest option — "Moderately active" — is 138pt, and the
+/// card's inner column is 302pt at 390pt phone width. 106 + 138 plus the
+/// control's own furniture does not fit a sprung row, and what gives way is the
+/// label: the page shipped "Biologic…" the first time it was rendered.
+///
+/// So at `.large` the label takes a fixed column and the control takes the
+/// rest. That fixes the failure in the right place — a label column sized to
+/// the longest label cannot truncate any label — and it lines the three
+/// dropdowns up on both edges, which a per-row natural width never did.
+///
+/// ### The numbers
+///
+/// Measured through `ImageRenderer` in the real face, not estimated, for the
+/// reason #616 spells out: a column narrower than its widest string is a defect
+/// that renders as a healthy-looking layout. `MealTargetsVitalRowTests` pins
+/// both sides of the division.
+///
+/// The figures are the iOS ramp's, which is the tight platform: the macOS ramp
+/// is four points smaller at every rung and the Mac's pane is wider than a
+/// phone's, so a division that fits the phone has room to spare there. One
+/// constant rather than a fork, because a second set of numbers would have to
+/// be re-measured every time the first one moved.
+enum MealVitalRowMetrics {
+
+    /// The label column at `.large`. "Biological sex" is 106pt at
+    /// `.edBodyMedium` and the control needs 175 of the 302, so this is the
+    /// middle of a 6pt band: any wider truncates "Moderately active", any
+    /// narrower truncates "Biological sex". Both ends are asserted.
+    static let labelColumn: CGFloat = 112
+
+    /// The chevron's point size at `.large`, and what it measures at.
+    ///
+    /// The rendered width is a fact about the SF Symbol, so it is pinned by a
+    /// test rather than trusted: it is one of the three things the control
+    /// spends its width on and the only one not made of tokens.
+    static let chevronPointSize: CGFloat = 12
+    static let chevronWidth: CGFloat = 13
+
+    /// What the control spends on itself before any text: the padding either
+    /// side, the two gaps around the spring, and the chevron.
+    static let triggerFurniture: CGFloat = Space.sm * 2 + Space.xs * 2 + chevronWidth
+
+    /// What is left for the control once the label column and the gap are taken.
+    static func triggerWidth(inColumn column: CGFloat) -> CGFloat {
+        column - labelColumn - Space.sm
+    }
+
+    /// What the card gives a row at 390pt phone width: the screen, less the
+    /// tab's padding either side, less the card's, less the vitals block's.
+    ///
+    /// Spelled out from the tokens rather than carried as a literal, so a
+    /// spacing change moves the tests rather than going unnoticed.
+    static func column(screenWidth: CGFloat) -> CGFloat {
+        screenWidth - (Space.lg + Space.lg + Space.md) * 2
+    }
+}
+
 /// One of a handful of choices, drawn out of the design system (#544).
 ///
 /// Not a `Menu` (#540): a system menu panel is the one control the design
@@ -397,10 +455,24 @@ struct MealTargetsSheet: View {
 /// the meal composer use, floated in a popover so opening the list never moves
 /// the fields under it.
 struct MealTargetsChoiceField<Option: Identifiable & Hashable>: View {
+
+    /// How large the row is set (#623).
+    ///
+    /// The companion of `MealNumberField.Size`, and it has to move with it: the
+    /// six vitals are one stack of six lines, three of them fields and three of
+    /// them dropdowns, and a dropdown left a rung under the field above it
+    /// would read as a different KIND of row rather than as the same row with a
+    /// different control.
+    enum Size: Equatable {
+        case regular
+        case large
+    }
+
     let label: String
     let options: [Option]
     let title: KeyPath<Option, String>
     @Binding var selection: Option
+    var size: Size = .regular
 
     @State private var open = false
     #if os(macOS)
@@ -410,31 +482,53 @@ struct MealTargetsChoiceField<Option: Identifiable & Hashable>: View {
     var body: some View {
         HStack(spacing: Space.sm) {
             Text(label)
-                .font(.edFootnote)
+                .font(rowFont)
                 .foregroundStyle(Tokens.inkSoft)
-            Spacer(minLength: Space.sm)
+                .lineLimit(1)
+                // A fixed column at `.large`, and only there. See
+                // `MealVitalRowMetrics` for why the two sizes divide the row
+                // differently at all.
+                .frame(
+                    width: size == .large ? MealVitalRowMetrics.labelColumn : nil,
+                    alignment: .leading
+                )
+            if size == .regular {
+                Spacer(minLength: Space.sm)
+            }
             trigger
-                .frame(width: 180)
+                .frame(maxWidth: size == .large ? .infinity : 180)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, size == .large ? Space.xs : 2)
+    }
+
+    /// The label and the chosen value are set together, for the reason
+    /// `MealNumberField` sets its label and its box together: they are one line.
+    private var rowFont: Font {
+        size == .large ? .edBodyMedium : .edFootnote
     }
 
     private var trigger: some View {
         Button { open.toggle() } label: {
-            HStack(spacing: Space.sm) {
+            // Tighter inside at `.large`, which is what buys the row its margin:
+            // the gaps around the spring cost 20pt at `Space.sm`, and the widest
+            // option needs every one of them back. See `MealVitalRowMetrics`.
+            HStack(spacing: size == .large ? Space.xs : Space.sm) {
                 Text(selection[keyPath: title])
-                    .font(.edFootnote)
+                    .font(rowFont)
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
-                Spacer(minLength: Space.xs)
+                Spacer(minLength: size == .large ? 0 : Space.xs)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(
+                        size: size == .large ? MealVitalRowMetrics.chevronPointSize : 10,
+                        weight: .medium
+                    ))
                     .foregroundStyle(Tokens.muted)
                     .rotationEffect(.degrees(open ? 180 : 0))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Space.sm)
-            .padding(.vertical, 5)
+            .padding(.vertical, size == .large ? 7 : 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
