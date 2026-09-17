@@ -138,10 +138,16 @@ struct MealPlanView: View {
     /// geometry in the first place. The day panel under this card says the same
     /// thing in full, for the day you are actually on, and a reader still hears
     /// it per day through `spokenDetail`.
-    /// Leading, not centred. The card is a fixed 300pt and everything under it
-    /// is full width, so centring it on a Mac window floats it away from the
-    /// day heading it belongs to. On a phone the content column is about 358pt,
-    /// so the difference is barely a gesture.
+    /// Centred (#611).
+    ///
+    /// The card is a fixed 300pt and everything under it is full width, so
+    /// SOMETHING is left over either way. Centred is what reads as deliberate:
+    /// leading put the card a few points off centre on a phone, which looks
+    /// like a layout slip rather than a decision.
+    ///
+    /// The space either side stays EMPTY. Filling a Mac's with the neighbouring
+    /// months is the three-month reel #605 deleted, and it would make this a
+    /// second calendar again on the one platform that has room for one.
     private var calendarCard: some View {
         EdDayPickerCalendar(
             day: $selectedDay,
@@ -152,7 +158,7 @@ struct MealPlanView: View {
                 return reading.isEmpty ? nil : reading.spokenSummary
             }
         )
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     /// Every planned day as a device-local midnight, which is what the calendar
