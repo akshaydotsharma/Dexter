@@ -376,6 +376,12 @@ final class SwiftDataStore {
         // asking what kind of row it holds, so a planned dinner sitting there
         // would land in Thursday's calories before Thursday happened.
         LocalMealPlanEntry.self,
+        // Saved food items (#625). One more new table and, again, no change to
+        // anything above it. It is its own model rather than a flag on
+        // `LocalMeal` because a library row is a FACT the user keeps and reuses,
+        // while a meal is one estimate frozen at one moment: putting them in one
+        // table would make every roll-up over meals count the library too.
+        LocalFoodItem.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

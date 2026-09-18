@@ -277,6 +277,14 @@ targets:
       # forever while the phone shows real dish names.
       - path: PersonalDashboard/AI/AnthropicClient+NameMeals.swift
       - path: PersonalDashboard/Services/MealNamingService.swift
+      # A library of predefined food items (#625). The @Model, the two
+      # constant namespaces and the portion unit all ride the
+      # `PersonalDashboard/Models` glob at the top of this list; the service
+      # and the public-database client do not. Without them the Mac holds the
+      # library table and has no way to write a row, which is the same
+      # half-a-feature #542's note warns about for the meal service.
+      - path: PersonalDashboard/Services/FoodItemService.swift
+      - path: PersonalDashboard/Services/OpenFoodFactsClient.swift
       - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       - path: PersonalDashboard/Services/PersonService.swift

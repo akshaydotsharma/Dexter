@@ -317,6 +317,12 @@ struct SyncApplier {
             case "LocalMealPlanEntry":
                 payload.mealPlanEntries = (payload.mealPlanEntries ?? [])
                     + [try decoder.decode(DataArchive.MealPlanEntryDTO.self, from: data)]
+            // #625. A peer on a build that predates the saved item library hits
+            // the `default` arm below and skips these ops with a log line, which
+            // is the same graceful degrade every model added after v1 gets.
+            case "LocalFoodItem":
+                payload.foodItems = (payload.foodItems ?? [])
+                    + [try decoder.decode(DataArchive.FoodItemDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -509,6 +515,11 @@ struct SyncApplier {
         // that was eventually logged against it is a separate row on a separate
         // table that nobody here should touch.
         case "LocalMealPlanEntry":   return try deleteString(LocalMealPlanEntry.self, id: recordID, key: \.clientUUID)
+        // #625. A String `clientUUID` again, so the string path. Deleting a
+        // library row deletes the row only: the meals logged from it hold their
+        // own copy of the numbers and must survive the item being retired, which
+        // is the same call every consumer of `mealItem(quantity:)` makes.
+        case "LocalFoodItem":        return try deleteString(LocalFoodItem.self, id: recordID, key: \.clientUUID)
         default:
             SyncLog.line("SyncApplier: cannot delete unknown entity \(entity)")
             return false

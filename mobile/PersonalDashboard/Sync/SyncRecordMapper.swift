@@ -93,6 +93,13 @@ enum SyncRecordMapper {
         // list — the same call `LocalList`, `LocalVisionBlock` and `LocalMeal`
         // all make about the arrays they own.
         out += try map("LocalMealPlanEntry", payload.mealPlanEntries ?? []) { $0.clientUUID }
+        // #625. Already a String on the model, like the three above. A library
+        // row owns no array and no file, so it is the simplest record here:
+        // every column is a scalar and the whole row is one sync unit. Meals
+        // logged from an item are ordinary `LocalMeal` records carrying their
+        // own copy of the numbers, so correcting an item on one device cannot
+        // rewrite a meal on another.
+        out += try map("LocalFoodItem", payload.foodItems ?? []) { $0.clientUUID }
 
         return out
     }
