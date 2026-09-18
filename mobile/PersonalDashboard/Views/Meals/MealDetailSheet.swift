@@ -176,7 +176,8 @@ struct MealDetailSheet: View {
     private var precision: MealFormat.Precision {
         MealGrounding.precision(
             isGrounded: meal.isGrounded,
-            totalsWereOverridden: meal.totalsWereOverridden
+            totalsWereOverridden: meal.totalsWereOverridden,
+            isFromLibrary: meal.source == MealSource.library
         )
     }
 
