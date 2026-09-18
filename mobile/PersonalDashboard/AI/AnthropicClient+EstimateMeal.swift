@@ -29,6 +29,19 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
     let sodiumMg: Double?
     let satFatG: Double?
 
+    /// The `LocalFoodItem.clientUUID` of the saved library row this dish IS
+    /// (#625), or nil for a dish the model estimated.
+    ///
+    /// It carries no numbers of its own on purpose. The eight above stay the
+    /// model's answer, and `ExecuteDraftAction` replaces them with the stored
+    /// row's figures scaled to `portionQuantity`. That ordering is what makes a
+    /// hallucinated id cost accuracy and never the log: an id naming no row
+    /// leaves the model's own estimate in place.
+    ///
+    /// Only the tool path ever sets it. The composer's fenced-JSON prompt does
+    /// not advertise the field, so a decode of that reply lands nil here.
+    let savedItemID: String?
+
     /// Explicit rather than synthesised, so every field defaults to nil.
     ///
     /// A `let` optional gets no default in a memberwise initialiser, which would
@@ -46,7 +59,8 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         fibreG: Double? = nil,
         sugarG: Double? = nil,
         sodiumMg: Double? = nil,
-        satFatG: Double? = nil
+        satFatG: Double? = nil,
+        savedItemID: String? = nil
     ) {
         self.name = name
         self.portionQuantity = portionQuantity
@@ -59,6 +73,7 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         self.sugarG = sugarG
         self.sodiumMg = sodiumMg
         self.satFatG = satFatG
+        self.savedItemID = savedItemID
     }
 
     enum CodingKeys: String, CodingKey {
@@ -73,6 +88,7 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         case sugarG    = "sugar_g"
         case sodiumMg  = "sodium_mg"
         case satFatG   = "saturated_fat_g"
+        case savedItemID = "saved_item_id"
     }
 }
 

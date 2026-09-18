@@ -619,19 +619,28 @@ struct FoodItemService {
         return incoming.trimmedNonEmptyFoodField
     }
 
-    /// Most used, then most recently used, then by name.
+    /// Most used, then most recently used, then by name, then by id.
     ///
     /// `lastUsedAt` is nil for an item never logged, and `.distantPast` is the
     /// right reading of that: never used sorts below used once. The name
     /// tiebreak is case-insensitive so the list does not put every capitalised
     /// brand above every lowercase one.
+    ///
+    /// The `clientUUID` tiebreak makes the order TOTAL, which matters outside
+    /// the picker (#625). `AssistantContextBuilder` renders this list into the
+    /// assistant's prompt every turn, `Array.sorted` is not stable, and two
+    /// rows sharing a name and a use count would otherwise swap places between
+    /// encodes. Order-unstable bytes in a prompt are the #580 trap: nothing
+    /// reports them and they cost the cache.
     private static func ranked(_ rows: [LocalFoodItem]) -> [LocalFoodItem] {
         rows.sorted { lhs, rhs in
             if lhs.useCount != rhs.useCount { return lhs.useCount > rhs.useCount }
             let lhsUsed = lhs.lastUsedAt ?? .distantPast
             let rhsUsed = rhs.lastUsedAt ?? .distantPast
             if lhsUsed != rhsUsed { return lhsUsed > rhsUsed }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            let byName = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if byName != .orderedSame { return byName == .orderedAscending }
+            return lhs.clientUUID < rhs.clientUUID
         }
     }
 

@@ -59,8 +59,44 @@ struct MealEstimatePreview: View {
     /// Which day the Log button writes to, in words, when that day is not today
     /// (#592). Nil on today.
     let dayNote: String?
+
+    /// Rows that came out of the saved item library and were NOT estimated
+    /// (#625). Empty on the ordinary path, where this whole view is the #543
+    /// preview unchanged.
+    ///
+    /// ### Why they are a parameter here and not a second preview
+    ///
+    /// The composer can log a meal that is half typed and half picked, and the
+    /// two halves have to be told apart on screen: the user's move on seeing a
+    /// figure is to ask whether anyone guessed it. The first build of that
+    /// screen was a separate `mixedPreview` inside the composer, which meant
+    /// two statements of the header, the repair note, the assumptions, the
+    /// suspect block, the sources and the actions.
+    ///
+    /// That is the shape this repo has paid for repeatedly: #475 split a
+    /// two-leg ticket in the email path only, #500 decoded a boarding pass
+    /// differently on the attach path, #546 states the meal rules once for
+    /// exactly this reason. The drift is invisible in the diff that causes it,
+    /// because each statement still looks right on its own. So there is one
+    /// preview, and the difference between the two cases is this array.
+    var savedItems: [MealItemEntry] = []
+
     let onDiscard: () -> Void
     let onConfirm: () -> Void
+
+    /// Every row the Log button will write, estimated ones first.
+    private var allItems: [MealItemEntry] { checked.items + savedItems }
+
+    /// What the totals row prints.
+    ///
+    /// With no saved items this is `checked.nutrients` VERBATIM, not a re-sum
+    /// of the items. The distinction is load-bearing: a needs-detail estimate
+    /// carries totals with no items behind them, and re-summing would show a
+    /// meal as zero. `MealEstimationService.save` guards the same case the same
+    /// way, so the preview and the written row agree by construction.
+    private var totals: MealNutrients {
+        savedItems.isEmpty ? checked.nutrients : MealNutrients.sum(of: allItems)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
@@ -68,12 +104,44 @@ struct MealEstimatePreview: View {
 
             if checked.needsDetail {
                 needsDetailBlock
-            } else {
-                VStack(alignment: .leading, spacing: Space.sm) {
-                    ForEach(checked.items) { item in
-                        MealItemLine(item: item, precision: precision)
+            }
+
+            if savedItems.isEmpty {
+                // The #543 path, unchanged: one ungrouped list, and nothing at
+                // all when the estimate identified no food.
+                if !checked.needsDetail {
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        ForEach(checked.items) { item in
+                            MealItemLine(item: item, precision: precision)
+                        }
                     }
                 }
+            } else {
+                // Two groups, labelled, because the user's move on seeing a
+                // figure is to ask whether anyone guessed it. The saved rows
+                // print at `.stated` precision: a library row is a published
+                // panel, and rounding 148 kcal to 150 would throw away the
+                // exactness that is the whole reason the library exists (#594).
+                if !checked.needsDetail {
+                    itemGroup(
+                        title: "Estimated from what you typed",
+                        note: "Portions are assumed.",
+                        items: checked.items,
+                        precision: precision
+                    )
+                }
+                itemGroup(
+                    title: "From your saved items",
+                    note: "Read off the label, not estimated.",
+                    items: savedItems,
+                    precision: .stated
+                )
+            }
+
+            // Shown whenever there is anything to total. A needs-detail
+            // estimate on its own has no numbers worth a row; the same estimate
+            // beside a saved item does, because the saved item has them.
+            if !checked.needsDetail || !savedItems.isEmpty {
                 totalsRow
             }
 
@@ -150,9 +218,9 @@ struct MealEstimatePreview: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             MealStatPill(
                 label: "kcal",
-                value: MealFormat.calories(checked.nutrients.calories, precision),
+                value: MealFormat.calories(totals.calories, precision),
                 variant: .accent,
-                accessibilityText: "\(MealFormat.calories(checked.nutrients.calories, precision)) kilocalories"
+                accessibilityText: "\(MealFormat.calories(totals.calories, precision)) kilocalories"
             )
 
             // Flowed rather than stacked in an HStack: four pills plus their
@@ -162,12 +230,35 @@ struct MealEstimatePreview: View {
                 ForEach(Nutrient.macrosInOrder) { nutrient in
                     MealStatPill(
                         label: nutrient.displayName,
-                        value: MealFormat.value(checked.nutrients[nutrient], for: nutrient)
+                        value: MealFormat.value(totals[nutrient], for: nutrient)
                     )
                 }
             }
         }
         .padding(.top, Space.xs)
+    }
+
+    /// One labelled group of item lines, used only when the meal has both
+    /// estimated and saved rows. The note under the title is what does the
+    /// work: it says whether the numbers beside it were guessed.
+    private func itemGroup(
+        title: String,
+        note: String,
+        items: [MealItemEntry],
+        precision: MealFormat.Precision
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).eyebrow()
+                Text(note)
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(items) { item in
+                MealItemLine(item: item, precision: precision)
+            }
+        }
     }
 
     /// What the estimate had to guess at.
@@ -189,10 +280,16 @@ struct MealEstimatePreview: View {
 
     private var needsDetailBlock: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("No food identified")
+            // With saved items in the meal, "No food identified" is false: the
+            // packets are identified and carry exact numbers. Only the typed
+            // half failed, and saying so is the difference between a warning
+            // the user can act on and one that looks like a bug.
+            Text(savedItems.isEmpty ? "No food identified" : "The typed part was not identified")
                 .font(.edHeading)
                 .foregroundStyle(Tokens.warning)
-            Text("Logging this keeps the description and the fact that you ate. Add detail later and re-estimate.")
+            Text(savedItems.isEmpty
+                 ? "Logging this keeps the description and the fact that you ate. Add detail later and re-estimate."
+                 : "Your saved items still carry their own numbers. Add detail to the rest later and re-estimate.")
                 .font(.edSubheadline)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -227,7 +324,9 @@ struct MealEstimatePreview: View {
             Spacer(minLength: Space.sm)
             Button("Discard", action: onDiscard)
                 .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-            Button(checked.needsDetail ? "Log it anyway" : "Log meal", action: onConfirm)
+            // "Log it anyway" is the right words only when the meal has no
+            // numbers at all. A saved item in the tray means it does.
+            Button(checked.needsDetail && savedItems.isEmpty ? "Log it anyway" : "Log meal", action: onConfirm)
                 .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
         }
     }

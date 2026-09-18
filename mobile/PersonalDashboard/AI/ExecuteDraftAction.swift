@@ -551,8 +551,11 @@ struct ExecuteDraftAction {
         let typeHint = MealType(rawValue: (trimmedString(input["meal_type"]) ?? "").lowercased())
         let resolved = MealToolSchema.resolveDay(isoDate: input["date"]?.stringValue, now: now)
 
+        // #625. Any item naming a saved library row takes that row's stored
+        // figures before anything is graded, so the guards and the totals both
+        // run over the numbers that will actually be written.
         let checked = MealEstimateGuards.check(
-            MealToolSchema.estimatedMeal(from: input),
+            substitutingSavedItems(in: MealToolSchema.estimatedMeal(from: input)),
             fallbackMealType: typeHint ?? MealEstimationService.inferredType(at: now),
             groundingSources: groundingSources
         )
@@ -637,8 +640,11 @@ struct ExecuteDraftAction {
             fallback: existing.deviceDay
         )
 
+        // #625. Same substitution as the log path. A correction that names a
+        // saved item has to land on the stored numbers too, or "that was the
+        // 150 g pot" would re-estimate the pot it is correcting.
         let checked = MealEstimateGuards.check(
-            MealToolSchema.estimatedMeal(from: input),
+            substitutingSavedItems(in: MealToolSchema.estimatedMeal(from: input)),
             fallbackMealType: typeHint ?? existing.mealTypeEnum,
             groundingSources: groundingSources
         )
@@ -666,6 +672,116 @@ struct ExecuteDraftAction {
             wasDateClampedFromFuture: resolved.wasClampedFromFuture,
             now: now
         )
+    }
+
+    /// Replace every item that names a saved library row with that row's
+    /// STORED numbers, scaled to the portion the model stated (#625).
+    ///
+    /// ### The model chooses the row; the device does the arithmetic
+    ///
+    /// A packet carries printed nutrition the user has already read and
+    /// accepted, and re-estimating it costs a round trip and returns a
+    /// different answer every time — two logs of one pot then disagree, and a
+    /// week's protein is the sum of that disagreement. So the model's job here
+    /// is to NAME the row and state how much of it was eaten. Its own eight
+    /// numbers are discarded for that item. A model that misquotes a figure
+    /// cannot corrupt the log, which is the whole reason the id exists rather
+    /// than a lookup tool the model would copy numbers out of.
+    ///
+    /// ### An id that resolves to nothing is not an error
+    ///
+    /// The item keeps the model's own estimate and the meal logs as it would
+    /// have without the id. A hallucinated id, a row deleted between the turn
+    /// and the write, a peer that never synced: all three cost accuracy on one
+    /// dish, and none of them is worth losing the meal over.
+    ///
+    /// ### Why the guards still run afterwards
+    ///
+    /// The composer's picker path skips them, because a human typed the grams
+    /// there. Here the PORTION is the model's, which is exactly the number the
+    /// ceilings and the macro check exist to catch: "500 g of protein powder"
+    /// is a stored row scaled by a hallucination. The substituted item goes
+    /// back into the estimate and is graded with everything beside it, and the
+    /// meal's eight totals are then summed over the final list by
+    /// `MealEstimateGuards.check`, so a substitution can never leave totals
+    /// disagreeing with their own items.
+    private func substitutingSavedItems(in estimate: EstimatedMeal) -> EstimatedMeal {
+        guard estimate.items.contains(where: { Self.trimmedID($0.savedItemID) != nil }) else {
+            return estimate
+        }
+
+        let library = FoodItemService(store: store)
+        var substituted: [LocalFoodItem] = []
+
+        let items = estimate.items.map { raw -> EstimatedMealItem in
+            guard let id = Self.trimmedID(raw.savedItemID),
+                  let row = Self.libraryRow(id, in: library) else { return raw }
+
+            // A stated portion wins; an absent, zero or nonsensical one falls
+            // back to what the user normally eats of this item, which is the
+            // number the picker opens on.
+            let stated = raw.portionQuantity
+            let quantity = (stated?.isFinite == true && (stated ?? 0) > 0)
+                ? (stated ?? row.defaultPortionQuantity)
+                : row.defaultPortionQuantity
+
+            let entry = row.mealItem(quantity: quantity)
+            substituted.append(row)
+            return EstimatedMealItem(
+                name: entry.name,
+                portionQuantity: entry.portionQuantity,
+                portionUnit: entry.portionUnit,
+                calories: entry.calories,
+                proteinG: entry.proteinG,
+                carbsG: entry.carbsG,
+                fatG: entry.fatG,
+                fibreG: entry.fibreG,
+                sugarG: entry.sugarG,
+                sodiumMg: entry.sodiumMg,
+                satFatG: entry.satFatG,
+                savedItemID: row.clientUUID
+            )
+        }
+
+        // This path really is the item being eaten, so the picker's ordering
+        // learns from it the same way a tap does. A correction that re-states
+        // the same item counts twice, and that is the right way round: these
+        // are ordering counters, and under-counting an item the user logs by
+        // voice would bury it under items they only ever tap.
+        //
+        // A failed counter bump never fails the log. The meal is the record;
+        // the count is how a list is sorted.
+        for row in substituted { try? library.recordUse(row) }
+
+        return EstimatedMeal(
+            mealType: estimate.mealType,
+            title: estimate.title,
+            items: items,
+            containsAlcohol: estimate.containsAlcohol,
+            confidence: estimate.confidence,
+            assumptions: estimate.assumptions,
+            noFoodIdentified: estimate.noFoodIdentified
+        )
+    }
+
+    /// A non-empty trimmed `saved_item_id`, or nil.
+    private static func trimmedID(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty, trimmed.lowercased() != "null" else { return nil }
+        return trimmed
+    }
+
+    /// The library row an id names, matched as sent and then lowercased.
+    ///
+    /// Ids are minted lowercase and the context block prints them that way, so
+    /// the second lookup only catches a model that re-cased what it was given.
+    /// It is one fetch against a personal-scale table and it saves a wrong
+    /// number.
+    private static func libraryRow(_ id: String, in library: FoodItemService) -> LocalFoodItem? {
+        if let row = (try? library.item(clientUUID: id)) ?? nil { return row }
+        let lowered = id.lowercased()
+        guard lowered != id else { return nil }
+        return (try? library.item(clientUUID: lowered)) ?? nil
     }
 
     /// `delete_meal`. A true delete, like every other delete here.

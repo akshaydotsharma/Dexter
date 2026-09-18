@@ -164,6 +164,10 @@ struct MealDetailSheet: View {
     @State private var confirmingDelete = false
     @State private var repeatedNote: String?
 
+    /// The item editor, opened on one dish off this meal (#625). Nil when it
+    /// is closed, which is what `sheet(item:)` reads.
+    @State private var editorTarget: FoodItemEditorTarget?
+
     private var service: MealEstimationService { .default() }
 
     /// How this meal's figures are printed. A grounded meal and a meal whose
@@ -221,6 +225,14 @@ struct MealDetailSheet: View {
         .frame(minWidth: 480, idealWidth: 520, minHeight: 600, idealHeight: 720)
         #endif
         .onAppear(perform: load)
+        .sheet(item: $editorTarget) { target in
+            // The editor writes the library row and hands it back. Nothing on
+            // this meal changes: a logged meal is what was eaten, and keeping
+            // one of its dishes is a statement about the NEXT one (#625).
+            FoodItemEditorSheet(target: target) { _ in
+                editorTarget = nil
+            }
+        }
         .confirmationDialog(
             "Replace the numbers you typed?",
             isPresented: $confirmingReestimate,
@@ -469,10 +481,30 @@ struct MealDetailSheet: View {
                         )
                     }
 
-                    Button("Apply to this item") {
-                        applyItem(draft.wrappedValue)
+                    HStack(spacing: Space.sm) {
+                        Button("Apply to this item") {
+                            applyItem(draft.wrappedValue)
+                        }
+                        .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+
+                        // Keep this dish, so the next time it is eaten it is
+                        // picked rather than estimated again (#625).
+                        //
+                        // A plain button inside the row's own drawer, which is
+                        // the gesture grammar this sheet already uses for a row
+                        // action: the row opens on a TAP and its actions are
+                        // buttons inside it. Never a long press, and never a
+                        // context menu that only one platform can find
+                        // (`feedback_inline_edit_gestures`).
+                        Button("Save to library") {
+                            // The entry goes through untouched, legacy unit and
+                            // all. The editor asks for a weight when the portion
+                            // cannot be scaled ("1.5 bowls"), and pre-validating
+                            // it here would mean two answers to one question.
+                            editorTarget = .fromMealItem(draft.wrappedValue.entry)
+                        }
+                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                     }
-                    .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
                 }
                 .padding(.top, Space.xs)
             }

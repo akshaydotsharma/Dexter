@@ -348,6 +348,7 @@ struct AssistantContextBuilder {
         }
 
         out += mealsBlock(now: now)
+        out += savedFoodItemsBlock()
 
         // Personal vocabulary: words the user has explicitly taught the
         // assistant so the model can prefer them over close-sounding
@@ -464,6 +465,86 @@ struct AssistantContextBuilder {
         }
 
         return out
+    }
+
+    // MARK: - The saved food library (#625)
+
+    /// The items the user keeps, so a packet is logged from its stored numbers
+    /// instead of being estimated again.
+    ///
+    /// ### Why the list is here and not behind a lookup tool
+    ///
+    /// A read tool would have to echo a row back to the model, and every tool
+    /// on this surface deliberately returns a FIXED token so user-controlled
+    /// text is never reflected (the H6 note in `ChatToDrafts`). It would also
+    /// leave the model copying eight numbers by hand. Listing the rows lets it
+    /// NAME one, and `ExecuteDraftAction` supplies the arithmetic: the model
+    /// chooses, the device computes, and a misquoted figure cannot reach the
+    /// log.
+    ///
+    /// ### Why the order is total and carries no clock
+    ///
+    /// This block is rebuilt on every turn. `FoodItemService.allItems()` ranks
+    /// by use and breaks the last tie on `clientUUID`, so two encodes of an
+    /// unchanged library are byte-identical. Nothing here prints a date for the
+    /// same reason: a timestamp would make the block differ every turn on a
+    /// library nobody touched (#580).
+    ///
+    /// ### Why it is capped, and why the cap is stated
+    ///
+    /// 40 rows, most used first. A library grows without bound and this block
+    /// rides every prompt in every section of the app. The header says when it
+    /// was cut so the model never reads an absent item as one the user does not
+    /// have — it can still describe that meal and have it estimated, which is
+    /// the correct outcome, rather than denying the item exists.
+    ///
+    /// ### Why 40 and not 80
+    ///
+    /// A row is about 120 bytes, and this block sits AFTER the cache
+    /// breakpoint, so none of it is cached and every turn in every section
+    /// pays for all of it (#580). The whole volatile tail was about 2,860
+    /// bytes before this block existed; 80 rows would have quadrupled it, 40
+    /// roughly doubles it.
+    ///
+    /// The ceiling only binds once the library passes it, and it is a ceiling
+    /// on the things eaten OFTEN, which is a much smaller set than the things
+    /// eaten. An item below the line is not lost: it is described and
+    /// estimated exactly as it was before this feature, and it climbs into the
+    /// block the moment it is logged a few times.
+    private func savedFoodItemsBlock() -> String {
+        let library = FoodItemService(store: store)
+        guard let all = try? library.allItems(), !all.isEmpty else { return "" }
+
+        let shown = Array(all.prefix(Self.savedFoodItemsLimit))
+        var out = "\n\nSAVED FOOD ITEMS (an item in log_meal / update_meal may carry one of these ids as \"saved_item_id\"; the device then writes the STORED numbers for the portion you state, so do not copy the numbers yourself)."
+        out += "\nEach line: ID · name · base portion · usual portion · kcal/protein/carbs/fat/fibre/sugar/sodium/sat-fat AT THE BASE PORTION (kcal, sodium in mg, the rest in g). Scale them yourself only to judge a portion; the device does the arithmetic."
+        if all.count > shown.count {
+            out += "\nShowing the \(shown.count) most used of \(all.count). An item you cannot see here is still loggable — describe it and estimate it as usual."
+        }
+        for item in shown {
+            out += "\n- ID:\(item.clientUUID) \"\(Self.safe(item.displayName, maxLen: 120))\""
+            out += " · base \(Self.compact(item.basePortionQuantity)) \(item.basePortionUnit)"
+            out += " · usual \(Self.compact(item.defaultPortionQuantity)) \(item.basePortionUnit)"
+            out += " · " + [
+                item.calories, item.proteinG, item.carbsG, item.fatG,
+                item.fibreG, item.sugarG, item.sodiumMg, item.satFatG
+            ].map(Self.compact).joined(separator: "/")
+        }
+        return out
+    }
+
+    /// How many library rows the prompt carries. See the note above.
+    static let savedFoodItemsLimit = 40
+
+    /// A nutrient as few characters as it can be read in: no trailing zeroes,
+    /// no exponent at any value a food holds.
+    ///
+    /// Eighty rows carry 640 of these numbers, so the format is a real cost.
+    /// `%g` keeps six significant digits, which is more precision than a label
+    /// prints, and renders 97.0 as "97".
+    private static func compact(_ value: Double) -> String {
+        guard value.isFinite else { return "0" }
+        return String(format: "%g", value)
     }
 
     /// Compact list of EVERY trip for the email-to-itinerary matcher (#143).
