@@ -255,6 +255,71 @@ enum StatementExtractionError: LocalizedError {
     }
 }
 
+/// Where an interrupted or stopped statement run got to, so a later attempt
+/// can pick up from there instead of paying for the chunks already read
+/// (#635).
+///
+/// `PDFChunker.split` is deterministic for a given PDF and page size, so
+/// the COUNT of chunks already read is enough to identify which ones to
+/// skip: the same file always splits the same way. `meta` carries the
+/// header forward, because a statement prints it on page 1 and a resumed
+/// run never reads page 1 again; without it every resumed row would lose
+/// its card attribution and payment method (#189).
+struct StatementResumePoint: Sendable, Equatable {
+    let chunksCompleted: Int
+    let chunksTotal: Int
+    let meta: ExtractedStatementMeta
+
+    /// False once every chunk has been read, so a finished run never offers
+    /// a Resume that would do nothing.
+    var hasUnreadChunks: Bool { chunksCompleted < chunksTotal }
+}
+
+/// The outcome of one statement extraction run (#635). Replaces the 4-tuple
+/// this returned before, because a run now has THREE ways of ending early
+/// and each needs its own copy, plus a resume point the caller can act on.
+struct StatementExtraction: Sendable {
+    let lines: [ExtractedStatementLine]
+    let meta: ExtractedStatementMeta
+    /// A chunk hit the model's output-token ceiling, so its tail rows never
+    /// came through. ORed across chunks.
+    let possiblyTruncated: Bool
+    /// Why the run ended before the last chunk, or nil when it read
+    /// everything.
+    let stopReason: StopReason?
+    /// Chunks read in total, counting any skipped by a resume.
+    let chunksCompleted: Int
+    let chunksTotal: Int
+
+    /// Three causes, three remedies, so three signals. `possiblyTruncated`
+    /// is deliberately NOT one of them: that is the model running out of
+    /// output budget on a chunk it DID read, not the run ending early.
+    enum StopReason: Sendable, Equatable {
+        /// The user tapped Stop. The loop taps out at the next chunk
+        /// boundary.
+        case stoppedByUser
+        /// A chunk threw: the request died mid-run (the phone locked and
+        /// iOS suspended the app, the network dropped, the API errored).
+        /// Everything read before it is kept.
+        case interrupted
+    }
+
+    /// Where to pick up from, or nil when there is nothing left to read.
+    var resumePoint: StatementResumePoint? {
+        guard stopReason != nil, chunksCompleted < chunksTotal else { return nil }
+        return StatementResumePoint(
+            chunksCompleted: chunksCompleted,
+            chunksTotal: chunksTotal,
+            meta: meta
+        )
+    }
+}
+
+/// What one chunk call yields. Named so the merge loop below can be handed
+/// a stub extractor in tests without a live Anthropic call.
+typealias StatementChunkResult = (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool)
+
+
 extension AnthropicClient {
     /// Per-chunk token budget for statement extraction. Output scales with the
     /// transaction count (~30-70 tokens per line). The primary guard against a
@@ -294,54 +359,124 @@ extension AnthropicClient {
     /// arrive in order. A single-chunk statement reports (1, 1) once.
     ///
     /// `cancellation` is polled BETWEEN chunks (#498). When it is set, the loop
-    /// stops and returns the lines read so far, flagged `stoppedEarly`, rather
+    /// stops and returns the lines read so far, flagged `.stoppedByUser`, rather
     /// than throwing: those rows still insert, and a later re-import is
     /// idempotent, so a stopped run self-heals. Cancelling the `Task` instead
     /// would make the insert pass's FX lookups throw and count every non-SGD
     /// row as failed.
+    ///
+    /// A chunk that THROWS is treated the same way (#635). Before, the loop had
+    /// no `catch`, so one dead request threw straight out of here and every
+    /// chunk already read was discarded: a 10-chunk statement that failed at
+    /// chunk 8 imported nothing after paying for seven extractions. Now the
+    /// loop breaks and returns what it has, flagged `.interrupted`. The one
+    /// exception is a failure with nothing read yet, which still throws: there
+    /// is nothing to salvage and the user needs the real error.
+    ///
+    /// `resumingFrom` skips the chunks a previous run already read (#635).
     func extractStatement(
         pdfData: Data,
+        resumingFrom: StatementResumePoint? = nil,
         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
         cancellation: ImportCancellationToken? = nil
-    ) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool, stoppedEarly: Bool) {
-        let chunks = PDFChunker.split(pdfData)
+    ) async throws -> StatementExtraction {
+        try await Self.runStatementChunks(
+            chunks: PDFChunker.split(pdfData),
+            wholePDF: pdfData,
+            resumingFrom: resumingFrom,
+            onProgress: onProgress,
+            cancellation: cancellation,
+            extractChunk: { try await self.extractStatementChunk(pdfData: $0) }
+        )
+    }
 
+    /// The chunk loop, split out from `extractStatement` so it can be driven by
+    /// a stub extractor in tests (#635). Everything that decides what a partial
+    /// run returns lives here; the instance method above only supplies the real
+    /// per-chunk Anthropic call.
+    static func runStatementChunks(
+        chunks: [Data],
+        wholePDF: Data,
+        resumingFrom: StatementResumePoint? = nil,
+        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
+        cancellation: ImportCancellationToken? = nil,
+        extractChunk: (Data) async throws -> StatementChunkResult
+    ) async throws -> StatementExtraction {
         // Single chunk (small or unsplittable statement): identical behaviour
-        // to the pre-#202 path — one call, same request bytes.
+        // to the pre-#202 path — one call, same request bytes. A failure here
+        // still throws, because there is no earlier chunk to salvage.
         if chunks.count <= 1 {
-            let (lines, meta, truncated) = try await extractStatementChunk(pdfData: chunks.first ?? pdfData)
+            let chunk = try await extractChunk(chunks.first ?? wholePDF)
             await onProgress?(1, 1)
-            return (lines, meta, truncated, false)
+            return StatementExtraction(
+                lines: chunk.lines,
+                meta: chunk.meta,
+                possiblyTruncated: chunk.possiblyTruncated,
+                stopReason: nil,
+                chunksCompleted: 1,
+                chunksTotal: 1
+            )
         }
 
+        // A resume starts at the chunk the last run stopped on, and inherits
+        // that run's header: page 1 is behind us and will not be read again.
+        let startIndex = min(max(resumingFrom?.chunksCompleted ?? 0, 0), chunks.count)
         var mergedLines: [ExtractedStatementLine] = []
-        var mergedMeta: ExtractedStatementMeta?
+        var mergedMeta: ExtractedStatementMeta? = resumingFrom.flatMap {
+            Self.metaHasContent($0.meta) ? $0.meta : nil
+        }
         var anyTruncated = false
-        var stoppedEarly = false
+        var stopReason: StatementExtraction.StopReason?
+        var completed = startIndex
 
-        for (index, chunk) in chunks.enumerated() {
+        for index in startIndex..<chunks.count {
             // Poll before spending the call, so a cancel taps out at the next
             // boundary rather than after one more multi-second request.
             if cancellation?.isCancelled == true {
-                stoppedEarly = true
+                stopReason = .stoppedByUser
                 break
             }
-            let (lines, meta, truncated) = try await extractStatementChunk(pdfData: chunk)
-            mergedLines.append(contentsOf: lines)
-            anyTruncated = anyTruncated || truncated
+
+            let chunk: StatementChunkResult
+            do {
+                chunk = try await extractChunk(chunks[index])
+            } catch {
+                // Nothing read this run: there is nothing to keep, and a silent
+                // "imported 0" would hide a real, actionable error (a bad key,
+                // an unreadable PDF). Let it out.
+                guard index > startIndex else { throw error }
+                // Otherwise keep every chunk already read and report WHY the
+                // rest is missing. Re-importing is idempotent (`ExpenseDedupe`),
+                // so these rows cost nothing on a later full run.
+                NSLog("extractStatement: chunk %d of %d failed, keeping %d lines: %@",
+                      index + 1, chunks.count, mergedLines.count, error.localizedDescription)
+                stopReason = .interrupted
+                break
+            }
+
+            mergedLines.append(contentsOf: chunk.lines)
+            anyTruncated = anyTruncated || chunk.possiblyTruncated
             // Take the header from the FIRST chunk that carries any readable
             // field (the statement header lives on page 1). Once found, keep it
             // — a later page must never overwrite it with an invented header.
-            if mergedMeta == nil, Self.metaHasContent(meta) {
-                mergedMeta = meta
+            if mergedMeta == nil, Self.metaHasContent(chunk.meta) {
+                mergedMeta = chunk.meta
             }
-            await onProgress?(index + 1, chunks.count)
+            completed = index + 1
+            await onProgress?(completed, chunks.count)
         }
 
         let finalMeta = mergedMeta ?? ExtractedStatementMeta(
             issuer: nil, last4: nil, statementMonth: nil, statementYear: nil
         )
-        return (mergedLines, finalMeta, anyTruncated, stoppedEarly)
+        return StatementExtraction(
+            lines: mergedLines,
+            meta: finalMeta,
+            possiblyTruncated: anyTruncated,
+            stopReason: stopReason,
+            chunksCompleted: completed,
+            chunksTotal: chunks.count
+        )
     }
 
     /// True when a parsed header carries at least one readable field, so the

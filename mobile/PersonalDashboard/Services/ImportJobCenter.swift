@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if os(iOS)
+import UIKit
+#endif
 
 /// A capture or statement import that is running, or has finished and is
 /// waiting to be acknowledged (#498).
@@ -70,7 +73,26 @@ struct ImportJob: Identifiable, Equatable {
 
     var outcome: Outcome?
 
+    /// Everything a later attempt needs to finish an incomplete run (#635).
+    /// Set when the extraction ended early with chunks still unread, whether
+    /// the user stopped it or a chunk failed. nil on a complete run, so the
+    /// Resume affordance only appears when there is something left to read.
+    var resume: ResumePlan?
+
+    /// The file and the point to pick up from. Holds the PDF bytes because
+    /// the picker's security-scoped URL is long gone by the time the user taps
+    /// Resume, and because `ImportJobCenter` is memory-only anyway (#498): a
+    /// relaunch clears the plan along with the job.
+    struct ResumePlan: Equatable {
+        let pdfData: Data
+        let fileName: String?
+        let point: StatementResumePoint
+    }
+
     var isFinished: Bool { outcome != nil }
+
+    /// True when the row should offer Resume rather than a plain dismissal.
+    var canResume: Bool { isFinished && resume != nil }
 
     /// The label actually rendered: the override when present, otherwise the
     /// kind's generic copy. A finished job drops the trailing ellipsis, which
@@ -156,6 +178,7 @@ final class ImportJobCenter {
         let token = ImportCancellationToken()
         tokens[id] = token
         jobs.append(ImportJob(id: id, kind: kind, scope: scope, overrideLabel: overrideLabel, outcome: nil))
+        refreshSystemAssertions()
         return (id, token)
     }
 
@@ -169,16 +192,24 @@ final class ImportJobCenter {
 
     /// Mark a job finished. The row stays visible, now tappable, until
     /// `acknowledge` removes it.
-    func finish(_ id: UUID, outcome: ImportJob.Outcome) {
+    ///
+    /// `resume` is the plan for finishing an incomplete run (#635). Passed for
+    /// a summary whose extraction ended early with chunks unread, and also for
+    /// a FAILURE on a resumed run, so one dead retry does not throw away a
+    /// resume point the user can still use.
+    func finish(_ id: UUID, outcome: ImportJob.Outcome, resume: ImportJob.ResumePlan? = nil) {
         tokens[id] = nil
+        defer { refreshSystemAssertions() }
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         jobs[index].outcome = outcome
+        jobs[index].resume = resume
     }
 
     /// Remove a finished job once the user has seen its outcome.
     func acknowledge(_ id: UUID) {
         tokens[id] = nil
         jobs.removeAll { $0.id == id }
+        refreshSystemAssertions()
     }
 
     /// Ask a running job to stop after the chunk it is on. What it already
@@ -193,5 +224,70 @@ final class ImportJobCenter {
     func discard(_ id: UUID) {
         tokens[id] = nil
         jobs.removeAll { $0.id == id }
+        refreshSystemAssertions()
     }
+
+    // MARK: - Keeping the run alive (#635)
+
+    /// True while any registered job is still working. The two system
+    /// assertions below are held exactly for as long as this is true.
+    var hasUnfinishedJobs: Bool { jobs.contains { !$0.isFinished } }
+
+    /// Hold the screen awake and a background-task assertion while any import
+    /// is unfinished, and release both the moment none is (#635).
+    ///
+    /// Centralised here rather than in each view because `begin` / `finish` /
+    /// `acknowledge` / `discard` are the only four places a job's state can
+    /// change, so this is the one point where the answer can never drift. It
+    /// also means a receipt read gets the same protection a statement does,
+    /// for free.
+    ///
+    /// The field failure this fixes: the phone auto-locked mid-import, iOS
+    /// suspended the app a few seconds later, and the in-flight request to
+    /// Anthropic died. Nothing here makes an import survive a LOCKED phone for
+    /// its whole run (that needs a background `URLSession`, a re-architecture);
+    /// it stops auto-lock from starting the sequence, and buys a brief
+    /// backgrounding enough time to land.
+    ///
+    /// Both calls are UIKit, and this file is in the `DexterMac` sources list,
+    /// so both sit behind `#if os(iOS)`. On macOS the method is a no-op: a Mac
+    /// does not suspend a foreground app and has no idle-timer equivalent worth
+    /// touching.
+    private func refreshSystemAssertions() {
+        #if os(iOS)
+        let working = hasUnfinishedJobs
+        UIApplication.shared.isIdleTimerDisabled = working
+        if working {
+            beginBackgroundAssertion()
+        } else {
+            endBackgroundAssertion()
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    /// `.invalid` means "we hold nothing". Every path in and out of this value
+    /// goes through the two methods below, so the assertion can be taken at
+    /// most once and is always released, including on `discard`.
+    @ObservationIgnored private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginBackgroundAssertion() {
+        guard backgroundTaskID == .invalid else { return }
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "Dexter import") { [weak self] in
+            // iOS is about to reclaim the time it granted. Release the
+            // assertion ourselves; failing to is what gets an app killed.
+            // The expiration handler is called on the main thread.
+            MainActor.assumeIsolated { self?.endBackgroundAssertion() }
+        }
+    }
+
+    private func endBackgroundAssertion() {
+        guard backgroundTaskID != .invalid else { return }
+        let held = backgroundTaskID
+        // Cleared BEFORE the call, so the expiration handler firing during
+        // `endBackgroundTask` cannot end the same identifier twice.
+        backgroundTaskID = .invalid
+        UIApplication.shared.endBackgroundTask(held)
+    }
+    #endif
 }

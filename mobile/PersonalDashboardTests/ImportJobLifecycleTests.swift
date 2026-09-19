@@ -1,4 +1,7 @@
 import XCTest
+#if os(iOS)
+import UIKit
+#endif
 @testable import PersonalDashboard
 
 /// An import that outlives the screen that started it (#498).
@@ -152,6 +155,85 @@ final class ImportJobLifecycleTests: XCTestCase {
         XCTAssertEqual(center.jobs(in: .finance).first?.displayLabel, "Importing Citi.pdf")
     }
 
+    // MARK: - Keeping the run alive (#635)
+
+    /// Auto-lock is what killed the field import: the phone locked, iOS
+    /// suspended the app, and the in-flight request died. The centre holds the
+    /// idle timer off for exactly as long as a job is unfinished, and releases
+    /// it the moment none is, so it can never be left disabled.
+    func testIdleTimerIsHeldOnlyWhileAJobIsUnfinished() {
+        #if os(iOS)
+        let center = makeCenter()
+        XCTAssertFalse(center.hasUnfinishedJobs)
+
+        let (first, _) = center.begin(kind: .statement, scope: .finance)
+        let (second, _) = center.begin(kind: .receipt, scope: .finance)
+        XCTAssertTrue(center.hasUnfinishedJobs)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+
+        // One job done is not all jobs done.
+        center.finish(first, outcome: .summary("Imported 42"))
+        XCTAssertTrue(center.hasUnfinishedJobs)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+
+        center.finish(second, outcome: .summary("Read"))
+        XCTAssertFalse(center.hasUnfinishedJobs)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        #endif
+    }
+
+    /// `discard` is the path a receipt read takes, and it removes the job
+    /// without an outcome. It has to release the assertions too, or a capture
+    /// that ends in the editor leaves the screen awake forever.
+    func testDiscardReleasesTheAssertionsToo() {
+        #if os(iOS)
+        let center = makeCenter()
+        let (id, _) = center.begin(kind: .receipt, scope: .finance)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+
+        center.discard(id)
+
+        XCTAssertFalse(center.hasUnfinishedJobs)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        #endif
+    }
+
+    // MARK: - Resume (#635)
+
+    /// An interrupted run leaves a plan on its finished row, so the user can
+    /// finish the statement by paying for the tail rather than the whole file.
+    func testAnInterruptedJobCarriesAResumePlan() {
+        let center = makeCenter()
+        let (id, _) = center.begin(kind: .statement, scope: .finance)
+        let plan = ImportJob.ResumePlan(
+            pdfData: Data("statement".utf8),
+            fileName: "Citi.pdf",
+            point: StatementResumePoint(
+                chunksCompleted: 7,
+                chunksTotal: 10,
+                meta: ExtractedStatementMeta(issuer: "Citi", last4: "1234", statementMonth: 5, statementYear: 2026)
+            )
+        )
+
+        center.finish(id, outcome: .summary("Import interrupted"), resume: plan)
+
+        let job = center.jobs(in: .finance).first
+        XCTAssertTrue(job?.canResume == true)
+        XCTAssertEqual(job?.resume?.point.chunksCompleted, 7)
+        XCTAssertEqual(job?.resume?.fileName, "Citi.pdf")
+    }
+
+    /// A run that read the whole statement has nothing to resume, so the row
+    /// must not offer it.
+    func testACompleteJobOffersNoResume() {
+        let center = makeCenter()
+        let (id, _) = center.begin(kind: .statement, scope: .finance)
+
+        center.finish(id, outcome: .summary("Imported 42"))
+
+        XCTAssertFalse(center.jobs(in: .finance).first?.canResume == true)
+    }
+
     // MARK: - What a stopped import tells the user
 
     /// Stopping is not truncation. Truncation means the model ran out of output
@@ -167,7 +249,7 @@ final class ImportJobLifecycleTests: XCTestCase {
             failed: 0,
             possiblyTruncated: false,
             importedUUIDs: [],
-            stoppedEarly: true
+            incompleteReason: .stoppedByUser
         )
 
         let summary = result.summaryLine
