@@ -44,8 +44,10 @@ import UIKit
 /// The crowd-sourcing is now answered where it costs nothing. Every row prints
 /// its calories and its protein BEFORE the tap, a record with figures missing
 /// says how many, and every item stays editable afterwards. `isVerified` stays
-/// false on anything that arrived this way, so the list can still say which rows
-/// nobody has read against a packet.
+/// false on anything that arrived this way, and the list deliberately does NOT
+/// draw that: once unverified is the normal state, a marker for it is on nearly
+/// every row, which is a standing request to curate rather than information.
+/// See the note in `libraryRow`.
 ///
 /// The network is respected by the debounce and the cancellation rather than by
 /// a button: one request leaves per pause in typing, the one before it is
@@ -461,16 +463,28 @@ struct FoodItemPickerSheet: View {
                                 .font(.edBody)
                                 .foregroundStyle(Tokens.ink)
                                 .fixedSize(horizontal: false, vertical: true)
-                            if !item.isVerified {
-                                // A row nobody has read against the packet. The
-                                // marker is quiet on purpose: the numbers are
-                                // probably right, and the user is the only one
-                                // who can say so.
-                                Image(systemName: "questionmark.circle")
-                                    .font(.system(size: 11, weight: .regular))
-                                    .foregroundStyle(Tokens.warning)
-                                    .accessibilityHidden(true)
-                            }
+                            // ── No "unverified" marker here ────────────────
+                            //
+                            // There was one, and it was right when every
+                            // import went through a confirm form: a row nobody
+                            // had read against the packet was the exception,
+                            // and the marker named it.
+                            //
+                            // Removing that form made unverified the NORMAL
+                            // state. `isVerified` is now set true only by
+                            // opening the editor by hand, so every row that
+                            // arrives the intended way (tap a hit, log the
+                            // meal) would carry the marker for ever. A badge
+                            // on nearly every row is not information, it is a
+                            // standing request to go and do the curation the
+                            // user explicitly did not want to do.
+                            //
+                            // The flag stays on the model. It still records
+                            // something true, and a future marker that means
+                            // "this row's figures are INCOMPLETE" would be
+                            // worth drawing, because that is a fact about the
+                            // data rather than about a ritual. This is not
+                            // that marker.
                         }
                         Text(servingLine(item))
                             .font(.edCaption)
