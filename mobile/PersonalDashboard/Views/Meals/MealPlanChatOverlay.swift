@@ -67,6 +67,15 @@ struct MealPlanChatOverlay: View {
     @Binding var isOpen: Bool
     @FocusState private var inputFocused: Bool
 
+    /// A complaint from the camera, the photo library or the microphone (#631).
+    ///
+    /// Deliberately separate from `model.errorMessage`, which is what the TURN
+    /// says went wrong. A photo that would not decode and a microphone with no
+    /// permission are problems with the input: nothing has been sent, there is
+    /// nothing to retry, and putting them in the transcript's error slot would
+    /// describe a failed conversation that never happened.
+    @State private var captureNotice: String?
+
     /// True when the greeting stands in for the transcript (#606).
     ///
     /// An error keeps the transcript on screen even with no turns, which is a
@@ -162,7 +171,10 @@ struct MealPlanChatOverlay: View {
             Spacer(minLength: Space.sm)
 
             if !model.isEmpty {
-                Button { model.reset() } label: {
+                Button {
+                    model.reset()
+                    captureNotice = nil
+                } label: {
                     Text("Clear").font(.edFootnote)
                 }
                 .buttonStyle(.plain)
@@ -314,6 +326,7 @@ struct MealPlanChatOverlay: View {
             if !model.isEmpty {
                 Button {
                     model.reset()
+                    captureNotice = nil
                 } label: {
                     Text("Clear")
                         .font(.edCaption)
@@ -328,24 +341,82 @@ struct MealPlanChatOverlay: View {
     }
     #endif
 
+    /// The field, the two ways of filling it that are not typing, and the tray
+    /// of what has been attached so far (#631).
+    ///
+    /// The tray sits ABOVE the bar rather than inside it. A thumbnail strip
+    /// inside a control that already grows to six lines of text would push the
+    /// send button around as photos come and go, and on the Mac the panel is a
+    /// fixed box where that movement is the most visible thing on screen.
     private var inputRow: some View {
-        HStack(spacing: Space.sm) {
-            ChatInputBar(
-                text: $model.draftInput,
-                isSending: model.isSending,
-                onSend: onSend,
-                focused: $inputFocused
-            )
-            if model.isSending {
-                Button {
-                    model.cancel()
-                } label: {
-                    Image(systemName: "stop.fill")
+        VStack(alignment: .leading, spacing: Space.sm) {
+            if let captureNotice {
+                captureNoticeRow(captureNotice)
+            }
+
+            if !model.draftPhotos.isEmpty {
+                MealPhotoStrip(photos: $model.draftPhotos)
+                    .padding(.horizontal, Space.xs)
+            }
+
+            HStack(spacing: Space.sm) {
+                ChatInputBar(
+                    text: $model.draftInput,
+                    isSending: model.isSending,
+                    onSend: onSend,
+                    focused: $inputFocused,
+                    hasAttachments: !model.draftPhotos.isEmpty
+                ) {
+                    // The composer's own pair, at the input bar's scale. A
+                    // photograph of a meal goes to the same model through the
+                    // same compressor whichever surface it is attached on, so a
+                    // second implementation here would be a second answer.
+                    MealCaptureAccessories(
+                        text: $model.draftInput,
+                        photos: $model.draftPhotos,
+                        onError: { captureNotice = $0 },
+                        side: 40,
+                        glyphSize: 18,
+                        photoLabel: "Add a photo",
+                        micLabel: "Dictate your question"
+                    )
                 }
-                .buttonStyle(EdIconButtonStyle(tint: Tokens.danger))
-                .accessibilityLabel("Stop")
+                if model.isSending {
+                    Button {
+                        model.cancel()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                    }
+                    .buttonStyle(EdIconButtonStyle(tint: Tokens.danger))
+                    .accessibilityLabel("Stop")
+                }
             }
         }
         .padding(Space.md)
+        .animation(.easeOut(duration: 0.18), value: model.draftPhotos.count)
+        .animation(.easeOut(duration: 0.18), value: captureNotice)
+    }
+
+    /// Same restrained inline note the main chat uses for a microphone failure:
+    /// muted text on a surface, tap to dismiss, no alert.
+    private func captureNoticeRow(_ message: String) -> some View {
+        HStack(spacing: Space.xs) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Tokens.muted)
+            Text(message)
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+        .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
+        .contentShape(Rectangle())
+        .onTapGesture { captureNotice = nil }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Dismisses this message")
     }
 }
