@@ -1,0 +1,387 @@
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
+/// The two other ways to say what a meal is: show it, or say it out loud
+/// (#627).
+///
+/// ### Why they live inside the field and not in the control row
+///
+/// The composer already has a row of controls under the description — the meal
+/// type, Find an item, Estimate — and two more buttons in it would make four
+/// controls of equal weight where only one of them is the action. These two are
+/// not actions. They are alternative ways of FILLING the field above them, which
+/// is why they sit inside its border, at the trailing edge, at icon size. A
+/// photograph and a dictation both end up in the same place a typed sentence
+/// does: the estimate's input.
+///
+/// ### Why one plus and not two buttons
+///
+/// "Take a photo" and "Choose a picture" are the same intention at two sources,
+/// and the phone is the only place the distinction exists at all. One plus asks
+/// the question once; the sheet behind it answers where from. On a Mac there is
+/// no camera path, so the plus opens the library directly and asks nothing.
+struct MealCaptureAccessories: View {
+
+    @Binding var text: String
+    @Binding var photos: [MealPhoto]
+
+    /// Off while an estimate is in flight. The inputs to a call that is already
+    /// running are not editable, and a mic opened mid-estimate would be
+    /// dictating into a field whose contents have already been sent.
+    var isEnabled: Bool = true
+
+    /// Where a failure is reported, and where a `nil` withdraws it.
+    ///
+    /// Both accessories report through this one closure, so a surface adopting
+    /// them has exactly one place to render "that didn't work" rather than one
+    /// per input. It is deliberately NOT the estimate's own failure state: a
+    /// photo that would not decode and a microphone with no permission are
+    /// problems with the INPUT, and offering "Try again" or "Log it without
+    /// numbers" for either would be answering a question nobody asked.
+    var onError: (String?) -> Void
+
+    @State private var showingSourceChoice = false
+    @State private var showingLibrary = false
+    @State private var isPreparing = false
+    #if os(iOS)
+    @State private var showingCamera = false
+    #endif
+
+    /// The cap, and the reason there is one.
+    ///
+    /// Three plates cover the case this feature exists for: a main, a side and a
+    /// drink photographed separately, or one meal shot twice because the first
+    /// frame missed half of it. Past that, each image is a full-size base64 blob
+    /// in one request body, and the ceiling is Anthropic's rather than anything
+    /// this app can raise.
+    static let maxPhotos = 3
+
+    private var canAddPhoto: Bool { isEnabled && !isPreparing && photos.count < Self.maxPhotos }
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            photoButton
+            #if os(iOS)
+            // iOS only, and not a capability check: the Mac target does not
+            // compile `SpeechTranscriber` at all (see the voice note in
+            // project.yml), so there is nothing here to gate at runtime.
+            MealDictationButton(text: $text, isEnabled: isEnabled, onError: onError)
+            #endif
+        }
+        #if os(iOS)
+        .confirmationDialog("Add a photo", isPresented: $showingSourceChoice, titleVisibility: .visible) {
+            Button("Take a photo") { showingCamera = true }
+            Button("Choose a picture") { showingLibrary = true }
+            Button("Cancel", role: .cancel) {}
+        }
+        .fullScreenCover(isPresented: $showingCamera) {
+            // Full screen rather than a sheet for the reason `CameraPicker`
+            // gives: UIKit's camera UI is itself full-screen and fights sheet
+            // detents.
+            CameraPicker { data in
+                showingCamera = false
+                guard let data else { return }
+                accept(data)
+            }
+            .ignoresSafeArea()
+        }
+        #endif
+        .photoLibraryPicker(isPresented: $showingLibrary) { data in
+            guard let data else { return }
+            accept(data)
+        }
+    }
+
+    private var photoButton: some View {
+        Button {
+            #if os(iOS)
+            // A simulator has no camera, and offering a choice with one real
+            // answer is a sheet in the way. `CameraPicker` falls back to the
+            // library itself, but the user should not have to discover that
+            // through a dialog that lied about the options.
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                showingSourceChoice = true
+            } else {
+                showingLibrary = true
+            }
+            #else
+            showingLibrary = true
+            #endif
+        } label: {
+            Group {
+                if isPreparing {
+                    ProgressView()
+                        #if os(macOS)
+                        .controlSize(.small)
+                        #else
+                        .scaleEffect(0.6)
+                        #endif
+                } else {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 17, weight: .regular))
+                }
+            }
+            .foregroundStyle(canAddPhoto ? Tokens.muted : Tokens.mutedSoft)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canAddPhoto)
+        .accessibilityLabel(photos.isEmpty
+                            ? "Add a photo of the meal"
+                            : "Add a photo of the meal, \(photos.count) added")
+    }
+
+    /// Normalise the picker's bytes and put the result in the tray.
+    ///
+    /// The compression is awaited rather than fired and forgotten, because the
+    /// plus button turns into a spinner for its duration: a photo that is still
+    /// being encoded when Estimate is pressed would be silently left out of the
+    /// request, and the user would be told the model could not see a picture
+    /// they can see on screen.
+    private func accept(_ raw: Data) {
+        isPreparing = true
+        Task {
+            defer { isPreparing = false }
+            do {
+                photos.append(try await MealPhoto.make(from: raw))
+                // A photo that worked clears the complaint about the one that
+                // did not. Leaving it up would describe a failure that is no
+                // longer on screen.
+                onError(nil)
+            } catch {
+                onError("Couldn't read that photo. \(error.localizedDescription)")
+            }
+        }
+    }
+}
+
+/// The photos attached so far, under the field they belong to.
+///
+/// Thumbnails rather than a count, because the one thing that goes wrong with an
+/// invisible attachment is attaching the wrong one. A count says "1 photo" for
+/// both yesterday's lunch and today's; a thumbnail does not.
+struct MealPhotoStrip: View {
+
+    @Binding var photos: [MealPhoto]
+
+    /// Shown beside the thumbnails when the field is empty, which is the case
+    /// where the photo is the entire input and the user is about to spend a
+    /// call on it.
+    var note: String?
+
+    private let side: CGFloat = 56
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack(spacing: Space.sm) {
+                ForEach(photos) { photo in
+                    thumbnail(photo)
+                }
+                Spacer(minLength: 0)
+            }
+            if let note {
+                Text(note)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func thumbnail(_ photo: MealPhoto) -> some View {
+        let image = PlatformImage(data: photo.jpegData)
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let image {
+                    Image(platformImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    // The bytes came out of a compressor that had already
+                    // decoded them, so this is close to unreachable. It renders
+                    // a placeholder rather than nothing so a photo that cannot
+                    // be drawn is still visibly attached and still removable.
+                    Tokens.surface2
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 16))
+                                .foregroundStyle(Tokens.mutedSoft)
+                        )
+                }
+            }
+            .frame(width: side, height: side)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.sm)
+
+            Button {
+                photos.removeAll { $0.id == photo.id }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 15, weight: .regular))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(Tokens.surface, Tokens.inkSoft)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .offset(x: 6, y: -6)
+            .accessibilityLabel("Remove this photo")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Attached photo of the meal")
+    }
+}
+
+#if os(iOS)
+
+/// Tap to dictate, tap again to stop (#627).
+///
+/// ### Why it stops only when asked
+///
+/// The chat mic auto-finalises after a stretch of silence, which suits a message
+/// you are about to send. A meal is dictated in pieces — you look at the plate,
+/// you remember the drink, you work out whether that was one slice or two — and
+/// a mic that closes during the thinking pause makes the user tap it three times
+/// for one meal. This one stays open until it is told to stop, which is what was
+/// asked for.
+///
+/// ### Why the field fills a phrase at a time
+///
+/// It mirrors `transcript`, which holds only utterances the engine has finalised
+/// and normalised, and never `provisionalText`, which holds raw deltas. The
+/// reason is the one `SpeechTranscriber` states: the raw stream can carry
+/// pre-normalisation script, and typing that into a field the user is about to
+/// submit puts Urdu characters in a meal description. Server VAD finalises on
+/// each pause, so text lands in phrases as you speak rather than all at the end.
+///
+/// ### Why it watches the session id
+///
+/// There is one transcriber in the app and the global voice overlay can take it
+/// at any moment — it is a `fullScreenCover`, so this view stays mounted and its
+/// observers keep firing underneath. Snapshotting `transcriber.sessionID` at
+/// start and refusing to mirror once it moves is what stops the overlay's words
+/// appearing in the meal field. See the note on that property.
+struct MealDictationButton: View {
+
+    @Binding var text: String
+    var isEnabled: Bool = true
+
+    /// Where a microphone failure is reported, and where a `nil` withdraws it.
+    ///
+    /// Without this the button is silent on the one failure that actually
+    /// happens: permission. `SpeechTranscriber` sets `errorMessage` and returns
+    /// without recording, so a user who has denied the microphone taps a mic
+    /// that does nothing at all and has no way to learn why. Chat renders the
+    /// same string inline; this hands it to whoever owns the field.
+    var onError: (String?) -> Void = { _ in }
+
+    /// The one shared transcriber, from the app-level owner. There is never a
+    /// second instance: a duplicate would install a second audio tap and trip
+    /// the AVAudioEngine assertion #150 was filed for.
+    @Environment(VoiceCaptureViewModel.self) private var voiceVM
+    private var transcriber: SpeechTranscriber { voiceVM.transcriber }
+
+    /// Whatever was in the field when the mic opened. Speech APPENDS to this
+    /// rather than replacing it, so dictating an afterthought onto a typed
+    /// description does not delete the description.
+    @State private var baseline: String = ""
+
+    /// The transcriber session this button started, or nil when it owns none.
+    @State private var ownedSession: Int?
+
+    /// `didFinalizeTranscript` at the moment the session opened, so a final
+    /// left over from a previous owner is not mistaken for this one's.
+    @State private var finalizeBaseline: Int = 0
+
+    private var isMine: Bool { ownedSession == transcriber.sessionID }
+    private var isListening: Bool { isMine && transcriber.isRecording }
+
+    var body: some View {
+        Button {
+            Task { await toggle() }
+        } label: {
+            Image(systemName: isListening ? "stop.circle.fill" : "mic")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(tint)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled && !isListening)
+        .accessibilityLabel(isListening ? "Stop dictating" : "Dictate the meal")
+        .accessibilityHint(isListening ? "" : "Listens until you tap it again")
+        .onChange(of: transcriber.transcript) { _, _ in mirror() }
+        .onChange(of: transcriber.didFinalizeTranscript) { _, _ in
+            // The authoritative text for this session has landed. Mirror it,
+            // then close the session — but ONLY once the mic has actually
+            // stopped. While it is still recording, server VAD finalises every
+            // pause, and closing on the first one would drop every phrase after
+            // it (the bug #151 fixed in chat).
+            guard isMine, transcriber.didFinalizeTranscript > finalizeBaseline else { return }
+            mirror()
+            if !transcriber.isRecording { endSession() }
+        }
+        .onDisappear {
+            // Leaving the surface must not leave the microphone open, and a
+            // transcript that lands afterwards must not write into a field
+            // nobody is looking at.
+            if isListening { transcriber.stop() }
+            endSession()
+        }
+    }
+
+    private var tint: Color {
+        if isListening { return Tokens.danger }
+        return isEnabled ? Tokens.muted : Tokens.mutedSoft
+    }
+
+    private func toggle() async {
+        if isListening {
+            // `stop()` is synchronous but the OpenAI final arrives after it, so
+            // the session stays open to catch it. `didFinalizeTranscript` above
+            // is what closes it.
+            transcriber.stop()
+            return
+        }
+        guard isEnabled else { return }
+        // A new attempt withdraws the last attempt's complaint, so the user is
+        // never reading an error about a tap two taps ago.
+        onError(nil)
+        // Snapshot BEFORE starting: `start()` clears `transcript`, and the
+        // baseline has to describe the field as it was, not as it will be.
+        baseline = text
+        finalizeBaseline = transcriber.didFinalizeTranscript
+        await transcriber.toggle()
+        // Claim the session the start just created. Read after the await
+        // because the id is bumped inside `start()`; a value read before it
+        // would name the PREVIOUS session and nothing would ever mirror.
+        ownedSession = transcriber.sessionID
+        // `start()` reports permission and audio-engine failures by setting
+        // this and returning, rather than by throwing, so the only way to know
+        // the mic never opened is to ask afterwards.
+        if !transcriber.isRecording, let failure = transcriber.errorMessage {
+            onError(failure)
+            endSession()
+        }
+    }
+
+    private func endSession() {
+        ownedSession = nil
+        baseline = ""
+    }
+
+    /// Put the session's settled text in the field, appended to the baseline.
+    private func mirror() {
+        guard isMine else { return }
+        let spoken = transcriber.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spoken.isEmpty else { return }
+        let base = baseline.trimmingCharacters(in: .whitespacesAndNewlines)
+        text = base.isEmpty ? spoken : "\(base) \(spoken)"
+    }
+}
+
+#endif

@@ -248,6 +248,12 @@ targets:
       # `ExecuteDraftAction`. `MealChatCard.swift` needs no entry: it sits in
       # `Views/Meals`, which goes in as one directory below.
       - path: PersonalDashboard/AI/MealToolSchema.swift
+      # A meal photo sent to the estimate and never stored (#627). Pulled by
+      # both estimate paths and by `Views/Meals`, which goes in as one directory
+      # entry below. The Mac gets the photo-library half of the feature (the
+      # same split Finance uses); the camera and the microphone are iOS-only and
+      # are gated inside `MealCaptureControls.swift`.
+      - path: PersonalDashboard/AI/MealPhoto.swift
       - path: PersonalDashboard/AI/MealLogSummary.swift
       # Grounding a branded estimate in published nutrition (#594). The type is
       # read by `LocalMeal` (globbed), by both estimate paths and by three Meals

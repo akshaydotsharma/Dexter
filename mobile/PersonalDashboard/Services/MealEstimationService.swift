@@ -77,13 +77,21 @@ struct MealEstimationService {
     ///
     /// Exactly one API call. The guards add no calls of their own — they are
     /// arithmetic over what came back.
+    ///
+    /// `photos` is the #627 addition and changes nothing about the guards: an
+    /// estimate read off a photograph is a guess about portions in exactly the
+    /// way a typed one is, and grading it more leniently because the model
+    /// "saw" the meal would be trusting the most confident-looking input in the
+    /// feature. A picture hides the oil.
     func estimate(
         description: String,
+        photos: [MealPhoto] = [],
         mealTypeHint: MealType? = nil,
         loggedAt: Date = Date()
     ) async throws -> CheckedMealEstimate {
         let raw = try await client.estimateMeal(
             description: description,
+            photos: photos,
             mealTypeHint: mealTypeHint,
             loggedAt: loggedAt
         )

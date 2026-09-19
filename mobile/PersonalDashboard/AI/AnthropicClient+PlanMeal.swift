@@ -51,17 +51,47 @@ extension AnthropicClient {
     /// declared there is no `pause_turn` to resume from.
     ///
     /// - Parameters:
-    ///   - title: the dish, as the user typed it.
+    ///   - title: the dish, as the user typed it. May be empty when `photos` is
+    ///     not: a picture of a menu, a recipe page or a plate names the dish as
+    ///     well as a typed line does (#627).
+    ///   - photos: pictures of the dish, sent as image blocks ahead of the
+    ///     line. Empty is the request this function sent before #627, byte for
+    ///     byte.
     ///   - mealType: which part of the day it is for. Always known here — the
     ///     block is being added to a named slot — so unlike the logging path
     ///     there is nothing for the model to infer and no clock to infer it
     ///     from.
+    ///
+    /// ### Why the photo rule rides the user message and not the system prompt
+    ///
+    /// `planMealSystemPrompt` is the `stable` half of a cached prefix (#580),
+    /// and a rule appended to it only when photos are present would make the
+    /// prefix differ between a photographed plan and a typed one. That is two
+    /// cache entries where there was one, and the entry for the rarer shape
+    /// would be written and never read. The rule is per-request, so it goes in
+    /// the per-request half.
     func planMeal(
         title: String,
+        photos: [MealPhoto] = [],
         mealType: MealType
     ) async throws -> PlannedMealEstimate {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw MealEstimationError.emptyDescription }
+        guard !trimmed.isEmpty || !photos.isEmpty else {
+            throw MealEstimationError.emptyDescription
+        }
+
+        // Images first, for the reason `estimateMeal` gives: the model reads
+        // blocks in order, so the instruction belongs after the thing it is
+        // about.
+        var userContent: [AnthropicContentBlock] = photos.map {
+            .image(base64: $0.base64, mediaType: $0.mediaType)
+        }
+        let line = trimmed.isEmpty
+            ? "\(mealType.displayName): name this dish from the picture."
+            : "\(mealType.displayName): \(trimmed)"
+        userContent.append(.text(
+            photos.isEmpty ? line : "\(line)\n\n\(MealToolSchema.photoRule)"
+        ))
 
         let response = try await send(
             systemPrompt: AnthropicSystemPrompt(
@@ -69,10 +99,7 @@ extension AnthropicClient {
                 volatile: nil
             ),
             messages: [
-                AnthropicMessage(
-                    role: "user",
-                    content: [.text("\(mealType.displayName): \(trimmed)")]
-                )
+                AnthropicMessage(role: "user", content: userContent)
             ],
             tools: [Self.planMealTool],
             // The same 8192 `estimateMeal` uses, and for the same measured

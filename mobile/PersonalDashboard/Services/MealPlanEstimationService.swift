@@ -33,8 +33,12 @@ struct MealPlanEstimationService {
     /// Nothing is written here. The caller shows the answer, the user confirms
     /// it, and `save` does the write. That order is the whole reason a plan can
     /// be corrected before it exists rather than after.
-    func estimate(title: String, mealType: MealType) async throws -> PlannedMealEstimate {
-        try await client.planMeal(title: title, mealType: mealType)
+    func estimate(
+        title: String,
+        photos: [MealPhoto] = [],
+        mealType: MealType
+    ) async throws -> PlannedMealEstimate {
+        try await client.planMeal(title: title, photos: photos, mealType: mealType)
     }
 
     // MARK: - Writes

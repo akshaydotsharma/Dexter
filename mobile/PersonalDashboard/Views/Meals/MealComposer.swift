@@ -47,6 +47,24 @@ enum MealDuplicateChoice: String, Identifiable {
 /// 3. Both. "Estimate", and the model is shown ONLY the typed words. The picks
 ///    are exact and are never sent anywhere.
 ///
+/// ### Why there is a camera and a microphone on the field (#627)
+///
+/// Typing stays the primary path and nothing about it changed. What #627 added
+/// is two other ways to answer the same question, for the two cases where words
+/// are the slow way to say it: the meal is in front of you and a photograph
+/// states it exactly, or your hands are busy and saying it is faster than
+/// spelling it out.
+///
+/// Both feed the SAME field and the SAME call. The microphone writes into the
+/// description, so a dictated meal is a typed meal that was not typed. The
+/// photograph rides the estimate request as an image block, so a photographed
+/// meal takes the same guards, the same preview and the same duplicate check a
+/// described one does.
+///
+/// The photograph is NOT kept. It is an input, the description field's peer, and
+/// `reset()` drops it exactly as it drops the text. See `MealPhoto` for the five
+/// subsystems that decision buys back.
+///
 /// ### Why the preview is not optional
 ///
 /// The estimate is a guess about portions, and the assumptions it made are the
@@ -103,6 +121,23 @@ struct MealComposer: View {
     @State private var picks: [FoodItemPick] = []
     @State private var showingPicker = false
 
+    /// Photographs of this meal, held only until the estimate returns (#627).
+    ///
+    /// Composer state, exactly like `descriptionText`: they are an input, not an
+    /// attachment. `reset()` clears them with the field, and nothing writes them
+    /// anywhere. See `MealPhoto` for why they are not kept.
+    @State private var photos: [MealPhoto] = []
+
+    /// A complaint from the camera or the microphone, which is a different kind
+    /// of failure from a failed estimate (#627).
+    ///
+    /// `phase = .failed` means "the model could not do this", and it offers Try
+    /// again and Log it without numbers. A photo that would not decode and a
+    /// microphone with no permission are neither: nothing has been sent, there
+    /// is nothing to log, and both of those buttons would be answering a
+    /// question nobody asked. So this is its own quiet line under the field.
+    @State private var captureNotice: String?
+
     /// Meals the pending estimate duplicates. Non-empty puts the choice in
     /// front of the user; it never blocks the write.
     @State private var duplicateMatches: [LocalMeal] = []
@@ -136,8 +171,11 @@ struct MealComposer: View {
         descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A description OR a photograph. Either one is a complete account of a
+    /// meal, so requiring both would make the camera a decoration on a field
+    /// you still had to fill in (#627).
     private var canEstimate: Bool {
-        !trimmed.isEmpty && phase != .estimating
+        (!trimmed.isEmpty || !photos.isEmpty) && phase != .estimating
     }
 
     /// The added items as the value type a meal stores. The picker already
@@ -157,8 +195,11 @@ struct MealComposer: View {
     /// Picks with no description is the ONLY state that writes without a
     /// model call. An empty composer stays on Estimate, disabled, which is
     /// what it has always done.
+    /// A photo counts as something to estimate, so a meal with picks AND a
+    /// photograph stays on Estimate. Falling through to Log there would write
+    /// the tray and silently drop the picture (#627).
     private var primaryAction: PrimaryAction {
-        trimmed.isEmpty && !picks.isEmpty ? .logPicks : .estimate
+        trimmed.isEmpty && photos.isEmpty && !picks.isEmpty ? .logPicks : .estimate
     }
 
     private var canSubmit: Bool {
@@ -180,11 +221,19 @@ struct MealComposer: View {
     /// halves, always: this field is what search, the duplicate check and a
     /// later re-estimate all read, and a description that named only the
     /// chicken rice would describe a meal the user did not eat.
-    private var descriptionToWrite: String {
+    private func descriptionToWrite(for checked: CheckedMealEstimate?) -> String {
         let picked = MealEstimationService.libraryDescription(for: pickedItems)
-        if trimmed.isEmpty { return picked }
-        if picked.isEmpty { return trimmed }
-        return "\(trimmed), \(picked)"
+        // A photographed meal with nothing typed has no words of its own, and
+        // the photo is not kept, so the model's reading of it IS the record
+        // (#627). Without this the row is written with an empty description,
+        // which is the one field search, the duplicate check and a later
+        // re-estimate all read.
+        let spoken = trimmed.isEmpty && !photos.isEmpty && checked != nil
+            ? MealEstimationService.libraryDescription(for: checked!.items)
+            : trimmed
+        if spoken.isEmpty { return picked }
+        if picked.isEmpty { return spoken }
+        return "\(spoken), \(picked)"
     }
 
     /// Derived from `day` rather than passed in, so the composer cannot disagree
@@ -216,6 +265,22 @@ struct MealComposer: View {
             Text(prompt).eyebrow()
 
             field
+
+            if let captureNotice {
+                Text(captureNotice)
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isStaticText)
+            }
+
+            // Directly under the field, because the photographs belong to it:
+            // they are what the description would have said. Above the tray,
+            // which is a different kind of input entirely — picked rows with
+            // figures already on them.
+            if !photos.isEmpty {
+                MealPhotoStrip(photos: $photos, note: photoNote)
+            }
 
             // The tray sits between the input and the controls, because it IS
             // input: it is the half of the meal that was picked rather than
@@ -287,6 +352,21 @@ struct MealComposer: View {
     /// breakfast nobody ate (#576). `PlainFieldPlaceholder` owns both halves.
     static let placeholderExample = "Two eggs on toast with butter and a flat white"
 
+    /// The description, with the camera and the microphone inside its border
+    /// (#627).
+    ///
+    /// The two accessories are an overlay pinned to the bottom trailing corner,
+    /// and `accessoryGutter` is the trailing padding that keeps the text off
+    /// them. Without it the last line of a long description runs under the two
+    /// glyphs.
+    ///
+    /// The gutter is charged on EVERY line, not only the line the buttons sit
+    /// beside, because a uniform `.trailing` padding is the only version of this
+    /// SwiftUI lays out without a custom `Layout`. It costs the field about 68pt
+    /// of width on a phone. That is affordable here and it is measured: the
+    /// example meal the placeholder advertises still fits, and the field grows to
+    /// five lines before it has to truncate anything. If a future change makes
+    /// the field single-line, revisit this — a one-line field cannot spend 68pt.
     private var field: some View {
         TextField(
             PlainFieldPlaceholder.title(Self.placeholderExample),
@@ -298,7 +378,15 @@ struct MealComposer: View {
         .lineLimit(2...5)
         .textFieldStyle(.plain)
         .focused($fieldFocused)
+        // The label belongs to the TEXT, and it has to be attached before the
+        // accessory overlay goes on. Applied afterwards it labels the composed
+        // view instead, which folds the camera and the microphone into one
+        // element named "Describe the meal" — they stop being reachable by
+        // VoiceOver and by anything scripting the app.
+        .accessibilityLabel(isToday ? "Describe the meal" : "Describe the meal eaten on \(dayPhrase)")
+        .onSubmit { if canEstimate { estimate() } }
         .padding(Space.md)
+        .padding(.trailing, accessoryGutter)
         .plainFieldPlaceholder(
             Self.placeholderExample,
             isVisible: descriptionText.isEmpty,
@@ -309,8 +397,44 @@ struct MealComposer: View {
             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .stroke(Tokens.border, lineWidth: 0.5)
         )
-        .accessibilityLabel(isToday ? "Describe the meal" : "Describe the meal eaten on \(dayPhrase)")
-        .onSubmit { if canEstimate { estimate() } }
+        .overlay(alignment: .bottomTrailing) {
+            MealCaptureAccessories(
+                text: $descriptionText,
+                photos: $photos,
+                // An estimate in flight has already been sent the field's
+                // contents, so editing them means editing something that was
+                // not asked. The preview and failure states stay editable,
+                // because both of those are states you argue with.
+                isEnabled: phase != .estimating,
+                onError: { captureNotice = $0 }
+            )
+            .padding(.trailing, Space.sm)
+            .padding(.bottom, Space.sm)
+        }
+    }
+
+    /// Room for the two accessory glyphs on the field's last line.
+    ///
+    /// Two 28pt buttons and a 4pt gap on iOS; one button on macOS, which has no
+    /// microphone path at all. Plus the 8pt the overlay is inset by.
+    private var accessoryGutter: CGFloat {
+        #if os(iOS)
+        return 28 + Space.xs + 28 + Space.sm
+        #else
+        return 28 + Space.sm
+        #endif
+    }
+
+    /// What the photographs are about to be used for, said once, and only in
+    /// the case where nobody typed anything.
+    ///
+    /// With a description beside them the photographs are corroboration and need
+    /// no caption. Without one they ARE the meal, and the user is about to spend
+    /// a call on a guess made entirely from a picture. Saying so is the honest
+    /// version of a button that would otherwise look like it knew something.
+    private var photoNote: String? {
+        guard trimmed.isEmpty else { return nil }
+        return "Dexter will read the meal from \(photos.count == 1 ? "this photo" : "these photos"). Add a line if a portion or a brand isn't obvious."
     }
 
     /// Meal type, or "let Dexter decide".
@@ -510,8 +634,10 @@ struct MealComposer: View {
             HStack(spacing: Space.sm) {
                 Button("Try again") { estimate() }
                     .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-                Button("Log it without numbers") { logWithoutNumbers() }
-                    .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                if canLogWithoutNumbers {
+                    Button("Log it without numbers") { logWithoutNumbers() }
+                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                }
             }
         }
     }
@@ -611,6 +737,7 @@ struct MealComposer: View {
     private func estimate() {
         guard canEstimate else { return }
         let description = trimmed
+        let attached = photos
         let hint = typeOverride
         let at = estimateReferenceInstant()
         fieldFocused = false
@@ -619,6 +746,7 @@ struct MealComposer: View {
             do {
                 let checked = try await service.estimate(
                     description: description,
+                    photos: attached,
                     mealTypeHint: hint,
                     loggedAt: at
                 )
@@ -638,7 +766,7 @@ struct MealComposer: View {
         checkDuplicates(
             .estimate(checked),
             mealType: checked.mealType,
-            description: descriptionToWrite
+            description: descriptionToWrite(for: checked)
         )
     }
 
@@ -711,7 +839,7 @@ struct MealComposer: View {
             case .estimate(let checked):
                 meal = try service.save(
                     checked,
-                    description: descriptionToWrite,
+                    description: descriptionToWrite(for: checked),
                     day: day,
                     loggedAt: loggedAt(for: checked.mealType),
                     // Empty on path 1, so this is the #543 write unchanged.
@@ -748,11 +876,25 @@ struct MealComposer: View {
         FoodItemPick.commit(picks, countingUse: true)
     }
 
+    /// Whether there is anything left to log once the estimate has failed.
+    ///
+    /// The fallback writes the DESCRIPTION with no numbers on it, which is worth
+    /// having: the fact that you ate survives, and detail can be added later.
+    /// A meal whose only input was a photograph has no description to fall back
+    /// on — the photo is not kept (#627) — so the row would carry an empty
+    /// string, name nothing, and be impossible to re-estimate. Offering the
+    /// button there would be offering an empty row. Try again is the only
+    /// honest move, and it still has the photo to try with.
+    private var canLogWithoutNumbers: Bool {
+        !trimmed.isEmpty || !picks.isEmpty
+    }
+
     /// Save the description with zero nutrients and a needs-detail flag.
     ///
     /// The estimate is what failed, not the meal. Losing the fact that you ate
     /// is worse than losing the number.
     private func logWithoutNumbers() {
+        guard canLogWithoutNumbers else { return }
         let fallback = CheckedMealEstimate(
             mealType: libraryMealType,
             items: [],
@@ -780,6 +922,10 @@ struct MealComposer: View {
         // The tray is composer state like the field is, so it clears with it.
         // Leaving it behind would put the last meal's yogurt into the next one.
         picks = []
+        // Same rule, same reason: a photograph left attached would be sent with
+        // the NEXT meal, and a stale plate is a worse input than no plate.
+        photos = []
+        captureNotice = nil
     }
 
     /// The instant to stamp on the meal, and the ONLY place the composer decides
