@@ -42,6 +42,28 @@ struct MealCaptureAccessories: View {
     /// numbers" for either would be answering a question nobody asked.
     var onError: (String?) -> Void
 
+    /// The side of each button, and the glyph drawn inside it (#631).
+    ///
+    /// The composer carries them at 28pt because they live INSIDE the border of
+    /// a text box, in a gutter charged against the field's width. The plan chat
+    /// carries them in an input bar, which is a row of 40pt controls ending in a
+    /// send disc, and a 28pt pair there reads as two smaller buttons from
+    /// somewhere else rather than as part of the row.
+    ///
+    /// Same component, two scales. The alternative was a second pair of buttons
+    /// for the second surface, which is how two answers to one question start.
+    var side: CGFloat = 28
+    var glyphSize: CGFloat = 17
+
+    /// What a reader is told the two buttons do.
+    ///
+    /// The composer's defaults name the meal, because on that surface the photo
+    /// IS the meal being logged. In the plan chat the same photo is as likely to
+    /// be a fridge shelf or a menu, and a label that insisted it was a meal
+    /// would be describing a different feature (#631).
+    var photoLabel: String = "Add a photo of the meal"
+    var micLabel: String = "Dictate the meal"
+
     @State private var showingSourceChoice = false
     @State private var showingLibrary = false
     @State private var isPreparing = false
@@ -67,7 +89,14 @@ struct MealCaptureAccessories: View {
             // iOS only, and not a capability check: the Mac target does not
             // compile `SpeechTranscriber` at all (see the voice note in
             // project.yml), so there is nothing here to gate at runtime.
-            MealDictationButton(text: $text, isEnabled: isEnabled, onError: onError)
+            MealDictationButton(
+                text: $text,
+                isEnabled: isEnabled,
+                onError: onError,
+                side: side,
+                glyphSize: glyphSize,
+                label: micLabel
+            )
             #endif
         }
         #if os(iOS)
@@ -120,18 +149,16 @@ struct MealCaptureAccessories: View {
                         #endif
                 } else {
                     Image(systemName: "plus.circle")
-                        .font(.system(size: 17, weight: .regular))
+                        .font(.system(size: glyphSize, weight: .regular))
                 }
             }
             .foregroundStyle(canAddPhoto ? Tokens.muted : Tokens.mutedSoft)
-            .frame(width: 28, height: 28)
+            .frame(width: side, height: side)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!canAddPhoto)
-        .accessibilityLabel(photos.isEmpty
-                            ? "Add a photo of the meal"
-                            : "Add a photo of the meal, \(photos.count) added")
+        .accessibilityLabel(photos.isEmpty ? photoLabel : "\(photoLabel), \(photos.count) added")
     }
 
     /// Normalise the picker's bytes and put the result in the tray.
@@ -382,6 +409,15 @@ struct MealDictationButton: View {
     /// same string inline; this hands it to whoever owns the field.
     var onError: (String?) -> Void = { _ in }
 
+    /// Matches whatever the surface hosting it draws its other controls at. See
+    /// the note on `MealCaptureAccessories.side` (#631).
+    var side: CGFloat = 28
+    var glyphSize: CGFloat = 17
+
+    /// What a reader is told this button does when it is idle. See the note on
+    /// `MealCaptureAccessories.photoLabel` (#631).
+    var label: String = "Dictate the meal"
+
     /// The one shared transcriber, from the app-level owner. There is never a
     /// second instance: a duplicate would install a second audio tap and trip
     /// the AVAudioEngine assertion #150 was filed for.
@@ -408,14 +444,14 @@ struct MealDictationButton: View {
             Task { await toggle() }
         } label: {
             Image(systemName: isListening ? "stop.circle.fill" : "mic")
-                .font(.system(size: 17, weight: .regular))
+                .font(.system(size: glyphSize, weight: .regular))
                 .foregroundStyle(tint)
-                .frame(width: 28, height: 28)
+                .frame(width: side, height: side)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled && !isListening)
-        .accessibilityLabel(isListening ? "Stop dictating" : "Dictate the meal")
+        .accessibilityLabel(isListening ? "Stop dictating" : label)
         .accessibilityHint(isListening ? "" : "Listens until you tap it again")
         .onChange(of: transcriber.transcript) { _, _ in mirror() }
         .onChange(of: transcriber.didFinalizeTranscript) { _, _ in

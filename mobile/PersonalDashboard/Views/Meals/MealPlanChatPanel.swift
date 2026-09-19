@@ -70,7 +70,20 @@ struct MealPlanChatPanel: View {
     private func turnView(_ turn: MealPlanChatTurn) -> some View {
         switch turn.role {
         case .user:
-            UserBubble(text: turn.text)
+            VStack(alignment: .trailing, spacing: Space.xs) {
+                if !turn.photos.isEmpty {
+                    SentPhotoRow(photos: turn.photos)
+                }
+                // A photograph sent with nothing typed draws no bubble. The
+                // request carries a neutral line so the API has a text block
+                // (`MealPlanAdvisor.photoOnlyInput`), but putting words the user
+                // never wrote into their own bubble would be the transcript
+                // telling them what they said (#631).
+                if !turn.text.isEmpty {
+                    UserBubble(text: turn.text)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         case .assistant:
             VStack(alignment: .leading, spacing: Space.md) {
                 if turn.text.isEmpty && turn.isStreaming {
@@ -89,5 +102,63 @@ struct MealPlanChatPanel: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// The photographs on a turn that has already been sent (#631).
+///
+/// Read-only, unlike `MealPhotoStrip`: a sent message cannot have an attachment
+/// removed from it, and a remove button here would offer to edit history. It is
+/// still tappable, because "was that the right picture" is a question you ask
+/// AFTER reading the answer, and 44pt cannot settle it.
+private struct SentPhotoRow: View {
+
+    let photos: [MealPhoto]
+
+    @State private var viewing: MealPhoto?
+
+    private let side: CGFloat = 44
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            Spacer(minLength: 0)
+            ForEach(photos) { photo in
+                thumbnail(photo)
+            }
+        }
+        .sheet(item: $viewing) { photo in
+            MealPhotoViewer(photo: photo)
+        }
+    }
+
+    @ViewBuilder
+    private func thumbnail(_ photo: MealPhoto) -> some View {
+        let image = PlatformImage(data: photo.jpegData)
+        Button {
+            if image != nil { viewing = photo }
+        } label: {
+            Group {
+                if let image {
+                    Image(platformImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Tokens.surface2
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 14))
+                                .foregroundStyle(Tokens.mutedSoft)
+                        )
+                }
+            }
+            .frame(width: side, height: side)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.sm)
+            .contentShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(image == nil)
+        .accessibilityLabel("Photo sent with this message")
+        .accessibilityHint(image == nil ? "" : "Opens it full size")
     }
 }

@@ -1,7 +1,17 @@
 import SwiftUI
 
 /// Floating input bar pinned to the bottom safe area inset.
-struct ChatInputBar: View {
+///
+/// ### The accessory slot (#631)
+///
+/// A surface can hang its own controls between the field and the send button.
+/// The plan chat puts the meal composer's photo-and-microphone pair there, so
+/// the two surfaces that take a picture of food take it the same way.
+///
+/// It is generic with an `EmptyView` convenience init rather than an optional
+/// `AnyView`, so a caller that passes nothing compiles to exactly the bar that
+/// shipped before, and the main Chat tab is untouched.
+struct ChatInputBar<Accessories: View>: View {
     @Binding var text: String
     var isSending: Bool
     var onSend: () -> Void
@@ -17,9 +27,18 @@ struct ChatInputBar: View {
     /// `@FocusState private var inputFocused: Bool` and passes `$inputFocused`.
     @FocusState.Binding var focused: Bool
 
+    /// True when something other than the text makes this message worth
+    /// sending. A photograph on its own is a complete question in the plan chat,
+    /// and gating Send on the field would make the user type a word to send a
+    /// picture (#631).
+    var hasAttachments: Bool = false
+
+    /// Drawn between the field and the send button. Empty by default.
+    @ViewBuilder var accessories: () -> Accessories
+
     var body: some View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canSend = !trimmed.isEmpty && !isSending
+        let canSend = (!trimmed.isEmpty || hasAttachments) && !isSending
 
         HStack(alignment: .bottom, spacing: Space.sm) {
             ZStack(alignment: .leading) {
@@ -80,6 +99,8 @@ struct ChatInputBar: View {
             }
             .frame(minHeight: 40)
 
+            accessories()
+
             if let onMic {
                 Button(action: onMic) {
                     Image(systemName: isMicActive ? "stop.fill" : "mic")
@@ -107,5 +128,30 @@ struct ChatInputBar: View {
         )
         .paperBorder(focused ? Tokens.borderStrong : Tokens.border, radius: Radius.xl)
         .shadowSm()
+    }
+}
+
+extension ChatInputBar where Accessories == EmptyView {
+    /// The bar as it was before the accessory slot existed: field, optional
+    /// mic, send.
+    init(
+        text: Binding<String>,
+        isSending: Bool,
+        onSend: @escaping () -> Void,
+        onMic: (() -> Void)? = nil,
+        isMicActive: Bool = false,
+        focused: FocusState<Bool>.Binding,
+        hasAttachments: Bool = false
+    ) {
+        self.init(
+            text: text,
+            isSending: isSending,
+            onSend: onSend,
+            onMic: onMic,
+            isMicActive: isMicActive,
+            focused: focused,
+            hasAttachments: hasAttachments,
+            accessories: { EmptyView() }
+        )
     }
 }

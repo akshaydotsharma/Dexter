@@ -9,6 +9,14 @@ struct MealPlanChatTurn: Identifiable, Equatable {
     /// The cards this turn put forward. Empty on a turn that only answered a
     /// question, which is most of them.
     var suggestions: [MealPlanSuggestion]
+    /// The photographs the user sent with this turn (#631). Always empty on an
+    /// assistant turn.
+    ///
+    /// Held on the turn rather than only in the request so the transcript still
+    /// shows what was asked about. A conversation whose second question is
+    /// "what about a vegetarian one" reads as a non sequitur if the picture it
+    /// refers to left the screen the moment it was sent.
+    var photos: [MealPhoto]
     /// True while the model is still writing this turn.
     var isStreaming: Bool
 
@@ -17,12 +25,14 @@ struct MealPlanChatTurn: Identifiable, Equatable {
         role: Role,
         text: String,
         suggestions: [MealPlanSuggestion] = [],
+        photos: [MealPhoto] = [],
         isStreaming: Bool = false
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.suggestions = suggestions
+        self.photos = photos
         self.isStreaming = isStreaming
     }
 
@@ -61,6 +71,15 @@ final class MealPlanChatModel {
     private(set) var turns: [MealPlanChatTurn] = []
     private(set) var isSending = false
     var draftInput: String = ""
+
+    /// Photographs attached to the message being composed (#631).
+    ///
+    /// The same lifetime rule `MealPhoto` states: they are an input, not a
+    /// record. They move onto the user's turn when the message is sent, and
+    /// they go with the conversation when it is reset. Nothing here reaches
+    /// SwiftData, and nothing is written to disk.
+    var draftPhotos: [MealPhoto] = []
+
     var errorMessage: String?
 
     /// Suggestions the user has already added to the plan, by suggestion id.
@@ -101,6 +120,7 @@ final class MealPlanChatModel {
         streamTask = nil
         turns = []
         addedSuggestionIDs = []
+        draftPhotos = []
         errorMessage = nil
         isSending = false
     }
@@ -135,9 +155,14 @@ final class MealPlanChatModel {
     ///     the model names none.
     func send(context: String, defaultMealType: MealType) {
         let trimmed = draftInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isSending else { return }
+        // A photograph with no words is a complete message. See
+        // `MealPlanAdvisor.photoOnlyInput` for what the request says in that
+        // case, and why the turn on screen still shows only the picture.
+        let photos = draftPhotos
+        guard !trimmed.isEmpty || !photos.isEmpty, !isSending else { return }
 
         draftInput = ""
+        draftPhotos = []
         errorMessage = nil
         isSending = true
 
@@ -148,11 +173,12 @@ final class MealPlanChatModel {
             .map {
                 MealPlanAdvisor.PriorTurn(
                     role: $0.role == .user ? "user" : "assistant",
-                    text: $0.text
+                    text: $0.text,
+                    photos: $0.photos
                 )
             }
 
-        turns.append(MealPlanChatTurn(role: .user, text: trimmed))
+        turns.append(MealPlanChatTurn(role: .user, text: trimmed, photos: photos))
         let replyIndex = turns.count
         turns.append(MealPlanChatTurn(role: .assistant, text: "", isStreaming: true))
 
@@ -162,6 +188,7 @@ final class MealPlanChatModel {
                 for try await event in advisor.run(
                     history: history,
                     input: trimmed,
+                    photos: photos,
                     context: context,
                     defaultMealType: defaultMealType
                 ) {
@@ -198,6 +225,9 @@ final class MealPlanChatModel {
                    turns[replyIndex].suggestions.isEmpty {
                     turns.remove(at: replyIndex)
                 }
+                // Only the assistant's empty turn is removed above. The user's
+                // turn stays, photographs and all, so a failed send can be read
+                // and asked again rather than vanishing with its picture.
             }
         }
     }
