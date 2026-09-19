@@ -168,6 +168,13 @@ struct MealDetailSheet: View {
     /// is closed, which is what `sheet(item:)` reads.
     @State private var editorTarget: FoodItemEditorTarget?
 
+    /// Whether the meal-type picker is showing (#629).
+    @State private var typePickerOpen = false
+
+    #if os(macOS)
+    @State private var typeHovering = false
+    #endif
+
     private var service: MealEstimationService { .default() }
 
     /// How this meal's figures are printed. A grounded meal and a meal whose
@@ -260,9 +267,7 @@ struct MealDetailSheet: View {
     private var statusBlock: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             HStack(spacing: Space.sm) {
-                Label(meal.mealTypeEnum.displayName, systemImage: meal.mealTypeEnum.sfSymbol)
-                    .font(.edFootnote)
-                    .foregroundStyle(Tokens.accentMeals)
+                mealTypeControl
                 Spacer(minLength: Space.sm)
                 Text(MealRow.timeFormatter.string(from: meal.loggedAt))
                     .font(.edCaption)
@@ -303,6 +308,103 @@ struct MealDetailSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.md)
+    }
+
+    /// The meal type, as a control rather than a caption (#629).
+    ///
+    /// Every other fact about a logged meal is correctable in this sheet: the
+    /// description, each item's portion, the totals, the alcohol flag. The type
+    /// was the one that was printed and then frozen, so a lunch the composer
+    /// read off the clock stayed a lunch.
+    ///
+    /// It edits in place, where the type is READ, rather than earning a field
+    /// of its own further down the sheet. A "Meal" section below the totals
+    /// would be a second statement of the same fact, and the user would still
+    /// meet the wrong one first (`feedback_put_control_where_the_name_is_read`).
+    ///
+    /// The grammar is the composer's type picker verbatim: a trigger showing
+    /// the current type, a popover of the four options, a checkmark on the one
+    /// in force. Not a `Menu` (#540) — a system panel is the one control the
+    /// design system cannot reach.
+    private var mealTypeControl: some View {
+        Button {
+            typePickerOpen.toggle()
+        } label: {
+            HStack(spacing: Space.xs) {
+                Image(systemName: meal.mealTypeEnum.sfSymbol)
+                    .font(.system(size: 12, weight: .regular))
+                Text(meal.mealTypeEnum.displayName)
+                    .font(.edFootnote)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Tokens.muted)
+                    .rotationEffect(.degrees(typePickerOpen ? 180 : 0))
+            }
+            .foregroundStyle(Tokens.accentMeals)
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, Space.xs)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // A bordered `surface2` chip inside a `surface` card, which is the one
+        // pairing that separates in both themes (`project_nested_tile_surfaces`).
+        // Without it the trigger reads as the caption it used to be.
+        .background(typeTriggerBackground, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+        .paperBorder(typeTriggerBorder, radius: Radius.sm)
+        #if os(macOS)
+        .onHover { typeHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: typeHovering)
+        #endif
+        // `.top`, so the options hang BELOW the trigger. The composer's picker
+        // uses `.bottom` because it sits mid-screen; this status block is the
+        // first thing in the sheet, and a panel above it is clipped by the
+        // sheet's own top edge — two of the four types were cut off.
+        .popover(isPresented: $typePickerOpen, arrowEdge: .top) {
+            typeOptions
+        }
+        .accessibilityLabel("Meal type, \(meal.mealTypeEnum.displayName)")
+        .accessibilityHint("Changes which part of the day this meal counts towards")
+    }
+
+    /// The four types, floated over the sheet.
+    ///
+    /// No "Auto" row, unlike the composer's picker. Auto is a decision about a
+    /// meal that has not been written yet; this one already carries a type, and
+    /// "let Dexter decide again" would re-read a clock that has moved on.
+    private var typeOptions: some View {
+        VStack(spacing: 0) {
+            ForEach(MealType.allCases) { type in
+                InlineDropdownRow(
+                    glyph: .symbol(type.sfSymbol),
+                    label: type.displayName,
+                    isSelected: meal.mealTypeEnum == type,
+                    accent: Tokens.accentMeals
+                ) { setType(type) }
+            }
+        }
+        .padding(.vertical, Space.xs)
+        .frame(width: 220)
+        .background(Tokens.surface)
+        .presentationBackground(Tokens.surface)
+        // Without this an iPhone adapts a popover into a full-screen sheet,
+        // which this sheet cannot host anyway.
+        .presentationCompactAdaptation(.popover)
+    }
+
+    private var typeTriggerBackground: Color {
+        #if os(macOS)
+        return typeHovering && !typePickerOpen ? Tokens.surface : Tokens.surface2
+        #else
+        return Tokens.surface2
+        #endif
+    }
+
+    private var typeTriggerBorder: Color {
+        #if os(macOS)
+        return typeHovering || typePickerOpen ? Tokens.borderStrong : Tokens.border
+        #else
+        return typePickerOpen ? Tokens.borderStrong : Tokens.border
+        #endif
     }
 
     private var describeSection: some View {
@@ -653,6 +755,24 @@ struct MealDetailSheet: View {
             } catch {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    /// Write the corrected type (#629).
+    ///
+    /// Nothing else moves. The type says which part of the day a meal counts
+    /// towards; it is not an input to any number, so the totals, the items, the
+    /// time and the day all stay exactly as they were. A later re-estimate
+    /// picks the corrected type up on its own, because `reestimate` reads the
+    /// hint off the meal.
+    private func setType(_ type: MealType) {
+        typePickerOpen = false
+        guard type != meal.mealTypeEnum else { return }
+        do {
+            try MealService.default().updateMeal(meal, mealType: type)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
