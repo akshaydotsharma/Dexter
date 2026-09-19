@@ -20,7 +20,12 @@ enum MealGrounding {
 
     /// The words on the chip. One string, so the preview, the row and the
     /// detail sheet cannot describe the same meal three ways.
-    static let chipLabel = "Published nutrition"
+    ///
+    /// One word, because the chip sits in a row of chips and "Published
+    /// nutrition" wrapped to two lines wherever that row was tight, setting the
+    /// whole row a line taller for a label whose second word carries nothing.
+    /// What it is published nutrition FOR is the meal the chip is sitting on.
+    static let chipLabel = "Published"
 
     /// The chip itself, in the same shape every other meal flag uses.
     static func chip() -> MealFlagChip {

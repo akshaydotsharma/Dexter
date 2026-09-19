@@ -196,10 +196,10 @@ struct MealDetailSheet: View {
                     VStack(alignment: .leading, spacing: Space.lg) {
                         statusBlock
                         describeSection
-                        alcoholSection
                         if !itemDrafts.isEmpty {
                             itemsSection
                         }
+                        alcoholSection
                         totalsSection
                         overrideSection
                         actionsSection
@@ -269,10 +269,6 @@ struct MealDetailSheet: View {
             HStack(spacing: Space.sm) {
                 mealTypeControl
                 Spacer(minLength: Space.sm)
-                Text(MealRow.timeFormatter.string(from: meal.loggedAt))
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-                    .monospacedDigit()
                 if meal.isGrounded {
                     MealGrounding.chip()
                 }
@@ -433,17 +429,13 @@ struct MealDetailSheet: View {
                     RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                         .stroke(Tokens.border, lineWidth: 0.5)
                 )
+            // Right, and primary. It is the one thing this section is for, and
+            // the sheet's other committing controls ("Save these totals",
+            // "Apply to this item") all sit at the trailing edge of their own
+            // block. A secondary button on the left read as a footnote to the
+            // field above it.
             HStack(spacing: Space.sm) {
-                Button(isReestimating ? "Estimating…" : "Re-estimate") {
-                    if meal.totalsWereOverridden {
-                        confirmingReestimate = true
-                    } else {
-                        reestimate()
-                    }
-                }
-                .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-                .disabled(isReestimating || descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
+                Spacer(minLength: 0)
                 if isReestimating {
                     ProgressView()
                         #if os(macOS)
@@ -452,11 +444,16 @@ struct MealDetailSheet: View {
                         .scaleEffect(0.7)
                         #endif
                 }
-                Spacer(minLength: 0)
+                Button(isReestimating ? "Estimating…" : "Re-estimate") {
+                    if meal.totalsWereOverridden {
+                        confirmingReestimate = true
+                    } else {
+                        reestimate()
+                    }
+                }
+                .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+                .disabled(isReestimating || descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text("Costs one estimate. Correcting a single item below costs nothing.")
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
         }
     }
 
@@ -479,11 +476,6 @@ struct MealDetailSheet: View {
             .padding(Space.md)
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .paperBorder(Tokens.border, radius: Radius.md)
-
-            Text("Alcohol carries calories that sit in no macro, so a meal with a drink is exempt from the macro consistency check.")
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -510,10 +502,6 @@ struct MealDetailSheet: View {
             }
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .paperBorder(Tokens.border, radius: Radius.md)
-            Text("Change a portion and the item's numbers scale with it. The meal re-totals here, with no estimate.")
-                .font(.edCaption)
-                .foregroundStyle(Tokens.muted)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -688,12 +676,19 @@ struct MealDetailSheet: View {
                             )
                         )
                     }
-                    Button("Save these totals") { applyOverride() }
-                        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
                 }
                 .padding(Space.md)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                 .paperBorder(Tokens.border, radius: Radius.md)
+
+                // Outside the tile, at its trailing edge. The tile is the eight
+                // fields; the button is what commits them, and a primary
+                // control inside the surface it acts on reads as a ninth row.
+                HStack(spacing: Space.sm) {
+                    Spacer(minLength: 0)
+                    Button("Save these totals") { applyOverride() }
+                        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+                }
             }
         }
     }
