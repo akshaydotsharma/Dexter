@@ -36,9 +36,10 @@ enum MealDuplicateChoice: String, Identifiable {
 /// every time, so two logs of one pot disagree and a week's protein is the sum
 /// of the disagreement.
 ///
-/// So the saved items sit BESIDE the description rather than replacing it, and
-/// the two can be used in the same meal. The tray is what is picked so far, and
-/// the primary button reads what is in front of it:
+/// So there are exactly two ways to log a meal, and they sit side by side:
+/// describe it in the field, or find it in `FoodItemPickerSheet`. Both can be
+/// used in the same meal. The tray is what has been added so far, and the
+/// primary button reads what is in front of it:
 ///
 /// 1. Text, no picks. "Estimate", exactly as it has always worked.
 /// 2. Picks, no text. "Log". No call of any kind, and no preview: there is
@@ -89,10 +90,16 @@ struct MealComposer: View {
     #endif
     @State private var phase: MealComposerPhase = .idle
 
-    /// Saved items picked for this meal, in the order they were picked (#625).
+    /// Items added to this meal from the picker, in the order they were added
+    /// (#625).
     ///
     /// The whole tray is replaced by the picker rather than merged into, which
     /// is what makes Cancel in that sheet mean "nothing happened".
+    ///
+    /// A pick can name a row in the library or carry a database hit that is not
+    /// saved yet. Nothing here has to tell them apart: `pickedItems` reads the
+    /// entry either way, and `FoodItemPick.commit` resolves the origin once, at
+    /// the write.
     @State private var picks: [FoodItemPick] = []
     @State private var showingPicker = false
 
@@ -133,8 +140,9 @@ struct MealComposer: View {
         !trimmed.isEmpty && phase != .estimating
     }
 
-    /// The picks as the value type a meal stores. The picker already scaled
-    /// each one to the amount on its row, so nothing here multiplies anything.
+    /// The added items as the value type a meal stores. The picker already
+    /// scaled each one to the amount on its row, so nothing here multiplies
+    /// anything.
     private var pickedItems: [MealItemEntry] {
         picks.map(\.entry)
     }
@@ -219,7 +227,7 @@ struct MealComposer: View {
             HStack(alignment: .center, spacing: Space.sm) {
                 typeDropdown
                     .frame(maxWidth: 240)
-                savedItemsButton
+                findItemButton
                 Spacer(minLength: Space.sm)
                 estimateButton
             }
@@ -446,27 +454,34 @@ struct MealComposer: View {
         return primaryAction == .logPicks ? "Log" : "Estimate"
     }
 
-    /// The way into the library, beside the type dropdown rather than beside
-    /// the description.
+    /// The other way to say what is in the meal, beside the type dropdown
+    /// rather than beside the description.
     ///
     /// It is a choice about WHAT is in the meal, which is the same kind of
     /// choice the type dropdown makes, and putting it next to the field would
     /// read as a way of filling the field in.
-    private var savedItemsButton: some View {
+    ///
+    /// It says "find", not "saved items". The sheet behind it searches the
+    /// user's own items AND the public food database in one field, and calling
+    /// it a saved list promised something to maintain (#625). The count is left
+    /// off deliberately: the tray sits directly above this row whenever it has
+    /// anything in it, so a number on the button would state twice what is
+    /// already on screen.
+    private var findItemButton: some View {
         Button {
             showingPicker = true
         } label: {
             HStack(spacing: Space.xs) {
-                Image(systemName: "bookmark")
+                Image(systemName: "magnifyingglass")
                     .font(.system(size: 11, weight: .semibold))
-                Text(picks.isEmpty ? "Saved items" : "Saved items (\(picks.count))")
+                Text("Find an item")
                     .lineLimit(1)
             }
         }
         .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
         .accessibilityLabel(picks.isEmpty
-                            ? "Pick from your saved items"
-                            : "Saved items, \(picks.count) picked")
+                            ? "Find an item to add"
+                            : "Find an item to add, \(picks.count) added")
     }
 
     private var estimatingRow: some View {
@@ -503,7 +518,7 @@ struct MealComposer: View {
 
     // MARK: - The tray (#625)
 
-    /// What has been picked so far: one quiet line each, and a running total.
+    /// What has been added so far: one quiet line each, and a running total.
     ///
     /// Quiet on purpose. These rows are already settled — the numbers came off
     /// a label and nothing is going to change them — so they must not compete
@@ -511,7 +526,7 @@ struct MealComposer: View {
     private var trayBlock: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text("Saved items").eyebrow()
+                Text("Items").eyebrow()
                 Spacer(minLength: Space.sm)
                 Text("\(MealFormat.calories(pickedCalories, .stated)) kcal")
                     .font(.edFootnoteStrong)
@@ -710,7 +725,7 @@ struct MealComposer: View {
                     loggedAt: loggedAt(for: mealType)
                 )
             }
-            recordPickUses()
+            commitPicks()
             onLogged(meal)
             reset()
         } catch {
@@ -718,23 +733,19 @@ struct MealComposer: View {
         }
     }
 
-    /// Count each picked row as eaten, and only once the meal exists.
+    /// Turn the tray into library rows, and count each one as eaten.
     ///
-    /// The counters order the picker around what the user actually eats, so
-    /// they are a claim about a meal that was written. A pick sitting in a tray
-    /// the user then abandoned has not been eaten, which is why the picker
-    /// itself never calls this.
+    /// Committing is what makes an item the user's: a hit added from the food
+    /// database is written HERE, not when it was tapped, so an item added and
+    /// then removed leaves nothing behind and the list stays something that
+    /// accumulates by use rather than by curation (#625).
     ///
-    /// A row deleted between the pick and the write is skipped rather than
-    /// treated as an error: the meal is already saved and holds its own copy of
-    /// the numbers, and a failed counter is not worth telling anyone about.
-    private func recordPickUses() {
-        guard !picks.isEmpty else { return }
-        let items = FoodItemService.default()
-        for pick in picks {
-            guard let row = (try? items.item(clientUUID: pick.itemUUID)) ?? nil else { continue }
-            try? items.recordUse(row)
-        }
+    /// It runs only once the meal exists, because the counters are a claim
+    /// about a meal that was written. The one implementation lives on
+    /// `FoodItemPick` so this view and `MealPlanEntrySheet` cannot disagree
+    /// about what a commit does.
+    private func commitPicks() {
+        FoodItemPick.commit(picks, countingUse: true)
     }
 
     /// Save the description with zero nutrients and a needs-detail flag.

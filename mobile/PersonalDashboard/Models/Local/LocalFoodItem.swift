@@ -255,22 +255,25 @@ extension LocalFoodItem {
     /// The eight nutrients for `quantity` of `basePortionUnit`, scaled linearly
     /// off the base.
     ///
-    /// A base of zero would divide by zero, so it returns zeroes instead. That
-    /// state is unreachable through `FoodItemService`, which rejects a
-    /// non-positive base, and is handled here anyway because a row can also
-    /// arrive from a peer running a build this one has never seen.
+    /// The arithmetic itself lives in `MealNutrients.scaled(_:fromBasePortion:to:)`,
+    /// which `FoodItemDraft` also calls. A hit that is not saved yet has to be
+    /// rescalable in the tray with no row behind it, and two copies of the
+    /// ratio is how the saved and unsaved halves of one picker start printing
+    /// different numbers for the same packet (#625).
     func nutrients(for quantity: Double) -> MealNutrients {
-        guard basePortionQuantity > 0 else { return .zero }
-        let ratio = quantity / basePortionQuantity
-        return MealNutrients(
-            calories: calories * ratio,
-            proteinG: proteinG * ratio,
-            carbsG: carbsG * ratio,
-            fatG: fatG * ratio,
-            fibreG: fibreG * ratio,
-            sugarG: sugarG * ratio,
-            sodiumMg: sodiumMg * ratio,
-            satFatG: satFatG * ratio
+        MealNutrients.scaled(
+            MealNutrients(
+                calories: calories,
+                proteinG: proteinG,
+                carbsG: carbsG,
+                fatG: fatG,
+                fibreG: fibreG,
+                sugarG: sugarG,
+                sodiumMg: sodiumMg,
+                satFatG: satFatG
+            ),
+            fromBasePortion: basePortionQuantity,
+            to: quantity
         )
     }
 

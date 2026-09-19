@@ -8,22 +8,26 @@ import SwiftData
 /// does not, and holding those as separate `@State` on the parent is how two
 /// sheets end up disagreeing about what they are editing.
 ///
-/// ### Why there are six cases and not four
+/// ### Which cases are live, and which are a route nothing takes today
 ///
-/// `new`, `draft`, `existing` and `fromMealItem` are the four entry points the
-/// feature was specified around. The other two are branches of the barcode scan
-/// that would otherwise have no honest home:
+/// `existing` and `fromMealItem` are the two the app constructs. The first is
+/// the per-row Edit in the picker, the second is "Save to library" on a dish in
+/// `MealDetailSheet`. Both are CORRECTIONS: fixing a number, or keeping
+/// something already eaten. Neither asks the user to curate a list.
+///
+/// `new`, `draft`, `scannedDraft` and `newBarcode` are the confirm-before-save
+/// route, and nothing constructs them any more (#625). A search hit and a
+/// barcode scan now go straight into the meal, because the form in front of
+/// every import was the friction that turned the library into a thing to
+/// maintain. They are kept, rather than deleted, because they are the complete
+/// and tested way to open this form on a draft, and a future caller that wants
+/// a confirm step should use them instead of writing a second one.
 ///
 /// - `scannedDraft` is a database hit that arrived from a scan rather than from
 ///   a typed search. The numbers are identical; the PROVENANCE is not, and
-///   `LocalFoodItem.source` is the field that has to tell them apart. Folding it
-///   into `draft` would make every scanned row claim it came from a search.
-/// - `newBarcode` is a code the database did not know. It is a blank form with
-///   one fact already in hand, and dropping that fact would ask the user to
-///   read thirteen digits off a packet that a camera has already read.
-///
-/// Both are additive: the four specified cases carry exactly the payloads they
-/// were specified with, so a caller that only constructs those is unaffected.
+///   `LocalFoodItem.source` is the field that has to tell them apart.
+/// - `newBarcode` is a code the database did not know: a blank form with one
+///   fact already in hand.
 enum FoodItemEditorTarget: Identifiable {
     /// A blank form.
     case new
@@ -60,23 +64,27 @@ enum FoodItemEditorTarget: Identifiable {
 /// forms that drift on which nutrient is behind the disclosure and what an
 /// emptied brand does.
 ///
-/// ### Why the numbers are never written without this screen
+/// ### What this screen is for, now that imports do not come through it
 ///
 /// Open Food Facts is crowd-sourced and writable by anyone. One of its entries
 /// for a high-protein vanilla yogurt claims 52 kcal per 100 g, which is wrong,
-/// and nothing downstream can tell that from a plausible number. So no import
-/// path in the app reaches `FoodItemService` directly: every one of them lands
-/// here first, the user reads the figures against the packet, and the save sets
-/// `isVerified`. That flag is the user's statement, and it is the only thing in
-/// the library that is worth anything.
+/// and nothing downstream can tell that from a plausible number.
+///
+/// That used to make this form compulsory on every import. It is not any more:
+/// `FoodItemPick.commit` writes a tapped hit directly, and the picker row
+/// prints the figures before the tap instead (#625). What answers the bad
+/// record now is this form being REACHABLE afterwards, from the picker's
+/// per-row Edit. An item imported without eyes on it keeps `isVerified` false
+/// until somebody opens it here and saves, which is the only thing that flag
+/// has ever meant.
 ///
 /// ### Why a save from here always claims verification
 ///
 /// Every route into this form ends at a person looking at eight numbers and
-/// pressing Save. A hand-typed row was read off the label; an import was checked
+/// pressing Save. A hand-typed row was read off the label; an edit was made
 /// against it. There is no route that saves without a look, so there is no route
-/// that should save the flag false. A row created without eyes on it, by the
-/// assistant or by a peer, is what the false state is for.
+/// that should save the flag false. A row created without eyes on it, by an
+/// import, by the assistant or by a peer, is what the false state is for.
 struct FoodItemEditorSheet: View {
 
     let target: FoodItemEditorTarget

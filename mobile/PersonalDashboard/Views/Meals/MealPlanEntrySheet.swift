@@ -306,9 +306,9 @@ struct MealPlanEntrySheet: View {
                 Text("Nutrition").eyebrow()
                 Spacer(minLength: Space.sm)
                 // A planned block is often a packet: the overnight oats, the
-                // shake, the wafer. Picking it beats typing eight numbers off
+                // shake, the wafer. Finding it beats typing eight numbers off
                 // the back of it for the second time (#625).
-                Button("Add a saved item") { showingPicker = true }
+                Button("Find an item") { showingPicker = true }
                     .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                 if anyNumberEntered {
                     Button("Clear", action: clearNumbers)
@@ -444,12 +444,18 @@ struct MealPlanEntrySheet: View {
     /// blank, and leaving the field empty would make the block claim it does
     /// not know.
     ///
-    /// ### Why `recordUse` is NOT called here
+    /// ### Why the rows are written but NOT counted as used
     ///
-    /// The use counters order the picker by what gets EATEN. A plan is a
-    /// forecast, and a block ticked off later logs a real meal through its own
-    /// path. Counting a plan would let a week of intentions outrank the thing
-    /// the user has actually had forty times.
+    /// An item found in the public food database is not in the library until
+    /// something commits it, so this calls `FoodItemPick.commit` and the row
+    /// exists afterwards: planning tomorrow's shake and then logging it should
+    /// find the same item, not search for it twice.
+    ///
+    /// `countingUse` is false, and that is the difference between planning and
+    /// eating. The use counters order the picker by what gets EATEN. A plan is
+    /// a forecast, and a block ticked off later logs a real meal through its
+    /// own path. Counting a plan would let a week of intentions outrank the
+    /// thing the user has actually had forty times.
     ///
     /// ### Why `hasNumbers` is left alone
     ///
@@ -462,6 +468,9 @@ struct MealPlanEntrySheet: View {
     private func adoptPicks(_ picks: [FoodItemPick]) {
         let entries = picks.map(\.entry)
         guard !entries.isEmpty else { return }
+
+        // The one commit path, with the plan's own answer to the counters.
+        FoodItemPick.commit(picks, countingUse: false)
 
         items += entries
 

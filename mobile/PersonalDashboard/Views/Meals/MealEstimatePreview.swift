@@ -131,7 +131,7 @@ struct MealEstimatePreview: View {
                     )
                 }
                 itemGroup(
-                    title: "From your saved items",
+                    title: "Items you added",
                     note: "Read off the label, not estimated.",
                     items: savedItems,
                     precision: .stated
@@ -289,7 +289,7 @@ struct MealEstimatePreview: View {
                 .foregroundStyle(Tokens.warning)
             Text(savedItems.isEmpty
                  ? "Logging this keeps the description and the fact that you ate. Add detail later and re-estimate."
-                 : "Your saved items still carry their own numbers. Add detail to the rest later and re-estimate.")
+                 : "The items you added still carry their own numbers. Add detail to the rest later and re-estimate.")
                 .font(.edSubheadline)
                 .foregroundStyle(Tokens.muted)
                 .fixedSize(horizontal: false, vertical: true)

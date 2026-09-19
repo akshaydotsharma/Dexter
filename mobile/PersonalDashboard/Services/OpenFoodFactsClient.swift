@@ -26,8 +26,15 @@ import Foundation
 ///
 /// It also means a hit is not automatically true. One Open Food Facts entry for
 /// a high-protein vanilla yogurt claims 52 kcal per 100 g, which is wrong, and
-/// nothing downstream can tell that from a plausible number. Every path through
-/// this client therefore ends at a confirm form, never at a write.
+/// nothing downstream can tell that from a plausible number.
+///
+/// That used to be answered with a confirm form on every import. It is now
+/// answered with a row that prints its calories and protein BEFORE the tap, and
+/// with an item that stays editable after it (#625). The form on every import
+/// was friction on the path that has to stay fast, and it made the library
+/// something the user had to curate; showing the numbers in the row buys the
+/// same look for no taps. `LocalFoodItem.isVerified` stays false for a row that
+/// arrived this way, which is what the flag is for.
 ///
 /// ### Why there is no key and no account
 ///
@@ -178,10 +185,12 @@ struct OpenFoodFactsClient: Sendable {
     /// Not-found is `nil` and not an error, and the distinction carries real
     /// weight at the call site. A scan that finds nothing is an ordinary,
     /// frequent outcome — the database is large but it is not complete, and it
-    /// is thinnest exactly where a Singapore shelf is thickest — and the right
-    /// response is to open the confirm form empty with the barcode already
-    /// filled in, so the user types the panel once and never again. Treating it
-    /// as a failure would throw that away and show an apology instead.
+    /// is thinnest exactly where a Singapore shelf is thickest. Treating it as a
+    /// failure would show an apology for something that is working.
+    ///
+    /// The picker's answer to `nil` is a sentence saying the database does not
+    /// have that packet, and a pointer at the other way in: close the sheet and
+    /// describe the meal in words (#625).
     ///
     /// Their v2 endpoint answers HTTP 200 with `status: 0` for an unknown code,
     /// so the status field is the only thing that can tell you, not the HTTP
@@ -257,10 +266,15 @@ struct OpenFoodFactsClient: Sendable {
     ///
     /// Three attempts take a one-in-three failure to about one in twenty-seven,
     /// which is the difference between a search that feels broken and one that
-    /// occasionally feels slow. The worst case adds 1.7 s, and that is
-    /// affordable HERE because reaching this client is an explicit act: the
-    /// picker searches the local library as you type and only calls the network
-    /// when you ask it to. A per-keystroke search would want one retry, not two.
+    /// occasionally feels slow. The worst case adds 1.7 s.
+    ///
+    /// The picker now searches this database as the user types rather than on a
+    /// button (#625), which would make two retries expensive if every keystroke
+    /// reached here. It does not: the picker debounces by 350 ms and cancels the
+    /// in-flight request on each keystroke, so one request leaves per PAUSE and
+    /// a cancelled attempt never reaches the retry loop at all. The local
+    /// library answers instantly either way, so the wait this can add is always
+    /// on results the user is still reading past.
     ///
     /// Only `unavailable` is retried. A GET with no side effects is safe to
     /// repeat; a transport error is usually a dead network, where retrying just
@@ -526,29 +540,31 @@ struct OpenFoodFactsNumber: Decodable, Sendable {
     }
 }
 
-// MARK: - The draft a confirm form binds to
+// MARK: - The draft a hit travels in
 
 /// Everything `LocalFoodItem` needs, as a plain value with no store behind it
 /// (#625).
 ///
 /// ### Why this is not just a `LocalFoodItem`
 ///
-/// Because nothing has been decided yet. A draft is what an import PROPOSES:
-/// the user still has to read it against the packet, fix a name the database
-/// spells oddly, and accept or reject the numbers. Building a `@Model` to
-/// represent that would mean inserting a row into the store to hold a form's
-/// state, and then deleting it again when the user backs out — a write for
-/// every abandoned search, and a window in which an unconfirmed guess is
-/// indistinguishable from a fact the user accepted.
+/// Because nothing has been committed yet. A search answers with twenty hits
+/// and the user picks at most one. Building a `@Model` for each would mean
+/// twenty writes per search and a window in which a stranger's record is
+/// indistinguishable in the store from a row the user chose.
+///
+/// So a hit stays a draft while it is only a result, and while it is only in
+/// the tray. `FoodItemPick.commit` is the one place a draft becomes a row, and
+/// it runs when the meal is written.
 ///
 /// So this type deliberately touches no SwiftData at all. It can be built on
 /// any thread, held by a view, diffed, thrown away. `FoodItemService` is the
-/// one place that turns an accepted draft into a row.
+/// one place that turns a draft into a row.
 ///
 /// It is also what a hand-typed item flows through, which is the reason the
-/// fields are `var`: the confirm form binds straight to them, and an import and
+/// fields are `var`: the item editor binds straight to them, and an import and
 /// a manual entry then reach the store by the same path with the same
-/// validation.
+/// validation. The scan path sets `barcode` and `source` on a hit it made
+/// itself, for the same reason.
 ///
 /// ### `imageURL` and `missingNutrients` are not on the model, on purpose
 ///
@@ -556,9 +572,9 @@ struct OpenFoodFactsNumber: Decodable, Sendable {
 /// remote, temporary, and the library does not show pictures; carrying it on
 /// the row would mean a column that is stale the moment the contributor
 /// replaces the photo. `missingNutrients` is the list of figures the record did
-/// not carry, which the confirm form needs so it can say "this record has no
-/// fibre" instead of printing a confident `0 g`. Once the user has looked at
-/// the form, the zero IS the answer they accepted, and the list has no meaning
+/// not carry, which the picker row prints as "3 figures not stated" so a
+/// confident `0 g` is never read as a measurement. Once the row is in the
+/// library the zero is what the user chose to keep, and the list has no meaning
 /// any more.
 struct FoodItemDraft: Sendable, Equatable {
 
@@ -594,7 +610,16 @@ struct FoodItemDraft: Sendable, Equatable {
     var externalSource: String?
     var externalID: String?
 
-    /// The product photo, for the confirm form only. Never persisted.
+    /// How this draft would enter the library, as a `FoodItemSource` constant.
+    ///
+    /// Provenance, not content. A typed search and a barcode scan return the
+    /// SAME numbers for the same product and must still be told apart, because
+    /// `LocalFoodItem.source` is the only field that records which door was
+    /// used. The scan path overwrites this with `FoodItemSource.barcode` on the
+    /// hit it built; nothing else touches it.
+    var source: String = FoodItemSource.openFoodFacts
+
+    /// The product photo, for a form that wants one. Never persisted.
     var imageURL: URL?
 
     /// Which of the eight the source record did not carry. Every one of these
@@ -619,6 +644,7 @@ struct FoodItemDraft: Sendable, Equatable {
         barcode: String? = nil,
         externalSource: String? = nil,
         externalID: String? = nil,
+        source: String = FoodItemSource.openFoodFacts,
         imageURL: URL? = nil,
         missingNutrients: [Nutrient] = []
     ) {
@@ -638,8 +664,103 @@ struct FoodItemDraft: Sendable, Equatable {
         self.barcode = barcode
         self.externalSource = externalSource
         self.externalID = externalID
+        self.source = source
         self.imageURL = imageURL
         self.missingNutrients = missingNutrients
+    }
+}
+
+// MARK: - A draft behaving like a library row it is not yet (#625)
+
+extension FoodItemDraft {
+
+    /// Brand and name, as a shelf would label it. The same rule
+    /// `LocalFoodItem.displayName` follows, so a hit and the row it becomes
+    /// read identically and a tray entry does not rename itself on commit.
+    ///
+    /// The "Unnamed product" fallback is only reachable for a record carrying
+    /// neither a name nor a maker, which is a broken row rather than a food.
+    var displayName: String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let brand = brand?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !brand.isEmpty else {
+            return trimmedName.isEmpty ? "Unnamed product" : trimmedName
+        }
+        if trimmedName.isEmpty { return brand }
+        if trimmedName.lowercased().hasPrefix(brand.lowercased()) { return trimmedName }
+        return "\(brand) \(trimmedName)"
+    }
+
+    /// The eight AT `basePortionQuantity`, as one value.
+    var nutrientsAtBase: MealNutrients {
+        MealNutrients(
+            calories: calories,
+            proteinG: proteinG,
+            carbsG: carbsG,
+            fatG: fatG,
+            fibreG: fibreG,
+            sugarG: sugarG,
+            sodiumMg: sodiumMg,
+            satFatG: satFatG
+        )
+    }
+
+    /// The eight for `quantity`, through the same ratio a stored row uses.
+    func nutrients(for quantity: Double) -> MealNutrients {
+        MealNutrients.scaled(nutrientsAtBase, fromBasePortion: basePortionQuantity, to: quantity)
+    }
+
+    /// This hit, at `quantity`, as the value type a meal actually stores.
+    ///
+    /// The counterpart of `LocalFoodItem.mealItem(quantity:)`, and it exists
+    /// for one reason: a hit the user has tapped sits in the tray with no row
+    /// behind it, and retyping its amount there has to rescale something. The
+    /// alternative was writing the row at tap time, which fills the library
+    /// with everything the user tried and then removed (#625).
+    func mealItem(quantity: Double? = nil) -> MealItemEntry {
+        let amount = quantity ?? defaultPortionQuantity
+        let n = nutrients(for: amount)
+        return MealItemEntry(
+            name: displayName,
+            portionQuantity: amount,
+            portionUnit: basePortionUnit.rawValue,
+            calories: n.calories,
+            proteinG: n.proteinG,
+            carbsG: n.carbsG,
+            fatG: n.fatG,
+            fibreG: n.fibreG,
+            sugarG: n.sugarG,
+            sodiumMg: n.sodiumMg,
+            satFatG: n.satFatG
+        )
+    }
+
+    /// This draft as the one argument `FoodItemService.upsert` takes.
+    ///
+    /// Every optional is passed through as it stands, nil included, because
+    /// `FoodItemWrite` reads nil as "this source did not say" and leaves the
+    /// stored value alone. Collapsing a missing brand to `""` would CLEAR a
+    /// brand the user had corrected on a row this write is updating, which is
+    /// the #444 / #488 mistake pointed the other way.
+    ///
+    /// `isVerified` is false, and that is the honest value: nobody has read
+    /// these numbers against the packet. The flag is the user's statement, and
+    /// tapping a row in a list is not it.
+    var libraryWrite: FoodItemWrite {
+        FoodItemWrite(
+            name: name,
+            brand: brand,
+            basePortionQuantity: basePortionQuantity,
+            basePortionUnit: basePortionUnit.rawValue,
+            nutrients: nutrientsAtBase,
+            defaultPortionQuantity: defaultPortionQuantity,
+            barcode: barcode,
+            externalSource: externalSource,
+            externalID: externalID,
+            source: source,
+            isVerified: false,
+            notes: nil
+        )
     }
 }
 
