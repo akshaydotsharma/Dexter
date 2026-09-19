@@ -125,6 +125,11 @@ struct FinanceView: View {
     /// Summary shown after a statement import completes (#184), e.g.
     /// "Imported 42 · Skipped 8 duplicates · Ignored 5 payments/refunds".
     @State private var statementImportSummary: String?
+    /// The plan for finishing an import that ended with chunks unread (#635).
+    /// Held next to the alert text rather than on the job, because
+    /// `openFinishedJob` acknowledges the job (removing it) at the same moment
+    /// it raises the alert.
+    @State private var statementResumePlan: ImportJob.ResumePlan?
 
     /// Surfaced to the user when extraction fails with no usable receipt
     /// to attach (e.g. file save failed). Successful saves with failed
@@ -222,12 +227,15 @@ struct FinanceView: View {
         }
         .alert(
             // Source-agnostic: this summary now backs both statement imports
-            // and multi-expense photo imports (#247).
-            "Import complete",
+            // and multi-expense photo imports (#247). The title follows the
+            // outcome (#635): a run that stopped part-way must not announce
+            // itself as complete.
+            statementSummaryTitle,
             isPresented: statementSummaryBinding,
             presenting: statementImportSummary
         ) { _ in
-            Button("OK", role: .cancel) { statementImportSummary = nil }
+            resumeButton
+            Button("OK", role: .cancel) { clearStatementAlert() }
         } message: { summary in
             Text(summary)
         }
@@ -236,7 +244,15 @@ struct FinanceView: View {
             isPresented: captureErrorBinding,
             presenting: captureErrorMessage
         ) { _ in
-            Button("OK", role: .cancel) { captureErrorMessage = nil }
+            // A resumed run whose very first chunk fails throws, because there
+            // was nothing new to keep. The resume point is still good, so offer
+            // it here too rather than making the user pay for the whole
+            // statement again (#635).
+            resumeButton
+            Button("OK", role: .cancel) {
+                captureErrorMessage = nil
+                statementResumePlan = nil
+            }
         } message: { message in
             Text(message)
         }
@@ -549,7 +565,14 @@ struct FinanceView: View {
     private var captureErrorBinding: Binding<Bool> {
         Binding(
             get: { captureErrorMessage != nil },
-            set: { newValue in if !newValue { captureErrorMessage = nil } }
+            set: { newValue in
+                if !newValue {
+                    captureErrorMessage = nil
+                    // Dismissing the alert drops the offer with it, so a later
+                    // summary can never inherit a stale resume plan (#635).
+                    statementResumePlan = nil
+                }
+            }
         )
     }
 
@@ -567,14 +590,20 @@ struct FinanceView: View {
     /// are inserted directly and the outcome is surfaced as a summary. Parse
     /// failures show the "couldn't process" alert; a successful parse with zero
     /// transactions still shows a (benign) summary explaining nothing matched.
-    private func importStatement(pdfData: Data, fileName: String? = nil) async {
+    /// `resumingFrom` finishes a run that ended with chunks unread, re-reading
+    /// only those (#635).
+    private func importStatement(
+        pdfData: Data,
+        fileName: String? = nil,
+        resumingFrom: StatementResumePoint? = nil
+    ) async {
         // Non-blocking processing row while the batch import runs (#186); the
         // list stays interactive and multiple imports can queue up. When we
         // know the picked file name, label the row "Importing <name>…" so it's
         // clear which statement is being processed (#189).
         let bannerLabel = fileName
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-            .map { "Importing \($0)…" }
+            .map { resumingFrom == nil ? "Importing \($0)…" : "Resuming \($0)…" }
         // Registered on `ImportJobCenter`, NOT on this view (#498). A statement
         // is read in sequential 3-page chunks, so a long one runs for minutes;
         // the user can leave Finance and come back to find it still going, and a
@@ -587,16 +616,25 @@ struct FinanceView: View {
             overrideLabel: bannerLabel
         )
 
+        func plan(for point: StatementResumePoint) -> ImportJob.ResumePlan {
+            ImportJob.ResumePlan(pdfData: pdfData, fileName: fileName, point: point)
+        }
+
         do {
             let result = try await StatementImporter.default().importStatement(
                 pdfData: pdfData,
                 fileName: fileName,
+                resumingFrom: resumingFrom,
                 onProgress: { done, total in
                     ImportJobCenter.shared.reportProgress(jobID, completed: done, total: total)
                 },
                 cancellation: token
             )
-            ImportJobCenter.shared.finish(jobID, outcome: .summary(result.summaryLine))
+            ImportJobCenter.shared.finish(
+                jobID,
+                outcome: .summary(result.summaryLine),
+                resume: result.resumePoint.map(plan)
+            )
         } catch {
             let message: String = {
                 if let typed = error as? StatementExtractionError {
@@ -604,7 +642,13 @@ struct FinanceView: View {
                 }
                 return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
             }()
-            ImportJobCenter.shared.finish(jobID, outcome: .failure(message))
+            // Keep a resume point the failed attempt inherited: one dead retry
+            // must not throw away the chunks an earlier run already paid for.
+            ImportJobCenter.shared.finish(
+                jobID,
+                outcome: .failure(message),
+                resume: resumingFrom.map(plan)
+            )
         }
     }
 
@@ -620,15 +664,50 @@ struct FinanceView: View {
         case .none:
             return
         }
+        // Taken off the job BEFORE it is acknowledged, since acknowledging
+        // removes the job and the plan with it (#635).
+        statementResumePlan = job.resume
         withAnimation(.easeInOut(duration: 0.15)) {
             ImportJobCenter.shared.acknowledge(job.id)
         }
     }
 
+    /// A run that stopped or was interrupted is not a complete import, and the
+    /// alert title is the first thing read (#635).
+    private var statementSummaryTitle: String {
+        statementResumePlan == nil ? "Import complete" : "Import incomplete"
+    }
+
+    /// Offered only when there are chunks left to read. Re-runs just those,
+    /// so finishing a statement costs what is missing rather than the whole
+    /// file again (#635).
+    @ViewBuilder
+    private var resumeButton: some View {
+        if let plan = statementResumePlan {
+            Button("Resume") {
+                statementImportSummary = nil
+                captureErrorMessage = nil
+                statementResumePlan = nil
+                Task {
+                    await importStatement(
+                        pdfData: plan.pdfData,
+                        fileName: plan.fileName,
+                        resumingFrom: plan.point
+                    )
+                }
+            }
+        }
+    }
+
+    private func clearStatementAlert() {
+        statementImportSummary = nil
+        statementResumePlan = nil
+    }
+
     private var statementSummaryBinding: Binding<Bool> {
         Binding(
             get: { statementImportSummary != nil },
-            set: { newValue in if !newValue { statementImportSummary = nil } }
+            set: { newValue in if !newValue { clearStatementAlert() } }
         )
     }
 

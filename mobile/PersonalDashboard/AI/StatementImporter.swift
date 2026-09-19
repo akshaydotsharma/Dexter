@@ -46,12 +46,19 @@ struct StatementImportResult: Sendable {
     /// lookup failed is still counted in `deposits` but omitted here, so this is
     /// a lower bound on money received. Defaults to 0.
     var depositsTotalSGD: Double = 0
-    /// True when the user cancelled part-way and the extractor stopped between
-    /// chunks (#498). Distinct from `possiblyTruncated`: that means the model
-    /// ran out of output budget, this means the user asked us to stop. The rows
-    /// read before the stop still imported, and a re-import is idempotent, so
-    /// the remedy is simply to import the statement again. Defaults to false.
-    var stoppedEarly: Bool = false
+    /// Why the extraction ended before the last chunk, or nil when it read the
+    /// whole statement (#498, #635). Deliberately NOT folded into
+    /// `possiblyTruncated`: that means the model ran out of output budget on a
+    /// chunk it DID read, and the remedy is different. Three causes, three
+    /// remedies, so three messages (see `summaryLine`). The rows read before
+    /// the stop still imported, and a re-import is idempotent, so every one of
+    /// them self-heals.
+    var incompleteReason: StatementExtraction.StopReason? = nil
+
+    /// Where an incomplete run got to, so the caller can offer Resume rather
+    /// than paying for the whole statement again (#635). nil when the run read
+    /// everything, or when there is nothing left to read.
+    var resumePoint: StatementResumePoint? = nil
 
     var totalParsed: Int {
         imported + skippedDuplicates + ignoredNonSpend + deposits + failed
@@ -94,19 +101,36 @@ struct StatementImportResult: Sendable {
         }
         let counts = parts.joined(separator: " · ")
 
-        // A user-initiated stop takes precedence over the truncation warning:
-        // the run ended because it was asked to, and the remedy is different
-        // (import again, rather than "the statement was too long"). No em dash
-        // in this user-facing string (project no-em-dash rule).
-        if stoppedEarly {
+        // An early stop takes precedence over the truncation warning: the run
+        // ended before the model's budget ever came into it, and each cause has
+        // its own remedy. No em dash in these user-facing strings (project
+        // no-em-dash rule).
+        switch incompleteReason {
+        case .stoppedByUser:
             return """
             Import stopped
 
             \(counts)
 
-            The rest of the statement was not read. Import it again to finish; \
-            the transactions already added will not be duplicated.
+            The rest of the statement was not read. Resume it, or import the \
+            file again to finish; the transactions already added will not be \
+            duplicated.
             """
+        case .interrupted:
+            // The field case (#635): the phone locked, iOS suspended the app,
+            // and the in-flight request died. Say so plainly, because the user
+            // did nothing wrong and the count that DID land is the reassurance.
+            return """
+            Import interrupted
+
+            \(counts)
+
+            The connection dropped part-way, so the rest of the statement was \
+            not read. Resume it, or import the file again to finish; the \
+            transactions already added will not be duplicated.
+            """
+        case .none:
+            break
         }
 
         guard possiblyTruncated else { return counts }
@@ -203,27 +227,35 @@ struct StatementImporter {
     /// `onProgress` and `cancellation` are forwarded to the chunked extractor
     /// (#498) so the caller can show "3 of 5" and stop a long run between
     /// chunks. Both default to nil, so every existing call site and test is
-    /// unaffected. A stopped run is NOT an error: whatever was read before the
-    /// stop is inserted as normal and the result carries `stoppedEarly`.
+    /// unaffected. An incomplete run is NOT an error: whatever was read before
+    /// the stop is inserted as normal and the result carries `incompleteReason`
+    /// plus a `resumePoint` (#635).
+    ///
+    /// `resumingFrom` re-runs only the chunks a previous attempt did not read
+    /// (#635), carrying that attempt's statement header forward so the resumed
+    /// rows keep their card attribution.
     func importStatement(
         pdfData: Data,
         fileName: String? = nil,
         trip: LocalTrip? = nil,
+        resumingFrom: StatementResumePoint? = nil,
         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
         cancellation: ImportCancellationToken? = nil
     ) async throws -> StatementImportResult {
-        let (lines, meta, truncated, stoppedEarly) = try await anthropic.extractStatement(
+        let extraction = try await anthropic.extractStatement(
             pdfData: pdfData,
+            resumingFrom: resumingFrom,
             onProgress: onProgress,
             cancellation: cancellation
         )
         return await insert(
-            lines: lines,
-            meta: meta,
+            lines: extraction.lines,
+            meta: extraction.meta,
             fileName: fileName,
-            possiblyTruncated: truncated,
+            possiblyTruncated: extraction.possiblyTruncated,
             trip: trip,
-            stoppedEarly: stoppedEarly
+            incompleteReason: extraction.stopReason,
+            resumePoint: extraction.resumePoint
         )
     }
 
@@ -254,7 +286,8 @@ struct StatementImporter {
         recordsImportHistory: Bool = true,
         possiblyTruncated: Bool,
         trip: LocalTrip? = nil,
-        stoppedEarly: Bool = false
+        incompleteReason: StatementExtraction.StopReason? = nil,
+        resumePoint: StatementResumePoint? = nil
     ) async -> StatementImportResult {
         var imported = 0
         var refunds = 0
@@ -569,7 +602,8 @@ struct StatementImporter {
             importedUUIDs: importedUUIDs,
             deposits: deposits,
             depositsTotalSGD: depositsTotalSGD,
-            stoppedEarly: stoppedEarly
+            incompleteReason: incompleteReason,
+            resumePoint: resumePoint
         )
     }
 
