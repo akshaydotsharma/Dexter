@@ -259,6 +259,10 @@ final class DataImportService {
         /// would otherwise report "nothing to import" and refuse the only copy
         /// of it there is.
         case mealPlanEntries
+        /// #625. Same reason again: an archive carrying only the saved item
+        /// library would otherwise report "nothing to import" and refuse the
+        /// only copy of it there is.
+        case foodItems
 
         var id: String { rawValue }
 
@@ -285,6 +289,7 @@ final class DataImportService {
             case .meals:             return "Meals"
             case .mealTargets:       return "Nutrition targets"
             case .mealPlanEntries:   return "Planned meals"
+            case .foodItems:         return "Saved food items"
             }
         }
 
@@ -311,6 +316,7 @@ final class DataImportService {
             case .meals:             return "fork.knife"
             case .mealTargets:       return "target"
             case .mealPlanEntries:   return "calendar.badge.clock"
+            case .foodItems:         return "basket"
             }
         }
     }
@@ -442,6 +448,8 @@ final class DataImportService {
         let existingMealIDs        = try existingStringUUIDs(LocalMeal.self,        keyPath: \.clientUUID)
         let existingMealTargetIDs  = try existingStringUUIDs(MealTargets.self,      keyPath: \.clientUUID)
         let existingMealPlanIDs    = try existingStringUUIDs(LocalMealPlanEntry.self, keyPath: \.clientUUID)
+        // #625. A String `clientUUID` too, like the three above.
+        let existingFoodItemIDs    = try existingStringUUIDs(LocalFoodItem.self,   keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -476,6 +484,7 @@ final class DataImportService {
         record(.meals,             (payload.meals ?? []).map(\.clientUUID),            existing: existingMealIDs)
         record(.mealTargets,       (payload.mealTargets ?? []).map(\.clientUUID),      existing: existingMealTargetIDs)
         record(.mealPlanEntries,   (payload.mealPlanEntries ?? []).map(\.clientUUID),  existing: existingMealPlanIDs)
+        record(.foodItems,         (payload.foodItems ?? []).map(\.clientUUID),        existing: existingFoodItemIDs)
 
         return (skip, repair)
     }
@@ -534,6 +543,7 @@ final class DataImportService {
         let existingMealUUIDs        = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalMeal.self,    keyPath: \.clientUUID)
         let existingMealTargetUUIDs  = mode == .replaceMatching ? [] : try existingStringUUIDs(MealTargets.self,  keyPath: \.clientUUID)
         let existingMealPlanUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalMealPlanEntry.self, keyPath: \.clientUUID)
+        let existingFoodItemUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalFoodItem.self,   keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
@@ -950,6 +960,46 @@ final class DataImportService {
                 modelContext.insert(entry)
             }
 
+            // #625: the saved food item library. Rows only, no files, and no
+            // blobs either — every column on this model is a scalar, so nothing
+            // has to be assigned after construction the way a meal's `itemsData`
+            // does.
+            //
+            // `useCount` and `lastUsedAt` are restored as they were rather than
+            // zeroed. They are not a claim about this device: they are what
+            // orders the picker, and a library restored in alphabetical order is
+            // a library the user has to re-learn.
+            for dto in payload.foodItems ?? [] where !existingFoodItemUUIDs.contains(dto.clientUUID) {
+                let item = LocalFoodItem(
+                    clientUUID: dto.clientUUID,
+                    name: dto.name,
+                    brand: dto.brand,
+                    basePortionQuantity: dto.basePortionQuantity,
+                    basePortionUnit: dto.basePortionUnit,
+                    calories: dto.calories,
+                    proteinG: dto.proteinG,
+                    carbsG: dto.carbsG,
+                    fatG: dto.fatG,
+                    fibreG: dto.fibreG,
+                    sugarG: dto.sugarG,
+                    sodiumMg: dto.sodiumMg,
+                    satFatG: dto.satFatG,
+                    defaultPortionQuantity: dto.defaultPortionQuantity,
+                    barcode: dto.barcode,
+                    externalSource: dto.externalSource,
+                    externalID: dto.externalID,
+                    source: dto.source,
+                    isVerified: dto.isVerified,
+                    notes: dto.notes,
+                    useCount: dto.useCount,
+                    lastUsedAt: dto.lastUsedAt,
+                    isArchived: dto.isArchived,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt
+                )
+                modelContext.insert(item)
+            }
+
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
                 let restoredPath = try restoreReceipt(for: dto, archiveEntries: preview.entries)
                 if let written = restoredPath.writtenPath { writtenReceiptPaths.append(written) }
@@ -1233,6 +1283,7 @@ final class DataImportService {
         try deleteMatching(LocalMeal.self,        ids: Set((payload.meals ?? []).map(\.clientUUID)),             key: \.clientUUID)
         try deleteMatching(MealTargets.self,      ids: Set((payload.mealTargets ?? []).map(\.clientUUID)),       key: \.clientUUID)
         try deleteMatching(LocalMealPlanEntry.self, ids: Set((payload.mealPlanEntries ?? []).map(\.clientUUID)),  key: \.clientUUID)
+        try deleteMatching(LocalFoodItem.self,      ids: Set((payload.foodItems ?? []).map(\.clientUUID)),        key: \.clientUUID)
         try deleteMatching(LocalProcessedEmail.self, ids: Set((payload.processedEmails ?? []).map(\.messageKey)), key: \.messageKey)
     }
 
@@ -1329,6 +1380,7 @@ final class DataImportService {
             "LocalMeal":            payload.meals?.count ?? 0,
             "MealTargets":          payload.mealTargets?.count ?? 0,
             "LocalMealPlanEntry":   payload.mealPlanEntries?.count ?? 0,
+            "LocalFoodItem":        payload.foodItems?.count ?? 0,
         ]
     }
 

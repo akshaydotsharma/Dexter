@@ -79,6 +79,13 @@ enum MealToolSchema {
       portion. Units: calories in kcal, sodium in mg, everything else in
       grams. Never return a null or a negative number — use 0 for a nutrient
       the food genuinely has none of.
+    - "saved_item_id": set it when a dish IS one of the SAVED FOOD ITEMS
+      listed in the context, and leave it out otherwise. State
+      "portion_quantity" in that item's own unit. The device then writes the
+      STORED numbers for that portion and ignores the eight you sent. Send
+      your own estimate in them anyway: they are what gets used if the id
+      names no row. Never invent an id, and never use one for a dish the
+      list does not hold.
     - Do not return meal totals. The totals are the sum of the items and are
       computed from them.
     - "contains_alcohol": true if any item is beer, wine, cider, a spirit or
@@ -218,7 +225,17 @@ enum MealToolSchema {
             "fibre_g": number("Fibre for this item at this portion, in grams."),
             "sugar_g": number("Sugar for this item at this portion, in grams."),
             "sodium_mg": number("Sodium for this item at this portion, in MILLIGRAMS."),
-            "saturated_fat_g": number("Saturated fat for this item at this portion, in grams.")
+            "saturated_fat_g": number("Saturated fat for this item at this portion, in grams."),
+            // #625. The one field on an item that is not a number the model
+            // worked out. It names a row the DEVICE already holds, and the
+            // device substitutes that row's stored figures for the eight
+            // above, scaled to portion_quantity. Optional, and deliberately
+            // absent from `required`: most dishes are not in the library, and
+            // a required id is an id the model invents.
+            "saved_item_id": .object([
+                "type": .string("string"),
+                "description": .string("OPTIONAL. The id of a SAVED FOOD ITEM from the context, when this dish IS that item. The device replaces this item's name, unit and all eight nutrients with that row's stored figures, scaled to portion_quantity. Omit it for anything the saved list does not hold.")
+            ])
         ]),
         "required": .array([
             .string("name"), .string("portion_quantity"), .string("portion_unit"),
@@ -260,7 +277,11 @@ enum MealToolSchema {
                 fibreG: numberValue(dict["fibre_g"]),
                 sugarG: numberValue(dict["sugar_g"]),
                 sodiumMg: numberValue(dict["sodium_mg"]),
-                satFatG: numberValue(dict["saturated_fat_g"])
+                satFatG: numberValue(dict["saturated_fat_g"]),
+                // #625. Carried through untouched and resolved by
+                // `ExecuteDraftAction`, which is the only place with a store
+                // to resolve it against.
+                savedItemID: dict["saved_item_id"]?.stringValue
             )
         }
 

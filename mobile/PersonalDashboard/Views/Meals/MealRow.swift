@@ -379,7 +379,8 @@ struct MealRow: View {
     static func precision(of meal: LocalMeal) -> MealFormat.Precision {
         MealGrounding.precision(
             isGrounded: meal.isGrounded,
-            totalsWereOverridden: meal.totalsWereOverridden
+            totalsWereOverridden: meal.totalsWereOverridden,
+            isFromLibrary: meal.source == MealSource.library
         )
     }
 

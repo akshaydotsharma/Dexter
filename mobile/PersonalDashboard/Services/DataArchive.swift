@@ -99,6 +99,12 @@ enum DataArchive {
         // rather than failing the whole restore.
         var mealPlanEntries: [MealPlanEntryDTO]? = nil
 
+        // MARK: Added in #625 — the saved food item library.
+        // Optional like every field added after v1, so an archive written before
+        // the library existed decodes with nil and imports as "no saved items"
+        // rather than failing the whole restore.
+        var foodItems: [FoodItemDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -827,6 +833,51 @@ enum DataArchive {
         "SyncDeviceState", "SyncShadow", "SyncTombstone", "SyncPeerCursor",
     ]
 
+    /// One saved food item (#625).
+    ///
+    /// Every stored column travels, because unlike a meal this row has no
+    /// second copy anywhere: a meal logged from an item keeps its own numbers,
+    /// so losing the item loses the ability to log it again, not the log.
+    ///
+    /// The eight nutrients are flat fields matching the model's own columns one
+    /// for one, exactly as `MealDTO` carries them, and they describe
+    /// `basePortionQuantity` of `basePortionUnit` rather than a fixed 100. A
+    /// restore that assumed 100 would rescale every future log of the item.
+    ///
+    /// Every property is a `var` with a default, which is a stronger form of
+    /// the accommodation `MealDTO.title` makes: an archive written by an older
+    /// build simply carries no key for a field added later, and the row decodes
+    /// with the same value a row created before that field would have had.
+    /// `useCount` and `lastUsedAt` travel too, so a restored device opens the
+    /// picker in the order the user built rather than alphabetically.
+    struct FoodItemDTO: Codable {
+        var clientUUID: String = ""
+        var name: String = ""
+        var brand: String? = nil
+        var basePortionQuantity: Double = 100
+        var basePortionUnit: String = "g"
+        var calories: Double = 0
+        var proteinG: Double = 0
+        var carbsG: Double = 0
+        var fatG: Double = 0
+        var fibreG: Double = 0
+        var sugarG: Double = 0
+        var sodiumMg: Double = 0
+        var satFatG: Double = 0
+        var defaultPortionQuantity: Double = 100
+        var barcode: String? = nil
+        var externalSource: String? = nil
+        var externalID: String? = nil
+        var source: String = "manual"
+        var isVerified: Bool = false
+        var notes: String? = nil
+        var useCount: Int = 0
+        var lastUsedAt: Date? = nil
+        var isArchived: Bool = false
+        var createdAt: Date = Date()
+        var updatedAt: Date = Date()
+    }
+
     /// Every model this archive format carries, used for the manifest's claimed
     /// list. Order is stable so archives diff cleanly.
     static let exportedModels = [
@@ -848,6 +899,12 @@ enum DataArchive {
         // out would make it the one part of Meals a restore could not bring
         // back — the gap that cost eight vision blocks in #449.
         "LocalMealPlanEntry",
+        // #625. The library is user-authored content that nothing else holds: a
+        // row typed off a packet, or imported and then corrected, exists only
+        // in this table. Leaving it out would repeat the #449 gap exactly — a
+        // model in `schemaModels` and in no backup, so the first build without
+        // it destroys the rows and there is no copy to restore from.
+        "LocalFoodItem",
     ]
 
     static func makeEncoder() -> JSONEncoder {

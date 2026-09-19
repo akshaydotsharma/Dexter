@@ -234,6 +234,8 @@ final class DataExportService {
         // #599: the planned meals. Nothing else in the store holds them, so a
         // week typed into the plan calendar lives here or nowhere.
         let mealPlanEntries = try modelContext.fetch(FetchDescriptor<LocalMealPlanEntry>())
+        // #625: the saved food item library. Rows only, no files.
+        let foodItems = try modelContext.fetch(FetchDescriptor<LocalFoodItem>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -277,6 +279,7 @@ final class DataExportService {
         let mealDTOs: [DataArchive.MealDTO] = meals.map(Self.dto)
         let mealTargetsDTOs: [DataArchive.MealTargetsDTO] = mealTargets.map(Self.dto)
         let mealPlanDTOs: [DataArchive.MealPlanEntryDTO] = mealPlanEntries.map(Self.dto)
+        let foodItemDTOs: [DataArchive.FoodItemDTO] = foodItems.map(Self.dto)
 
         return DataArchive.Payload(
             tasks: taskDTOs,
@@ -303,7 +306,8 @@ final class DataExportService {
             visionBlocks: visionBlockDTOs,
             meals: mealDTOs,
             mealTargets: mealTargetsDTOs,
-            mealPlanEntries: mealPlanDTOs
+            mealPlanEntries: mealPlanDTOs,
+            foodItems: foodItemDTOs
         )
     }
 
@@ -337,6 +341,7 @@ final class DataExportService {
             "LocalMeal":            payload.meals?.count ?? 0,
             "MealTargets":          payload.mealTargets?.count ?? 0,
             "LocalMealPlanEntry":   payload.mealPlanEntries?.count ?? 0,
+            "LocalFoodItem":        payload.foodItems?.count ?? 0,
         ]
     }
 
@@ -687,6 +692,47 @@ final class DataExportService {
             groundingSourcesData: meal.groundingSourcesData,
             createdAt: meal.createdAt,
             updatedAt: meal.updatedAt
+        )
+    }
+
+    /// #625. Every column, flat, and nothing derived.
+    ///
+    /// `basePortionQuantity` travels beside the eight because the eight mean
+    /// nothing without it: they describe THAT amount, not a fixed 100, and a
+    /// restore that assumed otherwise would rescale every meal logged from the
+    /// item afterwards.
+    ///
+    /// `useCount` and `lastUsedAt` are carried rather than reset. They are the
+    /// only thing that orders the picker, so dropping them would restore the
+    /// library as an alphabetical list of things the user no longer recognises
+    /// the shape of.
+    private static func dto(_ item: LocalFoodItem) -> DataArchive.FoodItemDTO {
+        DataArchive.FoodItemDTO(
+            clientUUID: item.clientUUID,
+            name: item.name,
+            brand: item.brand,
+            basePortionQuantity: item.basePortionQuantity,
+            basePortionUnit: item.basePortionUnit,
+            calories: item.calories,
+            proteinG: item.proteinG,
+            carbsG: item.carbsG,
+            fatG: item.fatG,
+            fibreG: item.fibreG,
+            sugarG: item.sugarG,
+            sodiumMg: item.sodiumMg,
+            satFatG: item.satFatG,
+            defaultPortionQuantity: item.defaultPortionQuantity,
+            barcode: item.barcode,
+            externalSource: item.externalSource,
+            externalID: item.externalID,
+            source: item.source,
+            isVerified: item.isVerified,
+            notes: item.notes,
+            useCount: item.useCount,
+            lastUsedAt: item.lastUsedAt,
+            isArchived: item.isArchived,
+            createdAt: item.createdAt,
+            updatedAt: item.updatedAt
         )
     }
 

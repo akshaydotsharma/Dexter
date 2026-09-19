@@ -108,6 +108,9 @@ struct MealPlanEntrySheet: View {
     @State private var errorMessage: String?
     @State private var loaded = false
 
+    /// Whether the saved-item picker is up (#625).
+    @State private var showingPicker = false
+
     private enum Phase: Equatable {
         case idle
         case estimating
@@ -167,6 +170,15 @@ struct MealPlanEntrySheet: View {
         .frame(minWidth: 500, idealWidth: 560, minHeight: 620, idealHeight: 760)
         #endif
         .onAppear(perform: load)
+        .sheet(isPresented: $showingPicker) {
+            // `initialPicks` is deliberately empty every time. The picker hands
+            // back its WHOLE tray, and this sheet ADDS that tray to what it
+            // already holds, so seeding it with the last round would count the
+            // same yogurt twice.
+            FoodItemPickerSheet { chosen in
+                adoptPicks(chosen)
+            }
+        }
     }
 
     // MARK: - Meal type
@@ -293,6 +305,11 @@ struct MealPlanEntrySheet: View {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
                 Text("Nutrition").eyebrow()
                 Spacer(minLength: Space.sm)
+                // A planned block is often a packet: the overnight oats, the
+                // shake, the wafer. Finding it beats typing eight numbers off
+                // the back of it for the second time (#625).
+                Button("Find an item") { showingPicker = true }
+                    .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                 if anyNumberEntered {
                     Button("Clear", action: clearNumbers)
                         .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
@@ -409,6 +426,58 @@ struct MealPlanEntrySheet: View {
                 }
                 .accessibilityElement(children: .combine)
             }
+        }
+    }
+
+    /// Fold a round of picks into the block (#625).
+    ///
+    /// ### Why the fields are added to and not replaced
+    ///
+    /// A planned block is built in pieces: two eggs typed in, then the yogurt
+    /// picked, then a shake picked. Each of those is part of the same meal, so
+    /// a pick that overwrote the fields would delete the part the user had
+    /// already worked out. Adding is also what makes the second press of the
+    /// button mean what it looks like it means.
+    ///
+    /// All eight are written, including the ones that come to zero. A picked
+    /// item states its sugar and its sodium; zero there is a reading, not a
+    /// blank, and leaving the field empty would make the block claim it does
+    /// not know.
+    ///
+    /// ### Why the rows are written but NOT counted as used
+    ///
+    /// An item found in the public food database is not in the library until
+    /// something commits it, so this calls `FoodItemPick.commit` and the row
+    /// exists afterwards: planning tomorrow's shake and then logging it should
+    /// find the same item, not search for it twice.
+    ///
+    /// `countingUse` is false, and that is the difference between planning and
+    /// eating. The use counters order the picker by what gets EATEN. A plan is
+    /// a forecast, and a block ticked off later logs a real meal through its
+    /// own path. Counting a plan would let a week of intentions outrank the
+    /// thing the user has actually had forty times.
+    ///
+    /// ### Why `hasNumbers` is left alone
+    ///
+    /// On a new block that flag chooses between `MealPlanSource.manual` and
+    /// `MealPlanSource.chat`, and `chat` is documented as "the model's
+    /// estimate of a meal that has not been eaten". These figures are the
+    /// opposite of that, so `manual` is the honest half of the pair the enum
+    /// offers. The block still saves WITH its numbers either way, because
+    /// `nutrientsToWrite` reads the fields and not this flag.
+    private func adoptPicks(_ picks: [FoodItemPick]) {
+        let entries = picks.map(\.entry)
+        guard !entries.isEmpty else { return }
+
+        // The one commit path, with the plan's own answer to the counters.
+        FoodItemPick.commit(picks, countingUse: false)
+
+        items += entries
+
+        let added = MealNutrients.sum(of: entries)
+        for nutrient in Nutrient.allCases {
+            let current = MealItemDraft.number(values[nutrient] ?? "")
+            values[nutrient] = MealItemDraft.string(current + added[nutrient])
         }
     }
 

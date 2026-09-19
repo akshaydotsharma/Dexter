@@ -99,6 +99,31 @@ struct MealNutrients: Codable, Equatable, Hashable, Sendable {
     static func sum(of items: [MealItemEntry]) -> MealNutrients {
         items.reduce(MealNutrients.zero) { $0 + $1.nutrients }
     }
+
+    /// The eight for `quantity`, scaled linearly off a base portion (#625).
+    ///
+    /// The ONE ratio in the saved-item feature. `LocalFoodItem.nutrients(for:)`
+    /// and `FoodItemDraft.nutrients(for:)` both call it, so a row already in
+    /// the library and a hit that is not saved yet cannot disagree about what
+    /// 200 g of the same packet is. A view that multiplied the eight itself is
+    /// how one surface ends up printing different numbers from the one beside
+    /// it.
+    ///
+    /// A non-positive base returns zeroes rather than dividing by zero. That
+    /// state is unreachable through `FoodItemService`, which refuses such a
+    /// row, and is handled here anyway because a row can arrive from a peer
+    /// running a build this one has never seen.
+    static func scaled(
+        _ base: MealNutrients,
+        fromBasePortion basePortion: Double,
+        to quantity: Double
+    ) -> MealNutrients {
+        guard basePortion > 0 else { return .zero }
+        let ratio = quantity / basePortion
+        var out = MealNutrients()
+        for nutrient in Nutrient.allCases { out[nutrient] = base[nutrient] * ratio }
+        return out
+    }
 }
 
 extension MealItemEntry {

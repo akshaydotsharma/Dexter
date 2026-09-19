@@ -38,6 +38,16 @@ enum MealSource {
     /// without anyone looking at the screen is the one most worth being able to
     /// find later.
     static let capture = "capture"
+
+    /// Built entirely out of saved food items (#625).
+    ///
+    /// No model call was made and no guard was run, because the numbers came
+    /// off a label the user already read and accepted. Kept apart from `user`,
+    /// which also means "not estimated": `user` is eight totals somebody typed
+    /// onto one meal, and this is a set of library rows that can be named. A
+    /// caption can say which packet a figure came from only if the row says it
+    /// came from the library at all.
+    static let library = "library"
 }
 
 /// Everything between "the user described a meal" and "a row exists" (#543).
@@ -149,6 +159,23 @@ struct MealEstimationService {
     /// Passing `clientUUID` makes this a correction of the row that id names
     /// rather than a second meal — the identity contract `MealService.addMeal`
     /// already holds. The re-estimate path uses it; the composer does not.
+    ///
+    /// ### What `extraItems` is for, and why the totals are only recomputed
+    /// when it carries something (#625)
+    ///
+    /// A meal can hold estimated dishes AND saved library items at once: you
+    /// type "chicken rice" and pick the yogurt you always have with it. The
+    /// picked ones are exact and must never go through the model, so they are
+    /// not part of the estimate and arrive here instead. They are appended
+    /// AFTER the estimated items, which is the order the user built the meal
+    /// in, and the eight totals are then summed over the union.
+    ///
+    /// When `extraItems` is empty the stored totals stay `checked.nutrients`
+    /// verbatim rather than being re-summed from the items. That is not a
+    /// micro-optimisation, it is the existing contract: a needs-detail row and
+    /// a peer restore can both carry totals with no items behind them, and
+    /// re-summing would zero them. Every caller that predates #625 therefore
+    /// writes exactly the row it wrote before.
     @discardableResult
     func save(
         _ checked: CheckedMealEstimate,
@@ -156,9 +183,15 @@ struct MealEstimationService {
         day: Date,
         loggedAt: Date,
         source: String = MealSource.composer,
-        clientUUID: String? = nil
+        clientUUID: String? = nil,
+        extraItems: [MealItemEntry] = []
     ) throws -> LocalMeal {
-        try meals.addMeal(
+        let items = checked.items + extraItems
+        let nutrients = extraItems.isEmpty
+            ? checked.nutrients
+            : MealNutrients.sum(of: items)
+
+        return try meals.addMeal(
             date: day,
             loggedAt: loggedAt,
             mealType: checked.mealType,
@@ -167,8 +200,8 @@ struct MealEstimationService {
             // a re-estimate, so the short name and the numbers always describe
             // the same answer.
             title: checked.title,
-            nutrients: checked.nutrients,
-            items: checked.items,
+            nutrients: nutrients,
+            items: items,
             confidence: checked.confidence,
             source: source,
             needsDetail: checked.needsDetail,
@@ -188,6 +221,86 @@ struct MealEstimationService {
             groundingSources: checked.groundingSources,
             clientUUID: clientUUID
         )
+    }
+
+    // MARK: - Writing a meal made only of saved items (#625)
+
+    /// Write a meal that is nothing but library items.
+    ///
+    /// ### Why no guard runs over these numbers
+    ///
+    /// `MealEstimateGuards` grades a GUESS. Every one of its checks asks
+    /// whether a model's answer is plausible: is this more protein than a meal
+    /// holds, do the macros account for the stated calories, did an item come
+    /// back with no portion. A library item answers all of that before it is
+    /// picked. Its figures were read off a packet by the user and its portion
+    /// is a weight they typed.
+    ///
+    /// So running the guards here would not be a safety net, it would be the
+    /// app second-guessing a fact. 200 g of protein off four scoops is a real
+    /// day's eating, and flagging it suspect would hold a correct meal out of
+    /// the day's totals over a ceiling that exists to catch a multiplication
+    /// the model never made. `confidence` is 1 and `isSuspect` is false for the
+    /// same reason: there is nothing here anybody guessed at.
+    ///
+    /// The one thing this does NOT skip is the soft duplicate check, which is
+    /// the composer's to run and is about the meal being logged twice rather
+    /// than about the numbers.
+    @discardableResult
+    func saveFromLibrary(
+        items: [MealItemEntry],
+        mealType: MealType,
+        day: Date,
+        loggedAt: Date
+    ) throws -> LocalMeal {
+        try meals.addMeal(
+            date: day,
+            loggedAt: loggedAt,
+            mealType: mealType,
+            mealDescription: Self.libraryDescription(for: items),
+            title: Self.libraryTitle(for: items),
+            nutrients: MealNutrients.sum(of: items),
+            items: items,
+            confidence: 1,
+            source: MealSource.library,
+            needsDetail: false,
+            isSuspect: false,
+            suspectReason: nil,
+            assumptionsNote: nil,
+            // Nothing in the library records a drink as alcoholic today, and
+            // inferring it from a name would be a guess on a path whose whole
+            // claim is that it does not guess.
+            containsAlcohol: false,
+            // #594. A packet the user read is not a page a search returned, so
+            // there is no source to point at.
+            groundingSources: []
+        )
+    }
+
+    /// The picks written out plainly: "Farmers Union Greek Style Yogurt 150 g,
+    /// Superyou Protein Wafer 40 g".
+    ///
+    /// The description is what search, the duplicate check and a later
+    /// re-estimate all read, so it has to name the amounts as well as the
+    /// things. The short `title` is the one that drops them.
+    static func libraryDescription(for items: [MealItemEntry]) -> String {
+        items
+            .map { item in
+                let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return name.isEmpty ? item.portionDescription : "\(name) \(item.portionDescription)"
+            }
+            .joined(separator: ", ")
+    }
+
+    /// The names alone, for the line a list prints.
+    ///
+    /// Delegated to `MealDisplayName.fromItems`, which is already the rule for
+    /// naming a meal after its dishes: names in the order they were added, the
+    /// run read as one phrase, a "+n" for the ones that did not fit, and a cut
+    /// at a word boundary. That is `MealToolSchema.titleRule`'s intent stated
+    /// in Swift, and a second copy of it here would be a second answer.
+    static func libraryTitle(for items: [MealItemEntry]) -> String? {
+        MealDisplayName.fromItems(items)
     }
 
     /// Insert a copy of a meal dated today, with its stored numbers.

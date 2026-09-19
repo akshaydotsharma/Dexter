@@ -31,11 +31,22 @@ enum MealGrounding {
     ///
     /// The ONE place this is decided. A surface that worked it out for itself is
     /// how one screen rounds a published figure and the next one does not.
+    /// `isFromLibrary` is the third way a figure can be stated rather than
+    /// guessed (#625). A meal logged entirely out of the saved item library is
+    /// the MOST exact kind there is: every number was read off a packet and
+    /// scaled by a ratio, and no portion was assumed anywhere. Rounding 186 to
+    /// 190 on that row throws away the exactness the library exists to give.
+    ///
+    /// It is deliberately true only for a meal whose SOURCE is the library. A
+    /// meal that mixed a typed description with a picked item has an estimated
+    /// half, so its total really is a guess and `.estimate` is the honest way
+    /// to print it.
     static func precision(
         isGrounded: Bool,
-        totalsWereOverridden: Bool = false
+        totalsWereOverridden: Bool = false,
+        isFromLibrary: Bool = false
     ) -> MealFormat.Precision {
-        (isGrounded || totalsWereOverridden) ? .stated : .estimate
+        (isGrounded || totalsWereOverridden || isFromLibrary) ? .stated : .estimate
     }
 }
 

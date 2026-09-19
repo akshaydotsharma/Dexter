@@ -87,6 +87,8 @@ The same 28 tools serve both paths. Capture auto-executes everything, including 
 
 Forward-looking rules live in `.claude/rules/`. Read every file in that directory before doing project work.
 
+⚠️ **Also read `.claude/corrections.md` directly, by name, before planning any ticket work.** It is NOT inside `.claude/rules/`, so "read every file in that directory" does not reach it, and it holds the rules that OVERRIDE the global `~/.claude/rules/*.md` ones. The most-violated example: this repo does not use QA screenshot galleries or ticked-Acceptance-Criteria comments on tickets, though the global issue-resolution workflow calls for both. That correction has now been violated four times, every time by an agent that read the global rule and never opened this file.
+
 - `.claude/rules/github-issue-conventions.md` — issue title format and label conventions
 - `.claude/rules/dev-workflow.md` — local-first iOS workflow, tests-before-commit, commits link to issues
 
