@@ -364,4 +364,14 @@ enum FoodItemSource {
     static let meal = "meal"
     /// Saved by the assistant during a chat or a Shortcut run.
     static let chat = "chat"
+    /// Worked out by the estimator from a name typed into the picker (#625).
+    ///
+    /// The row for a thing no packet answers for. A cafe cappuccino has no
+    /// barcode and no usable public record, so the only way to price it is to
+    /// ask the model, and the result is a guess rather than a transcription.
+    /// Kept apart from `openFoodFacts` and `meal` because both of those name a
+    /// place the numbers were READ from, and this one does not: nothing was
+    /// read, and a later reader deciding how much to trust the figures needs
+    /// to be able to tell.
+    static let estimate = "estimate"
 }

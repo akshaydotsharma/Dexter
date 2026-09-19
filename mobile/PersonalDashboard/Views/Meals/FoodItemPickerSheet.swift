@@ -15,8 +15,24 @@ import UIKit
 /// a call, a few seconds, and a slightly different answer every time, so two
 /// logs of one pot disagree and a week's protein is the sum of the disagreement.
 ///
-/// So there are exactly two ways to log a meal: describe it in text, or find it
-/// here. Nothing in this sheet estimates anything.
+/// So the rule is about the ITEM and not about the screen: where a label states
+/// the numbers, read them, and guess only at what nothing states. This sheet
+/// therefore does estimate, and only where there is nothing to read.
+///
+/// ### The cappuccino, and why the list falls back to the estimator
+///
+/// A packet has a barcode and a record behind it. A cafe drink has neither.
+/// Open Food Facts answers "cappuccino" with thousands of hits, every one of
+/// them an instant-coffee sachet and not one of them carrying a calorie figure,
+/// so the search cannot price the drink he actually had and no amount of
+/// retyping will make it.
+///
+/// The way out used to be to leave: describe it in the composer, log the meal,
+/// open the meal, save the item to the library. Four steps, and he only found
+/// out he needed them after failing to find the thing. So the offer sits here
+/// instead. Estimate "cappuccino", it goes into the meal, and it becomes a row
+/// he taps tomorrow. The library still fills itself by use; this is one more
+/// door into it, not a form to fill in.
 ///
 /// ### One field, one list, two sources
 ///
@@ -114,6 +130,11 @@ struct FoodItemPickerSheet: View {
 
     @State private var remote: RemotePhase = .idle
 
+    @State private var estimatePhase: EstimatePhase = .idle
+
+    /// The one estimate call, held so the next keystroke can cancel it.
+    @State private var estimateTask: Task<Void, Never>?
+
     /// The database's answer to the last query that finished, before dedupe.
     ///
     /// Raw rather than merged, so deleting one of his rows while the sheet is
@@ -141,6 +162,7 @@ struct FoodItemPickerSheet: View {
 
     private var items: FoodItemService { .default() }
     private var database: OpenFoodFactsClient { OpenFoodFactsClient() }
+    private var estimator: MealEstimationService { .default() }
 
     /// How long typing has to stop before a request leaves.
     ///
@@ -154,6 +176,15 @@ struct FoodItemPickerSheet: View {
     /// four million products and answers with none of the right ones.
     private static let minimumRemoteQueryLength = 2
 
+    /// Below this, the estimate is not offered either.
+    ///
+    /// The same number as above and a separate constant, because it answers a
+    /// different question: not "will the database find it" but "is there enough
+    /// here to price". A single letter names no food, and an offer to work out
+    /// what "c" is made of would be the loudest thing on screen for the first
+    /// keystroke of every search.
+    private static let minimumEstimateQueryLength = 2
+
     /// Where the public search has got to.
     ///
     /// Cancellation is deliberately NOT a case. A search the user typed over is
@@ -165,6 +196,22 @@ struct FoodItemPickerSheet: View {
         /// Answered, for this exact query. Held so a stale empty result does not
         /// claim to be the answer to something newly typed.
         case answered(String)
+        case failed(String)
+    }
+
+    /// Where the estimate offer has got to.
+    ///
+    /// Cleared on every keystroke, exactly as the remote search is cancelled on
+    /// every keystroke. That is why no case carries the query it answers, unlike
+    /// `RemotePhase.answered`: there is no window in which an answer to
+    /// "cappuccino" can still be on screen under the word "croissant".
+    private enum EstimatePhase: Equatable {
+        case idle
+        case working
+        /// It came back, and these went into the tray.
+        case added([String])
+        /// It came back and named nothing that can be logged.
+        case nothingNamed
         case failed(String)
     }
 
@@ -245,6 +292,7 @@ struct FoodItemPickerSheet: View {
         }
         .onDisappear {
             searchTask?.cancel()
+            estimateTask?.cancel()
         }
         .sheet(item: $editorTarget) { target in
             FoodItemEditorSheet(target: target) { _ in
@@ -323,6 +371,19 @@ struct FoodItemPickerSheet: View {
     private func queryChanged() {
         reloadMatches()
         scheduleRemoteSearch()
+        cancelEstimate()
+    }
+
+    /// Drop whatever the estimator was doing or had just said.
+    ///
+    /// Both halves matter. Cancelling stops an answer to the old query landing
+    /// in the tray under the new one, and resetting the phase clears a message
+    /// that is about words no longer in the field. The same discipline the
+    /// debounce already keeps.
+    private func cancelEstimate() {
+        estimateTask?.cancel()
+        estimateTask = nil
+        estimatePhase = .idle
     }
 
     /// Cancel what is in flight, then start the debounce.
@@ -398,6 +459,7 @@ struct FoodItemPickerSheet: View {
                 noResultsBlock
             }
             remoteStatus
+            estimateOffer
         }
     }
 
@@ -640,19 +702,23 @@ struct FoodItemPickerSheet: View {
 
     /// Nothing answered, from either source.
     ///
-    /// The way out is the OTHER way to log a meal, and it is stated rather than
-    /// offered as a button: there is no form to fill in here, and a library the
-    /// user has to fill by hand is the thing this sheet stopped being.
+    /// This block states the fact and stops. The way out is the estimate offer
+    /// directly below it, and that is a button now: it used to be a sentence
+    /// sending the user to another screen to do in four steps what one tap
+    /// finishes here. Saying both would state the route twice, which is the
+    /// mistake the remote-failure branch was already fixed for.
     private var noResultsBlock: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text(noResultsHeadline)
                 .font(.edBody)
                 .foregroundStyle(Tokens.inkSoft)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(noResultsAdvice)
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            if let noResultsAdvice {
+                Text(noResultsAdvice)
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -669,13 +735,13 @@ struct FoodItemPickerSheet: View {
         return "Nothing matches \"\(trimmedQuery)\"."
     }
 
-    private var noResultsAdvice: String {
-        if trimmedQuery.isEmpty {
-            return libraryIsEmpty
-                ? "Anything you log from here is remembered, and works its way up this list the more you eat it."
-                : "Type a name to search the food database, or unarchive an item by editing it."
-        }
-        return "Close this and describe the meal in words instead. Dexter will estimate it, and you can save it to your items from the meal afterwards."
+    /// Nil once something was typed, because the estimate offer under this
+    /// block is then the only advice there is and it gives itself.
+    private var noResultsAdvice: String? {
+        guard trimmedQuery.isEmpty else { return nil }
+        return libraryIsEmpty
+            ? "Anything you log from here is remembered, and works its way up this list the more you eat it."
+            : "Type a name to search the food database, or unarchive an item by editing it."
     }
 
     /// What the network is doing, stated under the results and never instead of
@@ -737,20 +803,274 @@ struct FoodItemPickerSheet: View {
                     .foregroundStyle(Tokens.muted)
                     .fixedSize(horizontal: false, vertical: true)
 
-                // Only when there is nothing else on screen. With their own
-                // matches listed, the route out is obvious and this would be
-                // one more line to read.
-                if matches.isEmpty {
-                    Text("You can close this and describe the meal instead, and Dexter will estimate it.")
-                        .font(.edCaption)
-                        .foregroundStyle(Tokens.mutedSoft)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // The line that used to sit here sent the user off to describe
+                // the meal on another screen. The estimate offer below does
+                // that job on this one, so repeating it would be a second route
+                // out, stated worse.
 
                 Button("Try again") { retryRemoteSearch() }
                     .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
             }
         }
+    }
+
+    // MARK: - Estimating what nothing states (#625)
+
+    /// Whether the estimate route is on offer at all.
+    ///
+    /// Never while the database is still answering. The offer would appear
+    /// under an empty list and then jump down the screen as hits land above it,
+    /// and a control that moves while being read is a control that gets tapped
+    /// by accident.
+    ///
+    /// A call already running keeps its own spinner on screen regardless, so
+    /// the work never becomes invisible.
+    private var showsEstimateOffer: Bool {
+        if estimatePhase == .working { return true }
+        return trimmedQuery.count >= Self.minimumEstimateQueryLength && remote != .searching
+    }
+
+    /// The offer, and everything it turns into.
+    ///
+    /// One container per branch: a multi-statement `@ViewBuilder` flattens into
+    /// its parent, so a modifier attached here would otherwise be applied to
+    /// each child separately (#597).
+    @ViewBuilder
+    private var estimateOffer: some View {
+        if showsEstimateOffer {
+            switch estimatePhase {
+            case .idle:
+                estimateAction(prominent: !hasAnyResult)
+
+            case .working:
+                estimateWorkingRow
+
+            case .added(let names):
+                estimateAddedRow(names)
+
+            case .nothingNamed:
+                estimateNoteBlock(
+                    "Dexter could not work out what \"\(trimmedQuery)\" is made of.",
+                    advice: "Try naming it the way you would say it out loud, with the size and what is in it."
+                )
+
+            case .failed(let message):
+                estimateNoteBlock(message, advice: nil)
+            }
+        }
+    }
+
+    /// The offer in its two weights.
+    ///
+    /// Prominent when nothing usable answered, because it is then the only way
+    /// forward on this screen. Quiet at the foot when there ARE hits, because it
+    /// still has to be reachable: "cappuccino" returns thousands of instant
+    /// sachets, every one of them a result and not one of them the drink.
+    ///
+    /// Both say the same two things, because both have to: what the tap does,
+    /// and that the item is kept. A user who has just been handed thousands of
+    /// useless rows has no reason to assume a third button is any different.
+    @ViewBuilder
+    private func estimateAction(prominent: Bool) -> some View {
+        if prominent {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                Text("Dexter can work out the numbers for \"\(trimmedQuery)\" and keep it in your items for next time.")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                estimateButton(prominent: true)
+            }
+            .padding(Space.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.lg)
+        } else {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                estimateButton(prominent: false)
+                Text("Dexter works out the numbers and keeps the item for next time.")
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The query is on the button because the button is a statement about it.
+    /// One line and truncated: a long phrase must not grow a control that sits
+    /// under a list the user is reading.
+    private func estimateButton(prominent: Bool) -> some View {
+        Button {
+            runEstimate()
+        } label: {
+            Text("Estimate \"\(trimmedQuery)\"")
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .buttonStyle(EdButtonStyle(kind: prominent ? .secondary : .ghost, size: .sm))
+        .accessibilityLabel("Estimate \(trimmedQuery) and add it to the meal")
+    }
+
+    private var estimateWorkingRow: some View {
+        HStack(spacing: Space.sm) {
+            ProgressView()
+                #if os(macOS)
+                .controlSize(.small)
+                #else
+                .scaleEffect(0.7)
+                #endif
+            Text("Working out what \"\(trimmedQuery)\" is made of.")
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// What landed, in the same words the scan path uses for the same event.
+    ///
+    /// The tray below already lists the items with their amounts, so this is
+    /// one line and never a summary of them: it exists because the thing the
+    /// user tapped was a button that said "Estimate", and something has to say
+    /// that the estimate is now in the meal.
+    private func estimateAddedRow(_ names: [String]) -> some View {
+        Text(names.count == 1
+             ? "\(names[0]) went straight into the meal."
+             : "\(names.count) items went straight into the meal.")
+            .font(.edFootnote)
+            .foregroundStyle(Tokens.success)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A failed or empty estimate, stated and retryable.
+    ///
+    /// Muted rather than `danger`, for the reason the remote-failure branch
+    /// gives: nothing the user did has failed. They asked a third party a hard
+    /// question and it came back slowly or badly, and red here would teach them
+    /// to read red as noise on a surface where a real error still has to land.
+    ///
+    /// The query stays in the field throughout, so "Try again" means the same
+    /// thing it means under the search: run that again.
+    private func estimateNoteBlock(_ message: String, advice: String?) -> some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Text(message)
+                .font(.edFootnote)
+                .foregroundStyle(Tokens.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if let advice {
+                Text(advice)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.mutedSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Try again") { runEstimate() }
+                .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+        }
+    }
+
+    /// Ask the estimator to price what was typed, and put the answer in the
+    /// tray.
+    ///
+    /// Nothing is disabled while it runs. The call takes a few seconds and the
+    /// rest of the sheet is still a working search: his own items are listed,
+    /// the tray is editable, and Done still commits. Only the offer itself
+    /// becomes a spinner, because only the offer is busy.
+    ///
+    /// Several items is not an error. "cappuccino and a croissant" is two
+    /// things, and adding two is the honest reading of what he typed; the
+    /// common case is one, which is the case the wording is written for.
+    ///
+    /// Nothing reaches the store here, exactly as a tapped hit reaches nothing.
+    /// `FoodItemPick.commit` writes the rows when the meal is written, which is
+    /// what lets an estimate he does not like be removed at no cost.
+    private func runEstimate() {
+        let term = trimmedQuery
+        guard term.count >= Self.minimumEstimateQueryLength else { return }
+
+        estimateTask?.cancel()
+        estimatePhase = .working
+        estimateTask = Task { @MainActor in
+            do {
+                let checked = try await estimator.estimate(
+                    description: term,
+                    mealTypeHint: nil,
+                    loggedAt: Date()
+                )
+                try Task.checkCancellation()
+
+                let drafts = checked.items.compactMap(Self.estimatedDraft(from:))
+                guard !drafts.isEmpty else {
+                    // Said plainly rather than silently doing nothing, and the
+                    // query is left in the field so the next attempt is an edit
+                    // rather than a retype.
+                    estimatePhase = .nothingNamed
+                    return
+                }
+                for draft in drafts { addEstimated(draft) }
+                estimatePhase = .added(drafts.map(\.displayName))
+                Haptics.light()
+            } catch is CancellationError {
+                // The user typed on. `cancelEstimate` has already set the phase.
+            } catch {
+                // A cancelled URL request does not necessarily surface as a
+                // `CancellationError`, so the flag is checked before anything
+                // is reported about a call nobody is waiting for.
+                guard !Task.isCancelled else { return }
+                estimatePhase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// One estimated item as the draft a pick and a library row are both built
+    /// from.
+    ///
+    /// Nil for an item nothing can scale. `MealEstimateGuards` already zeroes
+    /// the portion of any item whose unit it could not use, so this rejects
+    /// exactly what the guards rejected rather than making a second judgment
+    /// about units.
+    ///
+    /// ### The base portion is the item's OWN quantity, not 100
+    ///
+    /// The eight numbers describe 240 ml of cappuccino, not 100 ml of it.
+    /// Writing them onto a row whose base said 100 would inflate every future
+    /// log of that item by the ratio between the two, silently and for ever.
+    /// The same trap `FoodItemService.saveFromMealItem` documents, and the
+    /// default portion is the same number for the same reason: what he had is
+    /// the best guess at what he will have.
+    ///
+    /// No brand, no barcode and no external id. An estimate has no maker and no
+    /// outside identity, and inventing either would let this row be matched
+    /// against a real product later by `FoodItemService.upsert`. Its only
+    /// identity is its name, which is what `FoodItemPick.commit` matches on.
+    ///
+    /// `missingNutrients` is empty because there is no record here to have
+    /// omitted anything, and because nothing draws an estimate as a result row.
+    private static func estimatedDraft(from item: MealItemEntry) -> FoodItemDraft? {
+        guard item.portionQuantity > 0,
+              !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let unit = FoodPortionUnit(rawValue: item.portionUnit.lowercased())
+        else { return nil }
+
+        return FoodItemDraft(
+            name: item.name,
+            brand: nil,
+            basePortionQuantity: item.portionQuantity,
+            basePortionUnit: unit,
+            calories: item.calories,
+            proteinG: item.proteinG,
+            carbsG: item.carbsG,
+            fatG: item.fatG,
+            fibreG: item.fibreG,
+            sugarG: item.sugarG,
+            sodiumMg: item.sodiumMg,
+            satFatG: item.satFatG,
+            defaultPortionQuantity: item.portionQuantity,
+            barcode: nil,
+            externalSource: nil,
+            externalID: nil,
+            source: FoodItemSource.estimate,
+            imageURL: nil,
+            missingNutrients: []
+        )
     }
 
     // MARK: - Barcode scanning
@@ -838,7 +1158,7 @@ struct FoodItemPickerSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
 
             case .unknown:
-                Text("The code read fine and the food database has never seen it. Close this and describe the item in words instead, then save it to your items from the meal.")
+                Text("The code read fine and the food database has never seen it. Type its name in the search box and Dexter can work the numbers out instead.")
                     .font(.edFootnote)
                     .foregroundStyle(Tokens.inkSoft)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1046,9 +1366,26 @@ struct FoodItemPickerSheet: View {
     /// removes has to leave the library exactly as it found it, or the list
     /// fills with everything that was ever considered.
     private func add(_ draft: FoodItemDraft) {
-        guard !isPicked(draft) else { return }
+        addUnsaved(.database(draft), draft: draft)
+    }
+
+    /// An estimated item, on the same terms as a hit.
+    ///
+    /// Its own function rather than a flag on the one above, because the origin
+    /// is the whole difference and it decides what `FoodItemPick.commit` writes:
+    /// a hit is seeded from somebody's record, an estimate is `source`
+    /// `estimate` with no outside identity at all.
+    private func addEstimated(_ draft: FoodItemDraft) {
+        addUnsaved(.estimated(draft), draft: draft)
+    }
+
+    /// The shared half: one tray row at the draft's usual serving, and nothing
+    /// written. Both unsaved origins go through it so they cannot drift apart
+    /// on what a tap costs.
+    private func addUnsaved(_ origin: FoodItemPick.Origin, draft: FoodItemDraft) {
+        guard !isPicked(origin) else { return }
         append(
-            FoodItemPick(origin: .database(draft), entry: draft.mealItem()),
+            FoodItemPick(origin: origin, entry: draft.mealItem()),
             amount: draft.defaultPortionQuantity
         )
     }
@@ -1148,12 +1485,14 @@ struct FoodItemPickerSheet: View {
     /// written. A tray handed back and then abandoned costs nothing.
     private func commit() {
         searchTask?.cancel()
+        estimateTask?.cancel()
         onDone(picks)
         dismiss()
     }
 
     private func cancel() {
         searchTask?.cancel()
+        estimateTask?.cancel()
         dismiss()
     }
 }

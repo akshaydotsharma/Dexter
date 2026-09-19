@@ -63,6 +63,32 @@ final class MealFoodItemPickTests: XCTestCase {
         FoodItemPick(origin: .database(draft), entry: draft.mealItem(quantity: quantity))
     }
 
+    /// What the estimator's answer becomes: the item's own portion as the base,
+    /// no brand, and neither outside identity. A cafe cappuccino has no barcode
+    /// and no public record, so this is all there ever is to go on.
+    private func cappuccinoDraft(name: String = "Cappuccino") -> FoodItemDraft {
+        FoodItemDraft(
+            name: name,
+            brand: nil,
+            basePortionQuantity: 240,
+            basePortionUnit: .millilitres,
+            calories: 120,
+            proteinG: 6.4,
+            carbsG: 9.6,
+            fatG: 6.4,
+            fibreG: 0,
+            sugarG: 9.6,
+            sodiumMg: 80,
+            satFatG: 4,
+            defaultPortionQuantity: 240,
+            source: FoodItemSource.estimate
+        )
+    }
+
+    private func estimatedPick(_ draft: FoodItemDraft, quantity: Double? = nil) -> FoodItemPick {
+        FoodItemPick(origin: .estimated(draft), entry: draft.mealItem(quantity: quantity))
+    }
+
     private func savedRows() throws -> [LocalFoodItem] {
         try store.context.fetch(FetchDescriptor<LocalFoodItem>())
     }
@@ -295,5 +321,122 @@ final class MealFoodItemPickTests: XCTestCase {
     func testAnEmptyLibraryHidesNothing() {
         let hits = [waferDraft(), waferDraft(code: "5000000000000")]
         XCTAssertEqual(FoodItemSearchMerge.databaseHits(hits, excluding: []).count, 2)
+    }
+
+    // MARK: - The estimate route (#625)
+
+    /// The picker can now price what no packet answers for: Open Food Facts
+    /// returns thousands of hits for "cappuccino" and not one of them carries a
+    /// calorie figure, so the estimator is the only thing that can.
+    ///
+    /// An estimated pick keeps every promise a database pick keeps. Tapping it
+    /// writes nothing, and the meal being written is what makes it his.
+    func testAnEstimatedPickWritesNothingUntilCommit() throws {
+        _ = estimatedPick(cappuccinoDraft())
+        XCTAssertTrue(try savedRows().isEmpty, "an estimate must not reach the store before the meal does")
+    }
+
+    /// Committing one writes a row that says where its numbers came from.
+    ///
+    /// `source` is the whole point of the third origin. A row built from a
+    /// guess and a row transcribed off a packet must be tellable apart later,
+    /// and `isVerified` stays false because nobody has read these figures
+    /// against anything at all.
+    func testCommittingAnEstimatedPickWritesAnEstimateRow() throws {
+        FoodItemPick.commit([estimatedPick(cappuccinoDraft())], countingUse: true, using: library)
+
+        let saved = try XCTUnwrap(try savedRows().first)
+        XCTAssertEqual(try savedRows().count, 1)
+        XCTAssertEqual(saved.name, "Cappuccino")
+        XCTAssertEqual(saved.source, FoodItemSource.estimate)
+        XCTAssertFalse(saved.isVerified, "nothing was read against a label")
+        XCTAssertNil(saved.externalID, "an estimate has no outside identity")
+        XCTAssertNil(saved.barcode)
+        XCTAssertEqual(saved.basePortionQuantity, 240, accuracy: 0.0001, "the item's own portion, never 100")
+        XCTAssertEqual(saved.defaultPortionQuantity, 240, accuracy: 0.0001)
+        XCTAssertEqual(saved.calories, 120, accuracy: 0.0001)
+        XCTAssertEqual(saved.useCount, 1)
+    }
+
+    /// The rule the whole route depends on.
+    ///
+    /// An estimated draft carries NEITHER outside identity, so the lookup that
+    /// serves a database hit finds nothing and every commit would insert.
+    /// Estimate "cappuccino" on Monday and again on Tuesday, before it ever
+    /// reaches the list, and the list whose entire promise is that it needs no
+    /// tidying holds two cappuccinos.
+    func testCommittingTheSameEstimatedNameTwiceKeepsOneRowAndCountsTwoUses() throws {
+        FoodItemPick.commit([estimatedPick(cappuccinoDraft())], countingUse: true, using: library)
+        FoodItemPick.commit([estimatedPick(cappuccinoDraft())], countingUse: true, using: library)
+
+        XCTAssertEqual(try savedRows().count, 1, "matched on the name, so no duplicate")
+        XCTAssertEqual(try savedRows().first?.useCount, 2)
+    }
+
+    /// He types what he says, not what he typed last time. "cappuccino  " and
+    /// "Cappuccino" are one drink.
+    func testTheNameMatchIgnoresCaseAndSurroundingSpace() throws {
+        FoodItemPick.commit([estimatedPick(cappuccinoDraft(name: "Cappuccino"))], countingUse: true, using: library)
+        FoodItemPick.commit([estimatedPick(cappuccinoDraft(name: "  cappuccino "))], countingUse: true, using: library)
+
+        XCTAssertEqual(try savedRows().count, 1)
+        XCTAssertEqual(try savedRows().first?.name, "Cappuccino", "the first row stands, untouched")
+        XCTAssertEqual(try savedRows().first?.useCount, 2)
+    }
+
+    /// A different name is a different thing, and gets its own row.
+    func testADifferentEstimatedNameGetsItsOwnRow() throws {
+        FoodItemPick.commit([estimatedPick(cappuccinoDraft())], countingUse: true, using: library)
+        FoodItemPick.commit([estimatedPick(cappuccinoDraft(name: "Flat white"))], countingUse: true, using: library)
+
+        XCTAssertEqual(try savedRows().count, 2)
+    }
+
+    /// The name match must NOT reach a draft with an outside identity.
+    ///
+    /// Two flavours of one bar share a shelf name constantly, so collapsing
+    /// them would log the wrong product's figures under the right name. The
+    /// identity decides for a packet; the name only decides where there is no
+    /// identity to decide with.
+    func testTheNameMatchDoesNotApplyToADatabaseDraftCarryingAnExternalID() throws {
+        // His row, named exactly as the incoming hit is named.
+        _ = try library.createItem(
+            name: "Protein Wafer",
+            brand: "Superyou",
+            nutrients: MealNutrients(calories: 398, proteinG: 25),
+            defaultPortionQuantity: 40,
+            source: FoodItemSource.manual
+        )
+
+        // A DIFFERENT product with the same name, straight off the database.
+        FoodItemPick.commit([databasePick(waferDraft())], countingUse: true, using: library)
+
+        XCTAssertEqual(try savedRows().count, 2, "the hit has its own identity and gets its own row")
+    }
+
+    /// A pick sitting in the tray has to answer "what are 350 ml of you" with
+    /// nothing written anywhere, which is why the draft rides on the origin.
+    func testAnEstimatedPickRescalesOffItsOwnDraft() throws {
+        let pick = estimatedPick(cappuccinoDraft())
+        XCTAssertNotNil(pick.estimatedDraft)
+        XCTAssertNil(pick.databaseDraft, "an estimate is not a database hit")
+        XCTAssertEqual(pick.entry.portionQuantity, 240, accuracy: 0.0001)
+        XCTAssertEqual(pick.entry.calories, 120, accuracy: 0.0001)
+        XCTAssertTrue(pick.canRescale(savedRow: nil))
+
+        let rescaled = try XCTUnwrap(pick.entry(at: 480, savedRow: nil))
+        XCTAssertEqual(rescaled.portionQuantity, 480, accuracy: 0.0001)
+        XCTAssertEqual(rescaled.calories, 240, accuracy: 0.0001)
+        XCTAssertEqual(rescaled.proteinG, 12.8, accuracy: 0.0001)
+        XCTAssertEqual(rescaled.portionUnit, "ml")
+    }
+
+    /// Two estimates of one name are one thing in the tray as well as in the
+    /// store, or the meal counts a drink the library only ever knew once.
+    func testTwoEstimatesOfOneNameShareATraySubject() {
+        let first = estimatedPick(cappuccinoDraft(name: "Cappuccino"))
+        let second = estimatedPick(cappuccinoDraft(name: " cappuccino "))
+        XCTAssertEqual(first.subjectKey, second.subjectKey)
+        XCTAssertNotEqual(first.subjectKey, databasePick(waferDraft()).subjectKey)
     }
 }
