@@ -445,4 +445,38 @@ final class MealDayTotalsTests: XCTestCase {
         XCTAssertEqual(type(atHour: 16), .snack)
         XCTAssertEqual(type(atHour: 2), .snack)
     }
+
+    // MARK: - The empty state's invariant (#633)
+
+    /// `MealDayBreakdown` shows one centred sentence when `isUnlogged` is true
+    /// and hands the card everything else. The meal list under the card has no
+    /// empty branch of its own any more, so a day that is NOT unlogged must
+    /// always produce at least one row — otherwise the list renders nothing at
+    /// all and the day silently reads as a card with no meals under it.
+    ///
+    /// The case that would break it is a meal whose stored type this build does
+    /// not know: `orderedRows` groups by the four known types, so a row that
+    /// matched none of them would be dropped. It cannot happen, because
+    /// `mealTypeEnum` falls back rather than returning nil. This pins that.
+    func testEveryLoggedMealReachesARow() throws {
+        let meal = try log("Something with an unknown type")
+        meal.mealType = "second breakfast"
+        try store.context.save()
+
+        let summary = MealDaySummary(meals: try store.context.fetch(FetchDescriptor<LocalMeal>()))
+        XCTAssertFalse(summary.isUnlogged)
+        XCTAssertEqual(
+            summary.orderedRows(flaggedAsDuplicate: []).count,
+            1,
+            "A meal with a type this build has not heard of still has to reach a row."
+        )
+    }
+
+    /// The other half of the same invariant: nothing logged means no rows, so
+    /// the centred sentence is the whole of what a blank day shows.
+    func testAnUnloggedDayHasNoRows() {
+        let summary = MealDaySummary(meals: [])
+        XCTAssertTrue(summary.isUnlogged)
+        XCTAssertTrue(summary.orderedRows(flaggedAsDuplicate: []).isEmpty)
+    }
 }
