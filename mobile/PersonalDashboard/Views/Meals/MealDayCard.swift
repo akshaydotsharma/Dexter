@@ -87,6 +87,15 @@ struct MealNutrientBar: View {
 /// and NOTHING else: no tracks, no verdicts, no implied "you are doing well".
 /// Logging is never blocked on setup, so a day still adds up on the first
 /// morning the feature is opened.
+///
+/// ### It is only ever handed a day that has meals
+///
+/// An unlogged day does not render a card at all: `MealDayBreakdown` shows one
+/// centred sentence instead and stops there (#633). So nothing here has to
+/// guard `summary.isUnlogged`, and nothing here should start drawing a column
+/// of zeros if it is ever handed one — a card of zeros reads as a day that came
+/// to nothing, which is a different claim from a day nobody wrote down. Keep
+/// the empty state where it is; do not reintroduce a second one here.
 struct MealDayCard: View {
     let summary: MealDaySummary
     let targets: MealTargets?
@@ -95,60 +104,56 @@ struct MealDayCard: View {
         VStack(alignment: .leading, spacing: Space.md) {
             header
 
-            if summary.isUnlogged {
-                unloggedNote
-            } else {
-                calorieBlock
-                Rectangle()
-                    .fill(Tokens.divider)
-                    .frame(height: 0.5)
-                // Addition 3: the bar stack gets a label, because the Watch row
-                // below it has one and an unlabelled stack beside a labelled
-                // one reads as an oversight. To revert, drop the eyebrow line
-                // and the VStack around it.
-                VStack(alignment: .leading, spacing: Space.sm) {
-                    Text("Macros").eyebrow()
-                    // Fibre joins the three macros because it is a floor most
-                    // days miss and nothing else on the card shows it.
-                    //
-                    // The treatment forks on whether a target exists, because a
-                    // bar with no target has no track to draw: it degrades to a
-                    // bare label-and-value row, directly above a Watch row of
-                    // pills carrying exactly the same kind of fact. Two
-                    // treatments for one kind of data, and the bar's whole
-                    // justification (it carries proportion) is the part that
-                    // went missing. With no target the pill is the honest mark;
-                    // once a target exists the bar earns its place back.
-                    if targets == nil {
-                        HStack(spacing: Space.sm) {
-                            ForEach(Nutrient.macrosInOrder) { nutrient in
-                                MealStatPill(
-                                    nutrient: nutrient,
-                                    value: summary.totals[nutrient],
-                                    target: nil,
-                                    fillsWidth: true
-                                )
-                            }
+            calorieBlock
+            Rectangle()
+                .fill(Tokens.divider)
+                .frame(height: 0.5)
+            // Addition 3: the bar stack gets a label, because the Watch row
+            // below it has one and an unlabelled stack beside a labelled
+            // one reads as an oversight. To revert, drop the eyebrow line
+            // and the VStack around it.
+            VStack(alignment: .leading, spacing: Space.sm) {
+                Text("Macros").eyebrow()
+                // Fibre joins the three macros because it is a floor most
+                // days miss and nothing else on the card shows it.
+                //
+                // The treatment forks on whether a target exists, because a
+                // bar with no target has no track to draw: it degrades to a
+                // bare label-and-value row, directly above a Watch row of
+                // pills carrying exactly the same kind of fact. Two
+                // treatments for one kind of data, and the bar's whole
+                // justification (it carries proportion) is the part that
+                // went missing. With no target the pill is the honest mark;
+                // once a target exists the bar earns its place back.
+                if targets == nil {
+                    HStack(spacing: Space.sm) {
+                        ForEach(Nutrient.macrosInOrder) { nutrient in
+                            MealStatPill(
+                                nutrient: nutrient,
+                                value: summary.totals[nutrient],
+                                target: nil,
+                                fillsWidth: true
+                            )
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: Space.md) {
-                            ForEach(Nutrient.macrosInOrder) { nutrient in
-                                MealNutrientBar(
-                                    nutrient: nutrient,
-                                    value: summary.totals[nutrient],
-                                    target: target(for: nutrient)
-                                )
-                            }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: Space.md) {
+                        ForEach(Nutrient.macrosInOrder) { nutrient in
+                            MealNutrientBar(
+                                nutrient: nutrient,
+                                value: summary.totals[nutrient],
+                                target: target(for: nutrient)
+                            )
                         }
                     }
                 }
-                watchRow
-                if !summary.excluded.isEmpty {
-                    excludedNote
-                }
+            }
+            watchRow
+            if !summary.excluded.isEmpty {
+                excludedNote
             }
 
-            if targets == nil && !summary.isUnlogged {
+            if targets == nil {
                 noTargetsNote
             }
         }
@@ -163,11 +168,9 @@ struct MealDayCard: View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
             Text("The day").eyebrow()
             Spacer(minLength: Space.sm)
-            if !summary.isUnlogged {
-                Text(mealCountText)
-                    .font(.edCaption)
-                    .foregroundStyle(Tokens.muted)
-            }
+            Text(mealCountText)
+                .font(.edCaption)
+                .foregroundStyle(Tokens.muted)
         }
     }
 
@@ -275,23 +278,6 @@ struct MealDayCard: View {
                     )
                 }
             }
-        }
-    }
-
-    /// A day nobody logged is not a day of nothing. Said in words, because the
-    /// alternative — a card of zeros — is exactly the reading this has to
-    /// prevent.
-    private var unloggedNote: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            Text("Not logged")
-                .font(.edHeading)
-                .foregroundStyle(Tokens.ink)
-            // In this state it is the card's entire content, so it is set at
-            // reading size rather than as a footnote under a heading.
-            Text("No meals were recorded on this day. That is different from a day that came to very little.")
-                .font(.edSubheadline)
-                .foregroundStyle(Tokens.muted)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

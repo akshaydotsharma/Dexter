@@ -29,7 +29,7 @@ struct MealDayBreakdown: View {
 
     let summary: MealDaySummary
     let targets: MealTargets?
-    /// Changes only the empty sentence: "yet today" versus "on this day". The
+    /// Changes only the empty sentence: "today" versus "on this day". The
     /// numbers, the card and the ordering are identical either way.
     let isToday: Bool
     /// The row an Activity deep-link just landed on, or nil. Held by the section
@@ -38,35 +38,61 @@ struct MealDayBreakdown: View {
     let onOpenMeal: (LocalMeal) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.lg) {
-            MealDayCard(summary: summary, targets: targets)
-            mealList
+        if summary.isUnlogged {
+            emptyState
+        } else {
+            VStack(alignment: .leading, spacing: Space.lg) {
+                MealDayCard(summary: summary, targets: targets)
+                mealList
+            }
         }
     }
 
-    @ViewBuilder
+    /// A day with nothing on it, said once (#633).
+    ///
+    /// ### Why the card goes with the sentence
+    ///
+    /// This state used to be three statements of one fact: a "Not logged"
+    /// heading, a paragraph under it drawing the distinction between a blank day
+    /// and a light one, and a third line below the card repeating it. All three
+    /// sat inside or under a bordered card whose job is to carry the day's
+    /// figures, and a day with no figures gives it nothing to hold. The card
+    /// became a box around a sentence.
+    ///
+    /// The distinction that paragraph was making is a real one and it is still
+    /// made, where it can be read at a glance rather than explained: the
+    /// calendar draws an unlogged day differently from a light one, and Trends
+    /// counts unlogged days as their own figure. It does not need a paragraph
+    /// on the day itself.
+    ///
+    /// Centred, because with the card gone there is no left edge for it to
+    /// belong to. The composer sits directly above; this is the answer to
+    /// "and what is below it", not a label on anything.
+    private var emptyState: some View {
+        Text(isToday ? "No meals logged today" : "No meals logged on this day")
+            .font(.edSubheadline)
+            .foregroundStyle(Tokens.muted)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Space.xl)
+    }
+
     private var mealList: some View {
         let flagged = MealDuplicateCheck.flaggedIDs(among: summary.all)
         let rows = summary.orderedRows(flaggedAsDuplicate: flagged)
-        if rows.isEmpty {
-            Text(isToday
-                 ? "Nothing logged yet today."
-                 : "Nothing was logged on this day.")
-                .font(.edFootnote)
-                .foregroundStyle(Tokens.muted)
-                .padding(.vertical, Space.lg)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            VStack(spacing: Space.sm) {
-                ForEach(rows) { meal in
-                    MealRow(
-                        meal: meal,
-                        isDuplicate: flagged.contains(meal.clientUUID),
-                        onTap: { onOpenMeal(meal) },
-                        isFocused: pulsedMealID == meal.clientUUID
-                    )
-                    .id(meal.clientUUID)
-                }
+        // No empty branch here any more. `orderedRows` is a permutation of
+        // `summary.all`, so it is empty exactly when `isUnlogged` is true, and
+        // that case never reaches this far.
+        return VStack(spacing: Space.sm) {
+            ForEach(rows) { meal in
+                MealRow(
+                    meal: meal,
+                    isDuplicate: flagged.contains(meal.clientUUID),
+                    onTap: { onOpenMeal(meal) },
+                    isFocused: pulsedMealID == meal.clientUUID
+                )
+                .id(meal.clientUUID)
             }
         }
     }
