@@ -83,6 +83,24 @@ final class SpeechTranscriber {
     /// back-to-back finals each register as a change.
     private(set) var didFinalizeTranscript: Int = 0
 
+    /// Bumped once per successful `start()`, so a surface that mirrors the
+    /// transcript can tell its own session from somebody else's (#627).
+    ///
+    /// There is exactly ONE transcriber in the app and three things now want to
+    /// drive it: the global voice overlay, the chat input bar, and the Meals
+    /// composer. Two of them can be alive at the same time — the overlay is a
+    /// `fullScreenCover`, so the surface underneath keeps its `onChange`
+    /// observers running — and without a way to tell sessions apart, the
+    /// surface underneath happily mirrors the overlay's words into its own
+    /// field. `ChatView` guards that case by checking `router.showVoiceOverlay`,
+    /// which works for one specific presenter and names the presenter rather
+    /// than the problem.
+    ///
+    /// This is the general form: snapshot the id when you start, and stop
+    /// mirroring the moment it moves. It costs one integer and it cannot be
+    /// wrong about a presenter it has never heard of.
+    private(set) var sessionID: Int = 0
+
     /// True between a successful start and the corresponding stop. The
     /// chat view uses this both to mirror `transcript` into the input
     /// field and to swap the mic icon for a recording indicator.
@@ -335,6 +353,11 @@ final class SpeechTranscriber {
         isStarting = true
         defer { isStarting = false }
 
+        // A new owner has the microphone as of this line. Bumped here, beside
+        // the transcript reset, because these two facts must never disagree:
+        // the moment the old session's text is gone is the moment its id is
+        // stale (#627).
+        sessionID &+= 1
         errorMessage = nil
         transcript = ""
         committedTranscript = ""

@@ -103,6 +103,45 @@ enum MealToolSchema {
       schema. Returning nothing is correct; returning a guess is not.
     """
 
+    /// How to read a photograph of the meal, stated once (#627).
+    ///
+    /// Kept apart from `estimateRules` for the reason `brandLookupRule` is kept
+    /// apart: it must reach only the path that can actually be handed an image.
+    /// The Shortcut and the chat tools take text, so telling them how to weigh a
+    /// photograph would be describing an input they cannot receive.
+    ///
+    /// ### Why precedence is the first rule and not the last
+    ///
+    /// A photo and a sentence disagree constantly, and they disagree in one
+    /// direction: the photo is a frame and the sentence is the whole meal. It
+    /// shows one wing of the eight that were eaten, the plate before the second
+    /// helping, the glass but not the two before it. The model is being shown
+    /// vivid evidence beside plain text, and vivid evidence wins arguments it
+    /// should lose. Stating the order of authority first, in its own rule, is
+    /// the cheapest way to stop a photograph overruling a fact the user typed.
+    static let photoRule = """
+    - THE PHOTOGRAPH. One or more photographs of this meal are attached. Read
+      them: identify each food, judge the portions against whatever the frame
+      gives you a scale from (the plate, the bowl, a hand, the cutlery), and
+      build the items from what you see.
+    - The typed description OUTRANKS the photograph wherever the two disagree.
+      A photograph shows one moment of a meal and the user is describing all of
+      it, so "ate eight of these" beside a picture of one wing means eight. Use
+      the photograph for what the food IS and how it was cooked; use the words
+      for how much of it there was whenever the words say.
+    - When there is no typed description at all, the photograph is the entire
+      input. Name what you see in "title" and in each item's "name" with enough
+      detail to stand as the record of the meal, because those names are what
+      the app stores in place of a description the user never typed.
+    - Say in "assumptions" what the photograph could not tell you. A picture
+      hides cooking oil, butter, sugar in a drink, dressing under a salad and
+      anything eaten off frame, and a confident number over an unseen
+      tablespoon of oil is exactly the error this field exists to expose.
+    - Do not describe the photograph, the plate, the table or the lighting.
+      Return the same JSON you would return for a typed description and nothing
+      else.
+    """
+
     /// When to look a product up instead of remembering it, stated once (#594).
     ///
     /// Kept apart from `estimateRules` for one reason: `estimateRules` reaches

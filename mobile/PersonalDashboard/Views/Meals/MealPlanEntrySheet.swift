@@ -111,6 +111,14 @@ struct MealPlanEntrySheet: View {
     /// Whether the saved-item picker is up (#625).
     @State private var showingPicker = false
 
+    /// Pictures of the dish, held only until the estimate returns (#627).
+    ///
+    /// On a plan this is most often a menu, a recipe page or a photograph of
+    /// something eaten elsewhere that is worth repeating. Same lifetime rule as
+    /// the Tracking composer: an input, never an attachment, dropped once the
+    /// estimate has read it. See `MealPhoto`.
+    @State private var photos: [MealPhoto] = []
+
     private enum Phase: Equatable {
         case idle
         case estimating
@@ -129,7 +137,13 @@ struct MealPlanEntrySheet: View {
     }
 
     private var canSave: Bool { !trimmedTitle.isEmpty && phase != .estimating }
-    private var canEstimate: Bool { !trimmedTitle.isEmpty && phase != .estimating }
+    /// A dish name OR a picture of one (#627). `canSave` is deliberately NOT
+    /// widened to match: a block still has to be NAMED to be saved, and the
+    /// photo is not kept, so a nameless block would be a row with nothing on it.
+    /// The estimate is what fills the name in.
+    private var canEstimate: Bool {
+        (!trimmedTitle.isEmpty || !photos.isEmpty) && phase != .estimating
+    }
 
     var body: some View {
         NavigationStack {
@@ -197,6 +211,14 @@ struct MealPlanEntrySheet: View {
 
     // MARK: - Title
 
+    /// The dish, with the camera and the microphone inside its border (#627).
+    ///
+    /// The same two accessories the Tracking composer carries, laid out the same
+    /// way and for the same reason: they are other ways of filling THIS field,
+    /// not other actions. A plan is usually typed from memory, so these matter
+    /// less here than on Tracking — but a menu photographed at the table and a
+    /// dish named out loud while cooking are both real, and a user who learns
+    /// the gesture on one surface should find it on the other.
     private var titleSection: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("What are you having?").eyebrow()
@@ -207,9 +229,38 @@ struct MealPlanEntrySheet: View {
                 .textFieldStyle(.plain)
                 .paperFieldOnMac()
                 .padding(Space.md)
+                .padding(.trailing, accessoryGutter)
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                 .paperBorder(Tokens.border, radius: Radius.md)
+                .overlay(alignment: .bottomTrailing) {
+                    MealCaptureAccessories(
+                        text: $title,
+                        photos: $photos,
+                        isEnabled: phase != .estimating,
+                        onError: { errorMessage = $0 }
+                    )
+                    .padding(.trailing, Space.sm)
+                    .padding(.bottom, Space.sm)
+                }
+            if !photos.isEmpty {
+                MealPhotoStrip(
+                    photos: $photos,
+                    note: trimmedTitle.isEmpty
+                        ? "Estimate will name the dish from the picture."
+                        : nil
+                )
+            }
         }
+    }
+
+    /// Room for the two accessory glyphs on the field's last line. Matches
+    /// `MealComposer.accessoryGutter`; the Mac has no microphone path.
+    private var accessoryGutter: CGFloat {
+        #if os(iOS)
+        return 28 + Space.xs + 28 + Space.sm
+        #else
+        return 28 + Space.sm
+        #endif
     }
 
     // MARK: - Day
@@ -796,23 +847,46 @@ struct MealPlanEntrySheet: View {
     /// recipe the user has been keeping.
     private func estimate() {
         let dish = trimmedTitle
-        guard !dish.isEmpty else { return }
+        let attached = photos
+        guard !dish.isEmpty || !attached.isEmpty else { return }
         errorMessage = nil
         phase = .estimating
 
         Task { @MainActor in
             defer { phase = .idle }
             do {
-                let planned = try await estimator.estimate(title: dish, mealType: mealType)
+                let planned = try await estimator.estimate(
+                    title: dish,
+                    photos: attached,
+                    mealType: mealType
+                )
 
                 guard !planned.estimate.needsDetail else {
-                    errorMessage = "Dexter couldn't tell what that is. Add a little more to the name, or fill the numbers in yourself."
+                    errorMessage = dish.isEmpty
+                        ? "Dexter couldn't tell what that is. Try another photo, or type the dish in yourself."
+                        : "Dexter couldn't tell what that is. Add a little more to the name, or fill the numbers in yourself."
                     return
+                }
+
+                // A picture with no typed name: the model's reading of it IS the
+                // name, because the photo is not kept and `canSave` still
+                // requires one (#627). Falls back to nothing if the model
+                // returned no title, which leaves Save disabled and the field
+                // empty — the honest state, not a placeholder dish.
+                let resolvedDish = dish.isEmpty
+                    ? (planned.estimate.title ?? "")
+                    : dish
+                if dish.isEmpty, !resolvedDish.isEmpty {
+                    title = resolvedDish
+                    // The photo said everything it had to say. Leaving it
+                    // attached would send it again on a re-estimate of a dish
+                    // that now has a name.
+                    photos = []
                 }
 
                 items = planned.estimate.items
                 shortTitle = planned.estimate.title
-                namedTitle = dish
+                namedTitle = resolvedDish
                 ingredients = planned.ingredients
                 if let newRecipe = planned.recipe { recipe = newRecipe }
                 for nutrient in Nutrient.allCases {

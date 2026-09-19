@@ -247,7 +247,7 @@ enum MealEstimationError: LocalizedError {
         case .notConfigured:
             return "Anthropic API key not configured."
         case .emptyDescription:
-            return "Describe the meal first."
+            return "Describe the meal, or add a photo of it."
         case .transport(let err):
             return "Couldn't reach Anthropic. \(err.localizedDescription)"
         case .http(let status, let preview):
@@ -288,7 +288,22 @@ extension AnthropicClient {
     /// estimate this function returned before: no sources, a saveable meal.
     ///
     /// - Parameters:
-    ///   - description: what the user typed or spoke, verbatim.
+    /// ### Why a photo does not make this a second function (#627)
+    ///
+    /// Everything below the content array is identical for a described meal and
+    /// a photographed one: the same schema, the same guards downstream, the same
+    /// resume loop, the same truncation handling. A separate `estimateMealPhoto`
+    /// would have to be kept in step with all of it, and the one thing #475 and
+    /// #500 each cost a release was a second extraction path that drifted from
+    /// the first. So the photos ride the existing call as extra content blocks
+    /// and change nothing else.
+    ///
+    /// - Parameters:
+    ///   - description: what the user typed or spoke, verbatim. May be empty
+    ///     when `photos` is not: a photograph is a complete input on its own.
+    ///   - photos: photographs of the meal, sent as image blocks ahead of the
+    ///     prompt. Empty is the ordinary text-only estimate, byte for byte the
+    ///     request this function sent before #627.
     ///   - mealTypeHint: the type the user picked, or nil to let the model
     ///     infer it from the description and the time of day.
     ///   - loggedAt: the instant the meal is being logged at, so an inferred
@@ -296,11 +311,17 @@ extension AnthropicClient {
     ///     breakfast.
     func estimateMeal(
         description: String,
+        photos: [MealPhoto] = [],
         mealTypeHint: MealType? = nil,
         loggedAt: Date = Date()
     ) async throws -> GroundedMealEstimate {
         let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw MealEstimationError.emptyDescription }
+        // One or the other, not necessarily both. A plate in front of the camera
+        // says as much as a sentence does, and refusing it would make the plus
+        // button a decoration on an empty field.
+        guard !trimmed.isEmpty || !photos.isEmpty else {
+            throw MealEstimationError.emptyDescription
+        }
 
         guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
             throw MealEstimationError.notConfigured
@@ -308,6 +329,7 @@ extension AnthropicClient {
 
         let prompt = Self.mealEstimationPrompt(
             description: trimmed,
+            photoCount: photos.count,
             mealTypeHint: mealTypeHint,
             loggedAt: loggedAt
         )
@@ -337,15 +359,30 @@ extension AnthropicClient {
         // overlooked. The tool block added in #594 renders ahead of the prompt
         // and carries no marker either, for the same reason: nothing here is
         // cached at all.
+        // Images ahead of the text, which is the order Anthropic documents for
+        // a vision turn: the model reads the blocks in sequence, so a question
+        // asked after the picture is a question about a picture it has already
+        // seen. The reverse order asks it to hold an instruction in mind for an
+        // image that has not arrived.
+        var userContent: [AnthropicJSONValue] = photos.map { photo in
+            .object([
+                "type": .string("image"),
+                "source": .object([
+                    "type": .string("base64"),
+                    "media_type": .string(photo.mediaType),
+                    "data": .string(photo.base64)
+                ])
+            ])
+        }
+        userContent.append(.object([
+            "type": .string("text"),
+            "text": .string(prompt)
+        ]))
+
         var messages: [AnthropicJSONValue] = [
             .object([
                 "role": .string("user"),
-                "content": .array([
-                    .object([
-                        "type": .string("text"),
-                        "text": .string(prompt)
-                    ])
-                ])
+                "content": .array(userContent)
             ])
         ]
 
@@ -499,6 +536,7 @@ extension AnthropicClient {
     /// not, and a guard the model grades itself against is not a guard.
     static func mealEstimationPrompt(
         description: String,
+        photoCount: Int = 0,
         mealTypeHint: MealType?,
         loggedAt: Date
     ) -> String {
@@ -514,22 +552,60 @@ extension AnthropicClient {
             Return that exact value.
             """
         } else {
+            // Names the evidence that actually exists. A photo-only turn told to
+            // infer the type "from the description" is being pointed at
+            // something that is not in the prompt.
+            let evidence = description.isEmpty ? "what you can see" : "the description"
             typeInstruction = """
-            - "meal_type": one of \(mealTypeList). Infer it from the description \
+            - "meal_type": one of \(mealTypeList). Infer it from \(evidence) \
             and from the local clock time, which is \(clock). A dish that is \
             eaten at any hour and gives no other signal is "snack".
             """
         }
 
-        return """
-        Estimate the nutrition of this meal from its description. There is no
-        portion picker and no serving dropdown, so every quantity you use is an
-        assumption you must state. You have one lookup and only one: the web
-        search tool, for a product a brand has published figures for. See BRAND
-        LOOKUP below for when to reach for it and when not to.
+        // What the model is being asked to read, which is not always the same
+        // two things (#627). The opening sentence and the description paragraph
+        // are written together here rather than patched independently, because
+        // a prompt that announces a description and then encloses none is the
+        // one shape that reliably makes a model invent the missing half.
+        let hasPhotos = photoCount > 0
+        let hasDescription = !description.isEmpty
+        let photoNoun = photoCount == 1 ? "photograph" : "photographs"
 
-        The description, verbatim:
-        \(description)
+        let opening: String
+        switch (hasPhotos, hasDescription) {
+        case (true, true):
+            opening = """
+            Estimate the nutrition of this meal from the attached \(photoNoun) \
+            and the description below. Read both. Where they disagree the \
+            description wins; see THE PHOTOGRAPH below.
+            """
+        case (true, false):
+            opening = """
+            Estimate the nutrition of this meal from the attached \(photoNoun). \
+            The user typed nothing, so the \(photoNoun) and the clock are \
+            everything you have; see THE PHOTOGRAPH below.
+            """
+        case (false, _):
+            opening = "Estimate the nutrition of this meal from its description."
+        }
+
+        let descriptionBlock = hasDescription
+            ? """
+
+
+            The description, verbatim:
+            \(description)
+            """
+            : ""
+
+        return """
+        \(opening) There is no portion picker and no serving dropdown, so every
+        quantity you use is an assumption you must state. You have one lookup and
+        only one: the web search tool, for a product a brand has published
+        figures for. See BRAND LOOKUP below for when to reach for it and when
+        not to.
+        \(descriptionBlock)
 
         Return STRICT JSON inside a ```json fence and nothing else — no prose
         before or after.
@@ -562,6 +638,7 @@ extension AnthropicClient {
         Rules:
         \(typeInstruction)
         \(MealToolSchema.estimateRules)
+        \(hasPhotos ? MealToolSchema.photoRule : "")
         \(MealToolSchema.brandLookupRule)
 
         Do not invent fields. Do not add commentary outside the JSON fence.

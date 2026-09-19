@@ -112,7 +112,30 @@ enum PlainFieldPlaceholder {
     /// the vertical needs a nudge. Stable across 12pt and 16pt padding and
     /// across `lineLimit(2...5)` and `(2...6)`, and unchanged when the field
     /// takes first responder, so the placeholder does not jump on a click.
-    static let macBaselineNudge: CGFloat = -0.5
+    ///
+    /// Re-measured on iOS for #627 and the answer is the same. Against a focused
+    /// three-line composer at 3x, the ink of the drawn placeholder and the ink of
+    /// real typed text begin on rows 680 and 681 — a third of a point apart, with
+    /// this nudge applied. Hence the rename: it was `macBaselineNudge` while
+    /// macOS was the only platform that drew its own placeholder.
+    static let baselineNudge: CGFloat = -0.5
+
+    /// What to hand a MULTI-LINE `TextField(_:text:axis:)` as its title.
+    ///
+    /// Empty on BOTH platforms, unlike `title(_:)`, because the problem on a
+    /// multi-line field is position rather than colour (#627).
+    ///
+    /// UIKit draws a plain field's placeholder vertically CENTRED in the text
+    /// container. On a single-line field that is the same place the caret goes,
+    /// so nobody notices. Give the field `axis: .vertical` and `lineLimit(3...6)`
+    /// and the two part company: the placeholder sits in the middle of a
+    /// three-line box while the caret blinks at the top of line one. The field
+    /// then reads as though the example text is somewhere the typing will not
+    /// go, which is exactly what it means.
+    ///
+    /// So a multi-line field draws its own placeholder, top-aligned, on both
+    /// platforms. iOS gets it for position; macOS already needed it for colour.
+    static func multilineTitle(_ text: String) -> String { "" }
 }
 
 extension View {
@@ -154,7 +177,7 @@ extension View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .padding(.leading, padding)
-                    .padding(.top, padding + PlainFieldPlaceholder.macBaselineNudge)
+                    .padding(.top, padding + PlainFieldPlaceholder.baselineNudge)
                     .padding(.trailing, padding)
                     // It is paint, not a control: clicks reach the field under
                     // it, and VoiceOver reads the field's own label instead.
@@ -166,5 +189,62 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+
+extension View {
+    /// Draws `text` as a muted placeholder pinned to the FIRST LINE of a
+    /// multi-line plain `TextField`, on both platforms (#627).
+    ///
+    /// The multi-line sibling of `plainFieldPlaceholder(_:isVisible:padding:)`.
+    /// That one is a no-op on iOS, because a single-line field's native
+    /// placeholder is already drawn muted and in the right place. This one is
+    /// never a no-op, because the right place is the thing at issue: see
+    /// `PlainFieldPlaceholder.multilineTitle`.
+    ///
+    /// Apply it to the field AFTER its own padding and BEFORE its background,
+    /// and pass the insets that padding used. `trailing` is separate because a
+    /// field with controls in its trailing gutter pads asymmetrically, and a
+    /// placeholder that ignored that would run under them.
+    ///
+    /// ```swift
+    /// TextField(PlainFieldPlaceholder.multilineTitle(example), text: $text, axis: .vertical)
+    ///     .textFieldStyle(.plain)
+    ///     .lineLimit(3...6)
+    ///     .padding(Space.md)
+    ///     .padding(.trailing, gutter)
+    ///     .multilinePlainFieldPlaceholder(example, isVisible: text.isEmpty,
+    ///                                     leading: Space.md, top: Space.md,
+    ///                                     trailing: Space.md + gutter)
+    ///     .background(…)
+    /// ```
+    @ViewBuilder
+    func multilinePlainFieldPlaceholder(
+        _ text: String,
+        isVisible: Bool,
+        leading: CGFloat,
+        top: CGFloat,
+        trailing: CGFloat
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            if isVisible {
+                Text(text)
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.mutedSoft)
+                    // One line, like both platforms' native placeholders, so a
+                    // long example cannot make an empty field look full.
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, leading)
+                    .padding(.top, top + PlainFieldPlaceholder.baselineNudge)
+                    .padding(.trailing, trailing)
+                    // It is paint, not a control: taps reach the field under it,
+                    // and VoiceOver reads the field's own label instead.
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            self
+        }
     }
 }

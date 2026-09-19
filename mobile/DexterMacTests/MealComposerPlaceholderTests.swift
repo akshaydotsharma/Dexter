@@ -102,8 +102,14 @@ final class MealComposerPlaceholderTests: XCTestCase {
             "macOS draws the example itself; AppKit's own placeholder stays empty"
         )
         XCTAssertTrue(
-            PlainFieldPlaceholder.title(MealComposer.placeholderExample).isEmpty,
-            "the macOS title half of the placeholder pair is empty"
+            PlainFieldPlaceholder.multilineTitle(MealComposer.placeholderExample).isEmpty,
+            """
+            the title half of the pair is empty. This names `multilineTitle` \
+            rather than `title` because that is what the composer calls since \
+            #627: a multi-line field draws its own placeholder on BOTH platforms, \
+            so asserting on `title` here would keep passing while the function \
+            this surface depends on broke.
+            """
         )
     }
 
