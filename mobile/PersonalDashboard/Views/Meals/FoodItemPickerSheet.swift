@@ -702,11 +702,37 @@ struct FoodItemPickerSheet: View {
             }
 
         case .failed(let message):
+            // ── Quiet, and stated ONCE ──────────────────────────────────────
+            //
+            // `message` is already a whole sentence written for a human
+            // ("The food database is not answering right now."), so anything
+            // this view adds in front of it says the same thing twice. The
+            // first build read "Your own items are listed above. The food
+            // database could not be reached. The food database is not
+            // answering right now.", which names the database three times to
+            // report one fact.
+            //
+            // Muted rather than `danger`, because nothing the user asked for
+            // has failed. Their own items are listed above and are the results
+            // they came for; a third party is slow. Red here would teach them
+            // to read red as noise, on a surface where a real error still has
+            // to land (#625).
             VStack(alignment: .leading, spacing: Space.sm) {
-                Text("Your own items are listed above. The food database could not be reached. \(message)")
+                Text(message)
                     .font(.edFootnote)
-                    .foregroundStyle(Tokens.danger)
+                    .foregroundStyle(Tokens.muted)
                     .fixedSize(horizontal: false, vertical: true)
+
+                // Only when there is nothing else on screen. With their own
+                // matches listed, the route out is obvious and this would be
+                // one more line to read.
+                if matches.isEmpty {
+                    Text("You can close this and describe the meal instead, and Dexter will estimate it.")
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.mutedSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Button("Try again") { retryRemoteSearch() }
                     .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
             }
@@ -804,9 +830,15 @@ struct FoodItemPickerSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
 
             case .unreachable(let message):
-                Text("The code read fine and the food database could not be reached. \(message)")
+                // "The code read fine" is the half the user cannot see for
+                // themselves; `message` already states the other half in a
+                // whole sentence, so repeating "the food database" here would
+                // name it twice in one line. Same severity as `.unknown`
+                // above: the scan did not land, and neither case is an error
+                // in anything the user did.
+                Text("The code read fine. \(message)")
                     .font(.edFootnote)
-                    .foregroundStyle(Tokens.danger)
+                    .foregroundStyle(Tokens.inkSoft)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
