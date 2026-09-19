@@ -144,6 +144,45 @@ final class MealPhotoStripRenderTests: XCTestCase {
         )
     }
 
+    // MARK: - Opening one full size (#627)
+
+    /// The viewer draws the photograph it was handed.
+    ///
+    /// A 56pt thumbnail settles "something is attached" and cannot settle "is
+    /// that the RIGHT one", which is the question that matters when the picture
+    /// is about to be the whole input to an estimate. A viewer that opened onto
+    /// an empty box would answer it no better than the thumbnail did.
+    func testTheViewerDrawsTheAttachedPhoto() throws {
+        let photo = MealPhoto(jpegData: try makeJPEG())
+        let big = CGSize(width: 390, height: 500)
+
+        let drawn = vermilionPixelCount(of: MealPhotoViewer(photo: photo), size: big)
+
+        XCTAssertGreaterThan(
+            drawn, 5_000,
+            "the viewer fills its sheet with the photo, not a thumbnail of it"
+        )
+    }
+
+    /// The viewer shows MORE of the photo than the thumbnail did. That is the
+    /// entire reason it exists, and it is one `.frame` away from not being true.
+    func testTheViewerShowsMoreThanTheThumbnail() throws {
+        let photo = MealPhoto(jpegData: try makeJPEG())
+        let big = CGSize(width: 390, height: 500)
+
+        let inStrip = vermilionPixelCount(
+            of: MealPhotoStrip(photos: .constant([photo]), note: nil)
+                .padding().frame(width: canvas.width, alignment: .leading),
+            size: canvas
+        )
+        let inViewer = vermilionPixelCount(of: MealPhotoViewer(photo: photo), size: big)
+
+        XCTAssertGreaterThan(
+            inViewer, inStrip * 5,
+            "opening a photo is worth doing only if it gets materially bigger"
+        )
+    }
+
     // MARK: - Removing one
 
     /// The remove button is bound to the photo it sits on, not to the last one.

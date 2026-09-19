@@ -369,13 +369,20 @@ struct MealComposer: View {
     /// the field single-line, revisit this — a one-line field cannot spend 68pt.
     private var field: some View {
         TextField(
-            PlainFieldPlaceholder.title(Self.placeholderExample),
+            // Empty on both platforms, and its own placeholder drawn below. The
+            // native one is vertically centred, which on a multi-line field puts
+            // the example text nowhere near the caret (#627).
+            PlainFieldPlaceholder.multilineTitle(Self.placeholderExample),
             text: $descriptionText,
             axis: .vertical
         )
         .font(.edBody)
         .foregroundStyle(Tokens.ink)
-        .lineLimit(2...5)
+        // Three lines rather than two. A meal is usually a list — a main, a
+        // side and a drink — and two lines meant the third scrolled out of a box
+        // that had room to show it. It also gives the two accessories in the
+        // bottom gutter somewhere to sit that is not beside the first line.
+        .lineLimit(3...6)
         .textFieldStyle(.plain)
         .focused($fieldFocused)
         // The label belongs to the TEXT, and it has to be attached before the
@@ -387,10 +394,12 @@ struct MealComposer: View {
         .onSubmit { if canEstimate { estimate() } }
         .padding(Space.md)
         .padding(.trailing, accessoryGutter)
-        .plainFieldPlaceholder(
+        .multilinePlainFieldPlaceholder(
             Self.placeholderExample,
             isVisible: descriptionText.isEmpty,
-            padding: Space.md
+            leading: Space.md,
+            top: Space.md,
+            trailing: Space.md + accessoryGutter
         )
         .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .overlay(
@@ -425,16 +434,17 @@ struct MealComposer: View {
         #endif
     }
 
-    /// What the photographs are about to be used for, said once, and only in
-    /// the case where nobody typed anything.
+    /// The one thing worth saying under a photograph with no words beside it.
     ///
-    /// With a description beside them the photographs are corroboration and need
-    /// no caption. Without one they ARE the meal, and the user is about to spend
-    /// a call on a guess made entirely from a picture. Saying so is the honest
-    /// version of a button that would otherwise look like it knew something.
+    /// It used to open by announcing that Dexter would read the meal from the
+    /// photo, which is a sentence that tells the user what they just did. The
+    /// thumbnail is directly above it and the button says Estimate; nobody needs
+    /// the narration. What is actually worth saying is the part they cannot
+    /// infer: that a portion or a brand the picture does not show is theirs to
+    /// add, and this is the moment to add it.
     private var photoNote: String? {
         guard trimmed.isEmpty else { return nil }
-        return "Dexter will read the meal from \(photos.count == 1 ? "this photo" : "these photos"). Add a line if a portion or a brand isn't obvious."
+        return "Add a line if a portion or a brand isn't obvious."
     }
 
     /// Meal type, or "let Dexter decide".

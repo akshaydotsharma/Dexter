@@ -167,6 +167,15 @@ struct MealPhotoStrip: View {
 
     @Binding var photos: [MealPhoto]
 
+    /// The photo being looked at full size, or nil.
+    ///
+    /// A 56pt thumbnail settles "there is a photo attached" and nothing else. It
+    /// cannot settle "is that the RIGHT photo", which is the question that
+    /// matters when the picture is about to be the entire input to an estimate:
+    /// two plates from the same lunch look identical at 56pt, and a photo
+    /// attached by mistake is only visible once it is big.
+    @State private var viewing: MealPhoto?
+
     /// Shown beside the thumbnails when the field is empty, which is the case
     /// where the photo is the entire input and the user is about to spend a
     /// call on it.
@@ -189,12 +198,35 @@ struct MealPhotoStrip: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .sheet(item: $viewing) { photo in
+            MealPhotoViewer(photo: photo)
+        }
     }
 
     @ViewBuilder
     private func thumbnail(_ photo: MealPhoto) -> some View {
         let image = PlatformImage(data: photo.jpegData)
         ZStack(alignment: .topTrailing) {
+            Button {
+                // Only offer the viewer for a photo that decoded. Opening a
+                // full-screen sheet onto the same grey placeholder the thumbnail
+                // is already showing would answer nothing.
+                if image != nil { viewing = photo }
+            } label: {
+                thumbnailFace(image)
+            }
+            .buttonStyle(.plain)
+            .disabled(image == nil)
+            .accessibilityLabel("Attached photo of the meal")
+            .accessibilityHint(image == nil ? "" : "Opens it full size")
+
+            removeButton(photo)
+        }
+    }
+
+    @ViewBuilder
+    private func thumbnailFace(_ image: PlatformImage?) -> some View {
+        Group {
             Group {
                 if let image {
                     Image(platformImage: image)
@@ -216,23 +248,94 @@ struct MealPhotoStrip: View {
             .frame(width: side, height: side)
             .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
             .paperBorder(Tokens.border, radius: Radius.sm)
-
-            Button {
-                photos.removeAll { $0.id == photo.id }
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 15, weight: .regular))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(Tokens.surface, Tokens.inkSoft)
-                    .padding(4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .offset(x: 6, y: -6)
-            .accessibilityLabel("Remove this photo")
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Attached photo of the meal")
+        // The tap target is the tile, not the drawn image inside it, so the
+        // corners a `scaledToFill` crop leaves bare still open the viewer.
+        .contentShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+    }
+
+    private func removeButton(_ photo: MealPhoto) -> some View {
+        Button {
+            photos.removeAll { $0.id == photo.id }
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 15, weight: .regular))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(Tokens.surface, Tokens.inkSoft)
+                .padding(4)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .offset(x: 6, y: -6)
+        .accessibilityLabel("Remove this photo")
+    }
+}
+
+/// One attached photo, full size (#627).
+///
+/// ### Why it reuses the ticket viewer's parts rather than the ticket viewer
+///
+/// `TicketOriginalViewer` reads from `TicketStorage` by relative path, handles
+/// PDFs, and knows about assets that have not synced to this device yet. A meal
+/// photo is none of those: it is a JPEG in memory that will be gone in a minute.
+/// So this takes the two pieces that ARE shared — `PinchZoomImageView` for the
+/// real platform gestures and `ZoomControls` for the mouse users who have none —
+/// and skips the storage layer entirely.
+struct MealPhotoViewer: View {
+
+    let photo: MealPhoto
+
+    @Environment(\.dismiss) private var dismiss
+
+    /// Driven by the zoom buttons, which on macOS are the only way in for a
+    /// mouse.
+    @State private var scale: CGFloat = PinchZoomImageView.minScale
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                content
+            }
+            .navigationTitle("Attached photo")
+            .inlineNavigationTitle()
+            .toolbar {
+                #if os(macOS)
+                ToolbarItem(placement: .automatic) {
+                    if image != nil { ZoomControls(scale: $scale) }
+                }
+                #endif
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Tokens.ink)
+                }
+            }
+        }
+        #if os(macOS)
+        // Without an explicit size a macOS sheet shrinks to its content's ideal
+        // width, which for a scroll-view-backed image is next to nothing: the
+        // photo would open as a thumbnail in a box barely taller than its own
+        // toolbar, which is the thing this view exists to stop being (#474).
+        .frame(minWidth: 520, idealWidth: 680, minHeight: 520, idealHeight: 760)
+        #endif
+    }
+
+    private var image: PlatformImage? { PlatformImage(data: photo.jpegData) }
+
+    @ViewBuilder
+    private var content: some View {
+        if let image {
+            PinchZoomImageView(image: image, scale: $scale)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(edges: .bottom)
+        } else {
+            // Close to unreachable: these bytes came out of a compressor that
+            // had already decoded them. It says the honest thing rather than
+            // showing an empty box.
+            Text("This photo can no longer be displayed.")
+                .font(.edBody)
+                .foregroundStyle(Tokens.muted)
+        }
     }
 }
 
