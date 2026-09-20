@@ -957,7 +957,9 @@ struct TripDetailView: View {
             // Save the receipt regardless; open the review sheet with a banner.
             let message: String = {
                 if let typed = error as? ReceiptExtractionError { return typed.localizedDescription }
-                if let typed = error as? StatementExtractionError { return typed.localizedDescription }
+                if let typed = error as? StatementExtractionError {
+                    return StatementFailure.classify(typed).failureAlertMessage
+                }
                 return "We saved your receipt but couldn't read it. Fill in the details below."
             }()
             let prefill = PrefilledExpense.fromFailure(
@@ -1066,15 +1068,15 @@ struct TripDetailView: View {
                 resume: result.resumePoint.map(plan)
             )
         } catch {
-            let message: String = {
-                if let typed = error as? StatementExtractionError { return typed.localizedDescription }
-                return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
-            }()
-            // Keep an inherited resume point alive through one failed retry.
+            // Classified, not rendered raw (#638). Same treatment as Finance,
+            // so both import screens say the same thing about the same error.
+            let failure = StatementFailure.classify(error)
+            // Keep an inherited resume point alive through one failed retry,
+            // but only where a retry could succeed (#638).
             ImportJobCenter.shared.finish(
                 jobID,
-                outcome: .failure(message),
-                resume: resumingFrom.map(plan)
+                outcome: .failure(failure.failureAlertMessage),
+                resume: failure.canResume ? resumingFrom.map(plan) : nil
             )
         }
     }

@@ -235,23 +235,322 @@ struct ExtractedStatementMeta: Decodable, Sendable, Equatable {
 enum StatementExtractionError: LocalizedError {
     case notConfigured
     case transport(Error)
-    case http(Int, String)
+    /// Status, the response body (first 800 bytes), and the `retry-after`
+    /// header in seconds when the API sent one (#638). The body is carried
+    /// verbatim because it holds the API's own `error.type` and
+    /// `error.message`, which is what `StatementFailure.classify` reads to
+    /// tell a billing 400 from a malformed-request 400.
+    case http(Int, String, retryAfter: TimeInterval?)
     case noJSON
     case parse(Error)
 
+    /// The DEVELOPER-facing rendering. It is no longer what the user sees on
+    /// a failed import: `.http` here still prints the raw JSON blob, which is
+    /// exactly the defect #638 fixes. Every user-facing surface goes through
+    /// `StatementFailure` instead.
     var errorDescription: String? {
         switch self {
         case .notConfigured:
             return "Anthropic API key not configured."
         case .transport(let err):
             return "Couldn't reach Anthropic. \(err.localizedDescription)"
-        case .http(let status, let preview):
+        case .http(let status, let preview, _):
             return "Anthropic API HTTP \(status). \(preview)"
         case .noJSON:
             return "Couldn't find a JSON array in Claude's response."
         case .parse(let err):
             return "Couldn't parse Claude's response. \(err.localizedDescription)"
         }
+    }
+}
+
+/// The Anthropic error envelope, as the API sends it on a non-2xx:
+/// `{"type":"error","error":{"type":"invalid_request_error","message":"..."}}`.
+/// Every field is optional so a truncated, empty, or non-JSON body decodes to
+/// nothing rather than throwing.
+struct AnthropicAPIErrorBody: Decodable {
+    struct Inner: Decodable {
+        let type: String?
+        let message: String?
+    }
+    let error: Inner?
+}
+
+/// Why a statement run could not finish, classified from the error one chunk
+/// call threw (#638).
+///
+/// The defect this replaces: `runStatementChunks` caught EVERY error and set
+/// one `.interrupted` stop reason, whose copy said the connection dropped. A
+/// billing 400, a 429, a 500, and a real network drop all rendered as the same
+/// wrong sentence, while the API's own message ("Your credit balance is too
+/// low...") was thrown away at the catch site. The classification is made here,
+/// once, and every surface reads it: the partial-run summary, the whole-run
+/// failure alert, and the decision of whether Resume is worth offering.
+///
+/// Classification keys on the API's `error.type` plus the message text, NOT on
+/// the HTTP status alone: a 400 covers both "you are out of credit" (Resume
+/// works once you top up) and "this request is malformed" (no retry ever
+/// helps), and those two need different affordances.
+enum StatementFailure: Sendable, Equatable {
+    /// The prepaid Anthropic balance is exhausted. Carries the API's own
+    /// message for the log.
+    case outOfCredit(String)
+    /// HTTP 429 / `rate_limit_error`, still failing after the in-run retries.
+    case rateLimited(retryAfter: TimeInterval?)
+    /// HTTP 529 / `overloaded_error`, still failing after the in-run retries.
+    case overloaded(retryAfter: TimeInterval?)
+    /// Any other API error. Carries the status and the API's OWN message, so
+    /// the app never invents copy for an error it does not recognise.
+    case api(status: Int, message: String)
+    /// No Anthropic API key is set.
+    case notConfigured
+    /// The request never reached Anthropic, or died in flight. THIS is the
+    /// only case that may say the connection dropped.
+    case transport(String)
+    /// Everything else: a reply that would not parse, or an unexpected error
+    /// from somewhere below.
+    case unreadable(String)
+
+    /// A payload-free projection of the case, so a caller (and a test) can
+    /// name the classification without rebuilding its associated values.
+    enum Kind: String, Sendable {
+        case outOfCredit, rateLimited, overloaded, api, notConfigured, transport, unreadable
+    }
+
+    var kind: Kind {
+        switch self {
+        case .outOfCredit:   return .outOfCredit
+        case .rateLimited:   return .rateLimited
+        case .overloaded:    return .overloaded
+        case .api:           return .api
+        case .notConfigured: return .notConfigured
+        case .transport:     return .transport
+        case .unreadable:    return .unreadable
+        }
+    }
+
+    // MARK: - Classification
+
+    /// Markers that identify the billing wall inside the API's own message.
+    /// Matched case-insensitively against `error.message`.
+    private static let creditMarkers = ["credit balance", "purchase credits", "plans & billing"]
+
+    /// API error types that a billing failure is reported under. Requiring one
+    /// of these AND a message marker is what keeps a malformed-request 400
+    /// from being read as "out of credit".
+    private static let billingErrorTypes: Set<String> = [
+        "invalid_request_error", "billing_error", "permission_error", "authentication_error"
+    ]
+
+    /// Turn any error thrown by a chunk call into exactly one classification.
+    static func classify(_ error: Error) -> StatementFailure {
+        switch error {
+        case let typed as StatementExtractionError:
+            switch typed {
+            case .notConfigured:
+                return .notConfigured
+            case .transport(let inner):
+                return .transport(inner.localizedDescription)
+            case .http(let status, let body, let retryAfter):
+                return classifyHTTP(status: status, body: body, retryAfter: retryAfter)
+            case .noJSON:
+                return .unreadable("Claude's reply held no transaction list.")
+            case .parse(let inner):
+                return .unreadable(inner.localizedDescription)
+            }
+        case let urlError as URLError:
+            return .transport(urlError.localizedDescription)
+        default:
+            return .unreadable(error.localizedDescription)
+        }
+    }
+
+    /// The non-2xx branch. Reads the API's envelope first and only falls back
+    /// to the status when the body says nothing useful.
+    static func classifyHTTP(status: Int, body: String, retryAfter: TimeInterval?) -> StatementFailure {
+        let decoded = body.data(using: .utf8).flatMap {
+            try? JSONDecoder().decode(AnthropicAPIErrorBody.self, from: $0)
+        }
+        let apiType = decoded?.error?.type?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiMessage = decoded?.error?.message?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+
+        if let apiType, billingErrorTypes.contains(apiType),
+           let apiMessage, !apiMessage.isEmpty,
+           creditMarkers.contains(where: { apiMessage.lowercased().contains($0) }) {
+            return .outOfCredit(apiMessage)
+        }
+        if status == 429 || apiType == "rate_limit_error" {
+            return .rateLimited(retryAfter: retryAfter)
+        }
+        if status == 529 || apiType == "overloaded_error" {
+            return .overloaded(retryAfter: retryAfter)
+        }
+        // Never invent copy for an error we do not recognise: hand the API's
+        // own message through. Only when there is none do we fall back to the
+        // body text, trimmed so an alert stays readable.
+        let message: String = {
+            if let apiMessage, !apiMessage.isEmpty { return apiMessage }
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return "The API sent no message." }
+            return String(trimmed.prefix(200))
+        }()
+        return .api(status: status, message: message)
+    }
+
+    // MARK: - What the app does about it
+
+    /// Seconds the API asked us to wait, when it said.
+    var retryAfterHint: TimeInterval? {
+        switch self {
+        case .rateLimited(let after), .overloaded(let after): return after
+        default: return nil
+        }
+    }
+
+    /// True for the two statuses worth retrying WITHIN the run, on a backoff
+    /// (#638 requirement 4). Everything else either cannot be fixed by waiting
+    /// or is better handled by the user tapping Resume when they are ready.
+    var isWorthRetryingInRun: Bool {
+        switch self {
+        case .rateLimited, .overloaded: return true
+        default: return false
+        }
+    }
+
+    /// True when a later attempt could actually succeed, which is the ONLY
+    /// thing that should put a Resume button on screen.
+    ///
+    /// Out of credit keeps Resume: topping up makes the very same request
+    /// work. A non-billing 4xx does not: no user action changes the outcome,
+    /// and offering Resume there is a button that is guaranteed to fail.
+    var canResume: Bool {
+        switch self {
+        case .outOfCredit, .rateLimited, .overloaded, .notConfigured, .transport, .unreadable:
+            return true
+        case .api(let status, _):
+            // 5xx is the server having a bad moment; 408 is a server-side
+            // timeout. Both clear on their own. Every other status is a
+            // rejection of the request itself.
+            return status >= 500 || status == 408
+        }
+    }
+
+    // MARK: - Copy
+    //
+    // No em dash in any string below (project no-em-dash rule).
+
+    /// The heading of the partial-run summary. It is the first thing read, so
+    /// it carries the verdict on its own.
+    var summaryTitle: String {
+        switch self {
+        case .outOfCredit:   return "Import stopped: out of API credit"
+        case .notConfigured: return "Import stopped: no API key"
+        case .api(let status, _) where !canResume:
+            return "Import failed: the API rejected the request (HTTP \(status))"
+        default:             return "Import interrupted"
+        }
+    }
+
+    /// The sentence that explains what happened and what to do, for a run that
+    /// imported some rows before it stopped.
+    var summaryBody: String {
+        switch self {
+        case .outOfCredit:
+            return "The Anthropic credit balance is empty, so the rest of the statement was not read. "
+                + "Top it up in the Anthropic console under Plans & Billing, then Resume; "
+                + "the transactions already added will not be duplicated."
+        case .rateLimited:
+            return "The Anthropic rate limit held after several retries, so the rest of the statement "
+                + "was not read. Wait a minute, then Resume; the transactions already added will not "
+                + "be duplicated."
+        case .overloaded:
+            return "The Anthropic API is overloaded and stayed that way after several retries, so the "
+                + "rest of the statement was not read. Try Resume again in a few minutes; the "
+                + "transactions already added will not be duplicated."
+        case .notConfigured:
+            return "Dexter has no Anthropic API key, so the rest of the statement was not read. "
+                + "Add one in Settings, then Resume; the transactions already added will not be "
+                + "duplicated."
+        case .transport:
+            // The #635 copy, now reserved for the case it was always meant to
+            // describe.
+            return "The connection dropped part-way, so the rest of the statement was not read. "
+                + "Resume it, or import the file again to finish; the transactions already added "
+                + "will not be duplicated."
+        case .unreadable(let detail):
+            return "The statement reader hit an unexpected error, so the rest of the statement was "
+                + "not read. \(Self.sentence(detail)) Resume it to try again; the transactions "
+                + "already added will not be duplicated."
+        case .api(let status, let message):
+            let head = "The Anthropic API returned an error (HTTP \(status)): \(Self.sentence(message))"
+            if canResume {
+                return head + " The rest of the statement was not read. Resume it to try again; "
+                    + "the transactions already added will not be duplicated."
+            }
+            return head + " Resuming will not change that, so the rest of this statement cannot be "
+                + "read from this file. The transactions already added were kept."
+        }
+    }
+
+    /// The whole message for a run that failed with nothing imported: the
+    /// single-chunk path and the first-chunk-throws path (#638 requirement 5).
+    /// Before this ticket both rendered `errorDescription`, so a billing 400
+    /// reached the alert as "Anthropic API HTTP 400. {json blob}".
+    var failureAlertMessage: String {
+        switch self {
+        case .outOfCredit:
+            return "The Anthropic credit balance is empty, so the statement could not be read. "
+                + "Top it up in the Anthropic console under Plans & Billing, then import the file again."
+        case .rateLimited:
+            return "The Anthropic rate limit held after several retries, so the statement could not "
+                + "be read. Wait a minute and import the file again."
+        case .overloaded:
+            return "The Anthropic API is overloaded, so the statement could not be read. "
+                + "Import the file again in a few minutes."
+        case .notConfigured:
+            return "Dexter has no Anthropic API key, so the statement could not be read. "
+                + "Add one in Settings, then import the file again."
+        case .transport(let detail):
+            return "Couldn't reach Anthropic, so the statement could not be read. "
+                + "\(Self.sentence(detail)) Check the connection and import the file again."
+        case .unreadable(let detail):
+            return "We couldn't read this statement. \(Self.sentence(detail)) "
+                + "Make sure it's a text-based PDF (not a photo) and try again."
+        case .api(let status, let message):
+            let head = canResume
+                ? "The Anthropic API returned an error (HTTP \(status)): "
+                : "The Anthropic API rejected the request (HTTP \(status)): "
+            let tail = canResume
+                ? " Import the file again to try once more."
+                : " Resuming will not change that."
+            return head + Self.sentence(message) + tail
+        }
+    }
+
+    /// One line for the console, carrying the classification AND the API's own
+    /// words, so a future failure is diagnosable from the log alone (#638).
+    var logLine: String {
+        switch self {
+        case .outOfCredit(let message):     return "out_of_credit: \(message)"
+        case .rateLimited(let after):       return "rate_limited retry_after=\(after.map { "\($0)" } ?? "nil")"
+        case .overloaded(let after):        return "overloaded retry_after=\(after.map { "\($0)" } ?? "nil")"
+        case .api(let status, let message): return "api_error http=\(status): \(message)"
+        case .notConfigured:                return "not_configured"
+        case .transport(let detail):        return "transport: \(detail)"
+        case .unreadable(let detail):       return "unreadable: \(detail)"
+        }
+    }
+
+    /// Give a fragment terminal punctuation so it can be dropped into the
+    /// middle of a paragraph without reading as a run-on. The API's messages
+    /// usually end in a full stop already.
+    private static func sentence(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return "" }
+        return ".!?".contains(last) ? trimmed : trimmed + "."
     }
 }
 
@@ -303,22 +602,34 @@ struct StatementExtraction: Sendable {
     let chunksCompleted: Int
     let chunksTotal: Int
 
-    /// Three causes, three remedies, so three signals. `possiblyTruncated`
-    /// is deliberately NOT one of them: that is the model running out of
-    /// output budget on a chunk it DID read, not the run ending early.
+    /// Two causes, and the second carries its own classification (#638).
+    /// `possiblyTruncated` is deliberately NOT one of them: that is the model
+    /// running out of output budget on a chunk it DID read, not the run
+    /// ending early.
     enum StopReason: Sendable, Equatable {
         /// The user tapped Stop. The loop taps out at the next chunk
         /// boundary.
         case stoppedByUser
-        /// A chunk threw: the request died mid-run (the phone locked and
-        /// iOS suspended the app, the network dropped, the API errored).
-        /// Everything read before it is kept.
-        case interrupted
+        /// A chunk threw. Before #638 this was a bare `.interrupted` whose
+        /// copy always said the connection dropped; it now carries WHICH
+        /// failure it was, so the message and the Resume affordance can both
+        /// follow from it.
+        case failed(StatementFailure)
+
+        /// True when a later attempt could succeed. A user stop always can;
+        /// a failure depends on what failed (#638).
+        var allowsResume: Bool {
+            switch self {
+            case .stoppedByUser:      return true
+            case .failed(let reason): return reason.canResume
+            }
+        }
     }
 
-    /// Where to pick up from, or nil when there is nothing left to read.
+    /// Where to pick up from, or nil when there is nothing left to read, or
+    /// when nothing a retry can do would change the outcome (#638).
     var resumePoint: StatementResumePoint? {
-        guard stopReason != nil, chunksCompleted < chunksTotal else { return nil }
+        guard let stopReason, stopReason.allowsResume, chunksCompleted < chunksTotal else { return nil }
         return StatementResumePoint(
             chunksCompleted: chunksCompleted,
             chunksTotal: chunksTotal,
@@ -381,9 +692,15 @@ extension AnthropicClient {
     /// no `catch`, so one dead request threw straight out of here and every
     /// chunk already read was discarded: a 10-chunk statement that failed at
     /// chunk 8 imported nothing after paying for seven extractions. Now the
-    /// loop breaks and returns what it has, flagged `.interrupted`. The one
-    /// exception is a failure with nothing read yet, which still throws: there
-    /// is nothing to salvage and the user needs the real error.
+    /// loop breaks and returns what it has, flagged `.failed` with the
+    /// classification of what went wrong (#638): out of credit, rate limited,
+    /// another API error, or a genuine transport failure. The one exception is
+    /// a failure with nothing read yet, which still throws: there is nothing to
+    /// salvage and the user needs the real error.
+    ///
+    /// A 429 or a 529 is retried on an exponential backoff before any of that
+    /// (#638), so a momentary rate limit costs a few seconds rather than the
+    /// rest of the statement.
     ///
     /// `resumingFrom` skips the chunks a previous run already read (#635).
     func extractStatement(
@@ -429,6 +746,9 @@ extension AnthropicClient {
         cancellation: ImportCancellationToken? = nil,
         splitChunk: @Sendable (PDFChunk) -> [PDFChunk]? = { PDFChunker.halves(of: $0) },
         maxResplitDepth: Int = defaultMaxResplitDepth,
+        maxChunkAttempts: Int = defaultMaxChunkAttempts,
+        retryBaseDelay: TimeInterval = defaultRetryBaseDelay,
+        sleep: @Sendable (TimeInterval) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
         extractChunk: (PDFChunk) async throws -> StatementChunkResult
     ) async throws -> StatementExtraction {
         // Single chunk (small or unsplittable statement): identical behaviour
@@ -446,6 +766,10 @@ extension AnthropicClient {
                 depth: 0,
                 maxDepth: maxResplitDepth,
                 splitChunk: splitChunk,
+                maxAttempts: maxChunkAttempts,
+                retryBaseDelay: retryBaseDelay,
+                sleep: sleep,
+                cancellation: cancellation,
                 extractChunk: extractChunk
             )
             await onProgress?(1, 1)
@@ -486,6 +810,10 @@ extension AnthropicClient {
                     depth: 0,
                     maxDepth: maxResplitDepth,
                     splitChunk: splitChunk,
+                    maxAttempts: maxChunkAttempts,
+                    retryBaseDelay: retryBaseDelay,
+                    sleep: sleep,
+                    cancellation: cancellation,
                     extractChunk: extractChunk
                 )
             } catch {
@@ -496,10 +824,17 @@ extension AnthropicClient {
                 // Otherwise keep every chunk already read and report WHY the
                 // rest is missing. Re-importing is idempotent (`ExpenseDedupe`),
                 // so these rows cost nothing on a later full run.
+                //
+                // The classification is made HERE and carried on the stop
+                // reason (#638). Before it, every error collapsed into one
+                // `.interrupted` whose copy said the connection dropped, and
+                // the API's own message (a billing wall, a rate limit) was
+                // dropped on the floor at this exact line.
+                let failure = StatementFailure.classify(error)
                 NSLog("extractStatement: chunk %d of %d (%@) failed, keeping %d lines: %@",
                       index + 1, chunks.count, chunks[index].pages.label,
-                      mergedLines.count, error.localizedDescription)
-                stopReason = .interrupted
+                      mergedLines.count, failure.logLine)
+                stopReason = .failed(failure)
                 break
             }
 
@@ -527,6 +862,87 @@ extension AnthropicClient {
             chunksCompleted: completed,
             chunksTotal: chunks.count
         )
+    }
+
+    /// How many times ONE chunk call is attempted before its failure is
+    /// reported (#638). Four attempts means three waits, which at the base
+    /// delay below is about 14 seconds of patience per chunk: enough to ride
+    /// out a short rate-limit window without stalling a long statement.
+    static let defaultMaxChunkAttempts = 4
+
+    /// First backoff wait, doubling on each further attempt (2s, 4s, 8s).
+    /// Only used when the API did not send a `retry-after` of its own.
+    static let defaultRetryBaseDelay: TimeInterval = 2
+
+    /// Ceiling on any single wait, including one the API asked for. A
+    /// `retry-after` of several minutes is not something to block an import
+    /// on; the user gets the rate-limit message and a Resume button instead.
+    static let maxRetryDelay: TimeInterval = 30
+
+    /// Read a `retry-after` header. Anthropic sends whole seconds; the HTTP
+    /// spec also allows a date, which is parsed here so a future change of
+    /// theirs does not silently drop the hint. Anything else, or a negative
+    /// value, yields nil and the caller falls back to its own backoff.
+    static func retryAfterSeconds(_ header: String?) -> TimeInterval? {
+        guard let raw = header?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        if let seconds = TimeInterval(raw) {
+            return seconds > 0 ? seconds : nil
+        }
+        guard let date = Self.httpDateFormatter.date(from: raw) else { return nil }
+        let interval = date.timeIntervalSinceNow
+        return interval > 0 ? interval : nil
+    }
+
+    /// RFC 1123, the format an HTTP `retry-after` date uses.
+    static let httpDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return f
+    }()
+
+    /// Call one chunk, retrying the SAME chunk on a transient API failure
+    /// (429 and 529) with exponential backoff (#638).
+    ///
+    /// This is a retry of an identical request. It is NOT the truncation
+    /// re-split from #637, which narrows the PAGE RANGE after a call that
+    /// succeeded but ran out of output budget. The two cannot interfere:
+    /// a truncated call returns normally and never reaches the `catch` here,
+    /// and a thrown 429 never produces a result for the re-split to inspect.
+    ///
+    /// `retry-after` wins over the computed backoff when the API sent one,
+    /// clamped to `maxRetryDelay`. The cancellation flag is polled before
+    /// each wait so Stop is honoured during a backoff rather than after it.
+    static func readRetryingTransient(
+        _ chunk: PDFChunk,
+        maxAttempts: Int,
+        retryBaseDelay: TimeInterval,
+        sleep: @Sendable (TimeInterval) async -> Void,
+        cancellation: ImportCancellationToken?,
+        extractChunk: (PDFChunk) async throws -> StatementChunkResult
+    ) async throws -> StatementChunkResult {
+        var attempt = 1
+        while true {
+            do {
+                return try await extractChunk(chunk)
+            } catch {
+                let failure = StatementFailure.classify(error)
+                guard failure.isWorthRetryingInRun,
+                      attempt < max(maxAttempts, 1),
+                      cancellation?.isCancelled != true else {
+                    throw error
+                }
+                let backoff = retryBaseDelay * pow(2, Double(attempt - 1))
+                let wait = min(failure.retryAfterHint ?? backoff, maxRetryDelay)
+                NSLog("extractStatement: %@ %@, retrying in %.1fs (attempt %d of %d)",
+                      chunk.pages.label, failure.logLine, wait, attempt + 1, maxAttempts)
+                await sleep(wait)
+                attempt += 1
+            }
+        }
     }
 
     /// How many times a truncated range may be halved before the warning
@@ -562,8 +978,9 @@ extension AnthropicClient {
     /// warning for that range only: the depth cap is reached, the range is a
     /// single page, or the bytes cannot be re-split.
     ///
-    /// A half that THROWS propagates. The caller treats that as `.interrupted`
-    /// and offers Resume, which re-reads the whole chunk from scratch. That is
+    /// A half that THROWS propagates. The caller classifies it and, where a
+    /// retry could succeed, offers Resume, which re-reads the whole chunk from
+    /// scratch (#635, #638). That is
     /// deliberate: keeping one good half and resuming from the next chunk would
     /// leave the other half's pages unread with nothing recording the gap.
     static func readHealingTruncation(
@@ -571,9 +988,24 @@ extension AnthropicClient {
         depth: Int,
         maxDepth: Int,
         splitChunk: @Sendable (PDFChunk) -> [PDFChunk]?,
+        maxAttempts: Int = defaultMaxChunkAttempts,
+        retryBaseDelay: TimeInterval = defaultRetryBaseDelay,
+        sleep: @Sendable (TimeInterval) async -> Void = { _ in },
+        cancellation: ImportCancellationToken? = nil,
         extractChunk: (PDFChunk) async throws -> StatementChunkResult
     ) async throws -> ChunkRead {
-        let result = try await extractChunk(chunk)
+        // The retry sits INSIDE the re-split, so a half gets the same backoff
+        // the whole chunk does. The two never collide: the retry acts on a
+        // THROWN transient API error, while the re-split acts on a call that
+        // RETURNED successfully with `possiblyTruncated` set (#638).
+        let result = try await readRetryingTransient(
+            chunk,
+            maxAttempts: maxAttempts,
+            retryBaseDelay: retryBaseDelay,
+            sleep: sleep,
+            cancellation: cancellation,
+            extractChunk: extractChunk
+        )
         guard result.possiblyTruncated else {
             return ChunkRead(lines: result.lines, meta: result.meta, truncatedRanges: [])
         }
@@ -605,6 +1037,10 @@ extension AnthropicClient {
                 depth: depth + 1,
                 maxDepth: maxDepth,
                 splitChunk: splitChunk,
+                maxAttempts: maxAttempts,
+                retryBaseDelay: retryBaseDelay,
+                sleep: sleep,
+                cancellation: cancellation,
                 extractChunk: extractChunk
             )
             lines.append(contentsOf: read.lines)
@@ -736,11 +1172,15 @@ extension AnthropicClient {
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw StatementExtractionError.http(0, "non-HTTP response")
+            throw StatementExtractionError.http(0, "non-HTTP response", retryAfter: nil)
         }
         guard (200..<300).contains(http.statusCode) else {
+            // The whole body (to 800 bytes), not a summary: it carries the
+            // API's own `error.type` and `error.message`, which is what the
+            // classification in `StatementFailure` reads (#638).
             let preview = String(data: data.prefix(800), encoding: .utf8) ?? "<non-utf8 bytes>"
-            throw StatementExtractionError.http(http.statusCode, preview)
+            let retryAfter = Self.retryAfterSeconds(http.value(forHTTPHeaderField: "retry-after"))
+            throw StatementExtractionError.http(http.statusCode, preview, retryAfter: retryAfter)
         }
 
         let decoded: AnthropicResponse

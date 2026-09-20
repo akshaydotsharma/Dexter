@@ -458,7 +458,9 @@ struct FinanceView: View {
                     return typed.localizedDescription
                 }
                 if let typed = error as? StatementExtractionError {
-                    return typed.localizedDescription
+                    // Classified (#638): the photo multi-expense path shares
+                    // the statement core, so it shared its raw-JSON alert too.
+                    return StatementFailure.classify(typed).failureAlertMessage
                 }
                 return "We saved your receipt but couldn't read it. Fill in the details below."
             }()
@@ -649,18 +651,19 @@ struct FinanceView: View {
                 resume: result.resumePoint.map(plan)
             )
         } catch {
-            let message: String = {
-                if let typed = error as? StatementExtractionError {
-                    return typed.localizedDescription
-                }
-                return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
-            }()
+            // Classified, not rendered raw (#638). `errorDescription` puts the
+            // API's JSON envelope straight in the alert, which is how a
+            // billing 400 reached the user as "Anthropic API HTTP 400. {json}".
+            let failure = StatementFailure.classify(error)
             // Keep a resume point the failed attempt inherited: one dead retry
             // must not throw away the chunks an earlier run already paid for.
+            // But only where a retry could actually succeed: a malformed
+            // request will fail identically every time, so Resume is withheld
+            // there rather than offered as a button guaranteed to fail (#638).
             ImportJobCenter.shared.finish(
                 jobID,
-                outcome: .failure(message),
-                resume: resumingFrom.map(plan)
+                outcome: .failure(failure.failureAlertMessage),
+                resume: failure.canResume ? resumingFrom.map(plan) : nil
             )
         }
     }

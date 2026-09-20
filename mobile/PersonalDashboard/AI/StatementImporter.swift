@@ -50,7 +50,9 @@ struct StatementImportResult: Sendable {
     /// whole statement (#498, #635). Deliberately NOT folded into
     /// `possiblyTruncated`: that means the model ran out of output budget on a
     /// chunk it DID read, and the remedy is different. Three causes, three
-    /// remedies, so three messages (see `summaryLine`). The rows read before
+    /// remedies, so a message per classification (see `summaryLine`). Since
+    /// #638 the failure case carries WHICH failure it was, so an empty API
+    /// credit balance no longer reads as a dropped connection. The rows read before
     /// the stop still imported, and a re-import is idempotent, so every one of
     /// them self-heals.
     var incompleteReason: StatementExtraction.StopReason? = nil
@@ -131,18 +133,17 @@ struct StatementImportResult: Sendable {
             file again to finish; the transactions already added will not be \
             duplicated.
             """
-        case .interrupted:
-            // The field case (#635): the phone locked, iOS suspended the app,
-            // and the in-flight request died. Say so plainly, because the user
-            // did nothing wrong and the count that DID land is the reassurance.
+        case .failed(let failure):
+            // Each classification gets its own heading and its own remedy
+            // (#638). Before it, every one of them rendered the transport
+            // sentence below, so an empty API credit balance read as a dropped
+            // connection and sent the user looking for a network fault.
             return """
-            Import interrupted
+            \(failure.summaryTitle)
 
             \(counts)
 
-            The connection dropped part-way, so the rest of the statement was \
-            not read. Resume it, or import the file again to finish; the \
-            transactions already added will not be duplicated.
+            \(failure.summaryBody)
             """
         case .none:
             break
