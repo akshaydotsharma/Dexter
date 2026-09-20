@@ -571,6 +571,23 @@ struct FoodItemPickerSheet: View {
         .padding(.vertical, Space.md)
         // Right-clicking the row reaches the same three actions on the Mac.
         .contextMenu { rowActions(item) }
+        // ...and swiping reaches them on the phone (#645).
+        //
+        // iOS only, and the swipe alone: long-press already lands on the
+        // `.contextMenu` above, so `rowSwipeAndMenuActions` would install a
+        // second menu competing with it. The macOS branch of `rowSwipeActions`
+        // installs its own `.contextMenu` too, which is the other half of the
+        // same reason this is guarded rather than applied to both platforms.
+        #if os(iOS)
+        .rowSwipeActions([
+            .edit(tint: Tokens.accentMeals) { editorTarget = .existing(item) },
+            .archive { archive(item) },
+            .delete {
+                pendingDelete = item
+                confirmingDelete = true
+            },
+        ])
+        #endif
     }
 
     private func pickGlyph(_ picked: Bool) -> some View {

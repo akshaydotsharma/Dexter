@@ -513,8 +513,11 @@ struct FoodItemEditorSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
+            // Text the user types, so it is set like the other things the user
+            // types in this form. Name, Brand and Barcode are all `.edBody`;
+            // this one alone sat a rung under them (#645).
             TextField(PlainFieldPlaceholder.title(Self.notesExample), text: $notes, axis: .vertical)
-                .font(.edFootnote)
+                .font(.edBody)
                 .foregroundStyle(Tokens.ink)
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
@@ -574,8 +577,11 @@ struct FoodItemEditorSheet: View {
 
             HStack(spacing: Space.sm) {
                 if case .existing = target {
+                    // `role: .destructive` is ignored by a custom ButtonStyle,
+                    // so this was grey until `.danger` existed to say it in the
+                    // type system (#645). The role stays for accessibility.
                     Button("Delete", role: .destructive) { confirmingDelete = true }
-                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                        .buttonStyle(EdButtonStyle(kind: .danger, size: .sm))
                 }
                 Spacer(minLength: Space.sm)
                 Button("Cancel") { dismiss() }

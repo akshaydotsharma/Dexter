@@ -100,9 +100,13 @@ struct MealBalanceBarRow: View {
             .minimumScaleFactor(0.8)
     }
 
+    /// Weight, not size, carries the step from the nutrient's name to its
+    /// reading. The two were one token apart only in colour (#645); this is the
+    /// pairing `MealDayCard`'s nutrient bar already uses, and keeping the point
+    /// size identical leaves the row's fixed columns untouched (#616).
     private var value: some View {
         Text(valueText)
-            .font(.edFootnote)
+            .font(.edFootnoteStrong)
             .monospacedDigit()
             .foregroundStyle(Tokens.ink)
             .lineLimit(1)

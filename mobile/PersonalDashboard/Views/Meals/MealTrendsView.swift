@@ -83,12 +83,15 @@ struct MealTrendsFilterBar: View {
                     bounds: Self.distantPast...Date()
                 )
             }
+            // The commit for the custom range. `.borderedProminent` was the one
+            // control in Meals drawn by the system rather than by the palette,
+            // so it arrived as a tinted capsule in a section built entirely from
+            // ink on paper (#645).
             Button("Apply") {
                 selection.period = .custom
                 showingCustom = false
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Tokens.accentMeals)
+            .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
         }
         .padding(Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)

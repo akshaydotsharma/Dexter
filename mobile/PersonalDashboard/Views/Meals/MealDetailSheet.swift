@@ -34,10 +34,10 @@ struct MealNumberField: View {
         HStack(spacing: Space.sm) {
             Text(label)
                 .font(labelFont)
-                .foregroundStyle(Tokens.inkSoft)
+                .foregroundStyle(Tokens.muted)
             Spacer(minLength: Space.sm)
             TextField("0", text: $text)
-                .font(labelFont)
+                .font(valueFont)
                 .multilineTextAlignment(.trailing)
                 .monospacedDigit()
                 .decimalKeyboard()
@@ -55,11 +55,29 @@ struct MealNumberField: View {
         .padding(.vertical, size == .large ? Space.xs : 2)
     }
 
-    /// The label and the field are set together, because they are one line of
-    /// one sentence: "Weight, 76, kg". A field a rung under its own label reads
-    /// as placeholder text.
+    /// The label sits a rung UNDER the value, not the other way round (#645).
+    ///
+    /// These two were previously one token, which is most of why the Meals
+    /// sheets read as undifferentiated: this row is reused by the meal editor,
+    /// the food-item editor, the targets sheet and the targets card, so every
+    /// numeric field in the section showed its name and its number at the same
+    /// size and weight.
+    ///
+    /// The step is made by dropping the LABEL rather than shrinking the value,
+    /// which is what the previous note here was protecting against: a field set
+    /// under its own label does read as placeholder text. The value keeps its
+    /// size and gains weight; the label gives up a rung and goes muted. The
+    /// sentence "Weight, 76, kg" still reads as one line, with the number as
+    /// the part being stated.
     private var labelFont: Font {
-        size == .large ? .edBodyMedium : .edFootnote
+        size == .large ? .edFootnote : .edCaption
+    }
+
+    /// The number is the content of the row, so it carries the weight. Same
+    /// point size as before at each step, so the fixed value and unit columns
+    /// this row depends on are unaffected (#616).
+    private var valueFont: Font {
+        size == .large ? .edBodyMedium : .edFootnoteStrong
     }
 }
 
@@ -627,7 +645,9 @@ struct MealDetailSheet: View {
                                 precision: precision
                             )
                         )
-                            .font(.edFootnote)
+                            // Same weight step as every other label/value pair
+                            // in the section (#645).
+                            .font(.edFootnoteStrong)
                             .foregroundStyle(Tokens.ink)
                             .monospacedDigit()
                     }
@@ -693,14 +713,25 @@ struct MealDetailSheet: View {
         }
     }
 
+    /// Delete leads, the reversible action trails.
+    ///
+    /// The two were the other way round, with Delete `.ghost` and a
+    /// `.foregroundStyle(Tokens.danger)` chained AFTER `.buttonStyle(...)` that
+    /// never took effect: `EdButtonStyle` applies its own `.foregroundStyle` to
+    /// the label inside `makeBody`, and the inner one wins. So the sheet's only
+    /// destructive control rendered as plain grey text (#645).
+    ///
+    /// Leading edge with a spring between is the rule the section now follows
+    /// everywhere a destructive action shares a row: it puts Delete as far as
+    /// the row allows from whatever commits, and it matches the footers in
+    /// `FoodItemEditorSheet` and `MealPlanEntrySheet`.
     private var actionsSection: some View {
         HStack(spacing: Space.sm) {
+            Button("Delete") { confirmingDelete = true }
+                .buttonStyle(EdButtonStyle(kind: .danger, size: .sm))
+            Spacer(minLength: Space.sm)
             Button("Repeat today") { repeatToday() }
                 .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-            Spacer(minLength: Space.sm)
-            Button("Delete") { confirmingDelete = true }
-                .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
-                .foregroundStyle(Tokens.danger)
         }
     }
 

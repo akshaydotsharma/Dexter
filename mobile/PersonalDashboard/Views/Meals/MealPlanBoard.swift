@@ -33,6 +33,8 @@ struct MealPlanBoard: View {
 
     var onAdd: (MealType) -> Void
     var onOpen: (LocalMealPlanEntry) -> Void
+    var onLogEntry: (LocalMealPlanEntry) -> Void
+    var onDeleteEntry: (LocalMealPlanEntry) -> Void
     /// Copy another day's plan onto this one. The offset is in days, so -1 is
     /// the day before and -7 is this day last week.
     var onCopyDay: (Int) -> Void
@@ -53,7 +55,9 @@ struct MealPlanBoard: View {
                     MealPlanTile(
                         slot: slot,
                         onAdd: { onAdd(slot.mealType) },
-                        onOpen: onOpen
+                        onOpen: onOpen,
+                        onLog: onLogEntry,
+                        onDelete: onDeleteEntry
                     )
                 }
             }

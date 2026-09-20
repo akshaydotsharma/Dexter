@@ -4,6 +4,17 @@ enum ButtonKind {
     case primary
     case secondary
     case ghost
+    /// Destructive. Tonal rather than filled: danger ink on a soft danger wash,
+    /// so it reads unmistakably as "this destroys something" without outranking
+    /// the `.primary` confirm it usually sits beside (#645).
+    ///
+    /// This kind exists because there was no way to state destructiveness in
+    /// the type system, and every call site invented its own. Two of those
+    /// inventions never worked at all: `role: .destructive` is ignored by a
+    /// custom `ButtonStyle`, and a `.foregroundStyle(Tokens.danger)` applied
+    /// OUTSIDE `.buttonStyle(...)` loses to the `.foregroundStyle(fg)` this
+    /// style already applies to the label. Both rendered plain grey.
+    case danger
 }
 
 enum ButtonSize {
@@ -22,6 +33,7 @@ struct EdButtonStyle: ButtonStyle {
             case .primary:   return (Tokens.paper, Tokens.ink, nil)
             case .secondary: return (Tokens.ink, Tokens.surface, Tokens.border)
             case .ghost:     return (Tokens.muted, .clear, nil)
+            case .danger:    return (Tokens.danger, Tokens.dangerSoft, nil)
             }
         }()
 
@@ -98,6 +110,7 @@ struct EdIconCircleButtonStyle: ButtonStyle {
             case .primary:   return (Tokens.paper, Tokens.ink, nil)
             case .secondary: return (Tokens.ink, Tokens.surface, Tokens.border)
             case .ghost:     return (Tokens.muted, .clear, nil)
+            case .danger:    return (Tokens.danger, Tokens.dangerSoft, nil)
             }
         }()
 

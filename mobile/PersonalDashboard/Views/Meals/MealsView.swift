@@ -189,6 +189,10 @@ struct MealsView: View {
     /// its states.
     @State private var showingTargets = false
 
+    /// A failed row action, shown as an alert rather than swallowed. A swipe
+    /// that appears to do nothing is worse than one that says why (#645).
+    @State private var rowActionError: String?
+
     /// The plan conversation (#599).
     ///
     /// Held HERE rather than inside `MealPlanView`, so switching to Trends and
@@ -286,6 +290,47 @@ struct MealsView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 #endif
+        }
+        .alert(
+            "That didn't work",
+            isPresented: Binding(
+                get: { rowActionError != nil },
+                set: { if !$0 { rowActionError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { rowActionError = nil }
+        } message: {
+            Text(rowActionError ?? "")
+        }
+    }
+
+    // MARK: - Row actions (#645)
+
+    /// Copy a logged meal onto today, from the row's swipe or long-press menu.
+    ///
+    /// The same call the detail sheet's "Repeat today" makes, so the two paths
+    /// cannot drift: `repeatMeal` keeps the dish, its name and its flags, and
+    /// deliberately drops the source, because the copy was not estimated.
+    private func repeatMeal(_ meal: LocalMeal) {
+        do {
+            try MealEstimationService.default().repeatMeal(meal)
+        } catch {
+            rowActionError = error.localizedDescription
+        }
+    }
+
+    /// Delete a logged meal outright.
+    ///
+    /// No confirmation, matching every other swipe-to-delete in the app (Tasks,
+    /// Notes, Lists, Finance, Trips): the swipe is itself the deliberate act,
+    /// and `rowSwipeActions` already fires the warning haptic on commit. The
+    /// detail sheet keeps its confirmation dialog, because a tap on a button
+    /// labelled "Delete" is a much cheaper thing to do by accident.
+    private func deleteMeal(_ meal: LocalMeal) {
+        do {
+            try MealService.default().deleteMeal(meal)
+        } catch {
+            rowActionError = error.localizedDescription
         }
     }
 
@@ -473,7 +518,9 @@ struct MealsView: View {
                     targets: MealTargets.inForce(on: selectedDay, among: allTargets),
                     isToday: isSelectedToday,
                     pulsedMealID: pulsedMealID,
-                    onOpenMeal: { openMeal = $0 }
+                    onOpenMeal: { openMeal = $0 },
+                    onRepeatMeal: repeatMeal,
+                    onDeleteMeal: deleteMeal
                 )
             }
         }

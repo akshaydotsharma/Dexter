@@ -434,11 +434,17 @@ struct MealTrendsPanel: View {
                     .font(.edCaption)
                     .monospacedDigit()
                     .foregroundStyle(Tokens.mutedSoft)
+                // The panel stated the same label/value relationship two ways:
+                // flat here, but `.eyebrow()` over `.edHeading` in `stat()` a
+                // few rows below. This is the flat one brought into line (#645).
+                // `minimumScaleFactor` is the guard the added weight needs,
+                // since this column sizes itself against a spring (#616).
                 Text("\(MealFormat.calories(slice.averageCalories)) kcal")
-                    .font(.edFootnote)
+                    .font(.edFootnoteStrong)
                     .monospacedDigit()
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
