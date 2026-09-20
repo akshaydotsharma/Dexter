@@ -203,6 +203,19 @@ struct MealComposer: View {
         trimmed.isEmpty && photos.isEmpty && !picks.isEmpty ? .logPicks : .estimate
     }
 
+    /// Whether the second way in is on screen.
+    ///
+    /// Idle and failed, yes: both are states where the card is still asking
+    /// what the meal was, and after a failed estimate the picker is a genuine
+    /// fallback. Estimating and preview, no. Removing a picked row stays
+    /// possible either way, because each tray row carries its own control.
+    private var showsBranch: Bool {
+        switch phase {
+        case .idle, .failed: return true
+        case .estimating, .preview: return false
+        }
+    }
+
     private var canSubmit: Bool {
         switch primaryAction {
         case .estimate: return canEstimate
@@ -286,13 +299,21 @@ struct MealComposer: View {
             // The branch, and the second path under it (#643). Everything
             // above this line is one way of answering "what did you eat"; the
             // button below it is the other.
-            orBranch
-                .frame(maxWidth: branchWidth)
-                .frame(maxWidth: .infinity, alignment: .center)
+            //
+            // It is a way IN, so it is only on screen while the card is still
+            // asking the question. Once an estimate is running or a preview is
+            // up, the card has one job — wait, or confirm — and a live fork in
+            // the middle of it is both noise and a tap target that would open a
+            // picker onto a meal already being written.
+            if showsBranch {
+                orBranch
+                    .frame(maxWidth: branchWidth)
+                    .frame(maxWidth: .infinity, alignment: .center)
 
-            findItemButton
-                .frame(maxWidth: branchWidth)
-                .frame(maxWidth: .infinity, alignment: .center)
+                findItemButton
+                    .frame(maxWidth: branchWidth)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
 
             // The tray sits under the button that fills it and above the
             // controls, because it IS input: it is the half of the meal that
@@ -300,14 +321,27 @@ struct MealComposer: View {
             // preview is up.
             if !picks.isEmpty { trayBlock }
 
-            // Centred: the options open in a popover now, so this row never
-            // changes height and the two controls can sit as a matched pair.
+            // The primary action, on the branch's measure (#643).
+            //
+            // Estimate used to be a small pill in the trailing corner while
+            // Find an item ran the full width of the card, which said by weight
+            // alone that searching was the main thing to do here. It is not:
+            // type and press Estimate is the path that has to stay fast. So the
+            // button fills whatever the meal type leaves, in the filled ink
+            // treatment, and is now the heaviest thing on the card.
+            //
+            // The row shares the branch's width and centre, so the card has two
+            // alignments (a full-width field, and a column under it) rather
+            // than three. The dropdown keeps a cap of its own because it is a
+            // choice most meals never make, and it must not read as a peer of
+            // the button beside it.
             HStack(alignment: .center, spacing: Space.sm) {
                 typeDropdown
-                    .frame(maxWidth: 240)
-                Spacer(minLength: Space.sm)
+                    .frame(maxWidth: 200)
                 estimateButton
             }
+            .frame(maxWidth: branchWidth)
+            .frame(maxWidth: .infinity, alignment: .center)
 
             switch phase {
             case .idle:
@@ -491,13 +525,13 @@ struct MealComposer: View {
                     .rotationEffect(.degrees(typePickerOpen ? 180 : 0))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // The metrics `EdButtonStyle` applies at `size: .sm`, which is what
-            // the Estimate button beside this one uses: 12 horizontal, 6
+            // The metrics `EdButtonStyle` applies at `size: .md`, which is what
+            // the Estimate button beside this one uses: 14 horizontal, 8
             // vertical (Design/Buttons.swift, `hpad` / `vpad`). `InlineDropdown`
             // pads `Space.md` (12) all round, which made this trigger read half
             // again as tall as the button it sits next to.
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -589,7 +623,9 @@ struct MealComposer: View {
         } label: {
             Text(primaryLabel)
         }
-        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+        // `.md` and full width, to match the height of the Find an item button
+        // above it and to take whatever the meal type does not (#643).
+        .buttonStyle(EdButtonStyle(kind: .primary, size: .md, fullWidth: true))
         .disabled(!canSubmit)
         .opacity(canSubmit ? 1 : 0.5)
     }
