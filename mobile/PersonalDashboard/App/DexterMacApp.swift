@@ -17,6 +17,17 @@ struct DexterMacApp: App {
     /// Drives the in-session cover recovery below (#428).
     @Environment(\.scenePhase) private var scenePhase
 
+    /// The app-level owner of the ONE `SpeechTranscriber` (#640).
+    ///
+    /// iOS creates it in `ContentView` and injects it there; the Mac creates it
+    /// here, and that difference is deliberate. `MacRootView` is per WINDOW, so
+    /// a `@State` on it would build a second view model — and therefore a second
+    /// transcriber — for every window the user opens, and two of them would each
+    /// install an audio tap on the same engine, which is the assertion #150 was
+    /// filed for. `@State` on the `App` is created once per process, which is
+    /// exactly the lifetime a single microphone owner needs.
+    @State private var voiceVM = VoiceCaptureViewModel()
+
     /// Forces the SwiftData store to bootstrap at process start, in DEBUG only.
     ///
     /// `SwiftDataStore.shared` is a `static let`, so it is lazy, and both the
@@ -68,6 +79,11 @@ struct DexterMacApp: App {
                 // including sheets, instead of 40-odd per-call-site modifiers.
                 // This file is macOS-only, so iOS cannot be affected.
                 .textFieldStyle(.plain)
+                // Share the single voice-capture view model — and so the single
+                // transcriber — with every surface in this window, the way
+                // `ContentView` does on iOS (#640). The dictation button in the
+                // meal composer and in the plan chat reads it from here.
+                .environment(voiceVM)
                 .modelContainer(SwiftDataStore.shared.container)
                 .frame(minWidth: 900, minHeight: 600)
                 // Trip cover repair sweep (#428). `.task` fires per WINDOW on
