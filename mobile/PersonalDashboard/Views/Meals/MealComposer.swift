@@ -36,10 +36,11 @@ enum MealDuplicateChoice: String, Identifiable {
 /// every time, so two logs of one pot disagree and a week's protein is the sum
 /// of the disagreement.
 ///
-/// So there are exactly two ways to log a meal, and they sit side by side:
-/// describe it in the field, or find it in `FoodItemPickerSheet`. Both can be
-/// used in the same meal. The tray is what has been added so far, and the
-/// primary button reads what is in front of it:
+/// So there are exactly two ways to log a meal, and since #643 the composer
+/// says so out loud: describe it in the field, or take the branch under it into
+/// `FoodItemPickerSheet`. The word between them is "or" and the rule around it
+/// is a fork, but both can still be used in the same meal. The tray is what has
+/// been added so far, and the primary button reads what is in front of it:
 ///
 /// 1. Text, no picks. "Estimate", exactly as it has always worked.
 /// 2. Picks, no text. "Log". No call of any kind, and no preview: there is
@@ -282,9 +283,21 @@ struct MealComposer: View {
                 MealPhotoStrip(photos: $photos, note: photoNote)
             }
 
-            // The tray sits between the input and the controls, because it IS
-            // input: it is the half of the meal that was picked rather than
-            // typed, and it stays editable while a preview is up.
+            // The branch, and the second path under it (#643). Everything
+            // above this line is one way of answering "what did you eat"; the
+            // button below it is the other.
+            orBranch
+                .frame(maxWidth: branchWidth)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            findItemButton
+                .frame(maxWidth: branchWidth)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            // The tray sits under the button that fills it and above the
+            // controls, because it IS input: it is the half of the meal that
+            // was picked rather than typed, and it stays editable while a
+            // preview is up.
             if !picks.isEmpty { trayBlock }
 
             // Centred: the options open in a popover now, so this row never
@@ -292,7 +305,6 @@ struct MealComposer: View {
             HStack(alignment: .center, spacing: Space.sm) {
                 typeDropdown
                     .frame(maxWidth: 240)
-                findItemButton
                 Spacer(minLength: Space.sm)
                 estimateButton
             }
@@ -587,31 +599,78 @@ struct MealComposer: View {
         return primaryAction == .logPicks ? "Log" : "Estimate"
     }
 
-    /// The other way to say what is in the meal, beside the type dropdown
-    /// rather than beside the description.
+    /// The fork between the two ways to say what the meal is (#643).
     ///
-    /// It is a choice about WHAT is in the meal, which is the same kind of
-    /// choice the type dropdown makes, and putting it next to the field would
-    /// read as a way of filling the field in.
+    /// A rule with the word in the middle, and the word is the whole point: it
+    /// says the thing above and the thing below are alternatives rather than
+    /// steps. "Or", not "and", because either one alone is a complete meal —
+    /// though nothing stops a user taking both, which is what path 3 in the
+    /// type note above is.
+    ///
+    /// It is drawn from the same two tokens every other separator on this
+    /// surface uses: a hairline in `Tokens.border`, and an eyebrow in the
+    /// softest ink the palette has. Anything louder would read as a heading and
+    /// split one card into two.
+    private var orBranch: some View {
+        HStack(spacing: Space.sm) {
+            branchRule
+            Text("or").eyebrow(Tokens.mutedSoft)
+            branchRule
+        }
+        // One element, read once. Without this VoiceOver stops on two decorative
+        // rules on the way past a two-letter word.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("or")
+    }
+
+    /// How wide the branch is allowed to get.
+    ///
+    /// On a phone the card is narrower than this, so the rule and the button
+    /// fill it exactly as the field above them does. A Mac window is not: at
+    /// full width the button becomes a 1,400pt bar with two words floating in
+    /// the middle of it, which reads as an empty toolbar rather than as
+    /// something to press.
+    private let branchWidth: CGFloat = 420
+
+    private var branchRule: some View {
+        Rectangle()
+            .fill(Tokens.border)
+            .frame(height: 0.5)
+            .frame(maxWidth: .infinity)
+    }
+
+    /// The second path, under the branch rather than in the control row (#643).
+    ///
+    /// It used to sit beside the meal-type dropdown, on the grounds that both
+    /// are choices about WHAT is in the meal. That reasoning was right about the
+    /// button and wrong about the row: the control row is where the meal is
+    /// SETTLED — pick a type, press Estimate — so a third control in it read as
+    /// a modifier on the description rather than as the alternative to writing
+    /// one. Full width under an "or" states what it is in the one way nobody has
+    /// to work out.
     ///
     /// It says "find", not "saved items". The sheet behind it searches the
     /// user's own items AND the public food database in one field, and calling
     /// it a saved list promised something to maintain (#625). The count is left
-    /// off deliberately: the tray sits directly above this row whenever it has
-    /// anything in it, so a number on the button would state twice what is
-    /// already on screen.
+    /// off deliberately: the tray sits directly below this button whenever it
+    /// has anything in it, so a number here would state twice what is already
+    /// on screen.
     private var findItemButton: some View {
         Button {
             showingPicker = true
         } label: {
-            HStack(spacing: Space.xs) {
+            HStack(spacing: Space.sm) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
+                    // Sized off the ramp rather than off a literal, so the glyph
+                    // keeps its proportion to the label on a Mac, where the body
+                    // size is three points smaller than on the phone.
+                    .font(.system(size: EdMetrics.bodyPointSize - 3, weight: .semibold))
                 Text("Find an item")
                     .lineLimit(1)
             }
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+        .buttonStyle(EdButtonStyle(kind: .secondary, size: .md, fullWidth: true))
         .accessibilityLabel(picks.isEmpty
                             ? "Find an item to add"
                             : "Find an item to add, \(picks.count) added")
