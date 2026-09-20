@@ -27,9 +27,9 @@ struct StatementImportResult: Sendable {
     /// Spend lines that failed to insert (bad amount, FX failure, persistence
     /// error). Non-fatal — the batch continues past each one.
     let failed: Int
-    /// True when the model likely ran out of output tokens on a very large
-    /// statement, so the tail rows never came through. Drives a "some
-    /// transactions may be missing" note in the summary.
+    /// True when the model ran out of output tokens on a page range, AND
+    /// re-reading that range as halves did not rescue it (#637), so its tail
+    /// rows never came through. Drives the truncation warning in the summary.
     let possiblyTruncated: Bool
 
     /// UUIDs of the expenses actually inserted this run (kept for parity with
@@ -60,6 +60,20 @@ struct StatementImportResult: Sendable {
     /// everything, or when there is nothing left to read.
     var resumePoint: StatementResumePoint? = nil
 
+    /// The page ranges that stayed truncated after the self-healing re-split
+    /// (#637), so the warning can name them: "pages 7 to 9 were only partly
+    /// read". Empty when nothing truncated, and also empty on the photo
+    /// multi-expense path, which has no pages; the warning falls back to the
+    /// unnamed wording there.
+    var truncatedPageRanges: [PDFPageRange] = []
+
+    /// True when this run read the whole file: nothing stopped it early and
+    /// no page range survived the re-split still truncated. The FOUR end
+    /// states are complete, stopped, interrupted, and truncated; this
+    /// separates the first from the other three, and `summaryLine` keeps all
+    /// four apart.
+    var isComplete: Bool { incompleteReason == nil && !possiblyTruncated }
+
     var totalParsed: Int {
         imported + skippedDuplicates + ignoredNonSpend + deposits + failed
     }
@@ -69,10 +83,11 @@ struct StatementImportResult: Sendable {
     ///   "Imported 42 (including 3 credits) · Skipped 8 duplicates · Ignored 5 payments"
     ///   "Imported 26 (including 8 credits) · Ignored 1 payment · Skipped 1 deposit (SGD 14,840.00), income isn't tracked yet"
     ///   "Imported 12"
-    ///   "Nothing to import — no transactions found."
+    ///   "Nothing to import. No transactions found."
+    /// No em dash in any string this builds (project no-em-dash rule, #637).
     var summaryLine: String {
         guard totalParsed > 0 else {
-            return "Nothing to import — no transactions found on this statement."
+            return "Nothing to import. No transactions were found on this statement."
         }
         var head = "Imported \(imported)"
         if refunds > 0 {
@@ -135,18 +150,54 @@ struct StatementImportResult: Sendable {
 
         guard possiblyTruncated else { return counts }
 
-        // Chunking makes this essentially unreachable, but if a single chunk
-        // still ran out of output budget the import is genuinely incomplete —
-        // make that unmissable (leading warning, not a trailing footnote) with
-        // the count that DID land, so the user knows to re-import.
+        // The fourth end state (#637). Chunking plus the re-split make this
+        // close to unreachable: the range was read, hit the output ceiling,
+        // was halved and re-read, and STILL ran out of budget on a single
+        // page. When it does happen the import is genuinely incomplete, so
+        // make it unmissable (leading warning, not a trailing footnote), name
+        // the pages so the user knows where to look, and give the count that
+        // DID land. No em dash in these user-facing strings (project
+        // no-em-dash rule).
+        let which = Self.truncatedPagesSentence(truncatedPageRanges)
         return """
-        ⚠️ Incomplete import — some transactions may be missing
+        ⚠️ Incomplete import
 
         \(counts)
 
-        Part of this statement was too long to read in one pass. Re-import the \
-        statement to try again, or add any missing transactions manually.
+        \(which) Re-import the statement to try again, or add any missing \
+        transactions manually.
         """
+    }
+
+    /// The sentence that names what was lost. Reads "Pages 7 to 9 were only
+    /// partly read, so some transactions from them may be missing." (#637).
+    ///
+    /// Falls back to the unnamed wording when no range is known, which is the
+    /// photo multi-expense path (an image has no pages) and any older record
+    /// that predates the ranges.
+    static func truncatedPagesSentence(_ ranges: [PDFPageRange]) -> String {
+        guard !ranges.isEmpty else {
+            return "Part of this statement was too long to read in one pass,"
+                + " so some transactions may be missing."
+        }
+        let labels = ranges.map(\.label)
+        let joined: String
+        switch labels.count {
+        case 1:
+            joined = labels[0]
+        case 2:
+            joined = "\(labels[0]) and \(labels[1])"
+        default:
+            joined = labels.dropLast().joined(separator: ", ")
+                + ", and \(labels[labels.count - 1])"
+        }
+        // The range phrase starts the sentence, so lift its first letter.
+        let subject = joined.prefix(1).uppercased() + joined.dropFirst()
+        // One single page reads "Page 7 was"; anything wider reads "were".
+        let singlePage = ranges.count == 1 && ranges[0].pageCount == 1
+        let verb = singlePage ? "was" : "were"
+        return "\(subject) \(verb) only partly read,"
+            + " so some transactions may be missing."
     }
 
     /// Format an SGD magnitude with grouping and two decimals ("16,559.11").
@@ -255,7 +306,8 @@ struct StatementImporter {
             possiblyTruncated: extraction.possiblyTruncated,
             trip: trip,
             incompleteReason: extraction.stopReason,
-            resumePoint: extraction.resumePoint
+            resumePoint: extraction.resumePoint,
+            truncatedPageRanges: extraction.truncatedPageRanges
         )
     }
 
@@ -287,7 +339,8 @@ struct StatementImporter {
         possiblyTruncated: Bool,
         trip: LocalTrip? = nil,
         incompleteReason: StatementExtraction.StopReason? = nil,
-        resumePoint: StatementResumePoint? = nil
+        resumePoint: StatementResumePoint? = nil,
+        truncatedPageRanges: [PDFPageRange] = []
     ) async -> StatementImportResult {
         var imported = 0
         var refunds = 0
@@ -603,7 +656,8 @@ struct StatementImporter {
             deposits: deposits,
             depositsTotalSGD: depositsTotalSGD,
             incompleteReason: incompleteReason,
-            resumePoint: resumePoint
+            resumePoint: resumePoint,
+            truncatedPageRanges: truncatedPageRanges
         )
     }
 

@@ -132,7 +132,11 @@ extension AnthropicClient {
                 "text": .string(Self.expensesFromPhotoPrompt)
             ])
         ]
-        let (lines, _, _) = try await runStatementExtraction(content: content, extraHeaders: [:])
+        let (lines, _, _) = try await runStatementExtraction(
+            content: content,
+            extraHeaders: [:],
+            logPath: "photo-expenses"
+        )
         return lines
     }
 

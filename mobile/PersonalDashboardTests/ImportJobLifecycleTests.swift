@@ -30,7 +30,7 @@ final class ImportJobLifecycleTests: XCTestCase {
     /// once they have read it.
     func testFinishedJobStaysUntilItIsAcknowledged() {
         let center = makeCenter()
-        let (id, _) = center.begin(kind: .statement, scope: .finance, overrideLabel: "Importing Citi.pdf…")
+        let (id, _) = center.begin(kind: .statement, scope: .finance, subject: "Citi.pdf")
 
         center.finish(id, outcome: .summary("Imported 42"))
 
@@ -142,17 +142,17 @@ final class ImportJobLifecycleTests: XCTestCase {
         XCTAssertTrue(token.isCancelled)
     }
 
-    /// The label loses its work-in-progress ellipsis once the run is over, so a
-    /// finished row does not keep claiming to be busy.
+    /// The label follows the outcome once the run is over, so a finished row
+    /// does not keep claiming to be busy (#637).
     func testFinishedRowStopsReadingAsInProgress() {
         let center = makeCenter()
-        let (id, _) = center.begin(kind: .statement, scope: .finance, overrideLabel: "Importing Citi.pdf…")
+        let (id, _) = center.begin(kind: .statement, scope: .finance, subject: "Citi.pdf")
 
         XCTAssertEqual(center.jobs(in: .finance).first?.displayLabel, "Importing Citi.pdf…")
 
         center.finish(id, outcome: .summary("Imported 42"))
 
-        XCTAssertEqual(center.jobs(in: .finance).first?.displayLabel, "Importing Citi.pdf")
+        XCTAssertEqual(center.jobs(in: .finance).first?.displayLabel, "Imported Citi.pdf")
     }
 
     // MARK: - Keeping the run alive (#635)

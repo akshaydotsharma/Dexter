@@ -94,6 +94,11 @@ struct TripDetailView: View {
     /// (#635). Same shape as Finance's: held here because `openFinishedJob`
     /// acknowledges the job as it raises the alert.
     @State private var statementResumePlan: ImportJob.ResumePlan?
+    /// Whether the run behind `statementImportSummary` read the whole file,
+    /// which is what the alert TITLE reports (#637). Not inferred from
+    /// `statementResumePlan`: a run left truncated after the re-split is
+    /// incomplete and yet has nothing to resume.
+    @State private var statementSummaryIsComplete = true
     /// Hard-failure alert when an upload couldn't be processed at all.
     @State private var expenseCaptureError: String?
 
@@ -200,6 +205,10 @@ struct TripDetailView: View {
         switch job.outcome {
         case .summary(let text):
             statementImportSummary = text
+            statementSummaryIsComplete = true
+        case .incomplete(let text):
+            statementImportSummary = text
+            statementSummaryIsComplete = false
         case .failure(let text):
             expenseCaptureError = text
         case .none:
@@ -212,9 +221,10 @@ struct TripDetailView: View {
         }
     }
 
-    /// A run that stopped or was interrupted is not a complete import (#635).
+    /// A run that stopped, was interrupted, or left a page range truncated is
+    /// not a complete import (#635, #637).
     private var statementSummaryTitle: String {
-        statementResumePlan == nil ? "Import complete" : "Import incomplete"
+        statementSummaryIsComplete ? "Import complete" : "Import incomplete"
     }
 
     /// Re-runs only the chunks the last attempt did not read (#635).
@@ -454,6 +464,7 @@ struct TripDetailView: View {
                     if !$0 {
                         statementImportSummary = nil
                         statementResumePlan = nil
+                        statementSummaryIsComplete = true
                     }
                 }
             ),
@@ -463,6 +474,7 @@ struct TripDetailView: View {
             Button("OK", role: .cancel) {
                 statementImportSummary = nil
                 statementResumePlan = nil
+                statementSummaryIsComplete = true
             }
         } message: { summary in
             Text(summary)
@@ -992,6 +1004,8 @@ struct TripDetailView: View {
                 trip: trip
             )
             statementImportSummary = tripImportSummary(result.summaryLine)
+            // One photo is one non-chunked request, so this never ends short.
+            statementSummaryIsComplete = true
         }
     }
 
@@ -1014,13 +1028,15 @@ struct TripDetailView: View {
         // cleared by `openFinishedJob` once the user has read the outcome, so
         // leaving the trip mid-import and coming back shows the run as it
         // stands rather than losing it with the view.
-        let bannerLabel = fileName
+        // The FILE NAME only. `ImportJob` builds the wording for every phase,
+        // so the row stops saying "Importing" the moment the run ends (#637).
+        let subject = fileName
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-            .map { resumingFrom == nil ? "Importing \($0)…" : "Resuming \($0)…" }
         let (jobID, token) = ImportJobCenter.shared.begin(
             kind: .statement,
             scope: .trip(trip.clientUUID),
-            overrideLabel: bannerLabel
+            subject: subject,
+            isResuming: resumingFrom != nil
         )
 
         func plan(for point: StatementResumePoint) -> ImportJob.ResumePlan {
@@ -1040,7 +1056,13 @@ struct TripDetailView: View {
             )
             ImportJobCenter.shared.finish(
                 jobID,
-                outcome: .summary(tripImportSummary(result.summaryLine)),
+                // A run that stopped, was interrupted, or left a page range
+                // truncated is not a complete import, and the banner says so
+                // (#637).
+                outcome: .summary(
+                    tripImportSummary(result.summaryLine),
+                    complete: result.isComplete
+                ),
                 resume: result.resumePoint.map(plan)
             )
         } catch {

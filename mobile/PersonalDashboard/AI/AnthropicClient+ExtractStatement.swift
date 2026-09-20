@@ -283,7 +283,19 @@ struct StatementExtraction: Sendable {
     let meta: ExtractedStatementMeta
     /// A chunk hit the model's output-token ceiling, so its tail rows never
     /// came through. ORed across chunks.
+    ///
+    /// Since #637 this is only ever true when the self-healing re-split ALSO
+    /// failed: a truncated chunk is re-read as halves of its own page range
+    /// first, and only a range that is down to a single page (or has run out
+    /// of recursion depth) and still truncates reaches the user as a warning.
     let possiblyTruncated: Bool
+    /// The page ranges that stayed truncated after the re-split, in the
+    /// original statement's 1-based page numbers (#637). Lets the summary say
+    /// "pages 7 to 9 were only partly read" rather than "some transactions may
+    /// be missing". Empty on a clean run, and `possiblyTruncated` is exactly
+    /// `!truncatedPageRanges.isEmpty` for every run that came through the
+    /// chunk loop.
+    let truncatedPageRanges: [PDFPageRange]
     /// Why the run ended before the last chunk, or nil when it read
     /// everything.
     let stopReason: StopReason?
@@ -380,13 +392,28 @@ extension AnthropicClient {
         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
         cancellation: ImportCancellationToken? = nil
     ) async throws -> StatementExtraction {
-        try await Self.runStatementChunks(
-            chunks: PDFChunker.split(pdfData),
+        let chunks = PDFChunker.split(pdfData)
+        return try await Self.runStatementChunks(
+            chunks: chunks,
             wholePDF: pdfData,
             resumingFrom: resumingFrom,
             onProgress: onProgress,
             cancellation: cancellation,
-            extractChunk: { try await self.extractStatementChunk(pdfData: $0) }
+            extractChunk: { chunk in
+                // The log path names the chunk AND its pages, so one console
+                // line answers "which part of the file was this?" on its own
+                // (#637). A re-split half falls inside its parent chunk, so it
+                // reports that chunk's number with its own narrower range.
+                let owner = chunks.firstIndex {
+                    $0.pages.first <= chunk.pages.first && chunk.pages.last <= $0.pages.last
+                }
+                let which = owner.map { "chunk \($0 + 1) of \(chunks.count)" }
+                    ?? "chunk ? of \(chunks.count)"
+                return try await self.extractStatementChunk(
+                    pdfData: chunk.data,
+                    logPath: "statement \(which) \(chunk.pages.label)"
+                )
+            }
         )
     }
 
@@ -395,23 +422,38 @@ extension AnthropicClient {
     /// run returns lives here; the instance method above only supplies the real
     /// per-chunk Anthropic call.
     static func runStatementChunks(
-        chunks: [Data],
+        chunks: [PDFChunk],
         wholePDF: Data,
         resumingFrom: StatementResumePoint? = nil,
         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
         cancellation: ImportCancellationToken? = nil,
-        extractChunk: (Data) async throws -> StatementChunkResult
+        splitChunk: @Sendable (PDFChunk) -> [PDFChunk]? = { PDFChunker.halves(of: $0) },
+        maxResplitDepth: Int = defaultMaxResplitDepth,
+        extractChunk: (PDFChunk) async throws -> StatementChunkResult
     ) async throws -> StatementExtraction {
         // Single chunk (small or unsplittable statement): identical behaviour
         // to the pre-#202 path — one call, same request bytes. A failure here
-        // still throws, because there is no earlier chunk to salvage.
+        // still throws, because there is no earlier chunk to salvage. A
+        // truncation still re-splits (#637): a one-chunk statement is exactly
+        // the case the old code lost the most rows on.
         if chunks.count <= 1 {
-            let chunk = try await extractChunk(chunks.first ?? wholePDF)
+            let only = chunks.first ?? PDFChunk(
+                data: wholePDF,
+                pages: PDFPageRange(first: 1, last: 1)
+            )
+            let read = try await readHealingTruncation(
+                only,
+                depth: 0,
+                maxDepth: maxResplitDepth,
+                splitChunk: splitChunk,
+                extractChunk: extractChunk
+            )
             await onProgress?(1, 1)
             return StatementExtraction(
-                lines: chunk.lines,
-                meta: chunk.meta,
-                possiblyTruncated: chunk.possiblyTruncated,
+                lines: read.lines,
+                meta: read.meta,
+                possiblyTruncated: !read.truncatedRanges.isEmpty,
+                truncatedPageRanges: read.truncatedRanges,
                 stopReason: nil,
                 chunksCompleted: 1,
                 chunksTotal: 1
@@ -425,7 +467,7 @@ extension AnthropicClient {
         var mergedMeta: ExtractedStatementMeta? = resumingFrom.flatMap {
             Self.metaHasContent($0.meta) ? $0.meta : nil
         }
-        var anyTruncated = false
+        var truncatedRanges: [PDFPageRange] = []
         var stopReason: StatementExtraction.StopReason?
         var completed = startIndex
 
@@ -437,9 +479,15 @@ extension AnthropicClient {
                 break
             }
 
-            let chunk: StatementChunkResult
+            let chunk: ChunkRead
             do {
-                chunk = try await extractChunk(chunks[index])
+                chunk = try await readHealingTruncation(
+                    chunks[index],
+                    depth: 0,
+                    maxDepth: maxResplitDepth,
+                    splitChunk: splitChunk,
+                    extractChunk: extractChunk
+                )
             } catch {
                 // Nothing read this run: there is nothing to keep, and a silent
                 // "imported 0" would hide a real, actionable error (a bad key,
@@ -448,14 +496,15 @@ extension AnthropicClient {
                 // Otherwise keep every chunk already read and report WHY the
                 // rest is missing. Re-importing is idempotent (`ExpenseDedupe`),
                 // so these rows cost nothing on a later full run.
-                NSLog("extractStatement: chunk %d of %d failed, keeping %d lines: %@",
-                      index + 1, chunks.count, mergedLines.count, error.localizedDescription)
+                NSLog("extractStatement: chunk %d of %d (%@) failed, keeping %d lines: %@",
+                      index + 1, chunks.count, chunks[index].pages.label,
+                      mergedLines.count, error.localizedDescription)
                 stopReason = .interrupted
                 break
             }
 
             mergedLines.append(contentsOf: chunk.lines)
-            anyTruncated = anyTruncated || chunk.possiblyTruncated
+            truncatedRanges.append(contentsOf: chunk.truncatedRanges)
             // Take the header from the FIRST chunk that carries any readable
             // field (the statement header lives on page 1). Once found, keep it
             // — a later page must never overwrite it with an invented header.
@@ -472,11 +521,99 @@ extension AnthropicClient {
         return StatementExtraction(
             lines: mergedLines,
             meta: finalMeta,
-            possiblyTruncated: anyTruncated,
+            possiblyTruncated: !truncatedRanges.isEmpty,
+            truncatedPageRanges: truncatedRanges,
             stopReason: stopReason,
             chunksCompleted: completed,
             chunksTotal: chunks.count
         )
+    }
+
+    /// How many times a truncated range may be halved before the warning
+    /// stands (#637). Three levels take a default 3-page chunk to single
+    /// pages twice over, so the cap is a guard against a pathological PDF
+    /// rather than a limit anyone should reach. It also bounds the worst case
+    /// cost: a chunk can cost at most `2^depth` extra calls.
+    static let defaultMaxResplitDepth = 3
+
+    /// What reading ONE chunk produced, after any self-healing re-split.
+    struct ChunkRead {
+        let lines: [ExtractedStatementLine]
+        let meta: ExtractedStatementMeta
+        /// Page ranges that were STILL truncated when the recursion stopped.
+        /// Empty means every row came through.
+        let truncatedRanges: [PDFPageRange]
+    }
+
+    /// Read one chunk, and when the model runs out of output budget on it,
+    /// read its two halves instead (#637).
+    ///
+    /// The old behaviour accepted the partial array: `linesArray` trimmed the
+    /// cut-off JSON back to its last complete element, so the chunk kept its
+    /// first rows and dropped its tail, silently. Halving the page range gives
+    /// each half the WHOLE output budget, which is nearly always enough.
+    ///
+    /// The truncated attempt's rows are DISCARDED, never merged with the
+    /// re-read: the halves cover the same pages, so keeping both would double
+    /// every row the partial read did manage. (`ExpenseDedupe` would collapse
+    /// most of them later, but "most" is not a property worth relying on.)
+    ///
+    /// Recursion stops on three conditions, and each one falls back to today's
+    /// warning for that range only: the depth cap is reached, the range is a
+    /// single page, or the bytes cannot be re-split.
+    ///
+    /// A half that THROWS propagates. The caller treats that as `.interrupted`
+    /// and offers Resume, which re-reads the whole chunk from scratch. That is
+    /// deliberate: keeping one good half and resuming from the next chunk would
+    /// leave the other half's pages unread with nothing recording the gap.
+    static func readHealingTruncation(
+        _ chunk: PDFChunk,
+        depth: Int,
+        maxDepth: Int,
+        splitChunk: @Sendable (PDFChunk) -> [PDFChunk]?,
+        extractChunk: (PDFChunk) async throws -> StatementChunkResult
+    ) async throws -> ChunkRead {
+        let result = try await extractChunk(chunk)
+        guard result.possiblyTruncated else {
+            return ChunkRead(lines: result.lines, meta: result.meta, truncatedRanges: [])
+        }
+
+        guard depth < maxDepth, let halves = splitChunk(chunk), halves.count > 1 else {
+            NSLog("extractStatement: %@ truncated and cannot be split further (depth %d), keeping %d partial lines",
+                  chunk.pages.label, depth, result.lines.count)
+            // Nothing left to try: keep the partial rows, exactly as before
+            // #637, and name the range so the summary can say which pages.
+            return ChunkRead(
+                lines: result.lines,
+                meta: result.meta,
+                truncatedRanges: [chunk.pages]
+            )
+        }
+
+        NSLog("extractStatement: %@ hit max_tokens, re-reading as %d halves (depth %d)",
+              chunk.pages.label, halves.count, depth + 1)
+
+        var lines: [ExtractedStatementLine] = []
+        // The truncated attempt still parsed the header (it is emitted FIRST,
+        // ahead of the lines array), so it is a valid fallback if no half
+        // reads one.
+        var meta = result.meta
+        var ranges: [PDFPageRange] = []
+        for half in halves {
+            let read = try await readHealingTruncation(
+                half,
+                depth: depth + 1,
+                maxDepth: maxDepth,
+                splitChunk: splitChunk,
+                extractChunk: extractChunk
+            )
+            lines.append(contentsOf: read.lines)
+            ranges.append(contentsOf: read.truncatedRanges)
+            if !Self.metaHasContent(meta), Self.metaHasContent(read.meta) {
+                meta = read.meta
+            }
+        }
+        return ChunkRead(lines: lines, meta: meta, truncatedRanges: ranges)
     }
 
     /// True when a parsed header carries at least one readable field, so the
@@ -498,7 +635,16 @@ extension AnthropicClient {
     /// whether the model likely ran out of output tokens (stop_reason ==
     /// "max_tokens"). The header sits at the FRONT of the emitted object, so it
     /// survives even when the trailing `lines` array is truncated.
-    func extractStatementChunk(pdfData: Data) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
+    ///
+    /// `logPath` names this chunk in the console line the call prints (#637),
+    /// e.g. "statement pages 7 to 9". It is the whole of what makes a future
+    /// truncation diagnosable without a rebuild: the line carries the page
+    /// range, the billed token counts, the `stop_reason`, and how many rows
+    /// the chunk produced.
+    func extractStatementChunk(
+        pdfData: Data,
+        logPath: String = "statement chunk"
+    ) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
         let base64 = pdfData.base64EncodedString()
         let content: [AnthropicJSONValue] = [
             .object([
@@ -516,7 +662,8 @@ extension AnthropicClient {
         ]
         return try await runStatementExtraction(
             content: content,
-            extraHeaders: ["anthropic-beta": "pdfs-2024-09-25"]
+            extraHeaders: ["anthropic-beta": "pdfs-2024-09-25"],
+            logPath: logPath
         )
     }
 
@@ -526,9 +673,15 @@ extension AnthropicClient {
     /// (`extractExpenses(imageData:mediaType:)`, #247) can reuse the exact same
     /// object-wrapper parsing, bare-array fallback, truncated-array recovery,
     /// 120s timeout, and lenient per-line decode. Behaviour is unchanged.
+    ///
+    /// `logPath` labels the one console line this call prints (#637). Before
+    /// that ticket this was the ONLY extraction path in `AI/` that never
+    /// called `logUsage`, unlike `send` and `stream`, so a statement that lost
+    /// rows to the output ceiling left nothing behind to diagnose it with.
     func runStatementExtraction(
         content: [AnthropicJSONValue],
-        extraHeaders: [String: String]
+        extraHeaders: [String: String],
+        logPath: String = "statement"
     ) async throws -> (lines: [ExtractedStatementLine], meta: ExtractedStatementMeta, possiblyTruncated: Bool) {
         guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
             throw StatementExtractionError.notConfigured
@@ -634,6 +787,19 @@ extension AnthropicClient {
         // recovers the well-formed prefix, so we return what parsed plus the
         // truncation flag.
         let truncated = decoded.stop_reason == "max_tokens"
+
+        // Two lines, one call: the shared usage counters (so output_tokens can
+        // be read against the ceiling) and the two facts only this path knows,
+        // the stop reason and how many rows the chunk actually produced (#637).
+        // Counters only, no prompt text and no key, same as every other
+        // `logUsage` site.
+        Self.logUsage(decoded.usage, path: logPath)
+        NSLog("[anthropic] %@ stop_reason=%@ lines=%d max_tokens=%d",
+              logPath,
+              decoded.stop_reason ?? "nil",
+              lines.count,
+              Self.statementMaxTokens)
+
         return (lines, meta, truncated)
     }
 

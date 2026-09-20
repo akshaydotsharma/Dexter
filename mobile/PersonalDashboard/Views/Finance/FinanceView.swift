@@ -130,6 +130,12 @@ struct FinanceView: View {
     /// `openFinishedJob` acknowledges the job (removing it) at the same moment
     /// it raises the alert.
     @State private var statementResumePlan: ImportJob.ResumePlan?
+    /// Whether the run behind `statementImportSummary` read the whole file,
+    /// which is what the alert TITLE reports (#637). Taken off the job's
+    /// outcome rather than inferred from `statementResumePlan`: a run that
+    /// left a page range truncated is incomplete and yet has nothing to
+    /// resume, so the resume plan is not the same question.
+    @State private var statementSummaryIsComplete = true
 
     /// Surfaced to the user when extraction fails with no usable receipt
     /// to attach (e.g. file save failed). Successful saves with failed
@@ -510,6 +516,8 @@ struct FinanceView: View {
                 possiblyTruncated: false
             )
             statementImportSummary = result.summaryLine
+            // One photo is one non-chunked request, so this never ends short.
+            statementSummaryIsComplete = true
         }
     }
 
@@ -601,9 +609,10 @@ struct FinanceView: View {
         // list stays interactive and multiple imports can queue up. When we
         // know the picked file name, label the row "Importing <name>…" so it's
         // clear which statement is being processed (#189).
-        let bannerLabel = fileName
+        // The FILE NAME only. `ImportJob` builds the wording for every phase,
+        // so the row stops saying "Importing" the moment the run ends (#637).
+        let subject = fileName
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-            .map { resumingFrom == nil ? "Importing \($0)…" : "Resuming \($0)…" }
         // Registered on `ImportJobCenter`, NOT on this view (#498). A statement
         // is read in sequential 3-page chunks, so a long one runs for minutes;
         // the user can leave Finance and come back to find it still going, and a
@@ -613,7 +622,8 @@ struct FinanceView: View {
         let (jobID, token) = ImportJobCenter.shared.begin(
             kind: .statement,
             scope: .finance,
-            overrideLabel: bannerLabel
+            subject: subject,
+            isResuming: resumingFrom != nil
         )
 
         func plan(for point: StatementResumePoint) -> ImportJob.ResumePlan {
@@ -632,7 +642,10 @@ struct FinanceView: View {
             )
             ImportJobCenter.shared.finish(
                 jobID,
-                outcome: .summary(result.summaryLine),
+                // A run that stopped, was interrupted, or left a page range
+                // truncated is not a complete import, and the banner says so
+                // (#637).
+                outcome: .summary(result.summaryLine, complete: result.isComplete),
                 resume: result.resumePoint.map(plan)
             )
         } catch {
@@ -659,6 +672,10 @@ struct FinanceView: View {
         switch job.outcome {
         case .summary(let text):
             statementImportSummary = text
+            statementSummaryIsComplete = true
+        case .incomplete(let text):
+            statementImportSummary = text
+            statementSummaryIsComplete = false
         case .failure(let text):
             captureErrorMessage = text
         case .none:
@@ -675,7 +692,7 @@ struct FinanceView: View {
     /// A run that stopped or was interrupted is not a complete import, and the
     /// alert title is the first thing read (#635).
     private var statementSummaryTitle: String {
-        statementResumePlan == nil ? "Import complete" : "Import incomplete"
+        statementSummaryIsComplete ? "Import complete" : "Import incomplete"
     }
 
     /// Offered only when there are chunks left to read. Re-runs just those,
@@ -702,6 +719,7 @@ struct FinanceView: View {
     private func clearStatementAlert() {
         statementImportSummary = nil
         statementResumePlan = nil
+        statementSummaryIsComplete = true
     }
 
     private var statementSummaryBinding: Binding<Bool> {

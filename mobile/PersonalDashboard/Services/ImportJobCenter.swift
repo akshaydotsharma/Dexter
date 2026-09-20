@@ -48,19 +48,55 @@ struct ImportJob: Identifiable, Equatable {
     }
 
     /// How the run ended. `nil` while it is still going.
+    ///
+    /// Three finished cases, because the banner label follows the outcome
+    /// (#637) and "read the whole file" and "read part of the file" are not
+    /// the same result. `incomplete` covers every way a run can finish short:
+    /// the user stopped it, a chunk died, or a page range stayed truncated
+    /// after the re-split. Which of those it was is in the summary text
+    /// itself; the banner only needs the three-way split.
     enum Outcome: Equatable {
         /// `StatementImportResult.summaryLine`, or the receipt equivalent.
         case summary(String)
+        /// The run finished, carrying a summary, but did not read everything.
+        case incomplete(String)
         case failure(String)
+
+        /// Pick the flavour from whether the run read the whole file. Lets a
+        /// call site write `.summary(text, complete: result.isComplete)`
+        /// rather than branching at each of the two import screens.
+        static func summary(_ text: String, complete: Bool) -> Outcome {
+            complete ? .summary(text) : .incomplete(text)
+        }
+
+        /// The text to show, whichever flavour this is.
+        var message: String {
+            switch self {
+            case .summary(let text), .incomplete(let text), .failure(let text):
+                return text
+            }
+        }
     }
 
     let id: UUID
     let kind: Kind
     let scope: Scope
 
-    /// Per-instance label that overrides `kind.label`, e.g. "Importing
-    /// Citi_May2026.pdf…" (#189). nil falls back to the kind's generic copy.
-    let overrideLabel: String?
+    /// What is being read, e.g. "Citi_May2026.pdf" (#189). nil falls back to
+    /// the kind's generic copy.
+    ///
+    /// The FILE NAME, not a finished sentence (#637). The two import screens
+    /// used to hand in a built label ("Importing Citi_May2026.pdf…"), which is
+    /// why a finished job still read "Importing" beside a green tick: the
+    /// label was fixed at the start and nothing could revise it. Holding the
+    /// subject instead lets `displayLabel` below build every phase from the
+    /// job's own state, in one place.
+    let subject: String?
+
+    /// True when this run is finishing a previous one rather than starting
+    /// fresh, which is the only thing the running label needs to say
+    /// differently ("Resuming" rather than "Importing", #635).
+    let isResuming: Bool
 
     /// Chunks extracted so far, and how many there are in total (#498). A
     /// statement is split into 3-page chunks and each is a separate, sequential
@@ -94,13 +130,42 @@ struct ImportJob: Identifiable, Equatable {
     /// True when the row should offer Resume rather than a plain dismissal.
     var canResume: Bool { isFinished && resume != nil }
 
-    /// The label actually rendered: the override when present, otherwise the
-    /// kind's generic copy. A finished job drops the trailing ellipsis, which
-    /// is the work-in-progress marker.
+    /// The label actually rendered, for the phase the job is in (#637).
+    ///
+    /// Before this ticket the label was built once by the caller and only had
+    /// its trailing ellipsis stripped on finish, so a completed run rendered
+    /// "Importing 9_Aug_2026_-_8_Sep_2026.pdf" next to a green tick. Now a
+    /// finished job reads Imported / Import incomplete / Import failed, off
+    /// its own `outcome`.
     var displayLabel: String {
-        let base = overrideLabel ?? kind.label
-        guard isFinished else { return base }
-        return base.hasSuffix("…") ? String(base.dropLast()) : base
+        isFinished ? finishedLabel : runningLabel
+    }
+
+    /// "Importing Citi_May2026.pdf…", "Resuming Citi_May2026.pdf…", or the
+    /// kind's generic copy when there is no file name. The ellipsis is the
+    /// work-in-progress marker and belongs only here.
+    private var runningLabel: String {
+        guard let subject, !subject.isEmpty else { return kind.label }
+        return isResuming ? "Resuming \(subject)…" : "Importing \(subject)…"
+    }
+
+    /// The outcome as a phrase, with the file name when there is one.
+    ///
+    /// The happy case reads as a plain past tense ("Imported Citi_May.pdf").
+    /// The two unhappy ones lead with the verdict and follow with the file
+    /// after a colon, because the verdict is the part that must survive the
+    /// row's middle truncation.
+    private var finishedLabel: String {
+        let verdict: String
+        switch outcome {
+        case .summary:    verdict = "Imported"
+        case .incomplete: verdict = "Import incomplete"
+        case .failure:    verdict = "Import failed"
+        case .none:       return runningLabel
+        }
+        guard let subject, !subject.isEmpty else { return verdict }
+        if case .summary = outcome { return "\(verdict) \(subject)" }
+        return "\(verdict): \(subject)"
     }
 
     /// "3 of 5" while a multi-chunk statement is being read, nil otherwise.
@@ -169,15 +234,26 @@ final class ImportJobCenter {
     /// Register a job and return its id plus the token the importer polls.
     /// The caller keeps the id to report progress and the outcome.
     @discardableResult
+    /// `subject` is the FILE NAME, not a built label (#637): the job owns
+    /// every phase of its own wording, so a finished run can stop saying
+    /// "Importing".
     func begin(
         kind: ImportJob.Kind,
         scope: ImportJob.Scope,
-        overrideLabel: String? = nil
+        subject: String? = nil,
+        isResuming: Bool = false
     ) -> (id: UUID, token: ImportCancellationToken) {
         let id = UUID()
         let token = ImportCancellationToken()
         tokens[id] = token
-        jobs.append(ImportJob(id: id, kind: kind, scope: scope, overrideLabel: overrideLabel, outcome: nil))
+        jobs.append(ImportJob(
+            id: id,
+            kind: kind,
+            scope: scope,
+            subject: subject,
+            isResuming: isResuming,
+            outcome: nil
+        ))
         refreshSystemAssertions()
         return (id, token)
     }
