@@ -75,6 +75,11 @@ struct DexterMacApp: App {
                 // relaunch — the latch that makes that safe lives in
                 // `TripCoverService`, not here.
                 .task { await AppMaintenance.runTripCoverSweep() }
+                // Restore an incomplete statement import across a relaunch
+                // (#639). `.task` fires per WINDOW on macOS, so the latch that
+                // makes this safe lives inside `ImportJobCenter`, as it does
+                // for the cover sweep above.
+                .task { ImportJobCenter.shared.restorePersistedStatementJobs() }
                 // Task reminders (#444). The delegate has to be installed before
                 // anything fires, or macOS suppresses the banner whenever Dexter is
                 // the frontmost app. Both calls are idempotent, which is what makes

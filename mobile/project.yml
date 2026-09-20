@@ -293,6 +293,10 @@ targets:
       - path: PersonalDashboard/Services/OpenFoodFactsClient.swift
       - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
+      # The durable half of Resume (#639). `ImportJobCenter` holds it, so the
+      # Mac needs it to compile at all, and a Mac statement import gets the
+      # same survive-a-relaunch behaviour the phone does.
+      - path: PersonalDashboard/Services/StatementResumeStore.swift
       - path: PersonalDashboard/Services/PersonService.swift
       - path: PersonalDashboard/Services/EventService.swift
       - path: PersonalDashboard/Services/RecurringExpenseService.swift

@@ -22,6 +22,12 @@ struct PersonalDashboardApp: App {
                     // before any feature tries to reach the LAN dev server.
                     // Bonjour browse is Apple's canonical trigger; a plain
                     // URLSession is unreliable.
+                    // Bring back any statement import that ended with chunks
+                    // unread before the app last closed (#639). Cheap: one
+                    // fetch when there is nothing pending, which is the normal
+                    // case. Early, so the Imports banner is already right the
+                    // first time Finance or a trip is opened.
+                    ImportJobCenter.shared.restorePersistedStatementJobs()
                     LocalNetworkPermissionPrimer.shared.prime()
                     // Also make one real API call so the app shows up in
                     // iOS Settings with a Local Network toggle on first run.

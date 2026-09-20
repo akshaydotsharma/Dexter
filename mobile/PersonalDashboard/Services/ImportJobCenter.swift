@@ -117,12 +117,18 @@ struct ImportJob: Identifiable, Equatable {
 
     /// The file and the point to pick up from. Holds the PDF bytes because
     /// the picker's security-scoped URL is long gone by the time the user taps
-    /// Resume, and because `ImportJobCenter` is memory-only anyway (#498): a
-    /// relaunch clears the plan along with the job.
+    /// Resume.
+    ///
+    /// Since #639 a statement plan is also written to disk, so the offer
+    /// survives the app closing. `recordUUID` names the `LocalStatementImport`
+    /// row that carries it, which is how acknowledging or dismissing the job
+    /// deletes the stored PDF. nil means the plan is memory-only: a receipt
+    /// job, or a statement whose state could not be written.
     struct ResumePlan: Equatable {
         let pdfData: Data
         let fileName: String?
         let point: StatementResumePoint
+        var recordUUID: UUID? = nil
     }
 
     var isFinished: Bool { outcome != nil }
@@ -216,7 +222,7 @@ final class ImportCancellationToken: @unchecked Sendable {
 @MainActor
 @Observable
 final class ImportJobCenter {
-    static let shared = ImportJobCenter()
+    static let shared = ImportJobCenter(resumeStore: .shared)
 
     private(set) var jobs: [ImportJob] = []
 
@@ -224,7 +230,39 @@ final class ImportJobCenter {
     /// `ImportJob` so the job stays a value type the view can diff.
     @ObservationIgnored private var tokens: [UUID: ImportCancellationToken] = [:]
 
-    init() {}
+    /// Where a resumable STATEMENT run is kept so it survives the app closing
+    /// (#639). nil keeps the whole centre memory-only, which is what every test
+    /// that builds its own centre wants, and is also the honest answer for a
+    /// preview.
+    ///
+    /// Only statements are written. A receipt read has nothing to resume, and
+    /// making the whole job centre durable would put transient UI state in the
+    /// store.
+    @ObservationIgnored private let resumeStore: StatementResumeStore?
+
+    /// Restore runs once per process. Both app targets call it from a `.task`,
+    /// and on macOS that fires per WINDOW, so the latch is not optional.
+    @ObservationIgnored private var hasRestored = false
+
+    init(resumeStore: StatementResumeStore? = nil) {
+        self.resumeStore = resumeStore
+    }
+
+    /// Bring back any statement import that ended with chunks unread before the
+    /// app closed (#639), in the scope it belongs to.
+    ///
+    /// Idempotent and cheap: it is a single fetch when there is nothing
+    /// pending, which is the normal case. Restored jobs arrive already
+    /// finished, so they render exactly as the row the user last saw, with the
+    /// same Resume affordance.
+    func restorePersistedStatementJobs() {
+        guard !hasRestored, let resumeStore else { return }
+        hasRestored = true
+        let restored = resumeStore.restoreJobs()
+        guard !restored.isEmpty else { return }
+        jobs.append(contentsOf: restored)
+        refreshSystemAssertions()
+    }
 
     /// Jobs a given surface should render, oldest first.
     func jobs(in scope: ImportJob.Scope) -> [ImportJob] {
@@ -278,12 +316,40 @@ final class ImportJobCenter {
         defer { refreshSystemAssertions() }
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         jobs[index].outcome = outcome
-        jobs[index].resume = resume
+        jobs[index].resume = persisted(resume, for: jobs[index], outcome: outcome)
+    }
+
+    /// Write a statement's resume plan to disk and stamp the row that holds it
+    /// back onto the plan (#639).
+    ///
+    /// The single choke point, for the same reason `refreshSystemAssertions` is
+    /// one: `finish` is the only place a plan comes into being, so this is the
+    /// only place the durable copy can drift from the in-memory one.
+    ///
+    /// A plan only ever exists for a run a later attempt could finish: the two
+    /// import screens withhold it for a failure whose `canResume` is false
+    /// (#638), so a non-retryable API rejection writes nothing here and cannot
+    /// come back after a relaunch offering a Resume that would fail again.
+    private func persisted(
+        _ resume: ImportJob.ResumePlan?,
+        for job: ImportJob,
+        outcome: ImportJob.Outcome
+    ) -> ImportJob.ResumePlan? {
+        guard var plan = resume else { return nil }
+        guard job.kind == .statement, let resumeStore else { return plan }
+        plan.recordUUID = resumeStore.save(plan: plan, scope: job.scope, outcome: outcome)
+        return plan
     }
 
     /// Remove a finished job once the user has seen its outcome.
+    ///
+    /// Seeing the outcome IS the acknowledgement, so the stored PDF goes with
+    /// the row (#639). Tapping Resume from the alert still works: the bytes are
+    /// already in the plan the view read off the job a moment earlier, and a
+    /// resumed run that ends short writes a fresh record of its own.
     func acknowledge(_ id: UUID) {
         tokens[id] = nil
+        clearPersistedResume(for: id)
         jobs.removeAll { $0.id == id }
         refreshSystemAssertions()
     }
@@ -299,8 +365,18 @@ final class ImportJobCenter {
     /// feedback and a summary row would be noise.
     func discard(_ id: UUID) {
         tokens[id] = nil
+        clearPersistedResume(for: id)
         jobs.removeAll { $0.id == id }
         refreshSystemAssertions()
+    }
+
+    /// Drop the stored PDF and the row that named it, for a job that is about
+    /// to leave the list (#639).
+    private func clearPersistedResume(for id: UUID) {
+        guard let resumeStore,
+              let recordUUID = jobs.first(where: { $0.id == id })?.resume?.recordUUID
+        else { return }
+        resumeStore.clear(recordUUID: recordUUID)
     }
 
     // MARK: - Keeping the run alive (#635)

@@ -69,6 +69,15 @@ struct StatementImportResult: Sendable {
     /// unnamed wording there.
     var truncatedPageRanges: [PDFPageRange] = []
 
+    /// The chunk this run started at: 0 for a fresh import, the previous
+    /// attempt's stopping point for a resume (#639). Anything above 0 means the
+    /// counts below cover only part of the statement, which is what the summary
+    /// has to say out loud.
+    var resumedFromChunk: Int = 0
+
+    /// The page ranges THIS run read (#639). Reuses #637's `PDFPageRange`.
+    var pagesReadThisRun: [PDFPageRange] = []
+
     /// True when this run read the whole file: nothing stopped it early and
     /// no page range survived the re-split still truncated. The FOUR end
     /// states are complete, stopped, interrupted, and truncated; this
@@ -89,7 +98,11 @@ struct StatementImportResult: Sendable {
     /// No em dash in any string this builds (project no-em-dash rule, #637).
     var summaryLine: String {
         guard totalParsed > 0 else {
-            return "Nothing to import. No transactions were found on this statement."
+            let nothing = "Nothing to import. No transactions were found on this statement."
+            // A resume that found nothing read only the missing pages, so the
+            // sentence above is about those pages, not the whole file (#639).
+            guard let resumed = resumedRunSentence else { return nothing }
+            return "\(resumed)\n\nNothing to import. No transactions were found on those pages."
         }
         var head = "Imported \(imported)"
         if refunds > 0 {
@@ -116,7 +129,17 @@ struct StatementImportResult: Sendable {
         if failed > 0 {
             parts.append("\(failed) couldn't be added")
         }
-        let counts = parts.joined(separator: " · ")
+        var counts = parts.joined(separator: " · ")
+
+        // A resumed run is cheap on purpose: it re-reads only the chunks the
+        // last attempt missed (#635). Say which pages that was, or a run that
+        // read three pages and imported four rows reads as a run that silently
+        // did less than the one before it (#639). Folded into `counts` so every
+        // branch below carries it, complete and incomplete alike. No em dash
+        // (project no-em-dash rule).
+        if let resumed = resumedRunSentence {
+            counts += "\n\n" + resumed
+        }
 
         // An early stop takes precedence over the truncation warning: the run
         // ended before the model's budget ever came into it, and each cause has
@@ -168,6 +191,21 @@ struct StatementImportResult: Sendable {
         \(which) Re-import the statement to try again, or add any missing \
         transactions manually.
         """
+    }
+
+    /// "Resumed, so this run read pages 10 to 12." nil for a fresh import,
+    /// which read the file from its first page and needs no qualifier (#639).
+    ///
+    /// The pages, not the chunk count: a chunk is an implementation detail of
+    /// how the file is sent, and the user picked a document with pages in it.
+    var resumedRunSentence: String? {
+        guard resumedFromChunk > 0 else { return nil }
+        guard let first = pagesReadThisRun.map(\.first).min(),
+              let last = pagesReadThisRun.map(\.last).max() else {
+            return "Resumed, so this run read only the part of the statement that was still missing."
+        }
+        let range = PDFPageRange(first: first, last: last)
+        return "Resumed, so this run read \(range.label) of the statement."
     }
 
     /// The sentence that names what was lost. Reads "Pages 7 to 9 were only
@@ -308,7 +346,9 @@ struct StatementImporter {
             trip: trip,
             incompleteReason: extraction.stopReason,
             resumePoint: extraction.resumePoint,
-            truncatedPageRanges: extraction.truncatedPageRanges
+            truncatedPageRanges: extraction.truncatedPageRanges,
+            resumedFromChunk: extraction.chunksStartedAt,
+            pagesReadThisRun: extraction.pagesReadThisRun
         )
     }
 
@@ -341,7 +381,9 @@ struct StatementImporter {
         trip: LocalTrip? = nil,
         incompleteReason: StatementExtraction.StopReason? = nil,
         resumePoint: StatementResumePoint? = nil,
-        truncatedPageRanges: [PDFPageRange] = []
+        truncatedPageRanges: [PDFPageRange] = [],
+        resumedFromChunk: Int = 0,
+        pagesReadThisRun: [PDFPageRange] = []
     ) async -> StatementImportResult {
         var imported = 0
         var refunds = 0
@@ -658,7 +700,9 @@ struct StatementImporter {
             depositsTotalSGD: depositsTotalSGD,
             incompleteReason: incompleteReason,
             resumePoint: resumePoint,
-            truncatedPageRanges: truncatedPageRanges
+            truncatedPageRanges: truncatedPageRanges,
+            resumedFromChunk: resumedFromChunk,
+            pagesReadThisRun: pagesReadThisRun
         )
     }
 

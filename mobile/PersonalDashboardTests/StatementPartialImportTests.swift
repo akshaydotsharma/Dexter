@@ -237,6 +237,154 @@ final class StatementPartialImportTests: XCTestCase {
         XCTAssertEqual(extraction.resumePoint?.hasUnreadChunks, true)
     }
 
+    // MARK: - A restored run, and the scope rule (#639)
+
+    /// A run restored after a relaunch resumes on exactly the terms an
+    /// in-session Resume does: only the unread chunks are read, and the ones
+    /// already paid for are not touched.
+    ///
+    /// Driven through the plan a `StatementResumeStore` record rebuilds, so the
+    /// assertion is about the round trip, not about a hand-built point.
+    func testARestoredPlanReadsOnlyTheUnreadChunks() async throws {
+        let record = StatementResumeRecord(
+            pdfPath: "statement-resumes/abc.pdf",
+            sha256: "unused-here",
+            byteCount: 4,
+            fileName: "Amex_Sep2026.pdf",
+            tripUUID: nil,
+            chunksCompleted: 3,
+            chunksTotal: 5,
+            issuer: "Citi",
+            last4: "1234",
+            statementMonth: 5,
+            statementYear: 2026,
+            outcomeText: "Imported 158",
+            outcomeIsFailure: false,
+            savedAt: Date()
+        )
+
+        let seen = Seen()
+        let extraction = try await AnthropicClient.runStatementChunks(
+            chunks: chunks(5),
+            wholePDF: Data(),
+            resumingFrom: record.resumePoint,
+            extractChunk: extractor(meta: { _ in self.emptyMeta }, seen: seen)
+        )
+
+        XCTAssertEqual(seen.indices, [3, 4], "a restored plan must skip what the last run already read")
+        XCTAssertEqual(extraction.meta, citiMeta, "and carry that run's header forward")
+        XCTAssertEqual(extraction.chunksCompleted, 5)
+    }
+
+    /// A restored run that is interrupted AGAIN advances its resume point, so
+    /// the third attempt starts where the second stopped rather than where the
+    /// first did.
+    func testARestoredRunThatIsInterruptedAgainAdvancesTheResumePoint() async throws {
+        let seen = Seen()
+        let extraction = try await AnthropicClient.runStatementChunks(
+            chunks: chunks(8),
+            wholePDF: Data(),
+            resumingFrom: StatementResumePoint(chunksCompleted: 3, chunksTotal: 8, meta: citiMeta),
+            extractChunk: extractor(failingAt: 5, meta: { _ in self.emptyMeta }, seen: seen)
+        )
+
+        XCTAssertEqual(extraction.resumePoint?.chunksCompleted, 5)
+        XCTAssertEqual(extraction.chunksStartedAt, 3)
+    }
+
+    /// The scope rule, and the reason it is a rule: a statement picked from the
+    /// file picker is read in FULL, every page, every time, even when a
+    /// persisted record for those exact bytes is sitting in the store.
+    ///
+    /// The user may have deleted rows and want the whole file parsed again, and
+    /// a fresh import is how they ask for that. So the picker path passes no
+    /// resume point, and nothing anywhere looks a file up by hash.
+    func testAPickedFileIsReadInFullEvenWithAPersistedRecordForThoseBytes() async throws {
+        let seen = Seen()
+        let extraction = try await AnthropicClient.runStatementChunks(
+            chunks: chunks(5),
+            wholePDF: Data(),
+            // What `handleStatementData` passes: nothing. There is no lookup to
+            // make this anything else.
+            resumingFrom: nil,
+            extractChunk: extractor(meta: { _ in self.emptyMeta }, seen: seen)
+        )
+
+        XCTAssertEqual(seen.indices, [0, 1, 2, 3, 4], "a fresh import means fresh: every page, every time")
+        XCTAssertEqual(extraction.chunksStartedAt, 0)
+        XCTAssertNil(extraction.resumePoint)
+    }
+
+    // MARK: - What a resumed run says it read (#639)
+
+    /// A resume that costs one call must not read as a run that silently did
+    /// less than the one before it, so the summary names the pages THIS run
+    /// read.
+    func testAResumedRunSaysWhichPagesItRead() async throws {
+        let seen = Seen()
+        let extraction = try await AnthropicClient.runStatementChunks(
+            chunks: chunks(5),
+            wholePDF: Data(),
+            resumingFrom: StatementResumePoint(chunksCompleted: 3, chunksTotal: 5, meta: citiMeta),
+            extractChunk: extractor(meta: { _ in self.emptyMeta }, seen: seen)
+        )
+
+        // Chunks 3 and 4 are pages 10 to 12 and 13 to 15.
+        XCTAssertEqual(extraction.pagesReadThisRun.map(\.label), ["pages 10 to 12", "pages 13 to 15"])
+
+        let result = StatementImportResult(
+            imported: 4, refunds: 0, skippedDuplicates: 0, ignoredNonSpend: 0, failed: 0,
+            possiblyTruncated: false, importedUUIDs: [],
+            resumedFromChunk: extraction.chunksStartedAt,
+            pagesReadThisRun: extraction.pagesReadThisRun
+        )
+        XCTAssertTrue(result.summaryLine.contains("Imported 4"))
+        XCTAssertTrue(
+            result.summaryLine.contains("Resumed, so this run read pages 10 to 15 of the statement."),
+            "got: \(result.summaryLine)"
+        )
+    }
+
+    /// A fresh import read the file from its first page, so it needs no
+    /// qualifier and must not grow one.
+    func testAFreshImportSummaryIsUnqualified() {
+        let result = StatementImportResult(
+            imported: 42, refunds: 0, skippedDuplicates: 0, ignoredNonSpend: 0, failed: 0,
+            possiblyTruncated: false, importedUUIDs: []
+        )
+        XCTAssertEqual(result.summaryLine, "Imported 42")
+        XCTAssertNil(result.resumedRunSentence)
+    }
+
+    /// A resumed run that found nothing read only the missing pages, so the
+    /// "nothing to import" wording must not claim it read the statement.
+    func testAResumedRunThatFoundNothingSaysWhichPagesItLookedAt() {
+        let result = StatementImportResult(
+            imported: 0, refunds: 0, skippedDuplicates: 0, ignoredNonSpend: 0, failed: 0,
+            possiblyTruncated: false, importedUUIDs: [],
+            resumedFromChunk: 3,
+            pagesReadThisRun: [PDFPageRange(first: 10, last: 12)]
+        )
+        XCTAssertTrue(result.summaryLine.contains("Resumed, so this run read pages 10 to 12"))
+        XCTAssertTrue(result.summaryLine.contains("No transactions were found on those pages."))
+    }
+
+    /// The resumed sentence rides every end state, so an interrupted resume
+    /// still reports what it managed to read.
+    func testTheResumedSentenceSurvivesAnInterruptedEndState() {
+        let result = StatementImportResult(
+            imported: 4, refunds: 0, skippedDuplicates: 0, ignoredNonSpend: 0, failed: 0,
+            possiblyTruncated: false, importedUUIDs: [],
+            incompleteReason: .failed(.outOfCredit("Your credit balance is too low")),
+            resumedFromChunk: 3,
+            pagesReadThisRun: [PDFPageRange(first: 10, last: 12)]
+        )
+        let summary = result.summaryLine
+        XCTAssertTrue(summary.contains("Import stopped: out of API credit"))
+        XCTAssertTrue(summary.contains("Resumed, so this run read pages 10 to 12 of the statement."))
+        XCTAssertFalse(summary.contains("\u{2014}"), "no em dash in a user-facing string")
+    }
+
     /// Nothing new read on a resumed run is still a thrown error: the user
     /// needs to see why the retry died, not a summary that imported nothing.
     func testAResumedRunThatReadsNothingThrows() async {

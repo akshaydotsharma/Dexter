@@ -602,6 +602,20 @@ struct StatementExtraction: Sendable {
     let chunksCompleted: Int
     let chunksTotal: Int
 
+    /// The chunk index this run STARTED at, which is 0 for a fresh import and
+    /// the last run's stopping point for a resume (#639).
+    ///
+    /// Separate from `chunksCompleted` because the summary has to be able to
+    /// say what THIS run read, not what the statement has had read across every
+    /// attempt. Without it a resume that read three pages and a fresh run that
+    /// read the whole file produce the same sentence.
+    var chunksStartedAt: Int = 0
+
+    /// The page ranges this run actually read, in the original statement's
+    /// 1-based page numbers (#639). Reuses #637's `PDFPageRange` rather than a
+    /// second representation of the same fact.
+    var pagesReadThisRun: [PDFPageRange] = []
+
     /// Two causes, and the second carries its own classification (#638).
     /// `possiblyTruncated` is deliberately NOT one of them: that is the model
     /// running out of output budget on a chunk it DID read, not the run
@@ -780,7 +794,9 @@ extension AnthropicClient {
                 truncatedPageRanges: read.truncatedRanges,
                 stopReason: nil,
                 chunksCompleted: 1,
-                chunksTotal: 1
+                chunksTotal: 1,
+                chunksStartedAt: 0,
+                pagesReadThisRun: [only.pages]
             )
         }
 
@@ -794,6 +810,10 @@ extension AnthropicClient {
         var truncatedRanges: [PDFPageRange] = []
         var stopReason: StatementExtraction.StopReason?
         var completed = startIndex
+        // What THIS attempt read, so the summary can say so (#639). A resumed
+        // run that costs one call must not read as a run that silently did
+        // less than the one before it.
+        var pagesReadThisRun: [PDFPageRange] = []
 
         for index in startIndex..<chunks.count {
             // Poll before spending the call, so a cancel taps out at the next
@@ -840,6 +860,7 @@ extension AnthropicClient {
 
             mergedLines.append(contentsOf: chunk.lines)
             truncatedRanges.append(contentsOf: chunk.truncatedRanges)
+            pagesReadThisRun.append(chunks[index].pages)
             // Take the header from the FIRST chunk that carries any readable
             // field (the statement header lives on page 1). Once found, keep it
             // — a later page must never overwrite it with an invented header.
@@ -860,7 +881,9 @@ extension AnthropicClient {
             truncatedPageRanges: truncatedRanges,
             stopReason: stopReason,
             chunksCompleted: completed,
-            chunksTotal: chunks.count
+            chunksTotal: chunks.count,
+            chunksStartedAt: startIndex,
+            pagesReadThisRun: pagesReadThisRun
         )
     }
 
