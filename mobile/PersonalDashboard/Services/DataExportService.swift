@@ -214,7 +214,13 @@ final class DataExportService {
         let recurring   = try modelContext.fetch(FetchDescriptor<RecurringExpense>())
         let persons     = try modelContext.fetch(FetchDescriptor<LocalPerson>())
         let events      = try modelContext.fetch(FetchDescriptor<LocalEvent>())
+        // Resume placeholders are device-local bookkeeping, not import history
+        // (#639): the row names a PDF in THIS container and has no counts, so
+        // exporting it would put an empty "parsed file" in the archive and sync
+        // it to a device that can never act on it. Filtering here covers sync
+        // too: `SyncRecordMapper` reads this same payload.
         let statements  = try modelContext.fetch(FetchDescriptor<LocalStatementImport>())
+            .filter { !$0.isResumePlaceholder }
         let processed   = try modelContext.fetch(FetchDescriptor<LocalProcessedEmail>())
         // #399: task ticket attachments.
         let taskTickets = try modelContext.fetch(FetchDescriptor<LocalTaskTicket>())

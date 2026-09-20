@@ -331,9 +331,19 @@ struct ParsedFilesView: View {
         }
     }
 
+    /// Real import records only.
+    ///
+    /// A resumable statement import parks its state on a counts-free
+    /// `LocalStatementImport` row (#639), which is bookkeeping for the Resume
+    /// affordance and not a parsed file. Leaving it in would put an "Imported
+    /// 0" row in this history for a run the user has not finished yet.
+    private var statementRecords: [LocalStatementImport] {
+        statementImports.filter { !$0.isResumePlaceholder }
+    }
+
     /// The merged, filtered, sorted rows shown in the list.
     private var visibleRows: [ParsedRow] {
-        var rows: [ParsedRow] = statementImports.map { .statement($0) }
+        var rows: [ParsedRow] = statementRecords.map { .statement($0) }
         rows.append(contentsOf: reconstructedStatements.map { .reconstructed($0) })
         rows.append(contentsOf: emailLogs.map { .email($0) })
 
@@ -348,7 +358,7 @@ struct ParsedFilesView: View {
     /// expenses must NOT be reconstructed, or the file would appear twice.
     private var recordedFileNames: Set<String> {
         Set(
-            statementImports
+            statementRecords
                 .map { $0.fileName.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
         )

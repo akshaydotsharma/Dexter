@@ -27,9 +27,9 @@ struct StatementImportResult: Sendable {
     /// Spend lines that failed to insert (bad amount, FX failure, persistence
     /// error). Non-fatal — the batch continues past each one.
     let failed: Int
-    /// True when the model likely ran out of output tokens on a very large
-    /// statement, so the tail rows never came through. Drives a "some
-    /// transactions may be missing" note in the summary.
+    /// True when the model ran out of output tokens on a page range, AND
+    /// re-reading that range as halves did not rescue it (#637), so its tail
+    /// rows never came through. Drives the truncation warning in the summary.
     let possiblyTruncated: Bool
 
     /// UUIDs of the expenses actually inserted this run (kept for parity with
@@ -46,12 +46,44 @@ struct StatementImportResult: Sendable {
     /// lookup failed is still counted in `deposits` but omitted here, so this is
     /// a lower bound on money received. Defaults to 0.
     var depositsTotalSGD: Double = 0
-    /// True when the user cancelled part-way and the extractor stopped between
-    /// chunks (#498). Distinct from `possiblyTruncated`: that means the model
-    /// ran out of output budget, this means the user asked us to stop. The rows
-    /// read before the stop still imported, and a re-import is idempotent, so
-    /// the remedy is simply to import the statement again. Defaults to false.
-    var stoppedEarly: Bool = false
+    /// Why the extraction ended before the last chunk, or nil when it read the
+    /// whole statement (#498, #635). Deliberately NOT folded into
+    /// `possiblyTruncated`: that means the model ran out of output budget on a
+    /// chunk it DID read, and the remedy is different. Three causes, three
+    /// remedies, so a message per classification (see `summaryLine`). Since
+    /// #638 the failure case carries WHICH failure it was, so an empty API
+    /// credit balance no longer reads as a dropped connection. The rows read before
+    /// the stop still imported, and a re-import is idempotent, so every one of
+    /// them self-heals.
+    var incompleteReason: StatementExtraction.StopReason? = nil
+
+    /// Where an incomplete run got to, so the caller can offer Resume rather
+    /// than paying for the whole statement again (#635). nil when the run read
+    /// everything, or when there is nothing left to read.
+    var resumePoint: StatementResumePoint? = nil
+
+    /// The page ranges that stayed truncated after the self-healing re-split
+    /// (#637), so the warning can name them: "pages 7 to 9 were only partly
+    /// read". Empty when nothing truncated, and also empty on the photo
+    /// multi-expense path, which has no pages; the warning falls back to the
+    /// unnamed wording there.
+    var truncatedPageRanges: [PDFPageRange] = []
+
+    /// The chunk this run started at: 0 for a fresh import, the previous
+    /// attempt's stopping point for a resume (#639). Anything above 0 means the
+    /// counts below cover only part of the statement, which is what the summary
+    /// has to say out loud.
+    var resumedFromChunk: Int = 0
+
+    /// The page ranges THIS run read (#639). Reuses #637's `PDFPageRange`.
+    var pagesReadThisRun: [PDFPageRange] = []
+
+    /// True when this run read the whole file: nothing stopped it early and
+    /// no page range survived the re-split still truncated. The FOUR end
+    /// states are complete, stopped, interrupted, and truncated; this
+    /// separates the first from the other three, and `summaryLine` keeps all
+    /// four apart.
+    var isComplete: Bool { incompleteReason == nil && !possiblyTruncated }
 
     var totalParsed: Int {
         imported + skippedDuplicates + ignoredNonSpend + deposits + failed
@@ -62,10 +94,15 @@ struct StatementImportResult: Sendable {
     ///   "Imported 42 (including 3 credits) · Skipped 8 duplicates · Ignored 5 payments"
     ///   "Imported 26 (including 8 credits) · Ignored 1 payment · Skipped 1 deposit (SGD 14,840.00), income isn't tracked yet"
     ///   "Imported 12"
-    ///   "Nothing to import — no transactions found."
+    ///   "Nothing to import. No transactions found."
+    /// No em dash in any string this builds (project no-em-dash rule, #637).
     var summaryLine: String {
         guard totalParsed > 0 else {
-            return "Nothing to import — no transactions found on this statement."
+            let nothing = "Nothing to import. No transactions were found on this statement."
+            // A resume that found nothing read only the missing pages, so the
+            // sentence above is about those pages, not the whole file (#639).
+            guard let resumed = resumedRunSentence else { return nothing }
+            return "\(resumed)\n\nNothing to import. No transactions were found on those pages."
         }
         var head = "Imported \(imported)"
         if refunds > 0 {
@@ -92,37 +129,114 @@ struct StatementImportResult: Sendable {
         if failed > 0 {
             parts.append("\(failed) couldn't be added")
         }
-        let counts = parts.joined(separator: " · ")
+        var counts = parts.joined(separator: " · ")
 
-        // A user-initiated stop takes precedence over the truncation warning:
-        // the run ended because it was asked to, and the remedy is different
-        // (import again, rather than "the statement was too long"). No em dash
-        // in this user-facing string (project no-em-dash rule).
-        if stoppedEarly {
+        // A resumed run is cheap on purpose: it re-reads only the chunks the
+        // last attempt missed (#635). Say which pages that was, or a run that
+        // read three pages and imported four rows reads as a run that silently
+        // did less than the one before it (#639). Folded into `counts` so every
+        // branch below carries it, complete and incomplete alike. No em dash
+        // (project no-em-dash rule).
+        if let resumed = resumedRunSentence {
+            counts += "\n\n" + resumed
+        }
+
+        // An early stop takes precedence over the truncation warning: the run
+        // ended before the model's budget ever came into it, and each cause has
+        // its own remedy. No em dash in these user-facing strings (project
+        // no-em-dash rule).
+        switch incompleteReason {
+        case .stoppedByUser:
             return """
             Import stopped
 
             \(counts)
 
-            The rest of the statement was not read. Import it again to finish; \
-            the transactions already added will not be duplicated.
+            The rest of the statement was not read. Resume it, or import the \
+            file again to finish; the transactions already added will not be \
+            duplicated.
             """
+        case .failed(let failure):
+            // Each classification gets its own heading and its own remedy
+            // (#638). Before it, every one of them rendered the transport
+            // sentence below, so an empty API credit balance read as a dropped
+            // connection and sent the user looking for a network fault.
+            return """
+            \(failure.summaryTitle)
+
+            \(counts)
+
+            \(failure.summaryBody)
+            """
+        case .none:
+            break
         }
 
         guard possiblyTruncated else { return counts }
 
-        // Chunking makes this essentially unreachable, but if a single chunk
-        // still ran out of output budget the import is genuinely incomplete —
-        // make that unmissable (leading warning, not a trailing footnote) with
-        // the count that DID land, so the user knows to re-import.
+        // The fourth end state (#637). Chunking plus the re-split make this
+        // close to unreachable: the range was read, hit the output ceiling,
+        // was halved and re-read, and STILL ran out of budget on a single
+        // page. When it does happen the import is genuinely incomplete, so
+        // make it unmissable (leading warning, not a trailing footnote), name
+        // the pages so the user knows where to look, and give the count that
+        // DID land. No em dash in these user-facing strings (project
+        // no-em-dash rule).
+        let which = Self.truncatedPagesSentence(truncatedPageRanges)
         return """
-        ⚠️ Incomplete import — some transactions may be missing
+        ⚠️ Incomplete import
 
         \(counts)
 
-        Part of this statement was too long to read in one pass. Re-import the \
-        statement to try again, or add any missing transactions manually.
+        \(which) Re-import the statement to try again, or add any missing \
+        transactions manually.
         """
+    }
+
+    /// "Resumed, so this run read pages 10 to 12." nil for a fresh import,
+    /// which read the file from its first page and needs no qualifier (#639).
+    ///
+    /// The pages, not the chunk count: a chunk is an implementation detail of
+    /// how the file is sent, and the user picked a document with pages in it.
+    var resumedRunSentence: String? {
+        guard resumedFromChunk > 0 else { return nil }
+        guard let first = pagesReadThisRun.map(\.first).min(),
+              let last = pagesReadThisRun.map(\.last).max() else {
+            return "Resumed, so this run read only the part of the statement that was still missing."
+        }
+        let range = PDFPageRange(first: first, last: last)
+        return "Resumed, so this run read \(range.label) of the statement."
+    }
+
+    /// The sentence that names what was lost. Reads "Pages 7 to 9 were only
+    /// partly read, so some transactions from them may be missing." (#637).
+    ///
+    /// Falls back to the unnamed wording when no range is known, which is the
+    /// photo multi-expense path (an image has no pages) and any older record
+    /// that predates the ranges.
+    static func truncatedPagesSentence(_ ranges: [PDFPageRange]) -> String {
+        guard !ranges.isEmpty else {
+            return "Part of this statement was too long to read in one pass,"
+                + " so some transactions may be missing."
+        }
+        let labels = ranges.map(\.label)
+        let joined: String
+        switch labels.count {
+        case 1:
+            joined = labels[0]
+        case 2:
+            joined = "\(labels[0]) and \(labels[1])"
+        default:
+            joined = labels.dropLast().joined(separator: ", ")
+                + ", and \(labels[labels.count - 1])"
+        }
+        // The range phrase starts the sentence, so lift its first letter.
+        let subject = joined.prefix(1).uppercased() + joined.dropFirst()
+        // One single page reads "Page 7 was"; anything wider reads "were".
+        let singlePage = ranges.count == 1 && ranges[0].pageCount == 1
+        let verb = singlePage ? "was" : "were"
+        return "\(subject) \(verb) only partly read,"
+            + " so some transactions may be missing."
     }
 
     /// Format an SGD magnitude with grouping and two decimals ("16,559.11").
@@ -203,27 +317,38 @@ struct StatementImporter {
     /// `onProgress` and `cancellation` are forwarded to the chunked extractor
     /// (#498) so the caller can show "3 of 5" and stop a long run between
     /// chunks. Both default to nil, so every existing call site and test is
-    /// unaffected. A stopped run is NOT an error: whatever was read before the
-    /// stop is inserted as normal and the result carries `stoppedEarly`.
+    /// unaffected. An incomplete run is NOT an error: whatever was read before
+    /// the stop is inserted as normal and the result carries `incompleteReason`
+    /// plus a `resumePoint` (#635).
+    ///
+    /// `resumingFrom` re-runs only the chunks a previous attempt did not read
+    /// (#635), carrying that attempt's statement header forward so the resumed
+    /// rows keep their card attribution.
     func importStatement(
         pdfData: Data,
         fileName: String? = nil,
         trip: LocalTrip? = nil,
+        resumingFrom: StatementResumePoint? = nil,
         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
         cancellation: ImportCancellationToken? = nil
     ) async throws -> StatementImportResult {
-        let (lines, meta, truncated, stoppedEarly) = try await anthropic.extractStatement(
+        let extraction = try await anthropic.extractStatement(
             pdfData: pdfData,
+            resumingFrom: resumingFrom,
             onProgress: onProgress,
             cancellation: cancellation
         )
         return await insert(
-            lines: lines,
-            meta: meta,
+            lines: extraction.lines,
+            meta: extraction.meta,
             fileName: fileName,
-            possiblyTruncated: truncated,
+            possiblyTruncated: extraction.possiblyTruncated,
             trip: trip,
-            stoppedEarly: stoppedEarly
+            incompleteReason: extraction.stopReason,
+            resumePoint: extraction.resumePoint,
+            truncatedPageRanges: extraction.truncatedPageRanges,
+            resumedFromChunk: extraction.chunksStartedAt,
+            pagesReadThisRun: extraction.pagesReadThisRun
         )
     }
 
@@ -254,7 +379,11 @@ struct StatementImporter {
         recordsImportHistory: Bool = true,
         possiblyTruncated: Bool,
         trip: LocalTrip? = nil,
-        stoppedEarly: Bool = false
+        incompleteReason: StatementExtraction.StopReason? = nil,
+        resumePoint: StatementResumePoint? = nil,
+        truncatedPageRanges: [PDFPageRange] = [],
+        resumedFromChunk: Int = 0,
+        pagesReadThisRun: [PDFPageRange] = []
     ) async -> StatementImportResult {
         var imported = 0
         var refunds = 0
@@ -569,7 +698,11 @@ struct StatementImporter {
             importedUUIDs: importedUUIDs,
             deposits: deposits,
             depositsTotalSGD: depositsTotalSGD,
-            stoppedEarly: stoppedEarly
+            incompleteReason: incompleteReason,
+            resumePoint: resumePoint,
+            truncatedPageRanges: truncatedPageRanges,
+            resumedFromChunk: resumedFromChunk,
+            pagesReadThisRun: pagesReadThisRun
         )
     }
 

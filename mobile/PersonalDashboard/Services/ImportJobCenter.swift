@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if os(iOS)
+import UIKit
+#endif
 
 /// A capture or statement import that is running, or has finished and is
 /// waiting to be acknowledged (#498).
@@ -45,19 +48,55 @@ struct ImportJob: Identifiable, Equatable {
     }
 
     /// How the run ended. `nil` while it is still going.
+    ///
+    /// Three finished cases, because the banner label follows the outcome
+    /// (#637) and "read the whole file" and "read part of the file" are not
+    /// the same result. `incomplete` covers every way a run can finish short:
+    /// the user stopped it, a chunk died, or a page range stayed truncated
+    /// after the re-split. Which of those it was is in the summary text
+    /// itself; the banner only needs the three-way split.
     enum Outcome: Equatable {
         /// `StatementImportResult.summaryLine`, or the receipt equivalent.
         case summary(String)
+        /// The run finished, carrying a summary, but did not read everything.
+        case incomplete(String)
         case failure(String)
+
+        /// Pick the flavour from whether the run read the whole file. Lets a
+        /// call site write `.summary(text, complete: result.isComplete)`
+        /// rather than branching at each of the two import screens.
+        static func summary(_ text: String, complete: Bool) -> Outcome {
+            complete ? .summary(text) : .incomplete(text)
+        }
+
+        /// The text to show, whichever flavour this is.
+        var message: String {
+            switch self {
+            case .summary(let text), .incomplete(let text), .failure(let text):
+                return text
+            }
+        }
     }
 
     let id: UUID
     let kind: Kind
     let scope: Scope
 
-    /// Per-instance label that overrides `kind.label`, e.g. "Importing
-    /// Citi_May2026.pdf…" (#189). nil falls back to the kind's generic copy.
-    let overrideLabel: String?
+    /// What is being read, e.g. "Citi_May2026.pdf" (#189). nil falls back to
+    /// the kind's generic copy.
+    ///
+    /// The FILE NAME, not a finished sentence (#637). The two import screens
+    /// used to hand in a built label ("Importing Citi_May2026.pdf…"), which is
+    /// why a finished job still read "Importing" beside a green tick: the
+    /// label was fixed at the start and nothing could revise it. Holding the
+    /// subject instead lets `displayLabel` below build every phase from the
+    /// job's own state, in one place.
+    let subject: String?
+
+    /// True when this run is finishing a previous one rather than starting
+    /// fresh, which is the only thing the running label needs to say
+    /// differently ("Resuming" rather than "Importing", #635).
+    let isResuming: Bool
 
     /// Chunks extracted so far, and how many there are in total (#498). A
     /// statement is split into 3-page chunks and each is a separate, sequential
@@ -70,15 +109,69 @@ struct ImportJob: Identifiable, Equatable {
 
     var outcome: Outcome?
 
+    /// Everything a later attempt needs to finish an incomplete run (#635).
+    /// Set when the extraction ended early with chunks still unread, whether
+    /// the user stopped it or a chunk failed. nil on a complete run, so the
+    /// Resume affordance only appears when there is something left to read.
+    var resume: ResumePlan?
+
+    /// The file and the point to pick up from. Holds the PDF bytes because
+    /// the picker's security-scoped URL is long gone by the time the user taps
+    /// Resume.
+    ///
+    /// Since #639 a statement plan is also written to disk, so the offer
+    /// survives the app closing. `recordUUID` names the `LocalStatementImport`
+    /// row that carries it, which is how acknowledging or dismissing the job
+    /// deletes the stored PDF. nil means the plan is memory-only: a receipt
+    /// job, or a statement whose state could not be written.
+    struct ResumePlan: Equatable {
+        let pdfData: Data
+        let fileName: String?
+        let point: StatementResumePoint
+        var recordUUID: UUID? = nil
+    }
+
     var isFinished: Bool { outcome != nil }
 
-    /// The label actually rendered: the override when present, otherwise the
-    /// kind's generic copy. A finished job drops the trailing ellipsis, which
-    /// is the work-in-progress marker.
+    /// True when the row should offer Resume rather than a plain dismissal.
+    var canResume: Bool { isFinished && resume != nil }
+
+    /// The label actually rendered, for the phase the job is in (#637).
+    ///
+    /// Before this ticket the label was built once by the caller and only had
+    /// its trailing ellipsis stripped on finish, so a completed run rendered
+    /// "Importing 9_Aug_2026_-_8_Sep_2026.pdf" next to a green tick. Now a
+    /// finished job reads Imported / Import incomplete / Import failed, off
+    /// its own `outcome`.
     var displayLabel: String {
-        let base = overrideLabel ?? kind.label
-        guard isFinished else { return base }
-        return base.hasSuffix("…") ? String(base.dropLast()) : base
+        isFinished ? finishedLabel : runningLabel
+    }
+
+    /// "Importing Citi_May2026.pdf…", "Resuming Citi_May2026.pdf…", or the
+    /// kind's generic copy when there is no file name. The ellipsis is the
+    /// work-in-progress marker and belongs only here.
+    private var runningLabel: String {
+        guard let subject, !subject.isEmpty else { return kind.label }
+        return isResuming ? "Resuming \(subject)…" : "Importing \(subject)…"
+    }
+
+    /// The outcome as a phrase, with the file name when there is one.
+    ///
+    /// The happy case reads as a plain past tense ("Imported Citi_May.pdf").
+    /// The two unhappy ones lead with the verdict and follow with the file
+    /// after a colon, because the verdict is the part that must survive the
+    /// row's middle truncation.
+    private var finishedLabel: String {
+        let verdict: String
+        switch outcome {
+        case .summary:    verdict = "Imported"
+        case .incomplete: verdict = "Import incomplete"
+        case .failure:    verdict = "Import failed"
+        case .none:       return runningLabel
+        }
+        guard let subject, !subject.isEmpty else { return verdict }
+        if case .summary = outcome { return "\(verdict) \(subject)" }
+        return "\(verdict): \(subject)"
     }
 
     /// "3 of 5" while a multi-chunk statement is being read, nil otherwise.
@@ -129,7 +222,7 @@ final class ImportCancellationToken: @unchecked Sendable {
 @MainActor
 @Observable
 final class ImportJobCenter {
-    static let shared = ImportJobCenter()
+    static let shared = ImportJobCenter(resumeStore: .shared)
 
     private(set) var jobs: [ImportJob] = []
 
@@ -137,7 +230,39 @@ final class ImportJobCenter {
     /// `ImportJob` so the job stays a value type the view can diff.
     @ObservationIgnored private var tokens: [UUID: ImportCancellationToken] = [:]
 
-    init() {}
+    /// Where a resumable STATEMENT run is kept so it survives the app closing
+    /// (#639). nil keeps the whole centre memory-only, which is what every test
+    /// that builds its own centre wants, and is also the honest answer for a
+    /// preview.
+    ///
+    /// Only statements are written. A receipt read has nothing to resume, and
+    /// making the whole job centre durable would put transient UI state in the
+    /// store.
+    @ObservationIgnored private let resumeStore: StatementResumeStore?
+
+    /// Restore runs once per process. Both app targets call it from a `.task`,
+    /// and on macOS that fires per WINDOW, so the latch is not optional.
+    @ObservationIgnored private var hasRestored = false
+
+    init(resumeStore: StatementResumeStore? = nil) {
+        self.resumeStore = resumeStore
+    }
+
+    /// Bring back any statement import that ended with chunks unread before the
+    /// app closed (#639), in the scope it belongs to.
+    ///
+    /// Idempotent and cheap: it is a single fetch when there is nothing
+    /// pending, which is the normal case. Restored jobs arrive already
+    /// finished, so they render exactly as the row the user last saw, with the
+    /// same Resume affordance.
+    func restorePersistedStatementJobs() {
+        guard !hasRestored, let resumeStore else { return }
+        hasRestored = true
+        let restored = resumeStore.restoreJobs()
+        guard !restored.isEmpty else { return }
+        jobs.append(contentsOf: restored)
+        refreshSystemAssertions()
+    }
 
     /// Jobs a given surface should render, oldest first.
     func jobs(in scope: ImportJob.Scope) -> [ImportJob] {
@@ -147,15 +272,27 @@ final class ImportJobCenter {
     /// Register a job and return its id plus the token the importer polls.
     /// The caller keeps the id to report progress and the outcome.
     @discardableResult
+    /// `subject` is the FILE NAME, not a built label (#637): the job owns
+    /// every phase of its own wording, so a finished run can stop saying
+    /// "Importing".
     func begin(
         kind: ImportJob.Kind,
         scope: ImportJob.Scope,
-        overrideLabel: String? = nil
+        subject: String? = nil,
+        isResuming: Bool = false
     ) -> (id: UUID, token: ImportCancellationToken) {
         let id = UUID()
         let token = ImportCancellationToken()
         tokens[id] = token
-        jobs.append(ImportJob(id: id, kind: kind, scope: scope, overrideLabel: overrideLabel, outcome: nil))
+        jobs.append(ImportJob(
+            id: id,
+            kind: kind,
+            scope: scope,
+            subject: subject,
+            isResuming: isResuming,
+            outcome: nil
+        ))
+        refreshSystemAssertions()
         return (id, token)
     }
 
@@ -169,16 +306,52 @@ final class ImportJobCenter {
 
     /// Mark a job finished. The row stays visible, now tappable, until
     /// `acknowledge` removes it.
-    func finish(_ id: UUID, outcome: ImportJob.Outcome) {
+    ///
+    /// `resume` is the plan for finishing an incomplete run (#635). Passed for
+    /// a summary whose extraction ended early with chunks unread, and also for
+    /// a FAILURE on a resumed run, so one dead retry does not throw away a
+    /// resume point the user can still use.
+    func finish(_ id: UUID, outcome: ImportJob.Outcome, resume: ImportJob.ResumePlan? = nil) {
         tokens[id] = nil
+        defer { refreshSystemAssertions() }
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         jobs[index].outcome = outcome
+        jobs[index].resume = persisted(resume, for: jobs[index], outcome: outcome)
+    }
+
+    /// Write a statement's resume plan to disk and stamp the row that holds it
+    /// back onto the plan (#639).
+    ///
+    /// The single choke point, for the same reason `refreshSystemAssertions` is
+    /// one: `finish` is the only place a plan comes into being, so this is the
+    /// only place the durable copy can drift from the in-memory one.
+    ///
+    /// A plan only ever exists for a run a later attempt could finish: the two
+    /// import screens withhold it for a failure whose `canResume` is false
+    /// (#638), so a non-retryable API rejection writes nothing here and cannot
+    /// come back after a relaunch offering a Resume that would fail again.
+    private func persisted(
+        _ resume: ImportJob.ResumePlan?,
+        for job: ImportJob,
+        outcome: ImportJob.Outcome
+    ) -> ImportJob.ResumePlan? {
+        guard var plan = resume else { return nil }
+        guard job.kind == .statement, let resumeStore else { return plan }
+        plan.recordUUID = resumeStore.save(plan: plan, scope: job.scope, outcome: outcome)
+        return plan
     }
 
     /// Remove a finished job once the user has seen its outcome.
+    ///
+    /// Seeing the outcome IS the acknowledgement, so the stored PDF goes with
+    /// the row (#639). Tapping Resume from the alert still works: the bytes are
+    /// already in the plan the view read off the job a moment earlier, and a
+    /// resumed run that ends short writes a fresh record of its own.
     func acknowledge(_ id: UUID) {
         tokens[id] = nil
+        clearPersistedResume(for: id)
         jobs.removeAll { $0.id == id }
+        refreshSystemAssertions()
     }
 
     /// Ask a running job to stop after the chunk it is on. What it already
@@ -192,6 +365,81 @@ final class ImportJobCenter {
     /// feedback and a summary row would be noise.
     func discard(_ id: UUID) {
         tokens[id] = nil
+        clearPersistedResume(for: id)
         jobs.removeAll { $0.id == id }
+        refreshSystemAssertions()
     }
+
+    /// Drop the stored PDF and the row that named it, for a job that is about
+    /// to leave the list (#639).
+    private func clearPersistedResume(for id: UUID) {
+        guard let resumeStore,
+              let recordUUID = jobs.first(where: { $0.id == id })?.resume?.recordUUID
+        else { return }
+        resumeStore.clear(recordUUID: recordUUID)
+    }
+
+    // MARK: - Keeping the run alive (#635)
+
+    /// True while any registered job is still working. The two system
+    /// assertions below are held exactly for as long as this is true.
+    var hasUnfinishedJobs: Bool { jobs.contains { !$0.isFinished } }
+
+    /// Hold the screen awake and a background-task assertion while any import
+    /// is unfinished, and release both the moment none is (#635).
+    ///
+    /// Centralised here rather than in each view because `begin` / `finish` /
+    /// `acknowledge` / `discard` are the only four places a job's state can
+    /// change, so this is the one point where the answer can never drift. It
+    /// also means a receipt read gets the same protection a statement does,
+    /// for free.
+    ///
+    /// The field failure this fixes: the phone auto-locked mid-import, iOS
+    /// suspended the app a few seconds later, and the in-flight request to
+    /// Anthropic died. Nothing here makes an import survive a LOCKED phone for
+    /// its whole run (that needs a background `URLSession`, a re-architecture);
+    /// it stops auto-lock from starting the sequence, and buys a brief
+    /// backgrounding enough time to land.
+    ///
+    /// Both calls are UIKit, and this file is in the `DexterMac` sources list,
+    /// so both sit behind `#if os(iOS)`. On macOS the method is a no-op: a Mac
+    /// does not suspend a foreground app and has no idle-timer equivalent worth
+    /// touching.
+    private func refreshSystemAssertions() {
+        #if os(iOS)
+        let working = hasUnfinishedJobs
+        UIApplication.shared.isIdleTimerDisabled = working
+        if working {
+            beginBackgroundAssertion()
+        } else {
+            endBackgroundAssertion()
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    /// `.invalid` means "we hold nothing". Every path in and out of this value
+    /// goes through the two methods below, so the assertion can be taken at
+    /// most once and is always released, including on `discard`.
+    @ObservationIgnored private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginBackgroundAssertion() {
+        guard backgroundTaskID == .invalid else { return }
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "Dexter import") { [weak self] in
+            // iOS is about to reclaim the time it granted. Release the
+            // assertion ourselves; failing to is what gets an app killed.
+            // The expiration handler is called on the main thread.
+            MainActor.assumeIsolated { self?.endBackgroundAssertion() }
+        }
+    }
+
+    private func endBackgroundAssertion() {
+        guard backgroundTaskID != .invalid else { return }
+        let held = backgroundTaskID
+        // Cleared BEFORE the call, so the expiration handler firing during
+        // `endBackgroundTask` cannot end the same identifier twice.
+        backgroundTaskID = .invalid
+        UIApplication.shared.endBackgroundTask(held)
+    }
+    #endif
 }

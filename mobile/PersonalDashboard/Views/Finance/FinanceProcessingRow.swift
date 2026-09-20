@@ -70,6 +70,13 @@ struct FinanceProcessingRow: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(Tokens.success)
+        case .incomplete:
+            // Finished, but short of the whole file (#637). A green tick would
+            // say the opposite of what the label now says, so this sits
+            // between the tick and the failure triangle.
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Tokens.warning)
         case .failure:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 13, weight: .regular))
@@ -111,6 +118,8 @@ struct FinanceProcessingRow: View {
             return "\(job.displayLabel)\(progress). Working in the background."
         case .summary:
             return "\(job.displayLabel). Finished. Tap to see what was imported."
+        case .incomplete:
+            return "\(job.displayLabel). Finished, but not everything was read. Tap to see what was imported."
         case .failure:
             return "\(job.displayLabel). Failed. Tap to see why."
         }

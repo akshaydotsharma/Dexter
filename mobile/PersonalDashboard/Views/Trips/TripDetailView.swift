@@ -90,6 +90,15 @@ struct TripDetailView: View {
     @State private var isProcessingExpenseUpload: Bool = false
     /// Summary shown after a statement / multi-expense photo import completes.
     @State private var statementImportSummary: String?
+    /// The plan for finishing a trip import that ended with chunks unread
+    /// (#635). Same shape as Finance's: held here because `openFinishedJob`
+    /// acknowledges the job as it raises the alert.
+    @State private var statementResumePlan: ImportJob.ResumePlan?
+    /// Whether the run behind `statementImportSummary` read the whole file,
+    /// which is what the alert TITLE reports (#637). Not inferred from
+    /// `statementResumePlan`: a run left truncated after the re-split is
+    /// incomplete and yet has nothing to resume.
+    @State private var statementSummaryIsComplete = true
     /// Hard-failure alert when an upload couldn't be processed at all.
     @State private var expenseCaptureError: String?
 
@@ -196,13 +205,44 @@ struct TripDetailView: View {
         switch job.outcome {
         case .summary(let text):
             statementImportSummary = text
+            statementSummaryIsComplete = true
+        case .incomplete(let text):
+            statementImportSummary = text
+            statementSummaryIsComplete = false
         case .failure(let text):
             expenseCaptureError = text
         case .none:
             return
         }
+        // Read off the job BEFORE acknowledging, which removes it (#635).
+        statementResumePlan = job.resume
         withAnimation(.easeInOut(duration: 0.15)) {
             ImportJobCenter.shared.acknowledge(job.id)
+        }
+    }
+
+    /// A run that stopped, was interrupted, or left a page range truncated is
+    /// not a complete import (#635, #637).
+    private var statementSummaryTitle: String {
+        statementSummaryIsComplete ? "Import complete" : "Import incomplete"
+    }
+
+    /// Re-runs only the chunks the last attempt did not read (#635).
+    @ViewBuilder
+    private var resumeButton: some View {
+        if let plan = statementResumePlan {
+            Button("Resume") {
+                statementImportSummary = nil
+                expenseCaptureError = nil
+                statementResumePlan = nil
+                Task {
+                    await importTripStatement(
+                        pdfData: plan.pdfData,
+                        fileName: plan.fileName,
+                        resumingFrom: plan.point
+                    )
+                }
+            }
         }
     }
 
@@ -417,14 +457,25 @@ struct TripDetailView: View {
         }
         #endif
         .alert(
-            "Import complete",
+            statementSummaryTitle,
             isPresented: Binding(
                 get: { statementImportSummary != nil },
-                set: { if !$0 { statementImportSummary = nil } }
+                set: {
+                    if !$0 {
+                        statementImportSummary = nil
+                        statementResumePlan = nil
+                        statementSummaryIsComplete = true
+                    }
+                }
             ),
             presenting: statementImportSummary
         ) { _ in
-            Button("OK", role: .cancel) { statementImportSummary = nil }
+            resumeButton
+            Button("OK", role: .cancel) {
+                statementImportSummary = nil
+                statementResumePlan = nil
+                statementSummaryIsComplete = true
+            }
         } message: { summary in
             Text(summary)
         }
@@ -432,11 +483,22 @@ struct TripDetailView: View {
             "Couldn't process receipt",
             isPresented: Binding(
                 get: { expenseCaptureError != nil },
-                set: { if !$0 { expenseCaptureError = nil } }
+                set: {
+                    if !$0 {
+                        expenseCaptureError = nil
+                        statementResumePlan = nil
+                    }
+                }
             ),
             presenting: expenseCaptureError
         ) { _ in
-            Button("OK", role: .cancel) { expenseCaptureError = nil }
+            // A resumed run whose first chunk fails throws; the resume point is
+            // still good, so keep the offer alive here too (#635).
+            resumeButton
+            Button("OK", role: .cancel) {
+                expenseCaptureError = nil
+                statementResumePlan = nil
+            }
         } message: { message in
             Text(message)
         }
@@ -895,7 +957,9 @@ struct TripDetailView: View {
             // Save the receipt regardless; open the review sheet with a banner.
             let message: String = {
                 if let typed = error as? ReceiptExtractionError { return typed.localizedDescription }
-                if let typed = error as? StatementExtractionError { return typed.localizedDescription }
+                if let typed = error as? StatementExtractionError {
+                    return StatementFailure.classify(typed).failureAlertMessage
+                }
                 return "We saved your receipt but couldn't read it. Fill in the details below."
             }()
             let prefill = PrefilledExpense.fromFailure(
@@ -942,6 +1006,8 @@ struct TripDetailView: View {
                 trip: trip
             )
             statementImportSummary = tripImportSummary(result.summaryLine)
+            // One photo is one non-chunked request, so this never ends short.
+            statementSummaryIsComplete = true
         }
     }
 
@@ -954,37 +1020,64 @@ struct TripDetailView: View {
     /// Batch-import a statement PDF, linked to this trip (#258). Every inserted
     /// row gets the trip FK and — when the trip has participants — the default
     /// equal split. Dedup is unchanged.
-    private func importTripStatement(pdfData: Data, fileName: String? = nil) async {
+    /// `resumingFrom` re-reads only the chunks a previous attempt missed (#635).
+    private func importTripStatement(
+        pdfData: Data,
+        fileName: String? = nil,
+        resumingFrom: StatementResumePoint? = nil
+    ) async {
         // No blocking overlay and no `defer` removal (#498): the banner row is
         // cleared by `openFinishedJob` once the user has read the outcome, so
         // leaving the trip mid-import and coming back shows the run as it
         // stands rather than losing it with the view.
-        let bannerLabel = fileName
+        // The FILE NAME only. `ImportJob` builds the wording for every phase,
+        // so the row stops saying "Importing" the moment the run ends (#637).
+        let subject = fileName
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-            .map { "Importing \($0)…" }
         let (jobID, token) = ImportJobCenter.shared.begin(
             kind: .statement,
             scope: .trip(trip.clientUUID),
-            overrideLabel: bannerLabel
+            subject: subject,
+            isResuming: resumingFrom != nil
         )
+
+        func plan(for point: StatementResumePoint) -> ImportJob.ResumePlan {
+            ImportJob.ResumePlan(pdfData: pdfData, fileName: fileName, point: point)
+        }
 
         do {
             let result = try await StatementImporter.default().importStatement(
                 pdfData: pdfData,
                 fileName: fileName,
                 trip: trip,
+                resumingFrom: resumingFrom,
                 onProgress: { done, total in
                     ImportJobCenter.shared.reportProgress(jobID, completed: done, total: total)
                 },
                 cancellation: token
             )
-            ImportJobCenter.shared.finish(jobID, outcome: .summary(tripImportSummary(result.summaryLine)))
+            ImportJobCenter.shared.finish(
+                jobID,
+                // A run that stopped, was interrupted, or left a page range
+                // truncated is not a complete import, and the banner says so
+                // (#637).
+                outcome: .summary(
+                    tripImportSummary(result.summaryLine),
+                    complete: result.isComplete
+                ),
+                resume: result.resumePoint.map(plan)
+            )
         } catch {
-            let message: String = {
-                if let typed = error as? StatementExtractionError { return typed.localizedDescription }
-                return "We couldn't read this statement. Make sure it's a text-based PDF (not a photo) and try again."
-            }()
-            ImportJobCenter.shared.finish(jobID, outcome: .failure(message))
+            // Classified, not rendered raw (#638). Same treatment as Finance,
+            // so both import screens say the same thing about the same error.
+            let failure = StatementFailure.classify(error)
+            // Keep an inherited resume point alive through one failed retry,
+            // but only where a retry could succeed (#638).
+            ImportJobCenter.shared.finish(
+                jobID,
+                outcome: .failure(failure.failureAlertMessage),
+                resume: failure.canResume ? resumingFrom.map(plan) : nil
+            )
         }
     }
 

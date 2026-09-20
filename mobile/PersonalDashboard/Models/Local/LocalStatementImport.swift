@@ -46,6 +46,24 @@ final class LocalStatementImport {
     /// default so the migration stays lightweight. Empty when nothing landed.
     var importedExpenseUUIDs: String = ""
 
+    /// Everything needed to finish a statement import that ended with chunks
+    /// unread, so Resume survives the app closing (#639). Empty on every row
+    /// that has nothing to resume, which is every completed import and every
+    /// row written before this field existed.
+    ///
+    /// ONE additive column rather than the ten scalars the state needs. The
+    /// payload is a `StatementResumeRecord` encoded as JSON, so a later field
+    /// costs no further SwiftData migration on a model that already syncs and
+    /// exports. The default is on the DECLARATION, not only in `init`, because
+    /// a field without one fails the container bootstrap for every existing
+    /// install (#555).
+    ///
+    /// Device-local on purpose: it names a PDF in THIS device's container, so
+    /// it is deliberately absent from `StatementImportDTO` and therefore never
+    /// syncs and never lands in a backup. A peer that received this row sees an
+    /// empty string, which is the correct answer there.
+    var resumeStateJSON: String = ""
+
     var createdAt: Date
 
     init(
@@ -76,6 +94,24 @@ final class LocalStatementImport {
             .map { $0.uuidString.lowercased() }
             .joined(separator: ",")
         self.createdAt = createdAt
+    }
+
+    /// True when this row exists ONLY to carry a resumable import across a
+    /// relaunch (#639), and never recorded an import of its own.
+    ///
+    /// A run that imported nothing still needs somewhere to hang its resume
+    /// state, so `StatementResumeStore` writes a counts-free row for it. Such a
+    /// row is not a parsed file: the Parsed Files & Imports history filters it
+    /// out, and `DataExportService` leaves it out of the archive, so it neither
+    /// shows as an empty import nor travels to another device.
+    var isResumePlaceholder: Bool {
+        !resumeStateJSON.isEmpty
+            && imported == 0
+            && skippedDuplicates == 0
+            && ignoredNonSpend == 0
+            && failed == 0
+            && refunds == 0
+            && deposits == 0
     }
 
     /// Parsed list of imported-expense UUIDs (as lowercased strings, matching
