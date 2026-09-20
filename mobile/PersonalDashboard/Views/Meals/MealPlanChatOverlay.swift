@@ -3,21 +3,61 @@ import SwiftUI
 /// Fixed metrics for the floating chat (#599).
 enum MealPlanChatMetrics {
     /// The floating button.
+    ///
+    /// Its inset from the trailing edge is each caller's own padding; the BOTTOM
+    /// inset comes from `BottomTabBarMetrics.fabBottomInset`, which already
+    /// answers "clear the floating tab bar on a phone, sit in the true corner on
+    /// a Mac" and is what every other floating button in this app uses.
     static let buttonSize: CGFloat = 52
-    /// Inset from the trailing edge of the tab. The BOTTOM inset comes from
-    /// `BottomTabBarMetrics.fabBottomInset`, which already answers "clear the
-    /// floating tab bar on a phone, sit in the true corner on a Mac" and is what
-    /// every other floating button in this app uses.
+
     /// Widest the panel gets. Beyond this a chat line is too long to scan, and
     /// the plan behind it stops being visible, which is the whole reason this is
     /// a local overlay rather than a sheet.
     static let panelMaxWidth: CGFloat = 420
-    /// Tallest the transcript gets before it scrolls inside the panel.
+
+    /// (macOS) What the panel has to leave free under itself: the floating
+    /// button, the button's own bottom inset, and the gap between the two. It is
+    /// both the panel's bottom padding and the first term subtracted from the
+    /// window when its height is worked out, so the two can never disagree.
+    static let panelBottomReserve: CGFloat =
+        BottomTabBarMetrics.fabBottomInset + buttonSize + Space.sm
+
+    /// (macOS) What it leaves free above itself, so a full-height panel still
+    /// reads as a window floating over the plan rather than a second pane.
+    static let panelTopMargin: CGFloat = Space.lg
+
+    /// (macOS) Tallest the panel gets, however big the window is.
     ///
-    /// The panel is a fixed box over the plan, so unlike the inline version it
-    /// DOES own a scroll view. That is the trade a floating overlay makes: the
-    /// content behind it stays put, and the price is one nested scroll.
-    static let transcriptMaxHeight: CGFloat = 420
+    /// The panel is a conversation ABOUT the plan, and a panel that grew with
+    /// the window would eventually cover the thing being talked about. This is
+    /// the vertical half of the argument `panelMaxWidth` makes.
+    static let panelMaxHeight: CGFloat = 640
+
+    /// (macOS) Shortest it gets, as long as the window has the room.
+    ///
+    /// Below roughly this the transcript is a few lines between a header and an
+    /// input row, which is the shape #641 was filed about.
+    static let panelMinHeight: CGFloat = 320
+
+    /// (macOS) The panel's height for a given container height.
+    ///
+    /// Derived from the window rather than from the conversation, which is the
+    /// whole point: the box used to hug its content, so it grew as turns landed,
+    /// shrank when the transcript was cleared, and opened short and empty. A
+    /// height that only changes when the window is resized gives the transcript
+    /// a fixed frame to scroll inside, and that scroll is the trade a floating
+    /// overlay makes — the plan behind it stays put, and the price is one nested
+    /// scroll view.
+    ///
+    /// Bounded on both sides: never taller than the room above the button, and
+    /// never shorter than `panelMinHeight` unless the window itself is too short
+    /// to give it that, in which case it takes what there is rather than
+    /// overflowing.
+    static func panelHeight(inContainer containerHeight: CGFloat) -> CGFloat {
+        let room = containerHeight - panelBottomReserve - panelTopMargin
+        guard room > panelMinHeight else { return max(room, 0) }
+        return min(room, panelMaxHeight)
+    }
 }
 
 /// The plan chat: one button, two shapes (#599).
@@ -90,14 +130,21 @@ struct MealPlanChatOverlay: View {
             #if os(macOS)
             if isOpen {
                 scrim
-                panel
-                    .padding(.trailing, Space.lg)
-                    // Clears the button, which stays put underneath.
-                    .padding(
-                        .bottom,
-                        BottomTabBarMetrics.fabBottomInset + MealPlanChatMetrics.buttonSize + Space.sm
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                // The height comes from the window, not from the conversation
+                // (#641). `GeometryReader` is what reads it: the panel is a
+                // floating child of this ZStack, so nothing else here knows how
+                // much room there is above the button.
+                GeometryReader { geo in
+                    panel
+                        .frame(height: MealPlanChatMetrics.panelHeight(inContainer: geo.size.height))
+                        .padding(.trailing, Space.lg)
+                        // Clears the button, which stays put underneath.
+                        .padding(.bottom, MealPlanChatMetrics.panelBottomReserve)
+                        // A `GeometryReader` places its content top-leading, and
+                        // this panel belongs in the opposite corner.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             #endif
             floatingButton
@@ -276,9 +323,12 @@ struct MealPlanChatOverlay: View {
                 .frame(height: 0.5)
 
             if showsWelcome {
+                // Fills the space between the header and the input row rather
+                // than sizing it. The panel's height is already settled, so a
+                // greeting that hugged its own content would leave the box
+                // half-empty with a gap under it (#641).
                 MealPlanChatWelcome(compact: true)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, Space.xl)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -289,7 +339,10 @@ struct MealPlanChatOverlay: View {
                         )
                         .padding(Space.lg)
                     }
-                    .frame(maxHeight: MealPlanChatMetrics.transcriptMaxHeight)
+                    // Takes whatever the header and the input row leave, instead
+                    // of capping itself: the panel is a fixed box now, so the
+                    // cap is the box (#641).
+                    .frame(maxHeight: .infinity)
                     .onChange(of: model.turns.last?.text) { _, _ in scrollToNewest(proxy) }
                     .onChange(of: model.turns.count) { _, _ in scrollToNewest(proxy) }
                 }
@@ -300,6 +353,8 @@ struct MealPlanChatOverlay: View {
                 .frame(height: 0.5)
             inputRow
         }
+        // Width only. The height is imposed from the body above, where the
+        // window's size is known (#641).
         .frame(maxWidth: MealPlanChatMetrics.panelMaxWidth)
         .background(Tokens.paper, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
         .paperBorder(Tokens.borderStrong, radius: Radius.xl)
