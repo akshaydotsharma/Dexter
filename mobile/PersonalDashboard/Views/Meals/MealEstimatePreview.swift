@@ -81,6 +81,26 @@ struct MealEstimatePreview: View {
     /// preview, and the difference between the two cases is this array.
     var savedItems: [MealItemEntry] = []
 
+    /// The type the Log button will write (#643).
+    ///
+    /// ### Why the control is here and not in the composer above
+    ///
+    /// It used to be a dropdown in the composer's control row, which sat above
+    /// this whole surface and was only ever a HINT: it rode the request as
+    /// `mealTypeHint`, and the model was free to answer something else. So a
+    /// user who set "dinner" and then read "Lunch" in this header had been
+    /// overruled by a control that looked authoritative.
+    ///
+    /// The meal type is decided when the meal is WRITTEN, and this is where it
+    /// is written. The model's answer seeds it, the user changes it if the
+    /// model was wrong, and the value the Log button reads is the value on
+    /// screen. That is the whole of the rule.
+    ///
+    /// It replaces the read-only label that was here rather than joining it.
+    /// Two statements of one value in one card is how a header and a control
+    /// end up disagreeing.
+    @Binding var mealType: MealType
+
     let onDiscard: () -> Void
     let onConfirm: () -> Void
 
@@ -181,12 +201,22 @@ struct MealEstimatePreview: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-            // A category label, not a fact about the meal. As an eyebrow it
-            // demotes by kind instead of by size, which leaves the size budget
-            // to the numbers below it.
-            Label(checked.mealType.displayName, systemImage: checked.mealType.sfSymbol)
-                .eyebrow(Tokens.accentMeals)
+        HStack(alignment: .center, spacing: Space.sm) {
+            // The one editable thing in this header, and the only statement of
+            // the meal type on this surface. `allowsAuto` is off: the model has
+            // already answered, so "let Dexter decide" would offer to throw
+            // that answer away and take the clock's guess instead.
+            MealTypeDropdown(
+                selection: Binding(
+                    get: { mealType },
+                    // A nil can only arrive from the Auto row, which is not
+                    // rendered here. Ignoring it is what keeps this binding
+                    // total without inventing a type nobody chose.
+                    set: { if let new = $0 { mealType = new } }
+                ),
+                allowsAuto: false,
+                hugsContent: true
+            )
             Spacer(minLength: Space.sm)
             // Both chips, never one instead of the other. They answer different
             // questions: this one says the figures came from a published panel,

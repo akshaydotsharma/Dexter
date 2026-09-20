@@ -36,10 +36,11 @@ enum MealDuplicateChoice: String, Identifiable {
 /// every time, so two logs of one pot disagree and a week's protein is the sum
 /// of the disagreement.
 ///
-/// So there are exactly two ways to log a meal, and they sit side by side:
-/// describe it in the field, or find it in `FoodItemPickerSheet`. Both can be
-/// used in the same meal. The tray is what has been added so far, and the
-/// primary button reads what is in front of it:
+/// So there are exactly two ways to log a meal, and since #643 the composer
+/// says so out loud: describe it in the field, or take the branch under it into
+/// `FoodItemPickerSheet`. The word between them is "or" and the rule around it
+/// is a fork, but both can still be used in the same meal. The tray is what has
+/// been added so far, and the primary button reads what is in front of it:
 ///
 /// 1. Text, no picks. "Estimate", exactly as it has always worked.
 /// 2. Picks, no text. "Log". No call of any kind, and no preview: there is
@@ -99,14 +100,17 @@ struct MealComposer: View {
     /// description usually says, and a picker the user has to touch on every
     /// meal is friction on the one path that has to stay fast.
     @State private var typeOverride: MealType?
-    /// Whether the meal-type options are open. They float in a popover over
-    /// the composer rather than growing inside it, so opening the picker never
-    /// moves the description field or the Estimate button.
-    @State private var typePickerOpen = false
-    #if os(macOS)
-    @State private var triggerHovering = false
-    #endif
     @State private var phase: MealComposerPhase = .idle
+
+    /// The meal type the preview's Log button will write (#643).
+    ///
+    /// Seeded from the model's answer the moment an estimate lands, and then
+    /// owned by the user. It is separate from `typeOverride` on purpose:
+    /// that one is a HINT sent with the request and the model is free to
+    /// ignore it, this one is the decision. Conflating them would mean a user
+    /// who corrected "lunch" to "dinner" in the preview had merely suggested it
+    /// again to a call that had already finished.
+    @State private var previewMealType: MealType = .lunch
 
     /// Items added to this meal from the picker, in the order they were added
     /// (#625).
@@ -202,11 +206,40 @@ struct MealComposer: View {
         trimmed.isEmpty && photos.isEmpty && !picks.isEmpty ? .logPicks : .estimate
     }
 
-    private var canSubmit: Bool {
-        switch primaryAction {
-        case .estimate: return canEstimate
-        case .logPicks: return !picks.isEmpty && phase != .estimating
+    /// Whether the second way in is on screen.
+    ///
+    /// Idle and failed, yes: both are states where the card is still asking
+    /// what the meal was, and after a failed estimate the picker is a genuine
+    /// fallback. Estimating and preview, no. Removing a picked row stays
+    /// possible either way, because each tray row carries its own control.
+    private var showsBranch: Bool {
+        switch phase {
+        case .idle, .failed: return true
+        case .estimating, .preview: return false
         }
+    }
+
+    /// Whether path 1's button is on screen.
+    ///
+    /// Gone once an estimate has come back: the preview owns the decision from
+    /// then on, and a second Estimate above it would offer to re-run a call
+    /// whose answer is already on screen.
+    private var showsEstimateButton: Bool {
+        switch phase {
+        case .idle, .estimating: return true
+        // A failed estimate offers its own Try again, so this would be a second
+        // button for the same act.
+        case .failed, .preview: return false
+        }
+    }
+
+    /// Whether path 2's log row is on screen.
+    ///
+    /// Only when the tray is the whole meal. `primaryAction` already states
+    /// that rule for the write; this reads the same property so the button and
+    /// the write cannot disagree about which path a meal is on.
+    private var showsPicksLogRow: Bool {
+        showsBranch && !picks.isEmpty && primaryAction == .logPicks
     }
 
     /// The meal type a tray-only meal is written with: the user's choice, or
@@ -282,19 +315,57 @@ struct MealComposer: View {
                 MealPhotoStrip(photos: $photos, note: photoNote)
             }
 
-            // The tray sits between the input and the controls, because it IS
-            // input: it is the half of the meal that was picked rather than
-            // typed, and it stays editable while a preview is up.
+            // The branch, and the second path under it (#643). Everything
+            // above this line is one way of answering "what did you eat"; the
+            // block below it is the other, and it ends in its own button.
+            //
+            // It is a way IN, so it is only on screen while the card is still
+            // asking the question. Once an estimate is running or a preview is
+            // up, the card has one job — wait, or confirm — and a live fork in
+            // the middle of it is both noise and a tap target that would open a
+            // picker onto a meal already being written.
+            if showsBranch {
+                orBranch
+                    .frame(maxWidth: branchWidth)
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                findItemButton
+                    .frame(maxWidth: branchWidth)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+
+            // The tray sits under the button that fills it: it IS the second
+            // path's input, and it stays editable while a preview is up.
             if !picks.isEmpty { trayBlock }
 
-            // Centred: the options open in a popover now, so this row never
-            // changes height and the two controls can sit as a matched pair.
-            HStack(alignment: .center, spacing: Space.sm) {
-                typeDropdown
-                    .frame(maxWidth: 240)
-                findItemButton
-                Spacer(minLength: Space.sm)
-                estimateButton
+            // The second path's own log step (#643).
+            //
+            // It carries the meal type because this is the moment the meal is
+            // written, and a picked tray has no opinion about whether it is
+            // lunch. Nothing here is estimated, so nothing is previewed: the
+            // numbers came off a label and the button writes them.
+            //
+            // It appears only when the tray is the WHOLE meal. With words in
+            // the field the picks ride the estimate instead, and two live write
+            // buttons would ask the user which of them their meal qualifies for.
+            if showsPicksLogRow {
+                HStack(alignment: .center, spacing: Space.sm) {
+                    MealTypeDropdown(selection: $typeOverride)
+                        .frame(maxWidth: 200)
+                    logPicksButton
+                }
+                .frame(maxWidth: branchWidth)
+                .frame(maxWidth: .infinity, alignment: .center)
+            } else if !picks.isEmpty && showsBranch {
+                // The tray is not the whole meal, so its Log button is gone and
+                // the user is owed the reason. Without this the items look
+                // stranded: added, listed, and with no button under them.
+                Text("Added to the estimate when you press Estimate.")
+                    .font(.edFootnote)
+                    .foregroundStyle(Tokens.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: branchWidth)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
 
             switch phase {
@@ -312,6 +383,10 @@ struct MealComposer: View {
                     description: trimmed,
                     dayNote: isToday ? nil : "This logs onto \(dayPhrase), not today.",
                     savedItems: pickedItems,
+                    // The model's answer, and the user's if they disagree with
+                    // it (#643). This is the log step, so this is where the
+                    // meal type is decided and where it is read from.
+                    mealType: $previewMealType,
                     onDiscard: { reset() },
                     onConfirm: { confirm(checked) }
                 )
@@ -407,30 +482,53 @@ struct MealComposer: View {
                 .stroke(Tokens.border, lineWidth: 0.5)
         )
         .overlay(alignment: .bottomTrailing) {
-            MealCaptureAccessories(
-                text: $descriptionText,
-                photos: $photos,
-                // An estimate in flight has already been sent the field's
-                // contents, so editing them means editing something that was
-                // not asked. The preview and failure states stay editable,
-                // because both of those are states you argue with.
-                isEnabled: phase != .estimating,
-                onError: { captureNotice = $0 }
-            )
+            // Three controls on one line, and they are the same kind of thing:
+            // each one is a way of turning what is in this box into a meal
+            // (#643). The plus and the microphone FILL the box; the arrow sends
+            // it. Putting the arrow anywhere else made it look like it acted on
+            // the whole card, which it never did.
+            HStack(spacing: Space.xs) {
+                MealCaptureAccessories(
+                    text: $descriptionText,
+                    photos: $photos,
+                    // An estimate in flight has already been sent the field's
+                    // contents, so editing them means editing something that was
+                    // not asked. The preview and failure states stay editable,
+                    // because both of those are states you argue with.
+                    isEnabled: phase != .estimating,
+                    onError: { captureNotice = $0 }
+                )
+                if showsEstimateButton {
+                    estimateButton
+                }
+            }
             .padding(.trailing, Space.sm)
             .padding(.bottom, Space.sm)
         }
     }
 
-    /// Room for the two accessory glyphs on the field's last line.
+    /// Room for the three accessory glyphs on the field's last line.
     ///
-    /// Two 28pt buttons and a 4pt gap, plus the 8pt the overlay is inset by.
-    /// The Mac used to reserve one button's worth, because the microphone was
-    /// iOS-only; it carries both since #640, so the gutter is the same on both
-    /// platforms and a short reservation would let the last line run under the
-    /// mic.
+    /// Three 28pt buttons and two 4pt gaps, plus the 8pt the overlay is inset
+    /// by. The Mac used to reserve one button's worth, because the microphone
+    /// was iOS-only; it carries both since #640, so the gutter is the same on
+    /// both platforms and a short reservation would let the last line run under
+    /// a glyph.
+    ///
+    /// It reserves all three even in the phases that do not draw the arrow
+    /// (#643). A gutter that changed with the phase would reflow every line of
+    /// the description the moment an estimate came back, which is a paragraph
+    /// moving under the user for no reason they can see.
+    ///
+    /// The cost is real and it is measured: on a phone this is about 100pt of a
+    /// 338pt field, charged on every line rather than only the line the buttons
+    /// sit beside, because a uniform `.trailing` padding is the only version of
+    /// this SwiftUI lays out without a custom `Layout`. The field still opens at
+    /// three lines and grows to six, so a meal has room. If a future change
+    /// makes this field single-line, this arrangement cannot survive it: move
+    /// the row below the text instead of over it.
     private var accessoryGutter: CGFloat {
-        28 + Space.xs + 28 + Space.sm
+        28 * 3 + Space.xs * 2 + Space.sm
     }
 
     /// The one thing worth saying under a photograph with no words beside it.
@@ -446,172 +544,164 @@ struct MealComposer: View {
         return "Add a line if a portion or a brand isn't obvious."
     }
 
-    /// Meal type, or "let Dexter decide".
+    /// Path 1's action, and only path 1's (#643).
     ///
-    /// Not a `Menu` (#540). A system menu panel is the one control the design
-    /// system cannot reach: system font, system row metrics, system checkmarks,
-    /// and a different panel again on macOS. The rows here are the same
-    /// `InlineDropdownRow`s Finance uses, so the open state is still drawn out
-    /// of the design system.
+    /// ### Why it is a glyph and not the word "Estimate"
     ///
-    /// It no longer opens *inside* the form either. Growing the list in place
-    /// pushed the description field, the Estimate button and everything below
-    /// them down the screen every time the picker opened, for a choice most
-    /// meals never make. A popover floats the rows over the surface and leaves
-    /// the composer exactly where it was.
-    private var typeDropdown: some View {
-        Button {
-            typePickerOpen.toggle()
-        } label: {
-            HStack(spacing: Space.sm) {
-                Image(systemName: typeOverride?.sfSymbol ?? "wand.and.stars")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(typeOverride == nil ? Tokens.muted : Tokens.accentMeals)
-                    .frame(width: 24, alignment: .leading)
-                Text(typeOverride?.displayName ?? "Auto")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-                    .lineLimit(1)
-                Spacer(minLength: Space.sm)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Tokens.muted)
-                    .rotationEffect(.degrees(typePickerOpen ? 180 : 0))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // The metrics `EdButtonStyle` applies at `size: .sm`, which is what
-            // the Estimate button beside this one uses: 12 horizontal, 6
-            // vertical (Design/Buttons.swift, `hpad` / `vpad`). `InlineDropdown`
-            // pads `Space.md` (12) all round, which made this trigger read half
-            // again as tall as the button it sits next to.
-            .padding(.horizontal, Space.md)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(triggerBackground, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        .paperBorder(triggerBorder, radius: Radius.md)
-        #if os(macOS)
-        // Stripping the system chrome takes the button's own highlight with it,
-        // and without a hover response a bordered surface reads as a static
-        // caption rather than something you can open. The same rule
-        // `InlineDropdown` follows, so this picker and the Finance one behave
-        // alike under the pointer.
-        .onHover { triggerHovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: triggerHovering)
-        #endif
-        .popover(isPresented: $typePickerOpen, arrowEdge: .bottom) {
-            typeOptions
-        }
-        .accessibilityLabel("Meal type, \(typeOverride?.displayName ?? "decided automatically")")
-    }
-
-    private var triggerBackground: Color {
-        #if os(macOS)
-        return triggerHovering && !typePickerOpen ? Tokens.surface2 : Tokens.surface
-        #else
-        return Tokens.surface
-        #endif
-    }
-
-    private var triggerBorder: Color {
-        #if os(macOS)
-        return triggerHovering || typePickerOpen ? Tokens.borderStrong : Tokens.border
-        #else
-        return typePickerOpen ? Tokens.borderStrong : Tokens.border
-        #endif
-    }
-
-    /// The five options, floated over the composer.
+    /// It sits in the field's own accessory row, in line with the plus and the
+    /// microphone, and those three are one family: a photograph, a spoken
+    /// sentence and a typed one all end up as the same request. A labelled
+    /// button in that row would be a fourth kind of thing wedged between two
+    /// icons, and it would cost the row more width than the two inputs put
+    /// together.
     ///
-    /// Fixed to the trigger's own 240pt so the panel and the control it came
-    /// from are one width, and the labels keep the 24pt glyph slot they line up
-    /// against in the closed state.
-    private var typeOptions: some View {
-        VStack(spacing: 0) {
-            InlineDropdownRow(
-                glyph: .symbol("wand.and.stars"),
-                label: "Let Dexter decide",
-                isSelected: typeOverride == nil,
-                accent: Tokens.accentMeals
-            ) { selectType(nil) }
-
-            InlineDropdownDivider()
-
-            ForEach(MealType.allCases) { type in
-                InlineDropdownRow(
-                    glyph: .symbol(type.sfSymbol),
-                    label: type.displayName,
-                    isSelected: typeOverride == type,
-                    accent: Tokens.accentMeals
-                ) { selectType(type) }
-            }
-        }
-        .padding(.vertical, Space.xs)
-        .frame(width: 240)
-        .background(Tokens.surface)
-        // The panel's chrome belongs to the system; this puts it back on the
-        // design system's surface colour in both themes.
-        .presentationBackground(Tokens.surface)
-        // Without this an iPhone adapts a popover into a full-screen sheet,
-        // which is a far bigger interruption than the inline list this
-        // replaces. Available from iOS 16.4 / macOS 13.3, both below the 17.0 /
-        // 14.0 deployment targets in project.yml, so no availability guard.
-        .presentationCompactAdaptation(.popover)
-    }
-
-    private func selectType(_ type: MealType?) {
-        typeOverride = type
-        typePickerOpen = false
-    }
-
-    /// The one primary control, in its three states (#625).
+    /// The arrow is the one glyph that means "send this" without naming what
+    /// happens next, which suits a control whose answer is a guess. The filled
+    /// disc is what separates it from its two neighbours: they are outlined and
+    /// quiet because they fill the box, this one is solid because it acts on it.
     ///
-    /// One button rather than two, because "Estimate" and "Log" are the same
-    /// decision at different costs, and a surface with both would ask the user
-    /// to work out which one their meal qualifies for. The word on it is the
-    /// answer: a meal with nothing to guess at never offers to guess.
+    /// ### Why it spins in place
+    ///
+    /// The word used to change to "Estimating…". With no word left, the disc
+    /// carries the state itself: it holds its fill and swaps the arrow for a
+    /// spinner, so the thing you pressed is the thing that is working.
     private var estimateButton: some View {
         Button {
-            submit()
+            estimate()
         } label: {
-            Text(primaryLabel)
+            Group {
+                if phase == .estimating {
+                    ProgressView()
+                        #if os(macOS)
+                        .controlSize(.small)
+                        #else
+                        .scaleEffect(0.55)
+                        #endif
+                        // The spinner sits on a filled disc, so it has to be
+                        // drawn in the paper the arrow would have been.
+                        .tint(Tokens.paper)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+            }
+            // The resting state is drawn to be SEEN, not to disappear. It
+            // first used `paper2` on `mutedSoft`, which on this palette is
+            // #F4F0E6 on a #F8F5EE field: four points of difference, so the
+            // third control vanished and the field looked like it had only two.
+            // A user who has not typed yet is exactly the user who needs to know
+            // the arrow is there. So the disc rests on `border` with its arrow
+            // in the same `muted` its two neighbours use, and fills with ink
+            // only once it can act.
+            .foregroundStyle(isLive ? Tokens.paper : Tokens.muted)
+            .frame(width: 28, height: 28)
+            .background(isLive ? Tokens.ink : Tokens.border, in: Circle())
+            .contentShape(Circle())
         }
-        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
-        .disabled(!canSubmit)
-        .opacity(canSubmit ? 1 : 0.5)
+        .buttonStyle(.plain)
+        .disabled(!canEstimate)
+        .accessibilityLabel(phase == .estimating ? "Estimating the meal" : "Estimate the meal")
+        .accessibilityHint(canEstimate || phase == .estimating ? "" : "Describe the meal or add a photo first")
     }
 
-    private var primaryLabel: String {
-        if phase == .estimating { return "Estimating…" }
-        return primaryAction == .logPicks ? "Log" : "Estimate"
-    }
-
-    /// The other way to say what is in the meal, beside the type dropdown
-    /// rather than beside the description.
+    /// Whether the disc is drawn filled.
     ///
-    /// It is a choice about WHAT is in the meal, which is the same kind of
-    /// choice the type dropdown makes, and putting it next to the field would
-    /// read as a way of filling the field in.
+    /// True while an estimate is running as well as when one can start.
+    /// `canEstimate` is false mid-call — the inputs are not editable then — and
+    /// reading it alone would drain the colour out of the control at the exact
+    /// moment it is doing the work.
+    private var isLive: Bool {
+        canEstimate || phase == .estimating
+    }
+
+    /// Path 2's action: write the tray, with no call and no preview (#643).
+    ///
+    /// There is nothing to preview. The numbers were read off a packet and the
+    /// amounts are the ones the user typed in the picker, so a preview would be
+    /// asking them to confirm their own arithmetic.
+    private var logPicksButton: some View {
+        Button {
+            commitPicksAlone()
+        } label: {
+            Text("Log meal")
+        }
+        .buttonStyle(EdButtonStyle(kind: .primary, size: .md, fullWidth: true))
+        .disabled(phase == .estimating)
+        .opacity(phase == .estimating ? 0.5 : 1)
+    }
+
+    /// The fork between the two ways to say what the meal is (#643).
+    ///
+    /// A rule with the word in the middle, and the word is the whole point: it
+    /// says the thing above and the thing below are alternatives rather than
+    /// steps. "Or", not "and", because either one alone is a complete meal —
+    /// though nothing stops a user taking both, which is what path 3 in the
+    /// type note above is.
+    ///
+    /// It is drawn from the same two tokens every other separator on this
+    /// surface uses: a hairline in `Tokens.border`, and an eyebrow in the
+    /// softest ink the palette has. Anything louder would read as a heading and
+    /// split one card into two.
+    private var orBranch: some View {
+        HStack(spacing: Space.sm) {
+            branchRule
+            Text("or").eyebrow(Tokens.mutedSoft)
+            branchRule
+        }
+        // One element, read once. Without this VoiceOver stops on two decorative
+        // rules on the way past a two-letter word.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("or")
+    }
+
+    /// How wide the branch is allowed to get.
+    ///
+    /// On a phone the card is narrower than this, so the rule and the button
+    /// fill it exactly as the field above them does. A Mac window is not: at
+    /// full width the button becomes a 1,400pt bar with two words floating in
+    /// the middle of it, which reads as an empty toolbar rather than as
+    /// something to press.
+    private let branchWidth: CGFloat = 420
+
+    private var branchRule: some View {
+        Rectangle()
+            .fill(Tokens.border)
+            .frame(height: 0.5)
+            .frame(maxWidth: .infinity)
+    }
+
+    /// The second path, under the branch rather than in the control row (#643).
+    ///
+    /// It used to sit beside the meal-type dropdown, on the grounds that both
+    /// are choices about WHAT is in the meal. That reasoning was right about the
+    /// button and wrong about the row: the control row is where the meal is
+    /// SETTLED — pick a type, press Estimate — so a third control in it read as
+    /// a modifier on the description rather than as the alternative to writing
+    /// one. Full width under an "or" states what it is in the one way nobody has
+    /// to work out.
     ///
     /// It says "find", not "saved items". The sheet behind it searches the
     /// user's own items AND the public food database in one field, and calling
     /// it a saved list promised something to maintain (#625). The count is left
-    /// off deliberately: the tray sits directly above this row whenever it has
-    /// anything in it, so a number on the button would state twice what is
-    /// already on screen.
+    /// off deliberately: the tray sits directly below this button whenever it
+    /// has anything in it, so a number here would state twice what is already
+    /// on screen.
     private var findItemButton: some View {
         Button {
             showingPicker = true
         } label: {
-            HStack(spacing: Space.xs) {
+            HStack(spacing: Space.sm) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
+                    // Sized off the ramp rather than off a literal, so the glyph
+                    // keeps its proportion to the label on a Mac, where the body
+                    // size is three points smaller than on the phone.
+                    .font(.system(size: EdMetrics.bodyPointSize - 3, weight: .semibold))
                 Text("Find an item")
                     .lineLimit(1)
             }
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+        .buttonStyle(EdButtonStyle(kind: .secondary, size: .md, fullWidth: true))
         .accessibilityLabel(picks.isEmpty
                             ? "Find an item to add"
                             : "Find an item to add, \(picks.count) added")
@@ -718,15 +808,6 @@ struct MealComposer: View {
 
     // MARK: - Actions
 
-    /// The one place the primary button's press is resolved.
-    private func submit() {
-        guard canSubmit else { return }
-        switch primaryAction {
-        case .estimate: estimate()
-        case .logPicks: commitPicksAlone()
-        }
-    }
-
     /// Path 2: the tray on its own.
     ///
     /// No call, no preview and no guard. There is nothing to preview, because
@@ -759,6 +840,10 @@ struct MealComposer: View {
                     mealTypeHint: hint,
                     loggedAt: at
                 )
+                // The model's answer becomes the control's value, so the
+                // preview opens on what it decided and the user only touches
+                // it to disagree (#643).
+                previewMealType = checked.mealType
                 phase = .preview(checked)
             } catch {
                 phase = .failed(error.localizedDescription)
@@ -772,10 +857,16 @@ struct MealComposer: View {
     /// meal type it compares on is frequently the model's answer rather than the
     /// user's, and there is nothing to compare before that comes back.
     private func confirm(_ checked: CheckedMealEstimate) {
+        // The type the user is looking at, which is the model's answer unless
+        // they changed it (#643). Applied to the estimate itself rather than
+        // carried alongside it, so the duplicate check, `loggedAt` and the
+        // written row all read one value and cannot disagree.
+        var decided = checked
+        decided.mealType = previewMealType
         checkDuplicates(
-            .estimate(checked),
-            mealType: checked.mealType,
-            description: descriptionToWrite(for: checked)
+            .estimate(decided),
+            mealType: decided.mealType,
+            description: descriptionToWrite(for: decided)
         )
     }
 
@@ -924,7 +1015,6 @@ struct MealComposer: View {
     private func reset() {
         descriptionText = ""
         typeOverride = nil
-        typePickerOpen = false
         phase = .idle
         duplicateMatches = []
         pendingWrite = nil
