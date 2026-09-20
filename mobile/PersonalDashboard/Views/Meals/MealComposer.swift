@@ -315,17 +315,6 @@ struct MealComposer: View {
                 MealPhotoStrip(photos: $photos, note: photoNote)
             }
 
-            // Estimate belongs to the FIELD, not to the bottom of the card
-            // (#643). It is what you press when you have finished describing a
-            // meal, and it acts on the words above it and on nothing else. Sat
-            // below the branch it claimed to act on the picker too, which never
-            // needed it: a picked item arrives with its numbers already read
-            // off a label, so there is nothing there to guess at.
-            if showsEstimateButton {
-                estimateButton
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-
             // The branch, and the second path under it (#643). Everything
             // above this line is one way of answering "what did you eat"; the
             // block below it is the other, and it ends in its own button.
@@ -493,30 +482,53 @@ struct MealComposer: View {
                 .stroke(Tokens.border, lineWidth: 0.5)
         )
         .overlay(alignment: .bottomTrailing) {
-            MealCaptureAccessories(
-                text: $descriptionText,
-                photos: $photos,
-                // An estimate in flight has already been sent the field's
-                // contents, so editing them means editing something that was
-                // not asked. The preview and failure states stay editable,
-                // because both of those are states you argue with.
-                isEnabled: phase != .estimating,
-                onError: { captureNotice = $0 }
-            )
+            // Three controls on one line, and they are the same kind of thing:
+            // each one is a way of turning what is in this box into a meal
+            // (#643). The plus and the microphone FILL the box; the arrow sends
+            // it. Putting the arrow anywhere else made it look like it acted on
+            // the whole card, which it never did.
+            HStack(spacing: Space.xs) {
+                MealCaptureAccessories(
+                    text: $descriptionText,
+                    photos: $photos,
+                    // An estimate in flight has already been sent the field's
+                    // contents, so editing them means editing something that was
+                    // not asked. The preview and failure states stay editable,
+                    // because both of those are states you argue with.
+                    isEnabled: phase != .estimating,
+                    onError: { captureNotice = $0 }
+                )
+                if showsEstimateButton {
+                    estimateButton
+                }
+            }
             .padding(.trailing, Space.sm)
             .padding(.bottom, Space.sm)
         }
     }
 
-    /// Room for the two accessory glyphs on the field's last line.
+    /// Room for the three accessory glyphs on the field's last line.
     ///
-    /// Two 28pt buttons and a 4pt gap, plus the 8pt the overlay is inset by.
-    /// The Mac used to reserve one button's worth, because the microphone was
-    /// iOS-only; it carries both since #640, so the gutter is the same on both
-    /// platforms and a short reservation would let the last line run under the
-    /// mic.
+    /// Three 28pt buttons and two 4pt gaps, plus the 8pt the overlay is inset
+    /// by. The Mac used to reserve one button's worth, because the microphone
+    /// was iOS-only; it carries both since #640, so the gutter is the same on
+    /// both platforms and a short reservation would let the last line run under
+    /// a glyph.
+    ///
+    /// It reserves all three even in the phases that do not draw the arrow
+    /// (#643). A gutter that changed with the phase would reflow every line of
+    /// the description the moment an estimate came back, which is a paragraph
+    /// moving under the user for no reason they can see.
+    ///
+    /// The cost is real and it is measured: on a phone this is about 100pt of a
+    /// 338pt field, charged on every line rather than only the line the buttons
+    /// sit beside, because a uniform `.trailing` padding is the only version of
+    /// this SwiftUI lays out without a custom `Layout`. The field still opens at
+    /// three lines and grows to six, so a meal has room. If a future change
+    /// makes this field single-line, this arrangement cannot survive it: move
+    /// the row below the text instead of over it.
     private var accessoryGutter: CGFloat {
-        28 + Space.xs + 28 + Space.sm
+        28 * 3 + Space.xs * 2 + Space.sm
     }
 
     /// The one thing worth saying under a photograph with no words beside it.
@@ -534,21 +546,72 @@ struct MealComposer: View {
 
     /// Path 1's action, and only path 1's (#643).
     ///
-    /// It used to be one button that read "Estimate" or "Log" depending on what
-    /// was in front of it. One control with two meanings made the user work out
-    /// which one their meal qualified for, and it put the word "Estimate" under
-    /// a picker whose whole point is that nothing needs estimating. Now each
-    /// path carries its own button, and the state that used to be hidden in a
-    /// label is visible in which button is on screen.
+    /// ### Why it is a glyph and not the word "Estimate"
+    ///
+    /// It sits in the field's own accessory row, in line with the plus and the
+    /// microphone, and those three are one family: a photograph, a spoken
+    /// sentence and a typed one all end up as the same request. A labelled
+    /// button in that row would be a fourth kind of thing wedged between two
+    /// icons, and it would cost the row more width than the two inputs put
+    /// together.
+    ///
+    /// The arrow is the one glyph that means "send this" without naming what
+    /// happens next, which suits a control whose answer is a guess. The filled
+    /// disc is what separates it from its two neighbours: they are outlined and
+    /// quiet because they fill the box, this one is solid because it acts on it.
+    ///
+    /// ### Why it spins in place
+    ///
+    /// The word used to change to "Estimating…". With no word left, the disc
+    /// carries the state itself: it holds its fill and swaps the arrow for a
+    /// spinner, so the thing you pressed is the thing that is working.
     private var estimateButton: some View {
         Button {
             estimate()
         } label: {
-            Text(phase == .estimating ? "Estimating…" : "Estimate")
+            Group {
+                if phase == .estimating {
+                    ProgressView()
+                        #if os(macOS)
+                        .controlSize(.small)
+                        #else
+                        .scaleEffect(0.55)
+                        #endif
+                        // The spinner sits on a filled disc, so it has to be
+                        // drawn in the paper the arrow would have been.
+                        .tint(Tokens.paper)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+            }
+            // The resting state is drawn to be SEEN, not to disappear. It
+            // first used `paper2` on `mutedSoft`, which on this palette is
+            // #F4F0E6 on a #F8F5EE field: four points of difference, so the
+            // third control vanished and the field looked like it had only two.
+            // A user who has not typed yet is exactly the user who needs to know
+            // the arrow is there. So the disc rests on `border` with its arrow
+            // in the same `muted` its two neighbours use, and fills with ink
+            // only once it can act.
+            .foregroundStyle(isLive ? Tokens.paper : Tokens.muted)
+            .frame(width: 28, height: 28)
+            .background(isLive ? Tokens.ink : Tokens.border, in: Circle())
+            .contentShape(Circle())
         }
-        .buttonStyle(EdButtonStyle(kind: .primary, size: .md))
+        .buttonStyle(.plain)
         .disabled(!canEstimate)
-        .opacity(canEstimate ? 1 : 0.5)
+        .accessibilityLabel(phase == .estimating ? "Estimating the meal" : "Estimate the meal")
+        .accessibilityHint(canEstimate || phase == .estimating ? "" : "Describe the meal or add a photo first")
+    }
+
+    /// Whether the disc is drawn filled.
+    ///
+    /// True while an estimate is running as well as when one can start.
+    /// `canEstimate` is false mid-call — the inputs are not editable then — and
+    /// reading it alone would drain the colour out of the control at the exact
+    /// moment it is doing the work.
+    private var isLive: Bool {
+        canEstimate || phase == .estimating
     }
 
     /// Path 2's action: write the tray, with no call and no preview (#643).
