@@ -199,10 +199,12 @@ targets:
       - path: PersonalDashboard/Views/Shell/TopBar.swift
       - path: PersonalDashboard/Views/Shell/BottomTabBarMetrics.swift
       - path: PersonalDashboard/Views/Shell/MacMenuButton.swift
-      # Chat (issue #281). Text chat only — the voice capture path
-      # (VoiceCaptureViewModel / SpeechTranscriber / overlay / VoiceWaveform /
-      # VoiceAurora / WaveformBars) is AVFoundation/Speech-coupled, gated with
-      # `#if os(iOS)` inside ChatView, so those files stay out of this target.
+      # Chat (issue #281). Text chat only: the inline mic in the chat input bar
+      # is still `#if os(iOS)`-gated inside ChatView, and the full-screen voice
+      # capture overlay (VoiceCaptureOverlay / VoiceWaveform / VoiceAurora /
+      # WaveformBars) is the phone's press-and-hold surface and stays out of
+      # this target. The transcriber itself is NOT out any more — #640 ported it
+      # for the Meals dictation button; see the voice block further down.
       - path: PersonalDashboard/App/AppConfig.swift
       # User-supplied API key, Keychain-backed (#337). The scheme's env var is
       # written by `xcodegen generate` from the shell, so a regenerate without
@@ -291,6 +293,25 @@ targets:
       # half-a-feature #542's note warns about for the meal service.
       - path: PersonalDashboard/Services/FoodItemService.swift
       - path: PersonalDashboard/Services/OpenFoodFactsClient.swift
+      # Dictation (#640). The microphone the phone has, on the Mac: the
+      # transcriber, the OpenAI Realtime socket it streams to, the script
+      # normaliser every final is piped through, the amplitude trace the UI
+      # reads, and the single owner that holds one instance of all of it. Every
+      # `AVAudioSession` site inside `SpeechTranscriber` is `#if os(iOS)`-
+      # shimmed: macOS has no audio session at all, `AVAudioEngine`'s
+      # `inputNode` opens the default input directly, and the permission prompt
+      # is `AVCaptureDevice.requestAccess` rather than `AVAudioApplication`.
+      #
+      # NOT ported: the full-screen `VoiceCaptureOverlay` and its `VoiceAurora`
+      # / `WaveformBars` visuals. That is the phone's press-and-hold capture
+      # surface, a different feature from the dictation button, and
+      # `VoiceCaptureViewModel` is listed here as the single transcriber owner
+      # rather than as that overlay's model.
+      - path: PersonalDashboard/Services/SpeechTranscriber.swift
+      - path: PersonalDashboard/Services/OpenAIRealtimeTranscriber.swift
+      - path: PersonalDashboard/Services/HindiScriptNormalizer.swift
+      - path: PersonalDashboard/Services/VoiceLevelTrace.swift
+      - path: PersonalDashboard/ViewModels/VoiceCaptureViewModel.swift
       - path: PersonalDashboard/Views/Meals
       - path: PersonalDashboard/Services/ImportJobCenter.swift
       # The durable half of Resume (#639). `ImportJobCenter` holds it, so the
@@ -493,6 +514,12 @@ targets:
         # key that call throws `.notConfigured`, which `TripCoverService` treats
         # as permanent, and every tile falls back to the glyph.
         OPENAI_API_KEY: $(OPENAI_API_KEY)
+        # Dictation (#640). The Mac records through AVAudioEngine's default
+        # input device, so it needs the same two prompts the phone does: the
+        # microphone itself, and Speech for the on-device English fallback the
+        # transcriber uses when no OpenAI key is configured.
+        NSMicrophoneUsageDescription: "Dexter records your voice so it can transcribe what you say into a meal description or a question you're asking it."
+        NSSpeechRecognitionUsageDescription: "Dexter transcribes your voice into text you can edit. With no transcription key set it falls back to on-device English recognition."
         # Custom fonts ship as a Fonts/ folder reference; register them for
         # AppKit/SwiftUI. `.custom()` falls back to system font if this fails.
         ATSApplicationFontsPath: Fonts

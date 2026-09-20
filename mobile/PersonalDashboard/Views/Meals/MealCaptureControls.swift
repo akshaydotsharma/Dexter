@@ -22,6 +22,13 @@ import UIKit
 /// and the phone is the only place the distinction exists at all. One plus asks
 /// the question once; the sheet behind it answers where from. On a Mac there is
 /// no camera path, so the plus opens the library directly and asks nothing.
+///
+/// ### Both buttons are on both platforms
+///
+/// The microphone used to be iOS-only, because the Mac target did not compile
+/// the voice stack at all. It does now (#640), so the pair is the same pair
+/// everywhere; only the plus behaves differently, and only because a Mac has no
+/// camera to offer.
 struct MealCaptureAccessories: View {
 
     @Binding var text: String
@@ -85,10 +92,10 @@ struct MealCaptureAccessories: View {
     var body: some View {
         HStack(spacing: Space.xs) {
             photoButton
-            #if os(iOS)
-            // iOS only, and not a capability check: the Mac target does not
-            // compile `SpeechTranscriber` at all (see the voice note in
-            // project.yml), so there is nothing here to gate at runtime.
+            // Both platforms since #640. The Mac compiles the voice stack now,
+            // records through `AVAudioEngine`'s default input device, and owns
+            // its single transcriber from `DexterMacApp` — so there is nothing
+            // left here that was ever iOS-shaped.
             MealDictationButton(
                 text: $text,
                 isEnabled: isEnabled,
@@ -97,7 +104,6 @@ struct MealCaptureAccessories: View {
                 glyphSize: glyphSize,
                 label: micLabel
             )
-            #endif
         }
         #if os(iOS)
         .confirmationDialog("Add a photo", isPresented: $showingSourceChoice, titleVisibility: .visible) {
@@ -366,8 +372,6 @@ struct MealPhotoViewer: View {
     }
 }
 
-#if os(iOS)
-
 /// Tap to dictate, tap again to stop (#627).
 ///
 /// ### Why it stops only when asked
@@ -395,6 +399,11 @@ struct MealPhotoViewer: View {
 /// observers keep firing underneath. Snapshotting `transcriber.sessionID` at
 /// start and refusing to mirror once it moves is what stops the overlay's words
 /// appearing in the meal field. See the note on that property.
+///
+/// The Mac has no such overlay, but it has the same one transcriber and it can
+/// have two of these buttons mounted at once — the plan chat panel floats over
+/// the plan while the entry sheet is open on top of it — so the guard earns its
+/// place on both platforms (#640).
 struct MealDictationButton: View {
 
     @Binding var text: String
@@ -522,5 +531,3 @@ struct MealDictationButton: View {
         text = base.isEmpty ? spoken : "\(base) \(spoken)"
     }
 }
-
-#endif

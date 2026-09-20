@@ -424,14 +424,13 @@ struct MealComposer: View {
 
     /// Room for the two accessory glyphs on the field's last line.
     ///
-    /// Two 28pt buttons and a 4pt gap on iOS; one button on macOS, which has no
-    /// microphone path at all. Plus the 8pt the overlay is inset by.
+    /// Two 28pt buttons and a 4pt gap, plus the 8pt the overlay is inset by.
+    /// The Mac used to reserve one button's worth, because the microphone was
+    /// iOS-only; it carries both since #640, so the gutter is the same on both
+    /// platforms and a short reservation would let the last line run under the
+    /// mic.
     private var accessoryGutter: CGFloat {
-        #if os(iOS)
-        return 28 + Space.xs + 28 + Space.sm
-        #else
-        return 28 + Space.sm
-        #endif
+        28 + Space.xs + 28 + Space.sm
     }
 
     /// The one thing worth saying under a photograph with no words beside it.

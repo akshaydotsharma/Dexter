@@ -254,13 +254,10 @@ struct MealPlanEntrySheet: View {
     }
 
     /// Room for the two accessory glyphs on the field's last line. Matches
-    /// `MealComposer.accessoryGutter`; the Mac has no microphone path.
+    /// `MealComposer.accessoryGutter`, including the reason it no longer forks
+    /// per platform: the Mac carries the microphone too since #640.
     private var accessoryGutter: CGFloat {
-        #if os(iOS)
-        return 28 + Space.xs + 28 + Space.sm
-        #else
-        return 28 + Space.sm
-        #endif
+        28 + Space.xs + 28 + Space.sm
     }
 
     // MARK: - Day

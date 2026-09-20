@@ -333,6 +333,7 @@ final class SpeechTranscriber {
             task = nil
         }
 
+        #if os(iOS)
         // Deactivate the audio session so Music / podcasts resume cleanly.
         // `.notifyOthersOnDeactivation` is what makes the resume happen.
         do {
@@ -340,6 +341,10 @@ final class SpeechTranscriber {
         } catch {
             // Non-fatal — the next `start()` will reset the category anyway.
         }
+        #endif
+        // macOS has no AVAudioSession, so there is nothing to deactivate and
+        // nothing to hand back to whatever was playing (#640). Stopping the
+        // engine above is the whole of teardown there.
     }
 
     // MARK: Private
@@ -408,6 +413,7 @@ final class SpeechTranscriber {
             return
         }
 
+        #if os(iOS)
         // Audio session: `.record` + `.measurement` minimizes processing
         // (no echo cancellation tuned for voice calls); `.duckOthers` dims
         // background audio while we're listening.
@@ -419,6 +425,11 @@ final class SpeechTranscriber {
             errorMessage = "Couldn't start the microphone (\(error.localizedDescription))."
             return
         }
+        #endif
+        // macOS has no audio session to configure (#640): `AVAudioEngine`'s
+        // `inputNode` opens the default input device directly, so there is no
+        // category, no mode and no activation step. The microphone permission
+        // `start()` already asked for is the only gate.
 
         // Target format for the Realtime API: PCM16, mono, 24kHz.
         guard let targetFormat = AVAudioFormat(
@@ -662,6 +673,7 @@ final class SpeechTranscriber {
             return
         }
 
+        #if os(iOS)
         // Audio session: `.record` + `.measurement` minimizes processing
         // (no echo cancellation tuned for voice calls); `.duckOthers` dims
         // background audio while we're listening.
@@ -673,6 +685,11 @@ final class SpeechTranscriber {
             errorMessage = "Couldn't start the microphone (\(error.localizedDescription))."
             return
         }
+        #endif
+        // macOS has no audio session to configure (#640): `AVAudioEngine`'s
+        // `inputNode` opens the default input device directly, so there is no
+        // category, no mode and no activation step. The microphone permission
+        // `start()` already asked for is the only gate.
 
         // Build the recognition request. On-device only — if the model
         // isn't installed for the locale, `start()` will fail and we
@@ -905,7 +922,14 @@ final class SpeechTranscriber {
         }
     }
 
+    /// Ask for the microphone, in whichever vocabulary the platform has (#640).
+    ///
+    /// iOS asks through `AVAudioApplication` (or the pre-17 `AVAudioSession`
+    /// spelling of the same prompt). macOS has neither type: the microphone is
+    /// a capture device there, and `AVCaptureDevice` is the one prompt every
+    /// Mac app uses. Same question, same single system alert, same Bool.
     private static func requestMicrophonePermission() async -> Bool {
+        #if os(iOS)
         if #available(iOS 17.0, *) {
             return await AVAudioApplication.requestRecordPermission()
         } else {
@@ -915,5 +939,8 @@ final class SpeechTranscriber {
                 }
             }
         }
+        #else
+        return await AVCaptureDevice.requestAccess(for: .audio)
+        #endif
     }
 }

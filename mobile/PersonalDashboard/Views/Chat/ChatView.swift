@@ -12,8 +12,10 @@ struct ChatView: View {
     /// transcriber instance, which is what keeps the re-entry guard meaningful
     /// (two instances could each install a tap and crash the audio engine).
     ///
-    /// iOS-only: voice capture is AVFoundation/Speech-coupled and is gated off
-    /// on macOS (issue #281), where Chat is text-only.
+    /// iOS-only, and since #640 that is a CHOICE rather than a limit: the Mac
+    /// compiles the voice stack now (it drives the dictation button in Meals),
+    /// but the inline mic here has not been wired for it, so Chat stays
+    /// text-only on macOS.
     @Environment(VoiceCaptureViewModel.self) private var voiceVM
     private var transcriber: SpeechTranscriber { voiceVM.transcriber }
     #endif
@@ -540,9 +542,11 @@ struct ChatView: View {
         }
     }
 
-    /// Mic tap handler passed to `ChatInputBar`. On macOS there is no voice
-    /// capture (issue #281), so this is `nil` and `ChatInputBar` renders no
-    /// mic button. On iOS it toggles the shared transcriber.
+    /// Mic tap handler passed to `ChatInputBar`. On macOS this is `nil` and
+    /// `ChatInputBar` renders no mic button — not because the Mac cannot
+    /// record (it can, since #640), but because the inline mic's session
+    /// handling here is still iOS-shaped. On iOS it toggles the shared
+    /// transcriber.
     private var micHandler: (() -> Void)? {
         #if os(iOS)
         return { Task { await toggleMic() } }

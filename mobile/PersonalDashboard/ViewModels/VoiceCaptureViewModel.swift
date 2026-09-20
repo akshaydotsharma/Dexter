@@ -3,7 +3,12 @@ import Observation
 import os
 import Speech
 import AVFoundation
+#if canImport(UIKit)
 import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Drives the global full-screen voice-capture overlay (issue #150 → #156,
 /// one-shot capture per open).
@@ -14,6 +19,11 @@ import UIKit
 /// `ChatView`'s inline mic button both drive the same transcriber — there is
 /// never a second instance that could install a duplicate audio tap and crash
 /// the engine (the re-entry guard in `SpeechTranscriber` backs this up).
+///
+/// The Mac creates and injects it from `DexterMacApp` instead (#640), where it
+/// owns no overlay at all: there it exists only to be that single transcriber
+/// owner for the dictation buttons in Meals. The one-shot state machine below
+/// is the iOS overlay's, and nothing on macOS drives it.
 ///
 /// ### One-shot capture (issue #156)
 ///
@@ -338,7 +348,11 @@ final class VoiceCaptureViewModel {
         let results = chat.turns.last(where: { $0.role == .assistant })?.results ?? []
         let applied = results.filter { !$0.isFailure }
         successLabels = applied.isEmpty ? ["Message sent"] : applied.map(Self.successLabel(for:))
+        #if os(iOS)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
+        // No macOS branch: this whole path belongs to the iOS capture overlay,
+        // and a Mac has no Taptic Engine to say "done" with anyway (#640).
         state = .flashSuccess
 
         // Hold the result rows briefly so the user sees the green-check
@@ -486,10 +500,20 @@ final class VoiceCaptureViewModel {
     #endif
 
     /// Open the system Settings app (permission-denied state).
+    ///
+    /// The Mac has no per-app settings page to open (#640). Privacy lives in
+    /// System Settings instead, so this opens the Microphone pane directly —
+    /// the row the user has to switch on is the first thing on it.
     func openSettings() {
+        #if os(iOS)
         if let url = URL(string: UIApplication.openSettingsURLString) {
             UIApplication.shared.open(url)
         }
+        #elseif canImport(AppKit)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
+        }
+        #endif
     }
 
     // MARK: Helpers
@@ -510,11 +534,18 @@ final class VoiceCaptureViewModel {
         let speech = SFSpeechRecognizer.authorizationStatus()
         let speechBad = (speech == .denied || speech == .restricted)
         let micBad: Bool
+        #if os(iOS)
         if #available(iOS 17.0, *) {
             micBad = (AVAudioApplication.shared.recordPermission == .denied)
         } else {
             micBad = (AVAudioSession.sharedInstance().recordPermission == .denied)
         }
+        #else
+        // The same question in the macOS vocabulary: neither
+        // `AVAudioApplication` nor `AVAudioSession` exists there, and the
+        // microphone is a capture device (#640).
+        micBad = (AVCaptureDevice.authorizationStatus(for: .audio) == .denied)
+        #endif
         return speechBad || micBad
     }
 
