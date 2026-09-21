@@ -704,6 +704,17 @@ schemes:
         - variable: DEXTER_MEASURE_TOKENS
           value: $(DEXTER_MEASURE_TOKENS)
           isEnabled: true
+        # Same opt-in shape for the live accommodation-voucher read (#649):
+        #
+        #   xcodebuild test -scheme PersonalDashboard \
+        #     -only-testing:PersonalDashboardTests/LiveStayVoucherReadTests \
+        #     ANTHROPIC_API_KEY=… DEXTER_LIVE_STAY_PDF=/path/to/voucher.pdf
+        #
+        # Unset, it stays literally `$(DEXTER_LIVE_STAY_PDF)`, which is not a file
+        # and the test skips.
+        - variable: DEXTER_LIVE_STAY_PDF
+          value: $(DEXTER_LIVE_STAY_PDF)
+          isEnabled: true
       targets:
         - PersonalDashboardTests
         - PersonalDashboardUITests

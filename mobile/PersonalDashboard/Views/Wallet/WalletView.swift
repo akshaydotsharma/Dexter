@@ -513,21 +513,23 @@ struct WalletView: View {
     /// #522).
     ///
     /// Only the extracted cards qualify, and what qualifies is having a stored file
-    /// that an extractor guessed at. A `.pkpass` was never guessed at, and a trip's
-    /// inline ticket is edited on the stop itself.
+    /// that an extractor guessed at. A `.pkpass` was never guessed at, so it is the
+    /// one thing still excluded here.
     ///
-    /// A card the Wallet owns was excluded here on the reasoning that it "is edited
-    /// directly". That is true of one typed by hand and false of one that came off
-    /// a scan, which has a file on disk and an extraction worth running again — and
-    /// a scan is how most of them arrive. Without it, the only way a card already in
-    /// the Wallet benefits from a better prompt is deleting it and scanning again.
+    /// A card the Wallet owns was excluded on the reasoning that it "is edited
+    /// directly", and a trip's inline ticket on the reasoning that it "is edited on
+    /// the stop itself". Both describe a row someone typed, and neither describes
+    /// one that came off a scan — which is how most of them arrive, with a file on
+    /// disk and an extraction worth running again. Widened for the Wallet's own
+    /// cards in #522 and for trip stops in #649; the argument was the same both
+    /// times, and so was the answer.
     private func rereadTarget(of entry: WalletEntry) -> RereadTarget? {
         let target: RereadTarget
         switch entry.source {
         case .task(let id, _, _):               target = .document(id)
         case .tripDocument(let id, _, _, _):    target = .document(id)
         case .wallet(let id):                   target = .walletCard(id)
-        case .trip:                             return nil
+        case .trip(let itemID, _, _):           target = .tripStop(itemID)
         }
         let path = entry.card.attachmentPath
         guard !path.trimmingCharacters(in: .whitespaces).isEmpty,
@@ -551,6 +553,8 @@ struct WalletView: View {
                     try await TaskTicketExtraction().reread(ticketUUID: ticketID, context: modelContext)
                 case .walletCard(let cardID):
                     try await TicketExtraction().rereadWalletCard(cardUUID: cardID, context: modelContext)
+                case .tripStop(let itemID):
+                    try await TicketExtraction().rereadItineraryItem(itemUUID: itemID, context: modelContext)
                 }
                 Haptics.light()
             } catch {
@@ -694,15 +698,17 @@ struct WalletDetailTarget: Identifiable {
     var id: String { entry.id }
 }
 
-/// What a "Read again" runs against: a document attached to a task or a stop, or
-/// a card the Wallet owns outright (#522). Two models, two extractors, one action.
+/// What a "Read again" runs against: a document attached to a task or a stop, a
+/// card the Wallet owns outright (#522), or a trip stop that was itself created by
+/// scanning a ticket (#649). Three models, two extractors, one action.
 enum RereadTarget: Identifiable, Hashable {
     case document(UUID)
     case walletCard(UUID)
+    case tripStop(UUID)
 
     var id: UUID {
         switch self {
-        case .document(let id), .walletCard(let id): return id
+        case .document(let id), .walletCard(let id), .tripStop(let id): return id
         }
     }
 }
