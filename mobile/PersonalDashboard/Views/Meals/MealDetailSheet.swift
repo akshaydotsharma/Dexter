@@ -217,8 +217,16 @@ struct MealDetailSheet: View {
                         if !itemDrafts.isEmpty {
                             itemsSection
                         }
-                        alcoholSection
+                        // Under the items, because that is what it grades.
+                        // Outside the `if` above so a meal with no item
+                        // breakdown still states how good its numbers are.
+                        confidenceRow
                         totalsSection
+                        // Below the total it can change. The toggle decides
+                        // whether the macro consistency check fires, so it
+                        // reads as a footnote to the figures rather than as
+                        // something standing between the items and their sum.
+                        alcoholSection
                         overrideSection
                         actionsSection
                         if let errorMessage {
@@ -281,19 +289,29 @@ struct MealDetailSheet: View {
 
     // MARK: - Sections
 
+    /// Whether anything is left to put in the card.
+    ///
+    /// The block used to be guaranteed non-empty, because it always held the
+    /// meal-type control and the confidence chip. Both have moved to where the
+    /// thing they describe is read, so without this a clean, ungrounded meal
+    /// would render an empty bordered card.
+    private var hasStatusContent: Bool {
+        meal.isGrounded
+            || meal.suspectReason != nil
+            || meal.needsDetail
+            || meal.assumptionsNote != nil
+            || !meal.groundingSources.isEmpty
+    }
+
     @ViewBuilder
     private var statusBlock: some View {
+        if hasStatusContent {
         VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(spacing: Space.sm) {
-                mealTypeControl
-                Spacer(minLength: Space.sm)
-                if meal.isGrounded {
+            if meal.isGrounded {
+                HStack(spacing: Space.sm) {
                     MealGrounding.chip()
+                    Spacer(minLength: Space.sm)
                 }
-                MealFlagChip(
-                    MealFormat.confidenceBand(meal.confidence),
-                    tint: meal.totalsWereOverridden ? Tokens.success : Tokens.muted
-                )
             }
             if let reason = meal.suspectReason {
                 Text(reason)
@@ -322,6 +340,24 @@ struct MealDetailSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
+
+    /// How good these numbers are, said directly under the breakdown they grade.
+    ///
+    /// It sat in the status card at the top, beside the meal type, where it was
+    /// a fact about the meal in general. It is not: it is a fact about the
+    /// figures, and "Exact" specifically means the user typed the totals by
+    /// hand. Under the items is where that claim can be checked against the
+    /// thing it is claimed about.
+    private var confidenceRow: some View {
+        HStack(spacing: Space.sm) {
+            MealFlagChip(
+                MealFormat.confidenceBand(meal.confidence),
+                tint: meal.totalsWereOverridden ? Tokens.success : Tokens.muted
+            )
+            Spacer(minLength: Space.sm)
+        }
     }
 
     /// The meal type, as a control rather than a caption (#629).
@@ -453,6 +489,13 @@ struct MealDetailSheet: View {
             // block. A secondary button on the left read as a footnote to the
             // field above it.
             HStack(spacing: Space.sm) {
+                // The type sits on this line now, at the leading edge. It is
+                // the other thing about a meal you correct after reading the
+                // description, and giving it the empty half of the action row
+                // costs no height and puts the two corrections side by side.
+                // The primary keeps the trailing edge, so the rule the comment
+                // above states is unchanged.
+                mealTypeControl
                 Spacer(minLength: 0)
                 if isReestimating {
                     ProgressView()
