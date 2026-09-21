@@ -127,4 +127,28 @@ enum AppConfig {
         }
         return nil
     }()
+
+    /// USDA FoodData Central API key, used by the meal estimator to look food
+    /// composition and standard portion weights up instead of recalling them
+    /// (#653). Source order mirrors `openAIAPIKey` exactly:
+    ///   1. `USDA_FDC_API_KEY` env var (Xcode scheme for local sim and Mac runs).
+    ///   2. `USDA_FDC_API_KEY` Info.plist key, baked at archive time by
+    ///      `mobile/ota/ship-lan.sh`.
+    ///
+    /// Returns nil when neither is set, and that is a supported state rather
+    /// than a broken one: `FoodDataCentralClient.isConfigured` reads false, the
+    /// lookup tool is not advertised to the model, and the estimator falls back
+    /// to the model's own numbers exactly as it worked before #653. A meal is
+    /// never lost to a missing key.
+    ///
+    /// Free, instant signup at https://fdc.nal.usda.gov/api-key-signup.
+    static let usdaFDCAPIKey: String? = {
+        if let env = resolved(ProcessInfo.processInfo.environment["USDA_FDC_API_KEY"]) {
+            return env
+        }
+        if let plist = resolved(Bundle.main.object(forInfoDictionaryKey: "USDA_FDC_API_KEY") as? String) {
+            return plist
+        }
+        return nil
+    }()
 }

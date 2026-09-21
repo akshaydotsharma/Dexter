@@ -46,6 +46,10 @@ targets:
         # OpenAI key for cloud voice transcription (#151). Injected at
         # archive time by ship-lan.sh; empty for plain Xcode builds.
         OPENAI_API_KEY: $(OPENAI_API_KEY)
+        # USDA FoodData Central key for meal composition and portion lookups
+        # (#653). Same injection path as the two above. Absent is a supported
+        # state: the estimator falls back to the model's own numbers.
+        USDA_FDC_API_KEY: $(USDA_FDC_API_KEY)
         # Allow plain-HTTP calls to the Mac dev server on the local network.
         # Personal-use dev build only — App Store distribution is not a goal.
         NSAppTransportSecurity:
@@ -293,6 +297,7 @@ targets:
       # half-a-feature #542's note warns about for the meal service.
       - path: PersonalDashboard/Services/FoodItemService.swift
       - path: PersonalDashboard/Services/OpenFoodFactsClient.swift
+      - path: PersonalDashboard/Services/FoodDataCentralClient.swift
       # Dictation (#640). The microphone the phone has, on the Mac: the
       # transcriber, the OpenAI Realtime socket it streams to, the script
       # normaliser every final is piped through, the amplitude trace the UI
@@ -514,6 +519,10 @@ targets:
         # key that call throws `.notConfigured`, which `TripCoverService` treats
         # as permanent, and every tile falls back to the glyph.
         OPENAI_API_KEY: $(OPENAI_API_KEY)
+        # USDA FoodData Central key (#653), filled by the same post-build
+        # script. The Mac estimates meals through the same composer as the
+        # phone, so it needs the same lookups.
+        USDA_FDC_API_KEY: $(USDA_FDC_API_KEY)
         # Dictation (#640). The Mac records through AVAudioEngine's default
         # input device, so it needs the same two prompts the phone does: the
         # microphone itself, and Speech for the on-device English fallback the
@@ -568,6 +577,7 @@ targets:
             case "$1" in
               ANTHROPIC_API_KEY) echo "Chat will report 'API key not configured'" ;;
               OPENAI_API_KEY)    echo "trip tiles will draw the glyph instead of an illustration" ;;
+              USDA_FDC_API_KEY)  echo "meal estimates fall back to the model's own numbers instead of looking food up" ;;
               *)                 echo "the feature that reads it will be unconfigured" ;;
             esac
           }
@@ -575,7 +585,7 @@ targets:
           # Each key is independent: a missing OpenAI key must not stop the
           # Anthropic one being written, so this loop `continue`s per key rather
           # than exiting the script the way the single-key version did.
-          for name in ANTHROPIC_API_KEY OPENAI_API_KEY; do
+          for name in ANTHROPIC_API_KEY OPENAI_API_KEY USDA_FDC_API_KEY; do
             # An explicit `xcodebuild <NAME>=…` already filled this in. Don't
             # clobber it. `$(…)` means the build setting was undefined.
             existing="$(/usr/libexec/PlistBuddy -c "Print :$name" "$PLIST" 2>/dev/null || true)"

@@ -95,6 +95,28 @@ else
     echo "-> WARNING: OPENAI_API_KEY not set (env or server/.env). Cloud voice transcription (Hindi/Hinglish) will be DISABLED; the app falls back to on-device English dictation."
 fi
 
+# ---- Resolve USDA FoodData Central API key (meal lookups, #653) ----
+# Same source order and the same optionality as OpenAI. With no key the meal
+# estimator stops looking food composition and portion weights up and falls back
+# to the model's own numbers, which is how it behaved before #653. Nothing
+# breaks, estimates just get less accurate, so this warns and never aborts.
+#
+# The trailing `sed` is not decoration: a key pasted into server/.env with a
+# leading space is a real thing that happened on 2026-09-22, and api.data.gov
+# answers HTTP 403 API_KEY_INVALID for it with no hint that whitespace is the
+# problem.
+if [ -z "${USDA_FDC_API_KEY:-}" ]; then
+    if [ -f "${MOBILE_DIR}/../server/.env" ]; then
+        USDA_FDC_API_KEY="$(grep -E '^USDA_FDC_API_KEY=' "${MOBILE_DIR}/../server/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)"
+    fi
+fi
+if [ -n "${USDA_FDC_API_KEY:-}" ]; then
+    echo "-> USDA_FDC_API_KEY resolved (length=${#USDA_FDC_API_KEY})"
+else
+    USDA_FDC_API_KEY=""
+    echo "-> WARNING: USDA_FDC_API_KEY not set (env or server/.env). Meal estimates will fall back to the model's own numbers instead of looking food up. Free key: https://fdc.nal.usda.gov/api-key-signup"
+fi
+
 # ---- Regenerate project ----
 echo "-> regenerating Xcode project"
 xcodegen generate >/dev/null
@@ -213,6 +235,7 @@ xcodebuild \
     OTA_API_URL="${API_URL}" \
     ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
     OPENAI_API_KEY="${OPENAI_API_KEY}" \
+    USDA_FDC_API_KEY="${USDA_FDC_API_KEY}" \
     -allowProvisioningUpdates \
     archive \
     2>&1 | grep -E "(error:|warning: .*\.swift:|\*\* )" || true

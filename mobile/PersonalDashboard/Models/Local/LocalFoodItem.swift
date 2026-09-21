@@ -358,6 +358,15 @@ enum FoodItemSource {
     static let manual = "manual"
     /// Imported from an Open Food Facts search hit.
     static let openFoodFacts = "openfoodfacts"
+    /// Read out of USDA FoodData Central (#653).
+    ///
+    /// Kept apart from `openFoodFacts` although both are public databases and
+    /// both are transcriptions rather than guesses, because they answer
+    /// different questions and a reader deciding how far to trust a row needs
+    /// to know which one it came from. Open Food Facts is crowd-sourced label
+    /// data for a PACKET; FoodData Central is survey and laboratory data for a
+    /// generic food or a composite DISH.
+    static let usdaFDC = "usda_fdc"
     /// Imported after scanning the packet's barcode.
     static let barcode = "barcode"
     /// Saved out of an item on a meal that was already logged.
