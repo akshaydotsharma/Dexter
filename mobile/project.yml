@@ -298,6 +298,7 @@ targets:
       - path: PersonalDashboard/Services/FoodItemService.swift
       - path: PersonalDashboard/Services/OpenFoodFactsClient.swift
       - path: PersonalDashboard/Services/FoodDataCentralClient.swift
+      - path: PersonalDashboard/Services/SGFoodTable.swift
       - path: PersonalDashboard/AI/FoodLookupTool.swift
       - path: PersonalDashboard/AI/FoodLookupResolution.swift
       - path: PersonalDashboard/AI/MealPortionHistory.swift
@@ -500,6 +501,11 @@ targets:
         type: folder
         buildPhase: resources
       - path: PersonalDashboard/Resources/Assets.xcassets
+        buildPhase: resources
+      # #653. The shipped Singapore dish table. Without this line the Mac target
+      # builds fine and every local dish silently stops being found, because
+      # `SGFoodTable.shared` degrades to empty on purpose.
+      - path: PersonalDashboard/Resources/sg-food-table.json
         buildPhase: resources
     info:
       path: PersonalDashboard/InfoMac.plist

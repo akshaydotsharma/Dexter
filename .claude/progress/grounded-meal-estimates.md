@@ -20,32 +20,35 @@ Every exact row came from the library or a hand-typed total.
 ## Completed Steps
 
 - [x] Investigate and quantify the problem against the real store (2026-09-22)
-- [x] Raise #653 with the scope and the out-of-scope list (2026-09-22)
-- [x] `USDA_FDC_API_KEY` through `server/.env`, `project.yml`, `ship-lan.sh`,
-      `AppConfig`. Verified live; the Mac build's signature stays valid with
-      three keys injected (2026-09-22)
-- [x] `FoodDataCentralClient` + 31 tests, 28 offline and 3 live. Committed as
-      `d8963b7` (2026-09-22)
+- [x] Raise #653 (2026-09-22)
+- [x] `USDA_FDC_API_KEY` through the whole build chain; Mac signature verified
+      still valid with three keys injected (2026-09-22)
+- [x] `FoodDataCentralClient` + 31 tests — commit `d8963b7`
+- [x] Batched `look_up_foods` tool, per-item provenance, ledger verification,
+      device-side recompute, derived confidence — commit `5959dac`
+- [x] `statedQuantities(in:)`, after a live run showed the model reporting a
+      user-stated 250 g as a guess — in `5959dac`
+- [x] Saved library as a lookup source, and past portions as a mass source —
+      commit `0bd4cc5`
+- [x] Found the real HPB endpoint. The old `focos.hpb.gov.sg` host is GONE
+      (NXDOMAIN); the service is now the Singapore Food Insights Database at
+      `pphtpc.hpb.gov.sg/bff/v1/food-portal` (2026-09-22)
 
 ## Current Step
 
-- [ ] The lookup tool on the composer's estimate call
-  - Design settled: ONE batched tool, `look_up_foods({queries: [...]})`, so a
-    three-dish meal costs one model round trip rather than three. The device
-    fans the queries out concurrently and returns candidates already carrying
-    their portion tables.
-  - Not started in code.
+- [ ] Ship the Singapore table
+  - [x] `build-sg-food-table.py` — enumerates by substring search, reads
+        details, caches, backs off on 429
+  - [x] `SGFoodTable.swift` + tests, wired as a lookup source between the
+        library and FoodData Central
+  - [ ] The crawl itself (running; ~2,400 dishes at 2 requests/second)
+  - [ ] Add the JSON to the resources list for BOTH targets and run the tests
+        that assert the asset is actually in the bundle
 
 ## Next Steps
 
-- [ ] Per-item provenance on the item schema: `density_source` (fdc / saved /
-      packet / web / estimated) and `mass_source` (stated / packet_serving /
-      standard_portion / history / guessed)
-- [ ] Derive confidence in Swift from provenance; stop reading the model's band
-- [ ] Saved-library and recent-meal blocks reach the COMPOSER prompt (today they
-      reach only chat and the Shortcut, so `saved_item_id` cannot fire on the
-      path that logged 24 of 36 meals)
-- [ ] Seeded HPB table for Singapore dishes (user confirmed 2026-09-22)
+- [ ] Open the PR
+- [ ] Ship to phone and let the user QA a real meal
 
 ## Key Decisions Made
 

@@ -586,13 +586,33 @@ enum MealEstimateGuards {
     ///     composition from a named record   +1
     ///     portion from one of the four      +1
     ///
-    /// The meal takes the WORST item's score. A meal is a sum, so one item
-    /// guessed end to end puts the total in doubt however well the others are
-    /// sourced, and an average would let four good rows hide one bad one.
+    /// The meal takes the WORST MATERIAL item's score. A meal is a sum, so one
+    /// substantial item guessed end to end puts the total in doubt however well
+    /// the others are sourced, and an average would let four good rows hide one
+    /// bad one.
     ///
-    ///     2 -> high    both halves sourced for every item
-    ///     1 -> medium  one half sourced for every item
-    ///     0 -> low     some item is a guess twice over
+    ///     2 -> high    both halves sourced for every material item
+    ///     1 -> medium  one half sourced for every material item
+    ///     0 -> low     some material item is a guess twice over
+    ///
+    /// ### Why "material" and not simply "every"
+    ///
+    /// It was every item, and a live run on 2026-09-22 showed why that is
+    /// wrong. A plate of Hainanese chicken rice resolved beautifully — the dish
+    /// itself to HPB's own lab-analysed row at its weighed 346 g plate — and
+    /// the meal still graded LOW, because the model had also itemised a 5 g
+    /// drizzle of dark soy sauce and guessed it.
+    ///
+    /// That is the rule punishing the model for being thorough. The band
+    /// describes how far the meal's TOTALS can be trusted, and an item carrying
+    /// under a twentieth of the calories cannot move them enough to matter. An
+    /// estimator that grades a well-sourced meal as a guess over a condiment is
+    /// one whose band nobody reads, which is where this feature started.
+    ///
+    /// So an item is material when it carries at least `materialCalorieShare`
+    /// of the meal. Every item is material when none clears the bar (a meal of
+    /// five equal small things), and every item is material when the meal has
+    /// no calories to apportion.
     ///
     /// ### The honest caveat
     ///
@@ -609,11 +629,35 @@ enum MealEstimateGuards {
     static func derivedConfidence(items: [MealItemEntry], reported: Double) -> Double {
         let scores = items.compactMap(\.provenanceScore)
         guard !items.isEmpty, scores.count == items.count else { return reported }
-        switch scores.min() ?? 0 {
+
+        let material = materialItems(items)
+        let considered = material.isEmpty ? items.indices.map { $0 } : material
+        let worst = considered.compactMap { items[$0].provenanceScore }.min() ?? 0
+
+        switch worst {
         case 2:  return 0.9
         case 1:  return 0.6
         default: return 0.3
         }
+    }
+
+    /// The share of a meal's calories below which an item cannot move the band.
+    ///
+    /// A twentieth. Low enough that anything anybody would call a component of
+    /// the meal still counts, high enough to exclude a condiment, a garnish and
+    /// a splash of sauce — which is exactly the set the model itemises well and
+    /// estimates badly.
+    static let materialCalorieShare: Double = 0.05
+
+    /// Indices of the items that carry enough of the meal to affect its totals.
+    ///
+    /// Empty when nothing clears the bar, which the caller reads as "grade them
+    /// all": a meal of five equally small things has no negligible item, it has
+    /// five real ones.
+    static func materialItems(_ items: [MealItemEntry]) -> [Int] {
+        let total = items.reduce(0.0) { $0 + max($1.calories, 0) }
+        guard total > 0 else { return items.indices.map { $0 } }
+        return items.indices.filter { max(items[$0].calories, 0) / total >= materialCalorieShare }
     }
 
     static func macroConsistency(

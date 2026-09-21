@@ -154,6 +154,29 @@ struct FoodLookupCandidate: Sendable, Equatable {
     /// figure taken from the user's own library is recorded as theirs.
     private(set) var density: MealDensitySource = .lookedUp
 
+    /// The general initialiser, for a source with no type of its own here.
+    ///
+    /// Used by `SGFoodTable`, which is a shipped JSON asset rather than a
+    /// client: giving it a bespoke `init(sg:)` would put a decoding type from
+    /// Services into this file for no gain.
+    init(
+        id: String,
+        name: String,
+        provenance: String,
+        nutrientsPer100: MealNutrients,
+        missingNutrients: [Nutrient],
+        portions: [FoodDataCentralPortion],
+        density: MealDensitySource
+    ) {
+        self.id = id
+        self.name = name
+        self.provenance = provenance
+        self.nutrientsPer100 = nutrientsPer100
+        self.missingNutrients = missingNutrients
+        self.portions = portions
+        self.density = density
+    }
+
     init(fdc food: FoodDataCentralFood) {
         self.id = "fdc:\(food.fdcID)"
         self.name = food.description
@@ -294,11 +317,21 @@ struct FoodLookupService: Sendable {
 
     init(
         fdc: FoodDataCentralClient = FoodDataCentralClient(),
-        library: @escaping @Sendable (String) -> [FoodLookupCandidate] = { _ in [] }
+        library: @escaping @Sendable (String) -> [FoodLookupCandidate] = { _ in [] },
+        singapore: SGFoodTable = .shared
     ) {
         self.fdc = fdc
         self.library = library
+        self.singapore = singapore
     }
+
+    /// The shipped Singapore table (#653).
+    ///
+    /// Searched between the library and FoodData Central. Local dishes must be
+    /// offered before a US survey's nearest guess at one, because FDC does not
+    /// merely miss them, it MISMATCHES them: "hainanese chicken rice" there
+    /// returns "Chicken curry with rice" with a real id attached.
+    let singapore: SGFoodTable
 
     /// Build a service that searches a real store's library.
     ///
@@ -359,10 +392,18 @@ struct FoodLookupService: Sendable {
     }
 
     private func resolve(_ query: String) async -> FoodLookupResult {
-        // The library first, and without a network call. A row the user has
-        // eaten before beats a survey average of the same food, and it is the
-        // only source here that knows what THEY put on the plate.
+        // Two on-device sources first, and in this order, because neither
+        // costs a network call and both beat a US survey at the job:
+        //
+        //   1. the library — what THIS user ate and accepted,
+        //   2. the Singapore table — the real local dish, with a real local
+        //      serving weight.
+        //
+        // FoodData Central comes last for local food specifically, since it
+        // answers a query like "hainanese chicken rice" with a confident wrong
+        // row rather than with nothing.
         let saved = Array(library(query).prefix(FoodLookupTool.candidatesPerQuery))
+        let local = singapore.search(query)
 
         let hits: [FoodDataCentralFood]
         do {
@@ -370,14 +411,14 @@ struct FoodLookupService: Sendable {
         } catch let error as FoodDataCentralError {
             return FoodLookupResult(
                 query: query,
-                candidates: saved,
-                note: saved.isEmpty ? error.errorDescription : nil
+                candidates: saved + local,
+                note: (saved + local).isEmpty ? error.errorDescription : nil
             )
         } catch {
             return FoodLookupResult(
                 query: query,
-                candidates: saved,
-                note: saved.isEmpty ? "The lookup did not complete." : nil
+                candidates: saved + local,
+                note: (saved + local).isEmpty ? "The lookup did not complete." : nil
             )
         }
 
@@ -385,8 +426,8 @@ struct FoodLookupService: Sendable {
         guard !top.isEmpty else {
             return FoodLookupResult(
                 query: query,
-                candidates: saved,
-                note: saved.isEmpty
+                candidates: saved + local,
+                note: (saved + local).isEmpty
                     ? "No match. Estimate this one yourself, or try a broader description."
                     : nil
             )
@@ -403,10 +444,10 @@ struct FoodLookupService: Sendable {
             return out.sorted { $0.0 < $1.0 }.map(\.1)
         }
 
-        // Saved rows lead, for the reason above.
+        // On-device rows lead, for the reason above.
         return FoodLookupResult(
             query: query,
-            candidates: saved + detailed.map(FoodLookupCandidate.init(fdc:)),
+            candidates: saved + local + detailed.map(FoodLookupCandidate.init(fdc:)),
             note: nil
         )
     }

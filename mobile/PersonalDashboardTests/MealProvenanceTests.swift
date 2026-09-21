@@ -299,6 +299,65 @@ final class MealProvenanceTests: XCTestCase {
         XCTAssertEqual(MealEstimateGuards.derivedConfidence(items: items, reported: 0.9), 0.3)
     }
 
+    /// A condiment cannot drag a well-sourced meal down.
+    ///
+    /// The live case, 2026-09-22: a plate of chicken rice resolved to HPB's own
+    /// lab-analysed row at its weighed 346 g plate, and the meal graded LOW
+    /// because a 5 g soy sauce drizzle beside it was a guess. That is the rule
+    /// punishing the model for itemising properly.
+    func testANegligibleItemDoesNotDecideTheBand() {
+        let items = [
+            MealItemEntry(name: "Chicken rice", calories: 615,
+                          densitySource: .lookedUp, massSource: .standardPortion),
+            MealItemEntry(name: "Soy sauce drizzle", calories: 3,
+                          densitySource: .estimated, massSource: .estimated)
+        ]
+        XCTAssertEqual(MealEstimateGuards.derivedConfidence(items: items, reported: 0.3), 0.9)
+    }
+
+    /// A SUBSTANTIAL guessed item still decides it. The rule excuses a
+    /// condiment, not a dish.
+    func testASubstantialGuessedItemStillDecidesTheBand() {
+        let items = [
+            MealItemEntry(name: "Chicken rice", calories: 615,
+                          densitySource: .lookedUp, massSource: .standardPortion),
+            MealItemEntry(name: "Fried chicken wing", calories: 300,
+                          densitySource: .estimated, massSource: .estimated)
+        ]
+        XCTAssertEqual(MealEstimateGuards.derivedConfidence(items: items, reported: 0.9), 0.3)
+    }
+
+    /// Exactly at the bar counts. A twentieth of the meal is material.
+    func testAnItemExactlyAtTheThresholdIsMaterial() {
+        let items = [
+            MealItemEntry(name: "Main", calories: 950,
+                          densitySource: .lookedUp, massSource: .standardPortion),
+            MealItemEntry(name: "Side", calories: 50,
+                          densitySource: .estimated, massSource: .estimated)
+        ]
+        XCTAssertEqual(MealEstimateGuards.derivedConfidence(items: items, reported: 0.9), 0.3)
+    }
+
+    /// A meal of five equally small things has no negligible item; it has five
+    /// real ones, and they are all graded.
+    func testWhenNothingClearsTheBarEverythingIsGraded() {
+        let items = (1...5).map { i in
+            MealItemEntry(name: "Item \(i)", calories: 20,
+                          densitySource: i == 5 ? .estimated : .lookedUp,
+                          massSource: i == 5 ? .estimated : .stated)
+        }
+        XCTAssertEqual(MealEstimateGuards.derivedConfidence(items: items, reported: 0.9), 0.3)
+    }
+
+    /// A meal with no calories to apportion grades every item, rather than
+    /// dividing by zero and excusing the lot.
+    func testAZeroCalorieMealGradesEveryItem() {
+        let items = [
+            MealItemEntry(name: "Water", calories: 0, densitySource: .estimated, massSource: .estimated)
+        ]
+        XCTAssertEqual(MealEstimateGuards.derivedConfidence(items: items, reported: 0.9), 0.3)
+    }
+
     /// No provenance at all falls back to the model's band.
     ///
     /// This is what keeps every unconverted path, and every meal logged before
@@ -640,6 +699,44 @@ final class LiveMealLookupTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             checked.confidence, 0.6,
             "this description scored 0.3 before #653"
+        )
+    }
+
+    /// A Singapore dish, which is the case the whole shipped table exists for.
+    ///
+    /// FoodData Central answers "hainanese chicken rice" with "Chicken curry
+    /// with rice". HPB holds four real chicken rice dishes with lab-analysed
+    /// figures and a weighed plate. If the local table is doing its job, this
+    /// resolves to an `sg:` id and the portion comes from that plate.
+    func testALocalDishResolvesToTheSingaporeTable() async throws {
+        let (client, lookups) = try liveClient()
+        try XCTSkipIf(SGFoodTable.shared.isEmpty, "no shipped table to test against")
+
+        let description = "hainanese chicken rice for lunch at the hawker centre"
+        let grounded = try await client.estimateMeal(
+            description: description,
+            mealTypeHint: .lunch,
+            lookups: lookups
+        )
+        let resolution = FoodLookupResolution.resolve(
+            grounded.estimate,
+            ledger: grounded.lookupLedger,
+            wasGrounded: !grounded.groundingSources.isEmpty,
+            description: description
+        )
+
+        for verdict in resolution.resolved {
+            print("""
+            ITEM \(verdict.item.name ?? "?") — \
+            \(Int((verdict.item.portionQuantity ?? 0).rounded())) \(verdict.item.portionUnit ?? "") \
+            composition: \(verdict.densitySource.displayName), \
+            portion: \(verdict.massSource.displayName), id: \(verdict.sourceID ?? "-")
+            """)
+        }
+
+        XCTAssertTrue(
+            resolution.resolved.contains { ($0.sourceID ?? "").hasPrefix("sg:") },
+            "the local table should have answered this; got \(resolution.resolved.map { $0.sourceID ?? "-" })"
         )
     }
 
