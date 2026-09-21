@@ -91,6 +91,12 @@ struct MealPlanChatPanel: View {
                 } else {
                     AIProse(text: turn.text)
                 }
+                // Under the prose rather than under the cards: the figures the
+                // sources back up are in the sentence just above, and a turn
+                // that looked something up usually proposes no card at all
+                // (#647). Reuses the block the meal detail sheet draws, so a
+                // citation looks the same wherever the app makes one.
+                MealSourcesBlock(sources: turn.sources)
                 ForEach(turn.suggestions) { suggestion in
                     MealPlanSuggestionCard(
                         suggestion: suggestion,

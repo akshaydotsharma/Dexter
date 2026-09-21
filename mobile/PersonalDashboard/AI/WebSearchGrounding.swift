@@ -227,6 +227,33 @@ enum WebSearchGrounding {
         return out
     }
 
+    /// Add one completed search's sources to a running list, under the same
+    /// two quotas `sources(inContent:)` applies to a whole response (#647).
+    ///
+    /// The streaming callers see one search at a time and never hold the whole
+    /// content array, so they cannot call `sources(inContent:)` at all. Without
+    /// this they keep every page every search returned: a live lookup for one
+    /// branded bowl came back with 22 distinct URLs, which under a chat answer
+    /// is a bibliography where a provenance line was wanted.
+    ///
+    /// The per-search quota is the half that matters, for the reason spelled
+    /// out on `sources(inContent:)`: results arrive in query order, so a flat
+    /// cap spends every slot on the first product named and leaves the second
+    /// one with no evidence at all.
+    static func accumulate(
+        _ found: [WebSearchSource],
+        into running: inout [WebSearchSource]
+    ) {
+        var keptFromThisSearch = 0
+        for source in found {
+            guard running.count < maxStoredSources else { return }
+            guard keptFromThisSearch < maxPerSearch else { return }
+            guard !running.contains(where: { $0.url == source.url }) else { continue }
+            running.append(source)
+            keptFromThisSearch += 1
+        }
+    }
+
     /// Should this turn be sent back to be finished?
     ///
     /// Only a pause, and only while resumes remain. A `max_tokens` stop is a
