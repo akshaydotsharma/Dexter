@@ -42,6 +42,23 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
     /// not advertise the field, so a decode of that reply lands nil here.
     let savedItemID: String?
 
+    /// The `look_up_foods` candidate id the model says these figures came from
+    /// (#653), or nil.
+    ///
+    /// Held exactly as the model wrote it and believed by nothing here.
+    /// `FoodLookupResolution` is the only place that checks it against the
+    /// record of what the device actually offered, for the same reason
+    /// `GroundedMealEstimate.groundingSources` is read off the wire: a model
+    /// asked to cite its source can write itself a citation.
+    let sourceID: String?
+
+    /// How the model says it knows the portion (#653), as the raw string.
+    ///
+    /// A String rather than a `MealMassSource` because this is the wire, and a
+    /// value outside the enum must degrade to "estimated" rather than fail the
+    /// decode and take a whole meal down with it.
+    let massSource: String?
+
     /// Explicit rather than synthesised, so every field defaults to nil.
     ///
     /// A `let` optional gets no default in a memberwise initialiser, which would
@@ -60,7 +77,9 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         sugarG: Double? = nil,
         sodiumMg: Double? = nil,
         satFatG: Double? = nil,
-        savedItemID: String? = nil
+        savedItemID: String? = nil,
+        sourceID: String? = nil,
+        massSource: String? = nil
     ) {
         self.name = name
         self.portionQuantity = portionQuantity
@@ -74,6 +93,8 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         self.sodiumMg = sodiumMg
         self.satFatG = satFatG
         self.savedItemID = savedItemID
+        self.sourceID = sourceID
+        self.massSource = massSource
     }
 
     enum CodingKeys: String, CodingKey {
@@ -89,6 +110,8 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         case sodiumMg  = "sodium_mg"
         case satFatG   = "saturated_fat_g"
         case savedItemID = "saved_item_id"
+        case sourceID    = "source_id"
+        case massSource  = "mass_source"
     }
 }
 
@@ -204,7 +227,7 @@ struct EstimatedMeal: Decodable, Sendable, Equatable {
 /// the model SAID, decoded from its JSON. `groundingSources` is what the wire
 /// SHOWS: the pages its own web search returned. A model cannot write itself a
 /// source list here, which is the point.
-struct GroundedMealEstimate: Sendable, Equatable {
+struct GroundedMealEstimate: Sendable {
     let estimate: EstimatedMeal
 
     /// Empty when the estimate was not grounded, which covers three cases that
@@ -213,9 +236,25 @@ struct GroundedMealEstimate: Sendable, Equatable {
     /// figure to point at.
     let groundingSources: [WebSearchSource]
 
-    init(estimate: EstimatedMeal, groundingSources: [WebSearchSource] = []) {
+    /// Every food record the DEVICE offered during this turn (#653).
+    ///
+    /// Travels with the estimate for the same reason `groundingSources` does:
+    /// it is what the wire showed, not what the model said, and the two must
+    /// not be allowed to look alike. `FoodLookupResolution` checks the model's
+    /// claimed ids against it.
+    ///
+    /// Empty for a path that declares no lookup tool, and for a turn where the
+    /// model chose not to look anything up.
+    let lookupLedger: FoodLookupLedger
+
+    init(
+        estimate: EstimatedMeal,
+        groundingSources: [WebSearchSource] = [],
+        lookupLedger: FoodLookupLedger = FoodLookupLedger()
+    ) {
         self.estimate = estimate
         self.groundingSources = groundingSources
+        self.lookupLedger = lookupLedger
     }
 }
 
@@ -313,7 +352,8 @@ extension AnthropicClient {
         description: String,
         photos: [MealPhoto] = [],
         mealTypeHint: MealType? = nil,
-        loggedAt: Date = Date()
+        loggedAt: Date = Date(),
+        lookups: FoodLookupService = FoodLookupService()
     ) async throws -> GroundedMealEstimate {
         let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
         // One or the other, not necessarily both. A plate in front of the camera
@@ -327,11 +367,18 @@ extension AnthropicClient {
             throw MealEstimationError.notConfigured
         }
 
+        // Advertised only when a key is configured. A tool the model is told to
+        // call and whose every call fails is worse than no tool: it spends a
+        // round trip, returns an apology, and invites the model to treat the
+        // failure as information about the food.
+        let canLookUp = lookups.isConfigured
+
         let prompt = Self.mealEstimationPrompt(
             description: trimmed,
             photoCount: photos.count,
             mealTypeHint: mealTypeHint,
-            loggedAt: loggedAt
+            loggedAt: loggedAt,
+            canLookUp: canLookUp
         )
 
         // Hand-rolled body for the same reason the receipt extractor uses one:
@@ -388,6 +435,8 @@ extension AnthropicClient {
 
         var groundingSources: [WebSearchSource] = []
         var resumesUsed = 0
+        let ledger = FoodLookupLedger()
+        var lookupRoundsUsed = 0
 
         while true {
             let body: AnthropicJSONValue = .object([
@@ -401,7 +450,11 @@ extension AnthropicClient {
                 // web-search variant runs code execution under the hood, and a
                 // second declared execution environment confuses the model about
                 // which one it is in.
-                "tools": .array([WebSearchGrounding.toolJSON]),
+                "tools": .array(
+                    canLookUp
+                        ? [WebSearchGrounding.toolJSON, FoodLookupTool.toolJSON]
+                        : [WebSearchGrounding.toolJSON]
+                ),
                 "messages": .array(messages)
             ])
 
@@ -468,6 +521,33 @@ extension AnthropicClient {
                 groundingSources.append(source)
             }
 
+            // The client tool, handled ahead of the server-tool resume because a
+            // turn can pause AND ask for a lookup, and the lookup is the thing
+            // the model is waiting on.
+            if stopReason == "tool_use",
+               lookupRoundsUsed < Self.maxLookupRounds,
+               let call = Self.lookupCall(inContent: content) {
+                lookupRoundsUsed += 1
+                let results = await lookups.lookUp(FoodLookupTool.queries(from: call.input))
+                ledger.record(results)
+
+                messages.append(.object([
+                    "role": .string("assistant"),
+                    "content": .array(content)
+                ]))
+                messages.append(.object([
+                    "role": .string("user"),
+                    "content": .array([
+                        .object([
+                            "type": .string("tool_result"),
+                            "tool_use_id": .string(call.id),
+                            "content": .string(FoodLookupTool.render(results))
+                        ])
+                    ])
+                ]))
+                continue
+            }
+
             if WebSearchGrounding.shouldResume(stopReason: stopReason, resumesUsed: resumesUsed) {
                 resumesUsed += 1
                 // Empty text blocks are dropped for the reason
@@ -508,12 +588,46 @@ extension AnthropicClient {
             do {
                 return GroundedMealEstimate(
                     estimate: try Self.decoder.decode(EstimatedMeal.self, from: jsonData),
-                    groundingSources: groundingSources
+                    groundingSources: groundingSources,
+                    lookupLedger: ledger
                 )
             } catch {
                 throw MealEstimationError.parse(error)
             }
         }
+    }
+
+    // MARK: - Lookups
+
+    /// How many times one estimate may ask for food records (#653).
+    ///
+    /// Two, not one, because a first round can legitimately miss: the model
+    /// writes "khao soi", gets nothing usable, and rephrases it as "coconut
+    /// curry noodle soup". A third round has never been the difference between
+    /// an answer and no answer in practice, and the cap is what stops a
+    /// confused turn spending an hourly allowance on one meal.
+    ///
+    /// The cap is on ROUNDS, not on queries, because the tool is batched: one
+    /// round already resolves every dish in the meal.
+    static let maxLookupRounds = 2
+
+    /// The `look_up_foods` call in a response, if there is one.
+    ///
+    /// Returns the FIRST such block. A turn asking twice in one response would
+    /// be answered once and would ask again next round, which the round cap
+    /// bounds; handling only one keeps the reply pairing simple, and every
+    /// `tool_use` block must be answered or the API rejects the next message.
+    static func lookupCall(
+        inContent content: [AnthropicJSONValue]
+    ) -> (id: String, input: [String: AnthropicJSONValue])? {
+        for block in content {
+            guard let fields = block.objectValue,
+                  fields["type"]?.stringValue == "tool_use",
+                  fields["name"]?.stringValue == FoodLookupTool.name,
+                  let id = fields["id"]?.stringValue else { continue }
+            return (id, fields["input"]?.objectValue ?? [:])
+        }
+        return nil
     }
 
     // MARK: - Prompt
@@ -538,7 +652,8 @@ extension AnthropicClient {
         description: String,
         photoCount: Int = 0,
         mealTypeHint: MealType?,
-        loggedAt: Date
+        loggedAt: Date,
+        canLookUp: Bool = false
     ) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -570,6 +685,23 @@ extension AnthropicClient {
         // one shape that reliably makes a model invent the missing half.
         let hasPhotos = photoCount > 0
         let hasDescription = !description.isEmpty
+
+        // Named here rather than in the opening string so the two-lookup and
+        // one-lookup worlds read as one sentence each, instead of as a sentence
+        // with a clause bolted on.
+        let toolSentence = canLookUp
+            ? """
+             You have two lookups: \(FoodLookupTool.name), for what a food is \
+            made of and what its servings weigh, and the web search tool, for a \
+            product a brand has published figures for. See FOOD LOOKUP and \
+            BRAND LOOKUP below.
+            """
+            : """
+             You have one lookup and only one: the web search tool, for a \
+            product a brand has published figures for. See BRAND LOOKUP below \
+            for when to reach for it and when not to.
+            """
+
         let photoNoun = photoCount == 1 ? "photograph" : "photographs"
 
         let opening: String
@@ -601,10 +733,7 @@ extension AnthropicClient {
 
         return """
         \(opening) There is no portion picker and no serving dropdown, so every
-        quantity you use is an assumption you must state. You have one lookup and
-        only one: the web search tool, for a product a brand has published
-        figures for. See BRAND LOOKUP below for when to reach for it and when
-        not to.
+        quantity you use is an assumption you must state.\(toolSentence)
         \(descriptionBlock)
 
         Return STRICT JSON inside a ```json fence and nothing else — no prose
@@ -626,7 +755,9 @@ extension AnthropicClient {
               "fibre_g": 0,
               "sugar_g": 0.4,
               "sodium_mg": 142,
-              "saturated_fat_g": 3.1
+              "saturated_fat_g": 3.1,
+              "source_id": "fdc:2706437",
+              "mass_source": "standard_portion"
             }
           ],
           "contains_alcohol": false,
@@ -639,6 +770,7 @@ extension AnthropicClient {
         \(typeInstruction)
         \(MealToolSchema.estimateRules)
         \(hasPhotos ? MealToolSchema.photoRule : "")
+        \(canLookUp ? MealToolSchema.foodLookupRule : "")
         \(MealToolSchema.brandLookupRule)
 
         Do not invent fields. Do not add commentary outside the JSON fence.

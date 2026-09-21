@@ -91,9 +91,18 @@ enum MealToolSchema {
     - "contains_alcohol": true if any item is beer, wine, cider, a spirit or
       a mixed drink. Get this right even when the alcohol is a small part of
       the meal; it changes how the numbers are checked.
+    - "source_id" and "mass_source": say where each half of the item came
+      from. The numbers are `mass x composition`, the two are independent,
+      and the device grades the estimate on how many of them you did not
+      have to invent. Set "source_id" to a lookup candidate's id when that
+      candidate IS the dish, and set "mass_source" honestly on EVERY item.
+      A guess reported as a guess costs nothing; a guess reported as a
+      standard portion is the one failure this schema exists to prevent.
     - "confidence": one of "high", "medium", "low". Reflect how sure you are
       about the PORTIONS specifically, which is where a text-derived estimate
-      goes wrong, not about whether you recognised the food.
+      goes wrong, not about whether you recognised the food. The device
+      computes its own band from the provenance above and prefers it to this
+      one; this field still answers for a path that has no lookups.
     - "assumptions": one or two plain sentences naming what you assumed and
       the user never said — portion sizes, cooking oil, a default drink size,
       a default preparation. This is the most useful thing you return.
@@ -140,6 +149,55 @@ enum MealToolSchema {
     - Do not describe the photograph, the plate, the table or the lighting.
       Return the same JSON you would return for a typed description and nothing
       else.
+    """
+
+    /// When to look a FOOD up instead of remembering it, stated once (#653).
+    ///
+    /// Kept apart from `estimateRules` for the same reason `brandLookupRule` is:
+    /// it must reach only the path that can actually run the lookup. The
+    /// Shortcut has 22 seconds and no preview, and chat has not been converted
+    /// yet, so telling either one to call a tool it does not declare would
+    /// describe a capability it does not have.
+    ///
+    /// ### Why the rule spends most of its length on writing the QUERY
+    ///
+    /// Because that is where it fails. The database matches tokens, not dishes,
+    /// and the failure does not look like a failure: "khao soi" returns soy
+    /// chips, "hainanese chicken rice" returns a chicken curry, both with real
+    /// ids and real nutrient profiles. A model that quotes one of those has
+    /// produced a wrong number wearing a citation, which is worse than the
+    /// guess it replaced — it invites trust the figure has not earned, and the
+    /// user has nothing to check it against.
+    ///
+    /// So the rule says three things in order of how often they go wrong: write
+    /// a generic description, read the returned names before using one, and
+    /// prefer your own estimate to a near miss.
+    static let foodLookupRule = """
+    - FOOD LOOKUP. Call \(FoodLookupTool.name) ONCE, with one query per
+      distinct dish, before you write the items. This is the normal path for
+      almost every meal: a figure you looked up beats a figure you recalled,
+      and the portion weights it returns are the only non-guessed answer
+      available to "how much was there".
+    - WRITE THE QUERY AS A GENERIC FOOD DESCRIPTION, not as the user's words.
+      The database matches words, not dishes. "khao soi" finds soy chips.
+      "hainanese chicken rice" finds a chicken curry. Ask for what the dish
+      IS: "coconut curry noodle soup with chicken", "poached chicken with
+      rice", "flatbread fried in ghee".
+    - READ THE NAMES THAT COME BACK before you use one. A near miss is common
+      and looks exactly like a hit. If none of the candidates IS the dish,
+      use none of them: set no "source_id", estimate the item yourself, and
+      say so in "assumptions". An honest guess is worth more than a wrong row
+      with an id on it.
+    - When a candidate IS the dish, put its id in "source_id" and state
+      "portion_quantity" in grams or millilitres. The device computes the
+      nutrients from that record itself, so you cannot mis-transcribe them.
+    - Use the candidate's portion table for the mass wherever the user did not
+      give one, and then set "mass_source" to "standard_portion". Quote the
+      weight as published. A number you adjusted is your own estimate again,
+      so mark it "estimated": the device checks quoted portions against the
+      table and demotes the ones that are not in it.
+    - Do NOT look up a branded packaged product here. BRAND LOOKUP covers it,
+      and the brand's own panel beats a generic record of the same food.
     """
 
     /// When to look a product up instead of remembering it, stated once (#594).
@@ -274,6 +332,25 @@ enum MealToolSchema {
             "saved_item_id": .object([
                 "type": .string("string"),
                 "description": .string("OPTIONAL. The id of a SAVED FOOD ITEM from the context, when this dish IS that item. The device replaces this item's name, unit and all eight nutrients with that row's stored figures, scaled to portion_quantity. Omit it for anything the saved list does not hold.")
+            ]),
+            // #653. The two provenance keys. They are KEYS rather than a
+            // sentence in the rules for the reason #484 to #487 cost four
+            // rounds to learn: a rule the model keeps dropping belongs in the
+            // schema, not in prose. A named key with an enum is answered on
+            // every item; a paragraph asking for the same thing is answered on
+            // the first two and forgotten by the fifth.
+            "source_id": .object([
+                "type": .string("string"),
+                "description": .string("OPTIONAL. The id of a \(FoodLookupTool.name) candidate this item's per-100 g figures came from, e.g. \"fdc:2706437\". Set it ONLY for a candidate you were actually shown and that IS this dish. The device then computes the nutrients itself from that record, so you cannot get them wrong. An id that was never offered is ignored.")
+            ]),
+            "mass_source": .object([
+                "type": .string("string"),
+                "enum": .array([
+                    .string("stated"), .string("published_serving"),
+                    .string("standard_portion"), .string("history"),
+                    .string("estimated")
+                ]),
+                "description": .string("How you know portion_quantity. \"stated\": the user said the weight or volume. \"published_serving\": a packet or a chain published it. \"standard_portion\": a portion weight from a lookup candidate's portion table. \"history\": a portion this user accepted for this dish before. \"estimated\": you guessed it. Guessing is allowed and common; reporting a guess as anything else is not.")
             ])
         ]),
         "required": .array([
@@ -320,7 +397,12 @@ enum MealToolSchema {
                 // #625. Carried through untouched and resolved by
                 // `ExecuteDraftAction`, which is the only place with a store
                 // to resolve it against.
-                savedItemID: dict["saved_item_id"]?.stringValue
+                savedItemID: dict["saved_item_id"]?.stringValue,
+                // #653. Both carried through unverified. `FoodLookupResolution`
+                // is the only thing allowed to believe either of them, because
+                // it is the only thing holding the record of what was offered.
+                sourceID: dict["source_id"]?.stringValue,
+                massSource: dict["mass_source"]?.stringValue
             )
         }
 

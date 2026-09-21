@@ -283,10 +283,19 @@ enum MealEstimateGuards {
     ///   carried through and never graded: a published panel can still be
     ///   transcribed wrong, so every check below runs on a grounded estimate
     ///   exactly as it runs on a guessed one.
+    /// - Parameter provenance: what `FoodLookupResolution` was prepared to
+    ///   stand behind, one entry per item in `estimate.items`, in order (#653).
+    ///   EMPTY means this path did no lookups and asked no provenance
+    ///   questions, which is true of the plan tool and of any meal logged
+    ///   before #653; the model's own band is then used, exactly as before.
+    ///   That fallback is the whole reason this parameter is not a required
+    ///   one: a derived band computed from absent provenance would grade every
+    ///   such meal as a guess, including meals where the model did well.
     static func check(
         _ estimate: EstimatedMeal,
         fallbackMealType: MealType,
-        groundingSources: [WebSearchSource] = []
+        groundingSources: [WebSearchSource] = [],
+        provenance: [FoodLookupResolution.ResolvedItem] = []
     ) -> CheckedMealEstimate {
         let mealType = estimate.mealType
             .flatMap { MealType(rawValue: $0.lowercased()) } ?? fallbackMealType
@@ -323,7 +332,13 @@ enum MealEstimateGuards {
         var failures: [MealGuardFailure] = []
         var items: [MealItemEntry] = []
 
-        for raw in estimate.items {
+        // Positional, because the resolver produced this list from the same
+        // array in the same order. Length is checked rather than assumed: a
+        // mismatch means the two drifted, and attaching item three's provenance
+        // to item four would be worse than attaching none.
+        let aligned = provenance.count == estimate.items.count ? provenance : []
+
+        for (index, raw) in estimate.items.enumerated() {
             let name = (raw.name?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
                 $0.isEmpty ? nil : $0
             } ?? "Unnamed item"
@@ -342,6 +357,8 @@ enum MealEstimateGuards {
                 failures.append(.missingPortion(itemName: name))
             }
 
+            let verdict = aligned.isEmpty ? nil : aligned[index]
+
             items.append(
                 MealItemEntry(
                     name: name,
@@ -354,7 +371,13 @@ enum MealEstimateGuards {
                     fibreG:   raw.fibreG ?? 0,
                     sugarG:   raw.sugarG ?? 0,
                     sodiumMg: raw.sodiumMg ?? 0,
-                    satFatG:  raw.satFatG ?? 0
+                    satFatG:  raw.satFatG ?? 0,
+                    densitySource: verdict?.densitySource,
+                    // A portion the guards just rejected is not a portion from
+                    // anywhere. Reporting an unusable mass as "stated" would
+                    // let a flagged meal claim a sourced half.
+                    massSource: portionIsUsable ? verdict?.massSource : (verdict == nil ? nil : .estimated),
+                    sourceID: verdict?.sourceID
                 )
             )
         }
@@ -378,7 +401,7 @@ enum MealEstimateGuards {
             title: title,
             items: items,
             nutrients: totals,
-            confidence: estimate.numericConfidence,
+            confidence: derivedConfidence(items: items, reported: estimate.numericConfidence),
             assumptionsNote: assumptions,
             needsDetail: false,
             containsAlcohol: containsAlcohol,
@@ -540,6 +563,59 @@ enum MealEstimateGuards {
     /// states 140, a 71% miss. Without this exemption the single highest-value
     /// check in the set fires on every beer, and a check that cries wolf is one
     /// nobody reads.
+    // MARK: - Confidence
+
+    /// The band, computed from provenance rather than read from the model
+    /// (#653).
+    ///
+    /// ### Why this is not the model's answer any more
+    ///
+    /// The same argument the header of this file makes about every other check.
+    /// A band the model grades itself on drifts between model versions and is
+    /// silently dropped when the input is unusual, and the store shows exactly
+    /// that: over the week to 2026-09-21, a meal stating "250 g cooked chicken
+    /// curry + 2 parathas + 1 cup dal" came back LOW while "Burger Frites" —
+    /// two words, no portion at all — came back MEDIUM. The band was noise at
+    /// the margin.
+    ///
+    /// ### The rule
+    ///
+    /// Each item answers two independent questions, and scores one point for
+    /// each it did not have to invent:
+    ///
+    ///     composition from a named record   +1
+    ///     portion from one of the four      +1
+    ///
+    /// The meal takes the WORST item's score. A meal is a sum, so one item
+    /// guessed end to end puts the total in doubt however well the others are
+    /// sourced, and an average would let four good rows hide one bad one.
+    ///
+    ///     2 -> high    both halves sourced for every item
+    ///     1 -> medium  one half sourced for every item
+    ///     0 -> low     some item is a guess twice over
+    ///
+    /// ### The honest caveat
+    ///
+    /// The two points are equal here and the two errors are not: a composite
+    /// dish's composition varies 10 to 25% between sources, while a restaurant
+    /// portion varies by a factor of two. So "known composition, guessed
+    /// portion" and "guessed composition, known portion" both land on medium
+    /// although the second is the better estimate. That is a deliberate
+    /// simplification, kept because a band the user cannot predict is a band
+    /// they stop reading. Revisit it with evidence, not with intuition.
+    ///
+    /// With no provenance at all the model's own band is returned unchanged,
+    /// which keeps every path that has not been converted behaving as it did.
+    static func derivedConfidence(items: [MealItemEntry], reported: Double) -> Double {
+        let scores = items.compactMap(\.provenanceScore)
+        guard !items.isEmpty, scores.count == items.count else { return reported }
+        switch scores.min() ?? 0 {
+        case 2:  return 0.9
+        case 1:  return 0.6
+        default: return 0.3
+        }
+    }
+
     static func macroConsistency(
         totals: MealNutrients,
         containsAlcohol: Bool

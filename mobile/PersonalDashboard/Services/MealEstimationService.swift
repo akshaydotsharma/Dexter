@@ -95,14 +95,27 @@ struct MealEstimationService {
             mealTypeHint: mealTypeHint,
             loggedAt: loggedAt
         )
+        // #653. Between the answer and the grading sits the one step that
+        // decides whether a provenance claim is worth anything: the device
+        // checks each claimed record id against what it actually offered, and
+        // recomputes the numbers itself from the records that check out. The
+        // model chooses the row and the amount; the arithmetic is Swift's.
+        let resolution = FoodLookupResolution.resolve(
+            raw.estimate,
+            ledger: raw.lookupLedger,
+            wasGrounded: !raw.groundingSources.isEmpty,
+            description: description
+        )
+
         // #594. The sources come from the RESPONSE and travel beside the
         // estimate rather than inside it, so the guards below grade a grounded
         // answer with exactly the arithmetic they grade a guessed one with. A
         // published panel can still be transcribed wrong.
         return MealEstimateGuards.check(
-            raw.estimate,
+            resolution.estimate,
             fallbackMealType: mealTypeHint ?? Self.inferredType(at: loggedAt),
-            groundingSources: raw.groundingSources
+            groundingSources: raw.groundingSources,
+            provenance: resolution.resolved
         )
     }
 

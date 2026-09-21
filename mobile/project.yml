@@ -298,6 +298,8 @@ targets:
       - path: PersonalDashboard/Services/FoodItemService.swift
       - path: PersonalDashboard/Services/OpenFoodFactsClient.swift
       - path: PersonalDashboard/Services/FoodDataCentralClient.swift
+      - path: PersonalDashboard/AI/FoodLookupTool.swift
+      - path: PersonalDashboard/AI/FoodLookupResolution.swift
       # Dictation (#640). The microphone the phone has, on the Mac: the
       # transcriber, the OpenAI Realtime socket it streams to, the script
       # normaliser every final is piped through, the amplitude trace the UI
