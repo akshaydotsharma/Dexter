@@ -277,6 +277,54 @@ final class MealBrandGroundingTests: XCTestCase {
             ToolDefinitions.allTools.count + 1,
             "chatTools is allTools plus web search, and nothing else"
         )
+        XCTAssertTrue(
+            MealPlanAdvisor.tools.contains { $0.name == WebSearchGrounding.toolName },
+            "The plan chat looks up a branded meal too (#647)"
+        )
+    }
+
+    /// The streaming callers see one search at a time and never hold the whole
+    /// content array, so the quotas have to be applied as the searches land.
+    /// Without this a single branded lookup keeps every page it returned: the
+    /// live Guzman y Gomez call came back with 22.
+    func testAccumulateHoldsBothQuotas() {
+        var running: [WebSearchSource] = []
+
+        WebSearchGrounding.accumulate(
+            (1...5).map { WebSearchSource(title: "Drink \($0)", url: "https://drink.example/\($0)") },
+            into: &running
+        )
+        XCTAssertEqual(
+            running.count,
+            WebSearchGrounding.maxPerSearch,
+            "One search cannot spend more than its share"
+        )
+
+        WebSearchGrounding.accumulate(
+            [
+                WebSearchSource(title: "Drink 1 again", url: "https://drink.example/1"),
+                WebSearchSource(title: "Wafer", url: "https://wafer.example/panel")
+            ],
+            into: &running
+        )
+        XCTAssertEqual(
+            running.map(\.url).last,
+            "https://wafer.example/panel",
+            "The second product searched keeps its own evidence"
+        )
+        XCTAssertEqual(running.count, 3, "A repeat does not spend the second search's quota")
+
+        for index in 0..<10 {
+            WebSearchGrounding.accumulate(
+                [WebSearchSource(title: "Extra \(index)", url: "https://extra.example/\(index)")],
+                into: &running
+            )
+        }
+        XCTAssertEqual(
+            running.count,
+            WebSearchGrounding.maxStoredSources,
+            "The overall cap is the backstop a pathological turn hits"
+        )
     }
 
     /// The rule is stated once and reaches exactly the two paths that can act

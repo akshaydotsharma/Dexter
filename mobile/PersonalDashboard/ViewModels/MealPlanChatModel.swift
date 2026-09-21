@@ -17,6 +17,14 @@ struct MealPlanChatTurn: Identifiable, Equatable {
     /// "what about a vegetarian one" reads as a non sequitur if the picture it
     /// refers to left the screen the moment it was sent.
     var photos: [MealPhoto]
+    /// The pages this turn's web searches returned (#647). Empty on every turn
+    /// that did not search, which is most of them.
+    ///
+    /// Held on the turn rather than on the conversation so a later answer from
+    /// knowledge cannot inherit an earlier answer's citations. A source line
+    /// under a figure that was never looked up is the one failure this feature
+    /// must not have.
+    var sources: [WebSearchSource]
     /// True while the model is still writing this turn.
     var isStreaming: Bool
 
@@ -26,6 +34,7 @@ struct MealPlanChatTurn: Identifiable, Equatable {
         text: String,
         suggestions: [MealPlanSuggestion] = [],
         photos: [MealPhoto] = [],
+        sources: [WebSearchSource] = [],
         isStreaming: Bool = false
     ) {
         self.id = id
@@ -33,6 +42,7 @@ struct MealPlanChatTurn: Identifiable, Equatable {
         self.text = text
         self.suggestions = suggestions
         self.photos = photos
+        self.sources = sources
         self.isStreaming = isStreaming
     }
 
@@ -202,6 +212,8 @@ final class MealPlanChatModel {
                         turns[replyIndex].text += chunk
                     case .suggestion(let suggestion):
                         turns[replyIndex].suggestions.append(suggestion)
+                    case .sources(let sources):
+                        turns[replyIndex].sources = sources
                     case .truncated:
                         turns[replyIndex].text += turns[replyIndex].text.isEmpty
                             ? Self.truncatedMessage

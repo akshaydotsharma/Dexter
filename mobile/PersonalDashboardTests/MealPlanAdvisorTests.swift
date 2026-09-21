@@ -103,11 +103,26 @@ final class MealPlanAdvisorTests: XCTestCase {
         XCTAssertEqual(zero?.nutrients?.calories, 0, "A stated zero is a figure, not an absence.")
     }
 
-    // MARK: - The tool itself
+    // MARK: - The tools
 
-    /// One tool, and it writes nothing. The moment a second tool appears here
-    /// that can save, the promise this surface makes is broken.
-    func testThereIsExactlyOneToolAndItOnlySuggests() {
+    /// Two tools: one that proposes and one that reads. Neither saves. The
+    /// moment a tool appears here that CAN save, the promise this surface makes
+    /// is broken, so the check is on what they do rather than on how many there
+    /// are (#647).
+    func testNeitherToolCanWriteAnything() {
+        XCTAssertEqual(MealPlanAdvisor.tools.count, 2)
+        XCTAssertEqual(MealPlanAdvisor.tools.first?.name, MealPlanAdvisor.suggestToolName)
+        XCTAssertEqual(MealPlanAdvisor.tools.last?.name, WebSearchGrounding.toolName)
+        for tool in MealPlanAdvisor.tools {
+            XCTAssertNil(
+                ToolDefinitions.toolToActionType[tool.name],
+                "\(tool.name) maps to a store write and has no business on this surface"
+            )
+        }
+    }
+
+    /// The suggestion tool itself.
+    func testTheSuggestToolOnlySuggests() {
         XCTAssertEqual(MealPlanAdvisor.suggestToolName, "suggest_meal")
         let schema = MealPlanAdvisor.suggestTool.input_schema.objectValue
         let required = schema?["required"]?.arrayValue?.compactMap(\.stringValue)
@@ -125,6 +140,22 @@ final class MealPlanAdvisorTests: XCTestCase {
         XCTAssertFalse(prompt.contains("2025"), "A year in the stable half would change with the calendar.")
         XCTAssertFalse(prompt.contains("2026"))
         XCTAssertTrue(prompt.contains("TRUST BOUNDARY"), "The boundary rule has to reach every turn.")
+    }
+
+    /// A tool the prompt never scopes is a tool the model reaches for on every
+    /// turn, and this one costs money and seconds each time (#647). The rule
+    /// has to say both when to search and when not to.
+    func testThePromptSaysWhenToSearchAndWhenNotTo() {
+        let prompt = MealPlanAdvisor.stableSystemPrompt
+        XCTAssertTrue(prompt.contains("WHEN TO LOOK IT UP"))
+        XCTAssertTrue(
+            prompt.contains("Do NOT search for anything else"),
+            "Without the negative half, every planning turn pays for a search."
+        )
+        XCTAssertTrue(
+            prompt.contains("Never present a figure you did not find as one you did"),
+            "A looked-up answer and a recalled one must not read alike."
+        )
     }
 
     // MARK: - The context

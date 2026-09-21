@@ -4,6 +4,10 @@ import Foundation
 enum MealPlanAdvisorEvent: Sendable {
     case textChunk(String)
     case suggestion(MealPlanSuggestion)
+    /// The pages this turn's web searches actually returned, released once at
+    /// the end of the turn (#647). Empty is never sent: a turn that searched
+    /// nothing says nothing about sources.
+    case sources([WebSearchSource])
     case done
     /// The model ran out of output budget mid-turn (`stop_reason == "max_tokens"`).
     /// No suggestion from that turn is released. See the buffering note on `run`.
@@ -21,11 +25,23 @@ enum MealPlanAdvisorEvent: Sendable {
 /// through the options and then decide themselves, and a model that could write
 /// to the calendar would fill in days they were only thinking out loud about.
 ///
-/// It also declares no web search. A suggestion is an idea, not a figure off a
-/// brand's published panel, and a search would double the cost of a
-/// conversation whose whole point is that it is cheap enough to have often.
-/// Grounding belongs on the logging path, where a number is going into a total
-/// (#594).
+/// ### Why it can search the web, having started out unable to
+///
+/// It shipped with `suggest_meal` as its only tool, on the reasoning that a
+/// suggestion is an idea rather than a figure off a brand's published panel,
+/// and that a search would raise the cost of a conversation whose whole point
+/// is that it is cheap enough to have often. That reasoning covers "what should
+/// I have for lunch" and misses the question that actually gets asked here:
+/// "what if I order the Guzman y Gomez butter chicken bowl". A named restaurant
+/// item has ONE published answer, and the plan chat is where the order is
+/// decided, so refusing to look it up sent the user to a browser mid-decision
+/// (#647).
+///
+/// What keeps the cost property is that the model decides. The prompt says a
+/// lookup is for a brand, a restaurant item or a packaged product; a
+/// home-cooked idea is still answered from knowledge, and an ordinary planning
+/// turn declares the tool without ever calling it. A declared-and-unused server
+/// tool costs its definition in the cached prefix and nothing else.
 ///
 /// ### Prompt caching
 ///
@@ -133,55 +149,106 @@ struct MealPlanAdvisor {
                     )
 
                     var pending: [MealPlanSuggestion] = []
-                    var stopReason: String?
+                    var groundingSources: [WebSearchSource] = []
+                    var resumesUsed = 0
+                    var wasTruncated = false
                     // A stream that ends without its terminator is a connection
                     // that dropped, not a turn that finished. It releases
                     // nothing, the same rule `ChatStream` holds.
                     var turnCompleted = false
 
-                    for try await event in anthropic.stream(
-                        systemPrompt: systemPrompt,
-                        messages: messages,
-                        tools: [Self.suggestTool]
-                    ) {
-                        switch event {
-                        case .textDelta(let chunk):
-                            continuation.yield(.textChunk(chunk))
+                    // One iteration per API call. A turn that ran a web search
+                    // can come back paused, which means incomplete rather than
+                    // finished, and the only way to get the rest of it is to
+                    // hand the assistant's own content back and ask again
+                    // (#594, #647). Everything accumulated above spans the
+                    // resumes: they are one turn as far as the user is
+                    // concerned, and a suggestion made before the pause belongs
+                    // to the same answer as the prose written after it.
+                    resumeLoop: while true {
+                        var stopReason: String?
+                        var assistantContent: [AnthropicJSONValue] = []
+                        turnCompleted = false
 
-                        case .toolUse(let name, let rawInput):
-                            guard name == Self.suggestToolName else {
-                                continuation.yield(.error("Unknown tool: \(name)"))
-                                continue
+                        for try await event in anthropic.stream(
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            tools: Self.tools
+                        ) {
+                            switch event {
+                            case .textDelta(let chunk):
+                                continuation.yield(.textChunk(chunk))
+
+                            case .toolUse(let name, let rawInput):
+                                guard name == Self.suggestToolName else {
+                                    continuation.yield(.error("Unknown tool: \(name)"))
+                                    continue
+                                }
+                                guard let dict = rawInput.objectValue,
+                                      let suggestion = MealPlanSuggestion.from(
+                                        toolInput: dict,
+                                        fallbackMealType: defaultMealType
+                                      )
+                                else { continue }
+                                pending.append(suggestion)
+
+                            case .webSearchResult(let sources):
+                                // A server tool, already run by Anthropic.
+                                // Nothing to execute here: what it leaves
+                                // behind is the pages the answer can be checked
+                                // against. Read off the wire, never out of the
+                                // model's prose about what it looked at.
+                                WebSearchGrounding.accumulate(sources, into: &groundingSources)
+
+                            case .done(let reason, _, _, let content):
+                                stopReason = reason
+                                assistantContent = content
+                                turnCompleted = true
+
+                            case .error(let message):
+                                continuation.yield(.error(message))
                             }
-                            guard let dict = rawInput.objectValue,
-                                  let suggestion = MealPlanSuggestion.from(
-                                    toolInput: dict,
-                                    fallbackMealType: defaultMealType
-                                  )
-                            else { continue }
-                            pending.append(suggestion)
-
-                        case .done(let reason, _, _, _):
-                            stopReason = reason
-                            turnCompleted = true
-
-                        case .webSearchResult:
-                            // No search tool is declared, so this cannot arrive.
-                            // Ignored rather than treated as an error: a future
-                            // build that adds one should not have to remember to
-                            // come back here first.
-                            continue
-
-                        case .error(let message):
-                            continuation.yield(.error(message))
                         }
+
+                        // A cut-off turn releases NO suggestions. The last tool
+                        // block is incomplete by definition, and the ones
+                        // before it belong to a turn the model never finished
+                        // reasoning about.
+                        if stopReason == "max_tokens" {
+                            pending.removeAll()
+                            wasTruncated = true
+                            break resumeLoop
+                        }
+
+                        // A pause with nothing to hand back would re-post the
+                        // same request and pause again, so it is treated as the
+                        // end of the turn instead.
+                        guard WebSearchGrounding.shouldResume(
+                            stopReason: stopReason,
+                            resumesUsed: resumesUsed
+                        ), !assistantContent.isEmpty else { break resumeLoop }
+
+                        resumesUsed += 1
+                        messages.append(
+                            AnthropicMessage(
+                                role: "assistant",
+                                content: assistantContent.map(AnthropicContentBlock.raw)
+                            )
+                        )
                     }
 
-                    if stopReason == "max_tokens" {
+                    if wasTruncated {
                         continuation.yield(.truncated)
                     } else if turnCompleted {
                         for suggestion in pending {
                             continuation.yield(.suggestion(suggestion))
+                        }
+                        // After the suggestions, because the sources belong to
+                        // the whole turn rather than to any one card, and a
+                        // turn that searched usually answered in prose and
+                        // proposed nothing at all.
+                        if !groundingSources.isEmpty {
+                            continuation.yield(.sources(groundingSources))
                         }
                         continuation.yield(.done)
                     }
@@ -194,7 +261,19 @@ struct MealPlanAdvisor {
         }
     }
 
-    // MARK: - The one tool
+    // MARK: - The tools
+
+    /// Everything this surface advertises.
+    ///
+    /// `suggestTool` first and unchanged, so the cached prefix is identical up
+    /// to the one appended entry, and the search sits where a reader looking
+    /// for "can it write anything" finds the answer immediately: one tool that
+    /// proposes, one that reads. Neither saves.
+    ///
+    /// The search is `ToolDefinitions.webSearch` rather than a second
+    /// declaration of the same server tool, so the variant, the name and the
+    /// per-turn budget are stated once for the whole app (#594).
+    static let tools: [AnthropicTool] = [suggestTool, ToolDefinitions.webSearch]
 
     static let suggestToolName = "suggest_meal"
 
@@ -290,6 +369,18 @@ struct MealPlanAdvisor {
     /// Internal rather than private so a test measures the SHIPPED prompt rather
     /// than a copy of it. A copy drifts, and a prompt test against a drifted
     /// copy is a test of nothing (#554).
+    ///
+    /// ### Why the search rule is written here and not taken from `MealToolSchema`
+    ///
+    /// `MealToolSchema.brandLookupRule` states the same trigger once for the
+    /// whole app, and importing it would be the obvious move. It is written in
+    /// the estimator's vocabulary: build the ITEM from the figures, scale the
+    /// panel to the portion, name the source in ASSUMPTIONS. This surface has
+    /// no items, no portions and no assumptions field — it answers in prose and
+    /// draws cards. Pulling that rule in would describe a schema the model is
+    /// not being given, which is the same mistake `suggestTool` avoids by not
+    /// restating `estimateRules` (#546). What the two share is the trigger, and
+    /// a trigger is one sentence.
     static let stableSystemPrompt: String = """
     You help one person decide what to eat. You are talking to them inside their own \
     meal-planning app, on the Plan tab, beside a calendar of the meals they have \
@@ -330,6 +421,19 @@ struct MealPlanAdvisor {
     - Say what a meal costs them, in their terms: what it does to the day's calories \
     and protein against the targets, and what it leaves for the rest of the day. One \
     line, not a table.
+
+    WHEN TO LOOK IT UP
+    - You have a web search tool. Use it for a NAMED thing that has a published \
+    figure: a restaurant or chain menu item ("a Big Mac", "a grande Starbucks latte"), \
+    a packaged supermarket product, a brand's own nutrition panel. Give the \
+    numbers you found, say whose they are, and say plainly when the published figure \
+    is for a different size or a different build than the one they asked about.
+    - Do NOT search for anything else. A meal they would cook, a general question \
+    about a food, a portion estimate, a meal you are putting forward yourself: answer \
+    all of those from what you know. A search there makes every conversation slower \
+    for an answer no better than the one you already had.
+    - If the search finds nothing usable, say so and give your own estimate AS an \
+    estimate. Never present a figure you did not find as one you did.
 
     HOW TO ANSWER
     - Short. Two or three sentences of prose, then the suggestion cards. The cards \
