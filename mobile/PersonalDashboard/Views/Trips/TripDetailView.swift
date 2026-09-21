@@ -80,6 +80,10 @@ struct TripDetailView: View {
     /// Hard-failure banner (only when the upload couldn't be saved at all — the
     /// happy and degraded paths always produce a card instead).
     @State private var ticketError: String?
+    /// Stop queued for re-reading its own scanned file (#649). Confirmed rather
+    /// than immediate, exactly as in the Wallet: a re-read re-derives the stop
+    /// from the document, so it can overwrite a detail someone typed by hand.
+    @State private var pendingReread: UUID?
 
     // MARK: Expense upload / import state (#258)
     /// Camera cover for the Expenses tab, distinct from the ticket camera so
@@ -443,6 +447,21 @@ struct TripDetailView: View {
         } message: {
             Text(ticketError ?? "")
         }
+        .alert(
+            "Read this document again?",
+            isPresented: Binding(
+                get: { pendingReread != nil },
+                set: { if !$0 { pendingReread = nil } }
+            )
+        ) {
+            Button("Read again") {
+                if let id = pendingReread { reread(itemUUID: id) }
+                pendingReread = nil
+            }
+            Button("Cancel", role: .cancel) { pendingReread = nil }
+        } message: {
+            Text("The stored file is read again and this stop's details are replaced with what it says. Anything you typed by hand is overwritten. Its notes, its documents and its expenses are untouched.")
+        }
         // Expense camera (#258). Photo / PDF / statement uploads go through the
         // shared pickers above (#261); receipt results flow into the review
         // sheet (which already carries this trip's context), a statement PDF
@@ -580,6 +599,10 @@ struct TripDetailView: View {
                         onDocuments: { item in
                             Haptics.light()
                             documentsTarget = StopDocumentsTarget(id: item.clientUUID)
+                        },
+                        onReread: { item in
+                            Haptics.light()
+                            pendingReread = item.clientUUID
                         },
                         onDelete: { item in
                             Haptics.destructive()
@@ -876,6 +899,29 @@ struct TripDetailView: View {
         } catch {
             ticketError = (error as? LocalizedError)?.errorDescription
                 ?? "We couldn't save that ticket. Please try again."
+        }
+    }
+
+    /// Read a stop's stored document again against the current extractor (#649).
+    ///
+    /// The repair path for a stop whose details were read by an older prompt. A
+    /// stay scanned before the extractor could describe a check-out is the case
+    /// this shipped for: the file on disk says "Check-out 11:00, Sun, Oct 11" and
+    /// the row has nowhere that ever held it, so reading the same file again is
+    /// the whole fix, with no re-upload and nothing lost off the stop.
+    private func reread(itemUUID: UUID) {
+        Task {
+            withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = true }
+            defer { withAnimation(.easeInOut(duration: 0.15)) { isProcessingTicket = false } }
+            do {
+                try await TicketExtraction().rereadItineraryItem(
+                    itemUUID: itemUUID, context: modelContext
+                )
+                Haptics.tick()
+            } catch {
+                ticketError = (error as? LocalizedError)?.errorDescription
+                    ?? "We couldn't read that document again. Please try again."
+            }
         }
     }
 
@@ -1544,6 +1590,9 @@ private struct TripDayCluster: View {
     /// Opens the stop's documents: the tray under a stop that has some, and the
     /// context menu on every stop, which is where you go to add the first one.
     let onDocuments: (LocalItineraryItem) -> Void
+    /// Reads the stop's own scanned file again (#649). Offered only on a stop
+    /// that HAS one, so it is absent from a row typed by hand.
+    let onReread: (LocalItineraryItem) -> Void
     let onDelete: (LocalItineraryItem) -> Void
 
     var body: some View {
@@ -1595,6 +1644,18 @@ private struct TripDayCluster: View {
                             onDocuments(entry.item)
                         } label: {
                             Label("Documents", systemImage: "paperclip")
+                        }
+                        // The stop is where you meet the booking, so it is where
+                        // the repair belongs (#649). The Wallet offers the same
+                        // action, but only reaches a stop carrying a scannable
+                        // credential — a hotel voucher has none and never appears
+                        // there, which is exactly the document this is for.
+                        if entry.item.canBeReadAgain {
+                            Button {
+                                onReread(entry.item)
+                            } label: {
+                                Label("Read again", systemImage: "arrow.clockwise.circle")
+                            }
                         }
                         Button(role: .destructive) {
                             onDelete(entry.item)

@@ -420,3 +420,24 @@ final class LocalItineraryItem {
 extension LocalItineraryItem: WalletEligible {
     var reference: String { sourceConfirmation }
 }
+
+extension LocalItineraryItem {
+    /// Whether this stop has a stored file an extractor guessed at, and can
+    /// therefore be read again (#649).
+    ///
+    /// A stop typed by hand has nothing to re-read, and a `.pkpass` carries the
+    /// issuer's own fields and was never guessed at. Everything else came off a
+    /// scan, so the file is still on disk and the extraction that read it can be
+    /// run again when the prompt improves.
+    ///
+    /// Deliberately on the model rather than in either view: the timeline's
+    /// context menu and the Wallet's action have to agree about which stops offer
+    /// this, and two copies of the rule is how they would stop agreeing.
+    /// `@MainActor` because `TicketStorage` is; every caller (the timeline's
+    /// context menu, the Wallet's action) is already on it.
+    @MainActor
+    var canBeReadAgain: Bool {
+        let path = attachmentPath.trimmingCharacters(in: .whitespaces)
+        return !path.isEmpty && !TicketStorage.isPass(path)
+    }
+}

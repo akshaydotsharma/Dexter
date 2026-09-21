@@ -18,24 +18,45 @@ enum PassFieldSchema {
 
     /// The JSON-schema value for the `other_fields` property. Callers add it under
     /// that key in their own tool definition.
-    static let property: AnthropicJSONValue = .object([
-        "type": .string("array"),
-        "items": .object([
-            "type": .string("object"),
-            "properties": .object([
-                "label_in_english": .object([
-                    "type": .string("string"),
-                    "description": .string("What this fact IS, in English, always. Translate the document's own word for it: Settore is Sector, Tribuna is Stand, Cancello is Gate, Ingresso is Entrance, Fila is Row, Posto is Seat, Piano is Floor. Two or three words at most.")
+    ///
+    /// `stayIsTyped` is the one thing the two callers disagree about (#649). A
+    /// check-out is a fact the holder acts on, so it earned a place in the
+    /// examples below, and while nothing else could hold it that was the right
+    /// answer. `TicketExtraction` now has `end_date` and `end_time`, and a typed
+    /// field loses to a worked example every time: left in, the example goes on
+    /// telling that model to write the check-out as prose on the card's back.
+    /// `TaskTicketExtraction` reads a document hanging off a task or a stop, has
+    /// no stay of its own to fill, and keeps the example — for it, the back of the
+    /// card is genuinely the only place a check-out can go.
+    static func property(stayIsTyped: Bool = false) -> AnthropicJSONValue {
+        // Empty when the caller has somewhere better for it, so the sentence reads
+        // the same either way and only the list of examples gets shorter.
+        let stayExample = stayIsTyped ? "" : ", \"Check-out: Monday 7 September, 00:00 - 11:00\""
+        // The one rule that has to be restated when the check-out has a home: the
+        // paragraph below already forbids repeating a typed field, and this names
+        // the field it keeps being repeated into.
+        let stayRule = stayIsTyped
+            ? "\n\nA STAY'S CHECK-OUT IS NOT ONE OF THESE. It has its own end_date and end_time fields, and repeating it here writes it on the card twice."
+            : ""
+        return .object([
+            "type": .string("array"),
+            "items": .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "label_in_english": .object([
+                        "type": .string("string"),
+                        "description": .string("What this fact IS, in English, always. Translate the document's own word for it: Settore is Sector, Tribuna is Stand, Cancello is Gate, Ingresso is Entrance, Fila is Row, Posto is Seat, Piano is Floor. Two or three words at most.")
+                    ]),
+                    "value_as_printed": .object([
+                        "type": .string("string"),
+                        "description": .string("The fact itself, exactly as the document prints it, in the document's own language. Never translated: a place's name is a name, and renaming it sends someone to a sign that does not exist.")
+                    ])
                 ]),
-                "value_as_printed": .object([
-                    "type": .string("string"),
-                    "description": .string("The fact itself, exactly as the document prints it, in the document's own language. Never translated: a place's name is a name, and renaming it sends someone to a sign that does not exist.")
-                ])
+                "required": .array([.string("label_in_english"), .string("value_as_printed")])
             ]),
-            "required": .array([.string("label_in_english"), .string("value_as_printed")])
-        ]),
-        "description": .string("The few remaining facts the HOLDER would act on that no field above covers, one entry per fact, each as \"Label: value\".\n\nEVERY LABEL IS IN ENGLISH. The label is yours to write, not the document's to dictate, so translate it whenever the ticket is in another language and keep the VALUE exactly as printed. \"Settore: 4\" is wrong and \"Sector: 4\" is right; likewise Tribuna to Stand, Cancello to Gate, Ingresso to Entrance, Porta to Door, Fila to Row, Posto to Seat, Piano to Floor, Anello to Tier. If you are writing a label that is not an English word, you have made a mistake.\n\nLEAVE OUT THE ISSUER'S BOOKKEEPING. A ticket is covered in numbers printed so the seller can reconcile, audit and reprint it, and none of them is a fact anyone acts on: fiscal, tax and VAT identification codes, internal or progressive sequence numbers, system identifiers, ticket-stock and card serial numbers, issue or printing timestamps, seal, authorisation and control codes, checksums and hashes, and category or genre codes that are bare numbers rather than words.\n\nLEAVE OUT THE EVENT'S PROGRAMME. A schedule printed on a ticket is the event's, not the holder's: session times, running order, support races, set times, undercard, opening hours, a list of what happens when. A race ticket printing thirteen practice and qualifying sessions has thirteen facts about the WEEKEND and none about this admission. Return none of them.\n\nLEAVE OUT WHAT THE BOOKING INCLUDES. A list whose values are all \"included\", \"yes\", a tick or the same word down the column is a list of terms of sale: insurance, breakdown cover, unlimited mileage, extras, protections. It says what was bought, not what happens on the day. What the person collects or presents IS a fact and stays: the car booked, the return time, the return place, the total paid.\n\nThe test is not whether it is printed, it is whether the holder would ever read it out, act on it, or need it to get in. Most tickets have NOTHING to return here, and an empty list is the right answer far more often than a long one. SIX is the most any document should need: if you are about to return more, you are keeping things that do not belong here, so cut back to the ones that matter. Good entries look like \"Ticket: In-Person\", \"Organiser: Vibe Coders SG\", \"Dress code: Smart casual\", \"Table: 12\", \"Entrance: Gate C from 18:00\", \"PIN code: 0226\", \"Phone: +39 328 918 9473\", \"Check-out: Monday 7 September, 00:00 - 11:00\". A number to CALL on the day — the host, the property, the desk, the driver — is one of the most useful things a card can carry, so keep it whenever one is printed. Do NOT repeat anything already returned in another field, in any language: if you returned a section, no entry here restates it under the document's own word for section. Do not include the barcode's contents, and do not invent labels: if the document shows a bare value with no label, omit it.\n\nLast check before you answer: read back every label you wrote. If any one of them is not an English word, rewrite it in English now. \"Settore\" is not an English word."),
-    ])
+            "description": .string("The few remaining facts the HOLDER would act on that no field above covers, one entry per fact, each as \"Label: value\".\n\nEVERY LABEL IS IN ENGLISH. The label is yours to write, not the document's to dictate, so translate it whenever the ticket is in another language and keep the VALUE exactly as printed. \"Settore: 4\" is wrong and \"Sector: 4\" is right; likewise Tribuna to Stand, Cancello to Gate, Ingresso to Entrance, Porta to Door, Fila to Row, Posto to Seat, Piano to Floor, Anello to Tier. If you are writing a label that is not an English word, you have made a mistake.\n\nLEAVE OUT THE ISSUER'S BOOKKEEPING. A ticket is covered in numbers printed so the seller can reconcile, audit and reprint it, and none of them is a fact anyone acts on: fiscal, tax and VAT identification codes, internal or progressive sequence numbers, system identifiers, ticket-stock and card serial numbers, issue or printing timestamps, seal, authorisation and control codes, checksums and hashes, and category or genre codes that are bare numbers rather than words.\n\nLEAVE OUT THE EVENT'S PROGRAMME. A schedule printed on a ticket is the event's, not the holder's: session times, running order, support races, set times, undercard, opening hours, a list of what happens when. A race ticket printing thirteen practice and qualifying sessions has thirteen facts about the WEEKEND and none about this admission. Return none of them.\n\nLEAVE OUT WHAT THE BOOKING INCLUDES. A list whose values are all \"included\", \"yes\", a tick or the same word down the column is a list of terms of sale: insurance, breakdown cover, unlimited mileage, extras, protections. It says what was bought, not what happens on the day. What the person collects or presents IS a fact and stays: the car booked, the return time, the return place, the total paid.\n\nThe test is not whether it is printed, it is whether the holder would ever read it out, act on it, or need it to get in. Most tickets have NOTHING to return here, and an empty list is the right answer far more often than a long one. SIX is the most any document should need: if you are about to return more, you are keeping things that do not belong here, so cut back to the ones that matter. Good entries look like \"Ticket: In-Person\", \"Organiser: Vibe Coders SG\", \"Dress code: Smart casual\", \"Table: 12\", \"Entrance: Gate C from 18:00\", \"PIN code: 0226\", \"Phone: +39 328 918 9473\"\(stayExample). A number to CALL on the day — the host, the property, the desk, the driver — is one of the most useful things a card can carry, so keep it whenever one is printed. Do NOT repeat anything already returned in another field, in any language: if you returned a section, no entry here restates it under the document's own word for section. Do not include the barcode's contents, and do not invent labels: if the document shows a bare value with no label, omit it.\n\nLast check before you answer: read back every label you wrote. If any one of them is not an English word, rewrite it in English now. \"Settore\" is not an English word.\(stayRule)"),
+        ])
+    }
 }
 
 extension PassFieldSchema {

@@ -1545,7 +1545,7 @@ extension TaskTicketExtraction {
                 "row": field("Seating row, WITHOUT the word that labels it: \"Fila D\" is a row of \"D\", \"Row 14\" is a row of \"14\". The card prints ROW above it already. Omit if none."),
                 "address": field("The full postal or street address, when the document prints one BEYOND the venue's name (e.g. \"69 Ayer Rajah Cres., Level 3 Vidacity, Singapore 139961\"). Return it only when it is a real address with a street or a postcode in it — if all the document shows is the place's name, that is the venue and this field is omitted. Never repeat the venue here."),
                 "directions_url": field("A map link printed on the document (a Google Maps, Apple Maps or share.google URL). Read it exactly. Omit if none is written, and never construct one yourself."),
-                "other_fields": PassFieldSchema.property
+                "other_fields": PassFieldSchema.property()
                         ]),
                         "required": .array([])
                     ])
