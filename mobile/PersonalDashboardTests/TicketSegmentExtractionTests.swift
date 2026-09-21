@@ -299,10 +299,10 @@ final class TicketSegmentExtractionTests: XCTestCase {
     /// The schema must actually advertise the array, or the model has no way to
     /// report a second leg however well the prompt asks for one.
     func testToolSchemaAdvertisesASegmentsArray() throws {
-        guard case let .object(schema) = TicketExtraction.extractTicketTool.input_schema,
+        guard case let .object(schema) = TicketExtraction.extractBookingTool.input_schema,
               case let .object(properties) = try XCTUnwrap(schema["properties"]),
               case let .object(segments) = try XCTUnwrap(properties["segments"]) else {
-            return XCTFail("extract_ticket should expose a `segments` property")
+            return XCTFail("extract_booking should expose a `segments` property")
         }
         XCTAssertEqual(segments["type"]?.stringValue, "array")
 
