@@ -1,8 +1,8 @@
 # Ground meal estimates in real food data (#653)
 
-**Status**: in-progress
+**Status**: complete — PR #654 open, awaiting device QA
 **Started**: 2026-09-22
-**Last Updated**: 2026-09-22 02:00 SGT
+**Last Updated**: 2026-09-22 03:30 SGT
 **Branch**: `feat/grounded-meal-estimates`
 
 ## Objective
@@ -36,19 +36,24 @@ Every exact row came from the library or a hand-typed total.
 
 ## Current Step
 
-- [ ] Ship the Singapore table
-  - [x] `build-sg-food-table.py` — enumerates by substring search, reads
-        details, caches, backs off on 429
-  - [x] `SGFoodTable.swift` + tests, wired as a lookup source between the
-        library and FoodData Central
-  - [ ] The crawl itself (running; ~2,400 dishes at 2 requests/second)
-  - [ ] Add the JSON to the resources list for BOTH targets and run the tests
-        that assert the asset is actually in the bundle
+- [ ] Device QA. The build is on the phone (`C2241792`, 2026-09-22 03:26). Log a
+      real meal through the composer and check the preview shows sourced
+      composition and a portion that is not a guess.
 
 ## Next Steps
 
-- [ ] Open the PR
-- [ ] Ship to phone and let the user QA a real meal
+- [ ] Merge #654 once QA passes
+- [ ] Consider: chat and the Shortcut still have no lookups, so their estimates
+      fall back to the model's own band. Converting chat is the obvious next
+      step; the Shortcut's 22 s ceiling makes it a real design question.
+
+## Completed
+
+- [x] All seven scope items on #653. Four commits, PR #654.
+- [x] `d8963b7` FoodData Central client
+- [x] `5959dac` lookup tool, provenance, ledger, derived band
+- [x] `0bd4cc5` saved library and past portions
+- [x] `7f781c7` the 2,689-dish Singapore table
 
 ## Key Decisions Made
 
