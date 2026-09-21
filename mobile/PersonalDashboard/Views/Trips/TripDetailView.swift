@@ -68,7 +68,7 @@ struct TripDetailView: View {
 
     // MARK: Ticket upload / scan state (#222)
     @State private var showingTicketCamera: Bool = false
-    /// Blocks the FAB and shows a lightweight "Reading ticket…" overlay while
+    /// Blocks the FAB and shows a lightweight "Reading booking…" overlay while
     /// the decode + extraction pipeline runs.
     @State private var isProcessingTicket: Bool = false
     /// Present the full-screen scan surface for a ticket item.
@@ -437,7 +437,7 @@ struct TripDetailView: View {
             }
         }
         .alert(
-            "Couldn't save the ticket",
+            "Couldn't save the booking",
             isPresented: Binding(
                 get: { ticketError != nil },
                 set: { if !$0 { ticketError = nil } }
@@ -551,7 +551,7 @@ struct TripDetailView: View {
     private var ticketProcessingOverlay: some View {
         ReadingOverlay(
             tint: Tokens.accent(for: .itineraries),
-            title: "Reading ticket…",
+            title: "Reading booking…",
             subtitle: "Filling in the stop's details."
         )
     }
@@ -768,7 +768,14 @@ struct TripDetailView: View {
         .allowsHitTesting(true)
     }
 
-    /// Itinerary FAB: the existing add-stop / scan-ticket menu.
+    /// Itinerary FAB: add a stop by hand, or read one off a document.
+    ///
+    /// The three capture rows used to say "ticket" (#651). A trip collects far
+    /// more than tickets — a villa voucher, a tour confirmation, a restaurant
+    /// booking, a car hire slip — and the extractor reads all of them, so the
+    /// menu promising a ticket was the only thing suggesting otherwise. "Booking"
+    /// is the word the rest of the feature already uses (`sourceConfirmation` is
+    /// a booking reference) and it covers everything the scanner takes.
     private var itineraryFab: some View {
         Menu {
             Button {
@@ -787,7 +794,7 @@ struct TripDetailView: View {
                 Button {
                     showingTicketCamera = true
                 } label: {
-                    Label("Scan a ticket", systemImage: "camera")
+                    Label("Scan a booking", systemImage: "camera")
                 }
             }
             #endif
@@ -795,13 +802,13 @@ struct TripDetailView: View {
                 photoPickPurpose = .ticket
                 showingPhotoLibrary = true
             } label: {
-                Label("Ticket from Photos", systemImage: "photo")
+                Label("Booking from Photos", systemImage: "photo")
             }
             Button {
                 pdfPickPurpose = .ticket
                 showingPDFPicker = true
             } label: {
-                Label("Ticket from PDF", systemImage: "doc.text")
+                Label("Booking from PDF", systemImage: "doc.text")
             }
         } label: {
             Image(systemName: "plus")
@@ -898,7 +905,7 @@ struct TripDetailView: View {
             }
         } catch {
             ticketError = (error as? LocalizedError)?.errorDescription
-                ?? "We couldn't save that ticket. Please try again."
+                ?? "We couldn't save that booking. Please try again."
         }
     }
 

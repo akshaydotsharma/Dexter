@@ -7,7 +7,7 @@ import XCTest
 /// onto a Bali trip landed with `kind = stay` and `startTime = 15:00`, which is
 /// correct, and with `endDate = nil`, `endTime = nil` and `arrivalTime = 11:00`
 /// on the CHECK-IN day, which is not. The model had read the check-out perfectly
-/// and written it into `other_fields` as prose, because `extract_ticket` had no
+/// and written it into `other_fields` as prose, because `extract_booking` had no
 /// field for it and `buildItem` hardcoded `endDate: nil` regardless.
 ///
 /// Three separate things had to be true for that row to come out wrong, so each
