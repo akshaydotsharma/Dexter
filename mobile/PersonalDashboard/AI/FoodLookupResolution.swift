@@ -66,7 +66,8 @@ enum FoodLookupResolution {
         _ estimate: EstimatedMeal,
         ledger: FoodLookupLedger,
         wasGrounded: Bool = false,
-        description: String = ""
+        description: String = "",
+        portionHistory: [MealPortionHistory.Entry] = []
     ) -> (estimate: EstimatedMeal, resolved: [ResolvedItem]) {
         var resolvedItems: [ResolvedItem] = []
         let stated = statedQuantities(in: description, items: estimate.items)
@@ -78,6 +79,17 @@ enum FoodLookupResolution {
             // prove they did not.
             if stated.contains(index), !claimedMass.isSourced {
                 claimedMass = .stated
+            }
+            // A history claim is checkable for the same reason a portion-table
+            // quote is: the device is holding the list the model was shown.
+            if claimedMass == .history,
+               !MealPortionHistory.supports(
+                   name: raw.name,
+                   quantity: raw.portionQuantity ?? 0,
+                   unit: raw.portionUnit ?? "",
+                   in: portionHistory
+               ) {
+                claimedMass = .estimated
             }
 
             // A candidate the device really offered. Anything else — an id from
@@ -113,7 +125,7 @@ enum FoodLookupResolution {
                 resolvedItems.append(
                     ResolvedItem(
                         item: raw,
-                        densitySource: .lookedUp,
+                        densitySource: candidate.density,
                         massSource: claimedMass,
                         sourceID: id
                     )
@@ -159,7 +171,7 @@ enum FoodLookupResolution {
                         sourceID: id,
                         massSource: verifiedMass.rawValue
                     ),
-                    densitySource: .lookedUp,
+                    densitySource: candidate.density,
                     massSource: verifiedMass,
                     sourceID: id
                 )

@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 @testable import PersonalDashboard
 
 /// The step between what the model claimed and what the device believes (#653).
@@ -682,5 +683,258 @@ final class LiveMealLookupTests: XCTestCase {
                 "a surviving id must be one the device offered"
             )
         }
+    }
+}
+
+/// The two sources that come from the user rather than from a database (#653):
+/// their own saved library, and the portions they have already accepted.
+@MainActor
+final class MealUserSourcesTests: XCTestCase {
+
+    private var store: SwiftDataStore!
+    private var meals: MealService!
+
+    override func setUp() {
+        super.setUp()
+        store = SwiftDataStore(container: SwiftDataStore.makeInMemory())
+        meals = MealService(store: store)
+    }
+
+    override func tearDown() {
+        meals = nil
+        store = nil
+        super.tearDown()
+    }
+
+    @discardableResult
+    private func log(
+        _ name: String,
+        quantity: Double,
+        unit: String = "g",
+        daysAgo: Int = 1,
+        isSuspect: Bool = false
+    ) throws -> LocalMeal {
+        let when = Date().addingTimeInterval(-Double(daysAgo) * 86_400)
+        return try meals.addMeal(
+            date: when,
+            loggedAt: when,
+            mealType: .lunch,
+            mealDescription: name,
+            items: [MealItemEntry(name: name, portionQuantity: quantity, portionUnit: unit)],
+            source: MealSource.composer,
+            isSuspect: isSuspect,
+            suspectReason: isSuspect ? "test" : nil
+        )
+    }
+
+    private func allMeals() throws -> [LocalMeal] {
+        try store.context.fetch(FetchDescriptor<LocalMeal>())
+    }
+
+    // MARK: - History
+
+    /// The last portion wins, not an average. An average of 200 and 400 is a
+    /// portion that never happened.
+    func testTheMostRecentPortionWins() throws {
+        try log("Latte", quantity: 200, unit: "ml", daysAgo: 5)
+        try log("Latte", quantity: 176, unit: "ml", daysAgo: 1)
+
+        let entries = MealPortionHistory.entries(from: try allMeals())
+        let latte = try XCTUnwrap(entries.first { $0.name == "latte" })
+
+        XCTAssertEqual(latte.quantity, 176, accuracy: 0.001)
+        XCTAssertEqual(latte.timesLogged, 2)
+    }
+
+    /// A flagged meal's portions are exactly the ones nobody should quote back:
+    /// the meal is held out of every total because its numbers are not trusted.
+    func testASuspectMealContributesNoPortions() throws {
+        try log("Biryani", quantity: 350, daysAgo: 1, isSuspect: true)
+        let entries = MealPortionHistory.entries(from: try allMeals())
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    /// Outside the window, and therefore out of the block.
+    func testAnOldPortionFallsOutOfTheWindow() throws {
+        try log("Khao soi", quantity: 550, daysAgo: 90)
+        let entries = MealPortionHistory.entries(from: try allMeals())
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    /// A portion stated in something that cannot be scaled is not a portion
+    /// anything can reuse.
+    func testAnUnscalableUnitIsNotCarried() throws {
+        try log("Soup", quantity: 1, unit: "bowl", daysAgo: 1)
+        XCTAssertTrue(MealPortionHistory.entries(from: try allMeals()).isEmpty)
+    }
+
+    /// Most repeated first, because the block is capped and the dishes worth
+    /// carrying are the ones that come back.
+    func testTheMostRepeatedDishesLeadTheBlock() throws {
+        try log("Latte", quantity: 176, unit: "ml", daysAgo: 4)
+        try log("Latte", quantity: 176, unit: "ml", daysAgo: 3)
+        try log("Latte", quantity: 176, unit: "ml", daysAgo: 2)
+        try log("Trail mix", quantity: 10, daysAgo: 1)
+
+        let entries = MealPortionHistory.entries(from: try allMeals())
+        XCTAssertEqual(entries.first?.name, "latte")
+        XCTAssertEqual(entries.first?.timesLogged, 3)
+    }
+
+    /// The block says what the list is FOR, and what it is not for. Reading it
+    /// as a composition source is the one misuse that would inflate the band.
+    func testThePromptBlockSaysItIsAboutPortionsOnly() throws {
+        try log("Latte", quantity: 176, unit: "ml", daysAgo: 1)
+        let block = MealPortionHistory.promptBlock(MealPortionHistory.entries(from: try allMeals()))
+
+        XCTAssertTrue(block.contains("latte: 176 ml"))
+        XCTAssertTrue(block.contains("mass_source"))
+        XCTAssertTrue(block.contains("say nothing about what the food CONTAINS"))
+    }
+
+    /// No history, no block. An empty heading would still cost tokens and would
+    /// invite the model to explain its absence.
+    func testAnEmptyHistoryRendersNothing() {
+        XCTAssertTrue(MealPortionHistory.promptBlock([]).isEmpty)
+    }
+
+    // MARK: - Verifying a history claim
+
+    func testAHistoryClaimMatchingTheListIsAccepted() {
+        let entries = [MealPortionHistory.Entry(name: "latte", quantity: 176, unit: "ml", timesLogged: 3)]
+        XCTAssertTrue(MealPortionHistory.supports(name: "Latte with whole milk", quantity: 176, unit: "ml", in: entries))
+    }
+
+    /// The quantity is matched strictly. A claim of history for a portion that
+    /// is not in the list is the model's own number wearing a citation.
+    func testAHistoryClaimWithADifferentPortionIsRejected() {
+        let entries = [MealPortionHistory.Entry(name: "latte", quantity: 176, unit: "ml", timesLogged: 3)]
+        XCTAssertFalse(MealPortionHistory.supports(name: "Latte", quantity: 300, unit: "ml", in: entries))
+    }
+
+    func testAHistoryClaimForADishNotInTheListIsRejected() {
+        let entries = [MealPortionHistory.Entry(name: "latte", quantity: 176, unit: "ml", timesLogged: 3)]
+        XCTAssertFalse(MealPortionHistory.supports(name: "Biryani", quantity: 176, unit: "ml", in: entries))
+    }
+
+    /// End to end through the resolver: an unsupported claim is demoted, so it
+    /// cannot buy a confidence point.
+    func testAnUnsupportedHistoryClaimIsDemotedByTheResolver() {
+        let estimate = EstimatedMeal(
+            mealType: "lunch",
+            items: [EstimatedMealItem(name: "Biryani", portionQuantity: 350, portionUnit: "g", massSource: "history")]
+        )
+        let result = FoodLookupResolution.resolve(
+            estimate,
+            ledger: FoodLookupLedger(),
+            portionHistory: [MealPortionHistory.Entry(name: "latte", quantity: 176, unit: "ml", timesLogged: 3)]
+        )
+        XCTAssertEqual(result.resolved.first?.massSource, .estimated)
+    }
+
+    func testASupportedHistoryClaimSurvivesTheResolver() {
+        let estimate = EstimatedMeal(
+            mealType: "lunch",
+            items: [EstimatedMealItem(name: "Latte", portionQuantity: 176, portionUnit: "ml", massSource: "history")]
+        )
+        let result = FoodLookupResolution.resolve(
+            estimate,
+            ledger: FoodLookupLedger(),
+            portionHistory: [MealPortionHistory.Entry(name: "latte", quantity: 176, unit: "ml", timesLogged: 3)]
+        )
+        XCTAssertEqual(result.resolved.first?.massSource, .history)
+    }
+
+    // MARK: - The library as a lookup source
+
+    /// A library row's figures are restated per 100 so every candidate in one
+    /// answer is on the same footing, and its usual portion is offered as a
+    /// portion row.
+    func testALibraryRowBecomesACandidateStatedPerHundred() throws {
+        let library = FoodItemService(store: store)
+        let row = try library.createItem(
+            name: "Superyou Protein Wafer",
+            basePortionQuantity: 40,
+            basePortionUnit: FoodPortionUnit.grams.rawValue,
+            nutrients: MealNutrients(
+                calories: 186, proteinG: 10, carbsG: 20, fatG: 10,
+                fibreG: 3, sugarG: 3.5, sodiumMg: 177, satFatG: 8.5
+            ),
+            defaultPortionQuantity: 40,
+            source: FoodItemSource.openFoodFacts,
+            isVerified: false
+        )
+
+        let candidate = FoodLookupCandidate(saved: row)
+
+        XCTAssertEqual(candidate.id, "saved:\(row.clientUUID)")
+        XCTAssertEqual(candidate.density, MealDensitySource.saved)
+        XCTAssertEqual(candidate.nutrientsPer100.calories, 465, accuracy: 0.5, "186 kcal per 40 g is 465 per 100")
+        XCTAssertEqual(candidate.portions.first?.description, "your usual portion")
+        XCTAssertEqual(candidate.portions.first?.gramWeight ?? 0, 40, accuracy: 0.001)
+    }
+
+    /// A verified library id resolves as `saved`, not as `looked_up`. The two
+    /// are both transcriptions and they are not the same claim.
+    func testAVerifiedLibraryIDResolvesAsSaved() throws {
+        let library = FoodItemService(store: store)
+        let row = try library.createItem(
+            name: "Whey protein shake",
+            basePortionQuantity: 100,
+            basePortionUnit: FoodPortionUnit.millilitres.rawValue,
+            nutrients: MealNutrients(
+                calories: 40, proteinG: 8, carbsG: 1, fatG: 0.5,
+                fibreG: 0, sugarG: 0.5, sodiumMg: 30, satFatG: 0.2
+            ),
+            defaultPortionQuantity: 300,
+            source: FoodItemSource.manual,
+            isVerified: true
+        )
+        let ledger = FoodLookupLedger()
+        ledger.record([
+            FoodLookupResult(query: "whey", candidates: [FoodLookupCandidate(saved: row)], note: nil)
+        ])
+
+        let estimate = EstimatedMeal(
+            mealType: .none,
+            items: [
+                EstimatedMealItem(
+                    name: "Protein shake",
+                    portionQuantity: 300, portionUnit: "ml",
+                    calories: 999,
+                    sourceID: "saved:\(row.clientUUID)",
+                    massSource: "history"
+                )
+            ]
+        )
+
+        let result = FoodLookupResolution.resolve(estimate, ledger: ledger)
+
+        XCTAssertEqual(result.resolved.first?.densitySource, .saved)
+        XCTAssertEqual(
+            result.estimate.items.first?.calories ?? 0, 120, accuracy: 0.5,
+            "300 ml of a 40 kcal/100 ml shake, computed by the device"
+        )
+    }
+
+    /// The library search is reachable from a real store, and matches on a word
+    /// rather than on the whole phrase — the query is a generic description and
+    /// the row is a short name.
+    func testTheLibrarySearchMatchesAGenericQuery() throws {
+        let library = FoodItemService(store: store)
+        _ = try library.createItem(
+            name: "Latte",
+            basePortionQuantity: 176,
+            basePortionUnit: FoodPortionUnit.millilitres.rawValue,
+            nutrients: MealNutrients(calories: 100, proteinG: 5, carbsG: 8, fatG: 5,
+                                     fibreG: 0, sugarG: 8, sodiumMg: 60, satFatG: 3),
+            defaultPortionQuantity: 176,
+            source: FoodItemSource.estimate,
+            isVerified: false
+        )
+
+        let service = FoodLookupService.backedBy(store: store)
+        XCTAssertEqual(service.library("latte with whole milk").count, 1)
+        XCTAssertTrue(service.library("chicken biryani").isEmpty)
     }
 }

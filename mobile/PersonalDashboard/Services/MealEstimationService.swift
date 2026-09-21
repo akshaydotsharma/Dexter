@@ -89,11 +89,30 @@ struct MealEstimationService {
         mealTypeHint: MealType? = nil,
         loggedAt: Date = Date()
     ) async throws -> CheckedMealEstimate {
+        // #653. The lookup the model is offered, searching this user's own
+        // saved items before the public database. Built here rather than
+        // defaulted inside the client, because this is the layer that holds a
+        // store: before #653 the composer could not see the library at all, and
+        // `saved_item_id` — which has existed since #625 — could therefore
+        // never fire on the path that logged two thirds of the meals in the
+        // store.
+        // #653. The portions this user has already accepted, for the dishes
+        // they keep coming back to. A read of the store, never a network call.
+        let history = MealPortionHistory.entries(
+            from: (try? meals.meals(
+                from: loggedAt.addingTimeInterval(-MealPortionHistory.window),
+                to: loggedAt
+            )) ?? [],
+            now: loggedAt
+        )
+
         let raw = try await client.estimateMeal(
             description: description,
             photos: photos,
             mealTypeHint: mealTypeHint,
-            loggedAt: loggedAt
+            loggedAt: loggedAt,
+            lookups: FoodLookupService.backedBy(store: meals.store),
+            portionHistory: history
         )
         // #653. Between the answer and the grading sits the one step that
         // decides whether a provenance claim is worth anything: the device
@@ -104,7 +123,8 @@ struct MealEstimationService {
             raw.estimate,
             ledger: raw.lookupLedger,
             wasGrounded: !raw.groundingSources.isEmpty,
-            description: description
+            description: description,
+            portionHistory: history
         )
 
         // #594. The sources come from the RESPONSE and travel beside the

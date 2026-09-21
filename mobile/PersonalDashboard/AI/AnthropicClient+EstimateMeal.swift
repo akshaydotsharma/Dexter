@@ -353,7 +353,8 @@ extension AnthropicClient {
         photos: [MealPhoto] = [],
         mealTypeHint: MealType? = nil,
         loggedAt: Date = Date(),
-        lookups: FoodLookupService = FoodLookupService()
+        lookups: FoodLookupService = FoodLookupService(),
+        portionHistory: [MealPortionHistory.Entry] = []
     ) async throws -> GroundedMealEstimate {
         let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
         // One or the other, not necessarily both. A plate in front of the camera
@@ -378,7 +379,8 @@ extension AnthropicClient {
             photoCount: photos.count,
             mealTypeHint: mealTypeHint,
             loggedAt: loggedAt,
-            canLookUp: canLookUp
+            canLookUp: canLookUp,
+            portionHistory: portionHistory
         )
 
         // Hand-rolled body for the same reason the receipt extractor uses one:
@@ -653,7 +655,8 @@ extension AnthropicClient {
         photoCount: Int = 0,
         mealTypeHint: MealType?,
         loggedAt: Date,
-        canLookUp: Bool = false
+        canLookUp: Bool = false,
+        portionHistory: [MealPortionHistory.Entry] = []
     ) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -773,7 +776,7 @@ extension AnthropicClient {
         \(canLookUp ? MealToolSchema.foodLookupRule : "")
         \(MealToolSchema.brandLookupRule)
 
-        Do not invent fields. Do not add commentary outside the JSON fence.
+        Do not invent fields. Do not add commentary outside the JSON fence.\(MealPortionHistory.promptBlock(portionHistory))
         """
     }
 }

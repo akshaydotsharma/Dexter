@@ -55,13 +55,17 @@ enum FoodLookupTool {
         .object([
             "name": .string(name),
             "description": .string("""
-            Look food up in USDA FoodData Central: what 100 g of it contains, and what \
-            its standard servings weigh. Call this ONCE with every dish in the meal.
+            Look food up: what 100 g of it contains, and what its standard servings \
+            weigh. Searches the user's OWN SAVED ITEMS and USDA FoodData Central \
+            together. Call this ONCE with every dish in the meal.
 
             WHEN TO CALL IT: for any dish you would otherwise estimate from memory. That \
             is almost every meal. Skip it only for a branded packaged product, which the \
-            web search answers better, and for something already in the SAVED FOOD ITEMS \
-            list, which the device holds exact figures for.
+            web search answers better.
+
+            PREFER A SAVED ITEM when one matches. It is what this user actually ate and \
+            accepted, so its figures and its usual portion beat a survey average of the \
+            same food.
 
             HOW TO WRITE A QUERY: use a GENERIC food description, not the user's words. \
             The database matches tokens, not dishes. "khao soi" finds soy chips. \
@@ -143,6 +147,13 @@ struct FoodLookupCandidate: Sendable, Equatable {
     /// Household measures and their gram weights. The mass half.
     let portions: [FoodDataCentralPortion]
 
+    /// What kind of claim this candidate's numbers are, decided by which
+    /// initialiser built it and never by the model.
+    ///
+    /// `FoodLookupResolution` reads it rather than assuming `lookedUp`, so a
+    /// figure taken from the user's own library is recorded as theirs.
+    private(set) var density: MealDensitySource = .lookedUp
+
     init(fdc food: FoodDataCentralFood) {
         self.id = "fdc:\(food.fdcID)"
         self.name = food.description
@@ -150,6 +161,61 @@ struct FoodLookupCandidate: Sendable, Equatable {
         self.nutrientsPer100 = food.nutrientsPer100
         self.missingNutrients = food.missingNutrients
         self.portions = food.portions
+        self.density = .lookedUp
+    }
+
+    /// A row from the user's own library (#653).
+    ///
+    /// ### Why the library is a lookup source rather than a separate mechanism
+    ///
+    /// `saved_item_id` already existed for chat and the Shortcut (#625), and
+    /// the composer could not use it: `mealEstimationPrompt` never carried the
+    /// SAVED FOOD ITEMS block, so the field could not fire on the path that
+    /// logged 24 of the 36 meals in the store. The obvious fix was to add the
+    /// block to that prompt and a second resolution step beside it.
+    ///
+    /// Making the library a source of `look_up_foods` candidates instead gets
+    /// the same result with no second mechanism: one tool, one ledger, one
+    /// verification step, one substitution. A library row and a database row
+    /// differ only in where they came from, which is what `provenance` and
+    /// `density` are for.
+    ///
+    /// Library rows are offered FIRST, because a row the user has already eaten
+    /// and accepted beats a survey average of the same food, and because it
+    /// costs no network call.
+    init(saved item: LocalFoodItem) {
+        self.id = "saved:\(item.clientUUID)"
+        self.name = item.displayName
+        self.provenance = "your saved items, used \(item.useCount) time\(item.useCount == 1 ? "" : "s")"
+        // Stored per base portion, restated per 100 so every candidate in one
+        // answer is on the same footing. A model comparing a per-40 g row with
+        // a per-100 g row would be comparing two different questions.
+        let base = item.basePortionQuantity > 0 ? item.basePortionQuantity : 100
+        self.nutrientsPer100 = MealNutrients.scaled(
+            MealNutrients(
+                calories: item.calories,
+                proteinG: item.proteinG,
+                carbsG: item.carbsG,
+                fatG: item.fatG,
+                fibreG: item.fibreG,
+                sugarG: item.sugarG,
+                sodiumMg: item.sodiumMg,
+                satFatG: item.satFatG
+            ),
+            fromBasePortion: base,
+            to: 100
+        )
+        self.missingNutrients = []
+        // The portion the user actually eats, offered under a name that says
+        // so. It is a standard portion for THIS person, which is a stronger
+        // claim than a survey's average serving.
+        self.portions = [
+            FoodDataCentralPortion(
+                description: "your usual portion",
+                gramWeight: item.defaultPortionQuantity
+            )
+        ]
+        self.density = .saved
     }
 }
 
@@ -219,10 +285,54 @@ struct FoodLookupService: Sendable {
 
     let fdc: FoodDataCentralClient
 
-    init(fdc: FoodDataCentralClient = FoodDataCentralClient()) {
+    /// The user's own library, searched before the network (#653).
+    ///
+    /// Optional because the estimate call is reachable from places that have no
+    /// store, and because a library search is a strict addition: with no store
+    /// the tool behaves exactly as it did with FoodData Central alone.
+    let library: @Sendable (String) -> [FoodLookupCandidate]
+
+    init(
+        fdc: FoodDataCentralClient = FoodDataCentralClient(),
+        library: @escaping @Sendable (String) -> [FoodLookupCandidate] = { _ in [] }
+    ) {
         self.fdc = fdc
+        self.library = library
     }
 
+    /// Build a service that searches a real store's library.
+    ///
+    /// A closure rather than the `FoodItemService` itself, because this type is
+    /// `Sendable` and crosses into a task group: capturing a store would make
+    /// concurrency the caller's problem at every call site. The rows are read
+    /// once, up front, on the caller's actor.
+    @MainActor
+    static func backedBy(store: SwiftDataStore, fdc: FoodDataCentralClient = FoodDataCentralClient()) -> FoodLookupService {
+        let items = (try? FoodItemService(store: store).allItems()) ?? []
+        let snapshot = items.map(FoodLookupCandidate.init(saved:))
+        let names = items.map { $0.displayName.lowercased() }
+
+        return FoodLookupService(fdc: fdc, library: { query in
+            let needle = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !needle.isEmpty else { return [] }
+            // Substring both ways, because the query is a generic description
+            // ("flat white with whole milk") and the row is a short name
+            // ("Latte"). Either containing the other is a candidate; the model
+            // decides whether it is the dish.
+            let words = needle.split(separator: " ").map(String.init).filter { $0.count > 2 }
+            return snapshot.indices.compactMap { index in
+                let name = names[index]
+                guard name.contains(needle)
+                    || needle.contains(name)
+                    || words.contains(where: { name.contains($0) }) else { return nil }
+                return snapshot[index]
+            }
+        })
+    }
+
+    /// True when EITHER source can answer. A library with rows in it is a
+    /// working lookup even with no key configured, and advertising the tool
+    /// then is correct.
     var isConfigured: Bool { fdc.isConfigured }
 
     /// Resolve every query, in the order asked.
@@ -249,21 +359,36 @@ struct FoodLookupService: Sendable {
     }
 
     private func resolve(_ query: String) async -> FoodLookupResult {
+        // The library first, and without a network call. A row the user has
+        // eaten before beats a survey average of the same food, and it is the
+        // only source here that knows what THEY put on the plate.
+        let saved = Array(library(query).prefix(FoodLookupTool.candidatesPerQuery))
+
         let hits: [FoodDataCentralFood]
         do {
             hits = try await fdc.search(query)
         } catch let error as FoodDataCentralError {
-            return FoodLookupResult(query: query, candidates: [], note: error.errorDescription)
+            return FoodLookupResult(
+                query: query,
+                candidates: saved,
+                note: saved.isEmpty ? error.errorDescription : nil
+            )
         } catch {
-            return FoodLookupResult(query: query, candidates: [], note: "The lookup did not complete.")
+            return FoodLookupResult(
+                query: query,
+                candidates: saved,
+                note: saved.isEmpty ? "The lookup did not complete." : nil
+            )
         }
 
         let top = Array(hits.prefix(FoodLookupTool.candidatesPerQuery))
         guard !top.isEmpty else {
             return FoodLookupResult(
                 query: query,
-                candidates: [],
-                note: "No match. Estimate this one yourself, or try a broader description."
+                candidates: saved,
+                note: saved.isEmpty
+                    ? "No match. Estimate this one yourself, or try a broader description."
+                    : nil
             )
         }
 
@@ -278,9 +403,10 @@ struct FoodLookupService: Sendable {
             return out.sorted { $0.0 < $1.0 }.map(\.1)
         }
 
+        // Saved rows lead, for the reason above.
         return FoodLookupResult(
             query: query,
-            candidates: detailed.map(FoodLookupCandidate.init(fdc:)),
+            candidates: saved + detailed.map(FoodLookupCandidate.init(fdc:)),
             note: nil
         )
     }
