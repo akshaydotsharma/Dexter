@@ -100,8 +100,12 @@ struct MealPlanSuggestionCard: View {
                     .eyebrow()
                 Spacer(minLength: 0)
             }
+            // The dish is what the card is about, so it takes the display
+            // serif. It used to sit at `.edHeading` while the calorie figure
+            // below it ran at `.edTitle`, which put the number above the thing
+            // the number describes (#645).
             Text(suggestion.title)
-                .font(.edHeading)
+                .font(.edTitle)
                 .foregroundStyle(Tokens.ink)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -134,7 +138,7 @@ struct MealPlanSuggestionCard: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
                 Text(MealFormat.calories(nutrients.calories))
-                    .font(.edTitle)
+                    .font(.edHeading)
                     .foregroundStyle(Tokens.ink)
                     .monospacedDigit()
                 Text("kcal, roughly")
@@ -216,7 +220,10 @@ struct MealPlanSuggestionCard: View {
                             Text("Add")
                         }
                     }
-                    .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
+                    // The one thing this card exists to do. It was `.secondary`,
+                    // level with its own day and meal-type pickers, while the
+                    // same commit in `MealPlanEntrySheet` is `.primary` (#645).
+                    .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
                     .accessibilityLabel("Add \(suggestion.title) to \(mealType.displayName) on \(Self.dayLabel(day))")
                 }
             }

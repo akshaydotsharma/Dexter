@@ -36,6 +36,10 @@ struct MealDayBreakdown: View {
     /// because the pulse outlives the tab switch that brings this view on screen.
     let pulsedMealID: String?
     let onOpenMeal: (LocalMeal) -> Void
+    /// Copy this meal onto today. Same write the detail sheet's "Repeat today"
+    /// makes; the swipe is a shortcut to it, not a second implementation.
+    let onRepeatMeal: (LocalMeal) -> Void
+    let onDeleteMeal: (LocalMeal) -> Void
 
     var body: some View {
         if summary.isUnlogged {
@@ -92,6 +96,23 @@ struct MealDayBreakdown: View {
                     onTap: { onOpenMeal(meal) },
                     isFocused: pulsedMealID == meal.clientUUID
                 )
+                // Swipe and long-press, both carrying the same three (#645).
+                //
+                // Until now a logged meal could only be reached by tapping into
+                // the detail sheet, which is four taps to delete something you
+                // can see. Note these rows sit in a `VStack` inside a
+                // `ScrollView`, not a `List`, so `.swipeActions` would silently
+                // do nothing here; `rowSwipeActions` works because its iOS path
+                // is a bridged UIKit pan rather than a List modifier. Finance
+                // hit exactly this trap in #296.
+                //
+                // Delete goes last so the trash keeps the trailing edge, which
+                // is where it sits on every other swipeable row in the app.
+                .rowSwipeAndMenuActions([
+                    .repeatToday { onRepeatMeal(meal) },
+                    .edit(tint: Tokens.accentMeals) { onOpenMeal(meal) },
+                    .delete { onDeleteMeal(meal) },
+                ])
                 .id(meal.clientUUID)
             }
         }

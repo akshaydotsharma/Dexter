@@ -66,11 +66,11 @@ struct MealChatCard: View {
 
     private var header: some View {
         HStack(spacing: Space.xs) {
+            // The shared modifier, not a hand-rolled copy of it. Identical on
+            // iOS; on macOS it correctly tightens the tracking to 0.8, which
+            // the inlined 1.4 did not and which reads loose at a 10pt eyebrow.
             Text(eyebrow)
-                .font(.edEyebrow)
-                .textCase(.uppercase)
-                .tracking(1.4)
-                .foregroundStyle(Tokens.muted)
+                .eyebrow()
             Spacer(minLength: 0)
             // The date is shown whenever it is NOT today. A silently misdated
             // meal corrupts two days at once and neither one looks wrong, so
@@ -226,8 +226,11 @@ struct MealChatCard: View {
             // to the day that just ended, but guessing wrong is invisible on
             // both days and the user has no reason to go looking.
             if summary.offersYesterdayMove, let onMoveToYesterday {
+                // This one MOVES the meal to another day; "Go to meal" opposite
+                // it only navigates. They were the same `.ghost`, so the card
+                // gave a write and a read identical weight (#645).
                 Button("Add to yesterday instead?", action: onMoveToYesterday)
-                    .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                    .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
             }
             Spacer(minLength: 0)
             if let onOpen {

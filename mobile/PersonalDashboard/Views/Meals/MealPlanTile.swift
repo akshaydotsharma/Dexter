@@ -59,6 +59,10 @@ struct MealPlanTile: View {
     let slot: MealPlanSlot
     var onAdd: () -> Void
     var onOpen: (LocalMealPlanEntry) -> Void
+    /// Mark the planned block as eaten. Offered only for a day that has arrived,
+    /// which is the same rule `MealPlanService.canLog` enforces on the write.
+    var onLog: (LocalMealPlanEntry) -> Void
+    var onDelete: (LocalMealPlanEntry) -> Void
 
     private var visible: [LocalMealPlanEntry] {
         Array(slot.entries.prefix(MealPlanBoardMetrics.visibleRowCap))
@@ -96,6 +100,24 @@ struct MealPlanTile: View {
                 VStack(alignment: .leading, spacing: Space.sm) {
                     ForEach(visible, id: \.clientUUID) { entry in
                         MealPlanBlock(entry: entry, onOpen: { onOpen(entry) })
+                            // A planned block had no way to be removed except
+                            // by opening it and finding Delete in the footer
+                            // (#645). Log leads because it is the thing a plan
+                            // is for; delete keeps the trailing edge.
+                            //
+                            // Log is withheld on a future day rather than shown
+                            // and refused: `canLog` would reject the write, and
+                            // an action that fails silently is worse than one
+                            // that is not offered.
+                            .rowSwipeAndMenuActions(
+                                (MealPlanService.canLog(entry)
+                                    ? [RowSwipeAction.logDone(tint: Tokens.success) { onLog(entry) }]
+                                    : [])
+                                + [
+                                    .edit(tint: Tokens.accentMeals) { onOpen(entry) },
+                                    .delete { onDelete(entry) },
+                                ]
+                            )
                     }
                 }
                 if hidden > 0 {
@@ -164,21 +186,39 @@ struct MealPlanTile: View {
 
     // MARK: - Empty
 
-    /// The empty state is a BUTTON, not a label.
+    /// The empty state is a BUTTON, not a label, and now it looks like one.
     ///
     /// The plus sits at the far end of the title line, where the eye lands last.
     /// An empty tile is mostly empty space, and that space is the obvious thing
     /// to aim at, so it does the same job rather than nothing.
+    ///
+    /// It was already a `Button`, but its label was a muted sentence with no
+    /// fill, no border and no glyph, which made the ONLY way to fill a meal slot
+    /// indistinguishable from a caption saying the slot was empty (#645). A
+    /// dashed well is the conventional "drop something here" shape and it keeps
+    /// the tile quiet: no solid fill, hairline weight, and the meal-type hue it
+    /// already uses for the plus so the two controls read as one invitation.
     private var emptyBody: some View {
         Button(action: onAdd) {
-            HStack(spacing: Space.sm) {
-                Text("No items added")
+            HStack(spacing: Space.xs) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Add \(slot.mealType.displayName.lowercased())")
                     .font(.edFootnote)
-                    .foregroundStyle(Tokens.mutedSoft)
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
+            .foregroundStyle(slot.mealType.tint.opacity(0.85))
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, Space.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Radius.sm, style: .continuous)
+                    .strokeBorder(
+                        slot.mealType.tint.opacity(0.38),
+                        style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("No \(slot.mealType.displayName.lowercased()) planned. Add one")

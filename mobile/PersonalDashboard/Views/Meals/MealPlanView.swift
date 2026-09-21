@@ -80,6 +80,8 @@ struct MealPlanView: View {
                         targets: MealTargets.inForce(on: selectedDay, among: allTargets),
                         onAdd: { editorTarget = .new(day: selectedDay, mealType: $0) },
                         onOpen: { editorTarget = .existing($0) },
+                        onLogEntry: logEntry,
+                        onDeleteEntry: deleteEntry,
                         onCopyDay: copyDay,
                         onClearDay: clearDay
                     )
@@ -282,6 +284,31 @@ struct MealPlanView: View {
         perform {
             try plans.clearDay(selectedDay)
             Haptics.destructive()
+        }
+    }
+
+    // MARK: - Row actions (#645)
+
+    /// Mark one planned block as eaten, from its swipe or long-press menu.
+    ///
+    /// `logAsMeal` is idempotent: it returns the meal already logged for this
+    /// entry rather than writing a second one, so a repeated swipe cannot
+    /// double-count the day.
+    private func logEntry(_ entry: LocalMealPlanEntry) {
+        perform {
+            _ = try plans.logAsMeal(entry)
+            Haptics.light()
+        }
+    }
+
+    /// Delete one planned block.
+    ///
+    /// Any meal this block already logged is deliberately left alone, which is
+    /// `deleteEntry`'s own rule: the block is a plan, and deleting a plan cannot
+    /// make it untrue that the food was eaten.
+    private func deleteEntry(_ entry: LocalMealPlanEntry) {
+        perform {
+            try plans.deleteEntry(entry)
         }
     }
 

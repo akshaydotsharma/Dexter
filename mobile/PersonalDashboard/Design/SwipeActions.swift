@@ -48,6 +48,45 @@ struct RowSwipeAction: Identifiable {
         )
     }
 
+    /// Edit. Opens whatever editor the row already opens on tap, so the swipe
+    /// is a shortcut to a destination the user can also reach the long way.
+    /// Takes its tint from the caller because "edit" has no palette of its own:
+    /// a section passes its own accent so the strip reads as part of that
+    /// section rather than as generic chrome (#645).
+    static func edit(tint: Color, _ perform: @escaping () -> Void) -> RowSwipeAction {
+        RowSwipeAction(
+            icon: "pencil",
+            tint: tint,
+            label: "Edit",
+            isDestructive: false,
+            perform: perform
+        )
+    }
+
+    /// Repeat. Writes a copy of this row onto today. Reversible (the copy can be
+    /// deleted), so it takes the soft impact and the neutral tint, not the thump.
+    static func repeatToday(_ perform: @escaping () -> Void) -> RowSwipeAction {
+        RowSwipeAction(
+            icon: "arrow.triangle.2.circlepath",
+            tint: Tokens.muted,
+            label: "Repeat today",
+            isDestructive: false,
+            perform: perform
+        )
+    }
+
+    /// Mark a planned thing as done. Reversible by the same control that set
+    /// it, so it takes the soft impact.
+    static func logDone(tint: Color, _ perform: @escaping () -> Void) -> RowSwipeAction {
+        RowSwipeAction(
+            icon: "checkmark.circle",
+            tint: tint,
+            label: "Log it",
+            isDestructive: false,
+            perform: perform
+        )
+    }
+
     static func unarchive(_ perform: @escaping () -> Void) -> RowSwipeAction {
         RowSwipeAction(
             icon: "tray.and.arrow.up",
@@ -111,6 +150,44 @@ extension View {
         onDelete: @escaping () -> Void
     ) -> some View {
         rowSwipeActions([.unarchive(onUnarchive), .delete(onDelete)])
+    }
+
+    /// Swipe AND long-press, for a row whose actions should not be reachable
+    /// only by a gesture the user has to discover (#645).
+    ///
+    /// On macOS this is exactly `rowSwipeActions`, which already installs a
+    /// `.contextMenu` — that branch exists because `.swipeActions` does nothing
+    /// outside a `List` and a swipe needs a trackpad (#296, #297).
+    ///
+    /// On iOS it adds the `.contextMenu` that `rowSwipeActions` deliberately
+    /// withholds. Note what this does and does not contradict: the standing
+    /// correction against long-press is about inline RENAME, where a tap must
+    /// drop a cursor instead. A long-press that opens an action menu is already
+    /// the shipped pattern in Lists, Tasks, Wallet, Vision and Trips, and
+    /// `ListsView` pairs it with `swipeToDeleteTrash` on the same row.
+    ///
+    /// Use this rather than the swipe alone wherever the row carries more than
+    /// one action, because a multi-action strip gives up full-swipe-to-commit
+    /// and the menu is then the only affordance a user can find by accident.
+    func rowSwipeAndMenuActions(_ actions: [RowSwipeAction]) -> some View {
+        #if canImport(UIKit)
+        return rowSwipeActions(actions)
+            .contextMenu {
+                ForEach(actions) { action in
+                    if action.isDestructive {
+                        Button(role: .destructive, action: action.perform) {
+                            Label(action.label, systemImage: action.icon)
+                        }
+                    } else {
+                        Button(action: action.perform) {
+                            Label(action.label, systemImage: action.icon)
+                        }
+                    }
+                }
+            }
+        #else
+        return rowSwipeActions(actions)
+        #endif
     }
 
     /// The general form: reveal `actions` on a left swipe, in order.

@@ -34,10 +34,10 @@ struct MealNumberField: View {
         HStack(spacing: Space.sm) {
             Text(label)
                 .font(labelFont)
-                .foregroundStyle(Tokens.inkSoft)
+                .foregroundStyle(Tokens.muted)
             Spacer(minLength: Space.sm)
             TextField("0", text: $text)
-                .font(labelFont)
+                .font(valueFont)
                 .multilineTextAlignment(.trailing)
                 .monospacedDigit()
                 .decimalKeyboard()
@@ -55,11 +55,29 @@ struct MealNumberField: View {
         .padding(.vertical, size == .large ? Space.xs : 2)
     }
 
-    /// The label and the field are set together, because they are one line of
-    /// one sentence: "Weight, 76, kg". A field a rung under its own label reads
-    /// as placeholder text.
+    /// The label sits a rung UNDER the value, not the other way round (#645).
+    ///
+    /// These two were previously one token, which is most of why the Meals
+    /// sheets read as undifferentiated: this row is reused by the meal editor,
+    /// the food-item editor, the targets sheet and the targets card, so every
+    /// numeric field in the section showed its name and its number at the same
+    /// size and weight.
+    ///
+    /// The step is made by dropping the LABEL rather than shrinking the value,
+    /// which is what the previous note here was protecting against: a field set
+    /// under its own label does read as placeholder text. The value keeps its
+    /// size and gains weight; the label gives up a rung and goes muted. The
+    /// sentence "Weight, 76, kg" still reads as one line, with the number as
+    /// the part being stated.
     private var labelFont: Font {
-        size == .large ? .edBodyMedium : .edFootnote
+        size == .large ? .edFootnote : .edCaption
+    }
+
+    /// The number is the content of the row, so it carries the weight. Same
+    /// point size as before at each step, so the fixed value and unit columns
+    /// this row depends on are unaffected (#616).
+    private var valueFont: Font {
+        size == .large ? .edBodyMedium : .edFootnoteStrong
     }
 }
 
@@ -199,8 +217,16 @@ struct MealDetailSheet: View {
                         if !itemDrafts.isEmpty {
                             itemsSection
                         }
-                        alcoholSection
+                        // Under the items, because that is what it grades.
+                        // Outside the `if` above so a meal with no item
+                        // breakdown still states how good its numbers are.
+                        confidenceRow
                         totalsSection
+                        // Below the total it can change. The toggle decides
+                        // whether the macro consistency check fires, so it
+                        // reads as a footnote to the figures rather than as
+                        // something standing between the items and their sum.
+                        alcoholSection
                         overrideSection
                         actionsSection
                         if let errorMessage {
@@ -263,19 +289,29 @@ struct MealDetailSheet: View {
 
     // MARK: - Sections
 
+    /// Whether anything is left to put in the card.
+    ///
+    /// The block used to be guaranteed non-empty, because it always held the
+    /// meal-type control and the confidence chip. Both have moved to where the
+    /// thing they describe is read, so without this a clean, ungrounded meal
+    /// would render an empty bordered card.
+    private var hasStatusContent: Bool {
+        meal.isGrounded
+            || meal.suspectReason != nil
+            || meal.needsDetail
+            || meal.assumptionsNote != nil
+            || !meal.groundingSources.isEmpty
+    }
+
     @ViewBuilder
     private var statusBlock: some View {
+        if hasStatusContent {
         VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(spacing: Space.sm) {
-                mealTypeControl
-                Spacer(minLength: Space.sm)
-                if meal.isGrounded {
+            if meal.isGrounded {
+                HStack(spacing: Space.sm) {
                     MealGrounding.chip()
+                    Spacer(minLength: Space.sm)
                 }
-                MealFlagChip(
-                    MealFormat.confidenceBand(meal.confidence),
-                    tint: meal.totalsWereOverridden ? Tokens.success : Tokens.muted
-                )
             }
             if let reason = meal.suspectReason {
                 Text(reason)
@@ -304,6 +340,24 @@ struct MealDetailSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .paperBorder(Tokens.border, radius: Radius.md)
+        }
+    }
+
+    /// How good these numbers are, said directly under the breakdown they grade.
+    ///
+    /// It sat in the status card at the top, beside the meal type, where it was
+    /// a fact about the meal in general. It is not: it is a fact about the
+    /// figures, and "Exact" specifically means the user typed the totals by
+    /// hand. Under the items is where that claim can be checked against the
+    /// thing it is claimed about.
+    private var confidenceRow: some View {
+        HStack(spacing: Space.sm) {
+            MealFlagChip(
+                MealFormat.confidenceBand(meal.confidence),
+                tint: meal.totalsWereOverridden ? Tokens.success : Tokens.muted
+            )
+            Spacer(minLength: Space.sm)
+        }
     }
 
     /// The meal type, as a control rather than a caption (#629).
@@ -435,6 +489,13 @@ struct MealDetailSheet: View {
             // block. A secondary button on the left read as a footnote to the
             // field above it.
             HStack(spacing: Space.sm) {
+                // The type sits on this line now, at the leading edge. It is
+                // the other thing about a meal you correct after reading the
+                // description, and giving it the empty half of the action row
+                // costs no height and puts the two corrections side by side.
+                // The primary keeps the trailing edge, so the rule the comment
+                // above states is unchanged.
+                mealTypeControl
                 Spacer(minLength: 0)
                 if isReestimating {
                     ProgressView()
@@ -627,7 +688,9 @@ struct MealDetailSheet: View {
                                 precision: precision
                             )
                         )
-                            .font(.edFootnote)
+                            // Same weight step as every other label/value pair
+                            // in the section (#645).
+                            .font(.edFootnoteStrong)
                             .foregroundStyle(Tokens.ink)
                             .monospacedDigit()
                     }
@@ -693,14 +756,25 @@ struct MealDetailSheet: View {
         }
     }
 
+    /// Delete leads, the reversible action trails.
+    ///
+    /// The two were the other way round, with Delete `.ghost` and a
+    /// `.foregroundStyle(Tokens.danger)` chained AFTER `.buttonStyle(...)` that
+    /// never took effect: `EdButtonStyle` applies its own `.foregroundStyle` to
+    /// the label inside `makeBody`, and the inner one wins. So the sheet's only
+    /// destructive control rendered as plain grey text (#645).
+    ///
+    /// Leading edge with a spring between is the rule the section now follows
+    /// everywhere a destructive action shares a row: it puts Delete as far as
+    /// the row allows from whatever commits, and it matches the footers in
+    /// `FoodItemEditorSheet` and `MealPlanEntrySheet`.
     private var actionsSection: some View {
         HStack(spacing: Space.sm) {
+            Button("Delete") { confirmingDelete = true }
+                .buttonStyle(EdButtonStyle(kind: .danger, size: .sm))
+            Spacer(minLength: Space.sm)
             Button("Repeat today") { repeatToday() }
                 .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
-            Spacer(minLength: Space.sm)
-            Button("Delete") { confirmingDelete = true }
-                .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
-                .foregroundStyle(Tokens.danger)
         }
     }
 

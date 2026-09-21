@@ -359,8 +359,11 @@ struct MealPlanEntrySheet: View {
                 Button("Find an item") { showingPicker = true }
                     .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                 if anyNumberEntered {
+                    // Erases every number typed or estimated into this sheet.
+                    // It was `.ghost`, i.e. identical to the "Find an item"
+                    // lookup beside it, so nothing told the two apart (#645).
                     Button("Clear", action: clearNumbers)
-                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                        .buttonStyle(EdButtonStyle(kind: .danger, size: .sm))
                 }
             }
 
@@ -780,8 +783,10 @@ struct MealPlanEntrySheet: View {
 
             HStack(spacing: Space.sm) {
                 if case .existing(let entry) = target {
+                    // Was `.ghost`, which left the one irreversible control in
+                    // the sheet visually WEAKER than the Cancel beside it (#645).
                     Button("Delete", role: .destructive) { delete(entry) }
-                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                        .buttonStyle(EdButtonStyle(kind: .danger, size: .sm))
                 }
                 Spacer(minLength: Space.sm)
                 Button("Cancel") { dismiss() }

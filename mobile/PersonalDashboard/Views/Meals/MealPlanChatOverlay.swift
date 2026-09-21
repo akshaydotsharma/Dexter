@@ -225,7 +225,12 @@ struct MealPlanChatOverlay: View {
                     Text("Clear").font(.edFootnote)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Tokens.muted)
+                // Discards the whole conversation with no undo, so it does not
+                // get to look like the muted chrome around it (#645). The tint
+                // lands here because `.plain` sets no foreground of its own —
+                // unlike `EdButtonStyle`, where an outer `.foregroundStyle` is
+                // silently overridden.
+                .foregroundStyle(Tokens.danger)
                 .accessibilityLabel("Clear this conversation")
             }
 
@@ -387,7 +392,7 @@ struct MealPlanChatOverlay: View {
                         .font(.edCaption)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Tokens.muted)
+                .foregroundStyle(Tokens.danger)
                 .accessibilityLabel("Clear this conversation")
             }
         }

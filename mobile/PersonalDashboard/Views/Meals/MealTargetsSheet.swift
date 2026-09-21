@@ -482,8 +482,8 @@ struct MealTargetsChoiceField<Option: Identifiable & Hashable>: View {
     var body: some View {
         HStack(spacing: Space.sm) {
             Text(label)
-                .font(rowFont)
-                .foregroundStyle(Tokens.inkSoft)
+                .font(labelFont)
+                .foregroundStyle(Tokens.muted)
                 .lineLimit(1)
                 // A fixed column at `.large`, and only there. See
                 // `MealVitalRowMetrics` for why the two sizes divide the row
@@ -501,10 +501,21 @@ struct MealTargetsChoiceField<Option: Identifiable & Hashable>: View {
         .padding(.vertical, size == .large ? Space.xs : 2)
     }
 
-    /// The label and the chosen value are set together, for the reason
-    /// `MealNumberField` sets its label and its box together: they are one line.
-    private var rowFont: Font {
-        size == .large ? .edBodyMedium : .edFootnote
+    /// The label sits a rung under the chosen value, matching `MealNumberField`
+    /// (#645). Both rows appear in the same stack in the targets sheet and the
+    /// targets card, so they have to break the tie the same way or the "about
+    /// you" block reads as two competing conventions.
+    ///
+    /// Shrinking the label is safe against the fixed label column at `.large`:
+    /// the guard that column needs is against text growing past it (#616), and
+    /// this only ever makes the string narrower.
+    private var labelFont: Font {
+        size == .large ? .edFootnote : .edCaption
+    }
+
+    /// The chosen option is the content of the row, so it keeps the larger step.
+    private var valueFont: Font {
+        size == .large ? .edBodyMedium : .edFootnoteStrong
     }
 
     private var trigger: some View {
@@ -514,7 +525,7 @@ struct MealTargetsChoiceField<Option: Identifiable & Hashable>: View {
             // option needs every one of them back. See `MealVitalRowMetrics`.
             HStack(spacing: size == .large ? Space.xs : Space.sm) {
                 Text(selection[keyPath: title])
-                    .font(rowFont)
+                    .font(valueFont)
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
                 Spacer(minLength: size == .large ? 0 : Space.xs)
