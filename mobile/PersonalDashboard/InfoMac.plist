@@ -34,5 +34,7 @@
 	<string>Dexter transcribes your voice into text you can edit. With no transcription key set it falls back to on-device English recognition.</string>
 	<key>OPENAI_API_KEY</key>
 	<string>$(OPENAI_API_KEY)</string>
+	<key>USDA_FDC_API_KEY</key>
+	<string>$(USDA_FDC_API_KEY)</string>
 </dict>
 </plist>

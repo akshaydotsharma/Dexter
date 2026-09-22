@@ -89,20 +89,53 @@ struct MealEstimationService {
         mealTypeHint: MealType? = nil,
         loggedAt: Date = Date()
     ) async throws -> CheckedMealEstimate {
+        // #653. The lookup the model is offered, searching this user's own
+        // saved items before the public database. Built here rather than
+        // defaulted inside the client, because this is the layer that holds a
+        // store: before #653 the composer could not see the library at all, and
+        // `saved_item_id` — which has existed since #625 — could therefore
+        // never fire on the path that logged two thirds of the meals in the
+        // store.
+        // #653. The portions this user has already accepted, for the dishes
+        // they keep coming back to. A read of the store, never a network call.
+        let history = MealPortionHistory.entries(
+            from: (try? meals.meals(
+                from: loggedAt.addingTimeInterval(-MealPortionHistory.window),
+                to: loggedAt
+            )) ?? [],
+            now: loggedAt
+        )
+
         let raw = try await client.estimateMeal(
             description: description,
             photos: photos,
             mealTypeHint: mealTypeHint,
-            loggedAt: loggedAt
+            loggedAt: loggedAt,
+            lookups: FoodLookupService.backedBy(store: meals.store),
+            portionHistory: history
         )
+        // #653. Between the answer and the grading sits the one step that
+        // decides whether a provenance claim is worth anything: the device
+        // checks each claimed record id against what it actually offered, and
+        // recomputes the numbers itself from the records that check out. The
+        // model chooses the row and the amount; the arithmetic is Swift's.
+        let resolution = FoodLookupResolution.resolve(
+            raw.estimate,
+            ledger: raw.lookupLedger,
+            wasGrounded: !raw.groundingSources.isEmpty,
+            description: description,
+            portionHistory: history
+        )
+
         // #594. The sources come from the RESPONSE and travel beside the
         // estimate rather than inside it, so the guards below grade a grounded
         // answer with exactly the arithmetic they grade a guessed one with. A
         // published panel can still be transcribed wrong.
         return MealEstimateGuards.check(
-            raw.estimate,
+            resolution.estimate,
             fallbackMealType: mealTypeHint ?? Self.inferredType(at: loggedAt),
-            groundingSources: raw.groundingSources
+            groundingSources: raw.groundingSources,
+            provenance: resolution.resolved
         )
     }
 
@@ -392,10 +425,24 @@ struct MealEstimationService {
         // estimate path. A clamp applied to a number the user just typed is
         // visible the moment the field redraws with the clamped value, and
         // appending a sentence on every edit would grow the note without bound.
+        // #656. The band moves with the edit. A portion the user just typed is
+        // the strongest mass source there is, so correcting a dish should raise
+        // the meal's confidence, not leave it reading whatever the model said
+        // before the correction.
+        //
+        // `derivedConfidence` returns the meal's existing band unchanged when
+        // the items carry no provenance, so a meal logged before #653 is not
+        // re-graded by being edited.
+        let band = MealEstimateGuards.derivedConfidence(
+            items: result.items,
+            reported: meal.confidence
+        )
+
         try meals.updateMeal(
             meal,
             nutrients: result.totals,
             items: result.items,
+            confidence: band,
             isSuspect: !invalidating.isEmpty,
             suspectReason: .some(reason)
         )

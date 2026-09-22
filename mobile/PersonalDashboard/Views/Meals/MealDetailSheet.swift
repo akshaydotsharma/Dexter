@@ -94,6 +94,25 @@ struct MealItemDraft {
     /// estimate.
     let originalQuantity: Double
     let originalValues: MealNutrients
+    let originalUnit: String
+
+    /// The nutrients the USER has typed over in this editing session (#656).
+    ///
+    /// The one thing that decides who wins when the portion and a number
+    /// disagree: a figure the user typed is a statement about their meal, and
+    /// rescaling it underneath them would be the app overruling them with
+    /// arithmetic. Everything they did NOT touch follows the portion.
+    var handEdited: Set<Nutrient> = []
+
+    /// Where this item's numbers came from (#653), carried through an edit.
+    ///
+    /// Held rather than rebuilt because a hand-edit that dropped them would
+    /// silently change the basis of the meal's confidence band: with provenance
+    /// missing on one item, `derivedConfidence` falls back to the model's own
+    /// self-report for the whole meal.
+    let densitySource: MealDensitySource?
+    let massSource: MealMassSource?
+    let sourceID: String?
 
     init(_ item: MealItemEntry) {
         id = item.id
@@ -102,11 +121,37 @@ struct MealItemDraft {
         portionUnit = item.portionUnit.isEmpty ? "g" : item.portionUnit
         originalQuantity = item.portionQuantity
         originalValues = item.nutrients
+        originalUnit = item.portionUnit.isEmpty ? "g" : item.portionUnit
+        densitySource = item.densitySource
+        massSource = item.massSource
+        sourceID = item.sourceID
         var values: [Nutrient: String] = [:]
         for nutrient in Nutrient.allCases {
             values[nutrient] = MealItemDraft.string(item.nutrients[nutrient])
         }
         self.values = values
+    }
+
+    /// True when the draft says something different from what is stored.
+    ///
+    /// Drives whether the save button is there at all. A button that is always
+    /// present on every row invites a tap that does nothing, and a row that
+    /// looks editable but saves nothing is how #656 started.
+    var hasChanges: Bool {
+        if MealItemDraft.number(portionQuantity) != originalQuantity { return true }
+        if portionUnit.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            != originalUnit.lowercased() { return true }
+        for nutrient in Nutrient.allCases {
+            if MealItemDraft.number(values[nutrient] ?? "0") != originalValues[nutrient] {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Did the user change the portion?
+    var portionChanged: Bool {
+        MealItemDraft.number(portionQuantity) != originalQuantity
     }
 
     static func string(_ value: Double) -> String {
@@ -122,13 +167,29 @@ struct MealItemDraft {
     /// This is the whole reason the portion is stored as a quantity and a unit
     /// rather than as "about a bowl": "the rice was actually double" becomes one
     /// multiplication, not a second API call.
+    ///
+    /// ### Why this runs as the portion is typed rather than on a button (#656)
+    ///
+    /// It used to be a button beside a second button, and the two had to be
+    /// pressed in the right order. Typing 300 over 470 and tapping the other one
+    /// stored the NEW portion against the OLD numbers, so the row read
+    /// "300 g — 818 kcal", which is not a rounding error, it is a false
+    /// statement the app had no way to notice.
+    ///
+    /// Nutrients the user has typed over are left alone. Scaling those would be
+    /// the app overruling a person about their own meal.
     mutating func scaleToPortion() {
         let newQuantity = MealItemDraft.number(portionQuantity)
         guard originalQuantity > 0, newQuantity > 0 else { return }
         let ratio = newQuantity / originalQuantity
-        for nutrient in Nutrient.allCases {
+        for nutrient in Nutrient.allCases where !handEdited.contains(nutrient) {
             values[nutrient] = MealItemDraft.string(originalValues[nutrient] * ratio)
         }
+    }
+
+    /// Record that the user typed this nutrient themselves.
+    mutating func markHandEdited(_ nutrient: Nutrient) {
+        handEdited.insert(nutrient)
     }
 
     var entry: MealItemEntry {
@@ -146,6 +207,19 @@ struct MealItemDraft {
         out.sugarG   = MealItemDraft.number(values[.sugar] ?? "0")
         out.sodiumMg = MealItemDraft.number(values[.sodium] ?? "0")
         out.satFatG  = MealItemDraft.number(values[.saturatedFat] ?? "0")
+
+        // #656. Provenance survives the edit. Dropping it would leave the meal
+        // with provenance on some items and not others, and `derivedConfidence`
+        // reads that as "no provenance" and falls back to the model's own band
+        // for the whole meal — so correcting one dish would quietly change how
+        // the entire estimate is graded.
+        out.densitySource = densitySource
+        out.sourceID = sourceID
+
+        // A portion the USER types is the strongest mass source there is, so an
+        // edit RAISES the claim rather than erasing it. The nutrients still
+        // came from wherever they came from; only the amount is now theirs.
+        out.massSource = portionChanged ? .stated : massSource
         return out
     }
 }
@@ -613,17 +687,27 @@ struct MealDetailSheet: View {
                             .decimalKeyboard()
                             .textFieldStyle(.plain)
                             .frame(width: 72)
-                            .onSubmit { draft.wrappedValue.scaleToPortion() }
+                            // #656. The numbers follow the portion as it is
+                            // typed, rather than waiting for a second button
+                            // that could be skipped. `onChange` and not
+                            // `onSubmit`, because a numeric keyboard has no
+                            // return key and the field is often left by tapping
+                            // elsewhere.
+                            .onChange(of: draft.wrappedValue.portionQuantity) { _, _ in
+                                draft.wrappedValue.scaleToPortion()
+                            }
                         TextField("g", text: draft.portionUnit)
                             .font(.edCaption)
                             .textFieldStyle(.plain)
                             .noAutocapitalization()
                             .frame(width: 28)
                     }
-                    Button("Scale the numbers to this portion") {
-                        draft.wrappedValue.scaleToPortion()
+
+                    if draft.wrappedValue.portionChanged {
+                        Text(scalingNote(draft.wrappedValue))
+                            .font(.edCaption)
+                            .foregroundStyle(Tokens.muted)
                     }
-                    .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
 
                     ForEach(Nutrient.allCases) { nutrient in
                         MealNumberField(
@@ -634,10 +718,17 @@ struct MealDetailSheet: View {
                     }
 
                     HStack(spacing: Space.sm) {
-                        Button("Apply to this item") {
-                            applyItem(draft.wrappedValue)
+                        // #656. Present only when there is something to save,
+                        // and named for what it actually does: the meal total,
+                        // the confidence band and the day's figures all move
+                        // with it. "Apply to this item" described the scope of
+                        // the edit and hid its consequences.
+                        if draft.wrappedValue.hasChanges {
+                            Button("Save and update the meal") {
+                                applyItem(draft.wrappedValue)
+                            }
+                            .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
                         }
-                        .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
 
                         // Keep this dish, so the next time it is eaten it is
                         // picked rather than estimated again (#625).
@@ -667,8 +758,25 @@ struct MealDetailSheet: View {
     private func binding(for nutrient: Nutrient, in draft: Binding<MealItemDraft>) -> Binding<String> {
         Binding(
             get: { draft.wrappedValue.values[nutrient] ?? "0" },
-            set: { draft.wrappedValue.values[nutrient] = $0 }
+            set: { newValue in
+                // #656. Typing a nutrient pins it: a later portion change
+                // rescales everything EXCEPT what the user has stated.
+                if newValue != draft.wrappedValue.values[nutrient] {
+                    draft.wrappedValue.markHandEdited(nutrient)
+                }
+                draft.wrappedValue.values[nutrient] = newValue
+            }
         )
+    }
+
+    /// One line saying what the portion change did to the numbers, so the
+    /// rescale is something the user watched happen rather than something they
+    /// have to notice (#656).
+    private func scalingNote(_ draft: MealItemDraft) -> String {
+        let kept = Nutrient.allCases.filter { draft.handEdited.contains($0) }
+        guard !kept.isEmpty else { return "The numbers below have been scaled to this portion." }
+        let names = kept.map(\.displayName.localizedLowercase).joined(separator: ", ")
+        return "Scaled to this portion, except \(names), which you typed."
     }
 
     private var totalsSection: some View {
