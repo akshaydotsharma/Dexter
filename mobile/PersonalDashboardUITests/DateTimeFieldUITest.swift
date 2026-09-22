@@ -41,6 +41,10 @@ final class DateTimeFieldUITest: XCTestCase {
             app.buttons["Previous month"].exists,
             "A calendar was on screen before the date was switched on"
         )
+        XCTAssertFalse(
+            app.datePickers.firstMatch.exists,
+            "A clock was on screen before the date was switched on"
+        )
 
         let dateSwitch = app.switches["Date"].firstMatch
         XCTAssertTrue(dateSwitch.waitForExistence(timeout: 5), "Date switch not found")
@@ -53,17 +57,26 @@ final class DateTimeFieldUITest: XCTestCase {
             "The calendar did not open under the row"
         )
 
-        // The Time row hangs off the date, so it is only here now.
-        let timeRow = app.buttons["Time"].firstMatch
-        XCTAssertTrue(timeRow.waitForExistence(timeout: 5), "Time row not found under the date")
-        timeRow.tap()
-        sleep(1)
-        attach(name: "03-task-clock-open")
+        // The clock lives INSIDE the panel, at the foot of the calendar, not
+        // as a second row in the card.
+        XCTAssertTrue(
+            app.datePickers.firstMatch.waitForExistence(timeout: 5),
+            "The clock is not inside the calendar panel"
+        )
 
-        // One panel at a time: opening the clock shuts the calendar.
-        XCTAssertFalse(
-            app.buttons["Previous month"].exists,
-            "Both panels were open at once"
+        // Shutting the panel takes the clock with it, and the row still reports
+        // the whole answer.
+        let dateRow = app.buttons["Date"].firstMatch
+        XCTAssertTrue(dateRow.waitForExistence(timeout: 5), "Date row not found")
+        dateRow.tap()
+        sleep(1)
+        attach(name: "03-task-panel-shut")
+
+        XCTAssertFalse(app.buttons["Previous month"].exists, "The calendar stayed open")
+        XCTAssertFalse(app.datePickers.firstMatch.exists, "The clock outlived its panel")
+        XCTAssertTrue(
+            (dateRow.value as? String)?.contains(" at ") == true,
+            "The shut row does not report the time: \(String(describing: dateRow.value))"
         )
     }
 

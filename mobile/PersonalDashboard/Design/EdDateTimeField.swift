@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Dexter's date-and-time field: a toggle that opens a calendar in place (#657).
+/// Dexter's date-and-time field: a switch that opens a calendar in place (#657).
 ///
 /// ### What it replaces
 ///
@@ -19,20 +19,27 @@ import SwiftUI
 /// were reading stays where it was, and the chosen value sits under the label
 /// the whole time.
 ///
-/// Two rows, because a date and a time are two decisions. Time is only
-/// reachable once Date is on — there is no such thing as half past nothing.
+/// ### The time lives in the calendar
+///
+/// It began as a second row beside the date, which is what Reminders does. It
+/// reads worse here: a date and a time are one answer to one question, and a
+/// card holding several fields was getting two rows for each of them. So the
+/// time sits at the foot of the panel the day is chosen in, next to Today and
+/// Tomorrow, and the row above reports the whole answer — "Tue 22 Sep 2026 at
+/// 8:16 PM" — with the panel shut.
+///
+/// A field that is a time and NOTHING else — an arrival, a repeat rule's hour —
+/// has no calendar to sit in, so there the time is the row.
 ///
 /// ### One calendar in the app
 ///
 /// The panel is `EdDayPickerCalendar` with `drawsCard: false`, which is the
-/// same calendar the Meals plan and the day field already draw. `#621` built
-/// its reel for exactly this case: a calendar given a whole row, which fills
-/// the space either side with the months it is between. A third calendar design
-/// does not enter the app.
+/// same calendar the Meals plan and the day field already draw. A third
+/// calendar design does not enter the app.
 ///
 /// ### The clock is still Apple's
 ///
-/// Dexter has no time control of its own, and Reminders shows the system wheel
+/// Dexter has no time control of its own, and Reminders shows the system clock
 /// too. It is drawn inside our panel, in the section's accent. Building
 /// `EdTimePicker` is its own design job and its own ticket.
 struct EdDateTimeField: View {
@@ -122,7 +129,7 @@ struct EdDateTimeField: View {
                 row(
                     icon: dateIcon,
                     label: dateLabel,
-                    value: Self.dayFormatter.string(from: date),
+                    value: spokenValue,
                     isOn: dateIsOn,
                     binding: hasDate,
                     panel: dateKey
@@ -137,39 +144,35 @@ struct EdDateTimeField: View {
                         showsNeighbourMonths: showsNeighbourMonths
                     )
                     .frame(maxWidth: .infinity)
+                    if showsTime {
+                        Divider().background(Tokens.divider)
+                        timeStrip
+                    }
                 }
-            }
-
-            // Time hangs off the date. A field with no date on it has no moment
-            // for a time to name, so the row is not offered rather than offered
-            // and refused.
-            if showsTime && (!showsDate || dateIsOn) {
-                if showsDate {
-                    Divider().background(Tokens.divider)
-                }
+            } else if showsTime {
+                // No day to put a clock inside, so the clock is the field.
                 row(
                     icon: timeIcon,
                     label: timeLabel,
-                    value: date.formatted(date: .omitted, time: .shortened),
+                    value: timeText,
                     isOn: timeIsOn,
                     binding: hasTime,
                     panel: timeKey
                 )
                 if timeIsOn && open.wrappedValue == timeKey {
                     Divider().background(Tokens.divider)
-                    timePanel
+                    timeWheel
                 }
             }
         }
         .background(cardBackground)
         .onChange(of: dateIsOn) { _, isOn in
             // Switching a date on is a request to choose one, so the calendar
-            // opens with it. Switching it off closes everything, including the
-            // time panel that was hanging off it.
+            // opens with it. Switching it off closes the panel.
             withAnimation(.easeInOut(duration: 0.2)) {
                 if isOn {
                     open.wrappedValue = dateKey
-                } else if open.wrappedValue == dateKey || open.wrappedValue == timeKey {
+                } else if open.wrappedValue == dateKey {
                     // Only clear what belongs to this field. With a shared
                     // accordion, a sibling's open panel is none of our business.
                     open.wrappedValue = nil
@@ -177,6 +180,10 @@ struct EdDateTimeField: View {
             }
         }
         .onChange(of: timeIsOn) { _, isOn in
+            // Only the time-only field has a panel of its own to open. When a
+            // date is present the clock is already on screen, inside the
+            // calendar that had to be open for the switch to be reachable.
+            guard !showsDate else { return }
             withAnimation(.easeInOut(duration: 0.2)) {
                 if isOn {
                     open.wrappedValue = timeKey
@@ -221,10 +228,7 @@ struct EdDateTimeField: View {
         if let binding {
             HStack(spacing: Space.md) {
                 rowButton(icon: icon, label: label, value: value, isOn: isOn, panel: panel)
-                Toggle("", isOn: binding.animation(.easeInOut(duration: 0.2)))
-                    .labelsHidden()
-                    .tint(tint)
-                    .accessibilityLabel(label)
+                edSwitch(binding, label: label)
             }
             .padding(Space.md)
         } else {
@@ -237,13 +241,7 @@ struct EdDateTimeField: View {
                 value: value,
                 isOn: true,
                 panel: panel,
-                trailing: AnyView(
-                    Toggle("", isOn: .constant(true))
-                        .labelsHidden()
-                        .tint(tint)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                )
+                trailing: AnyView(fixedOnSwitch)
             )
             .padding(Space.md)
         }
@@ -301,7 +299,109 @@ struct EdDateTimeField: View {
         .accessibilityHint(isOn ? "Opens a picker" : "")
     }
 
-    // MARK: - The two panels
+    // MARK: - Switches
+
+    /// A switch on both platforms.
+    ///
+    /// macOS draws a bare `Toggle` as a CHECKBOX, so the same field read as a
+    /// switch on the phone and a tick box on the Mac. `.switch` is the same
+    /// object in both places, which is what a shared control has to be.
+    private func edSwitch(_ binding: Binding<Bool>, label: String) -> some View {
+        Toggle("", isOn: binding.animation(.easeInOut(duration: 0.2)))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(tint)
+            .accessibilityLabel(label)
+    }
+
+    /// The switch on a value that cannot be absent. Drawn on, takes no taps, so
+    /// the press falls through to the row that opens the panel.
+    private var fixedOnSwitch: some View {
+        Toggle("", isOn: .constant(true))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(tint)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    // MARK: - The clock, inside the calendar
+
+    /// The foot of the calendar panel: what time, on the day chosen above it.
+    ///
+    /// Deliberately a strip inside the panel rather than a row of its own in
+    /// the card. A date and a time are one answer, and a card holding three
+    /// dated fields would otherwise carry six rows before it said anything.
+    private var timeStrip: some View {
+        HStack(spacing: Space.md) {
+            Image(systemName: timeIcon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(timeIsOn ? tint : Tokens.mutedSoft)
+                .frame(width: 18)
+            Text(timeLabel)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+            Spacer(minLength: Space.sm)
+            if timeIsOn {
+                compactClock
+            }
+            if let hasTime {
+                edSwitch(hasTime, label: timeLabel)
+            }
+        }
+        .padding(Space.md)
+    }
+
+    /// One line, because it sits in a strip. Apple's compact clock opens its own
+    /// small wheel in place when tapped, which is the behaviour every iOS user
+    /// already has for a time.
+    private var compactClock: some View {
+        DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .tint(tint)
+            .paperDatePickerOnMac()
+            .accessibilityLabel(timeLabel)
+    }
+
+    /// The full wheel, for a field that is a time and nothing else. It has the
+    /// whole panel to itself there, so it may as well be readable at a glance.
+    @ViewBuilder
+    private var timeWheel: some View {
+        #if os(iOS)
+        DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .datePickerStyle(.wheel)
+            .tint(tint)
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel(timeLabel)
+        #else
+        HStack {
+            DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+                .datePickerStyle(.stepperField)
+                .paperDatePickerOnMac()
+                .tint(tint)
+                .accessibilityLabel(timeLabel)
+            Spacer(minLength: 0)
+        }
+        .padding(Space.md)
+        #endif
+    }
+
+    // MARK: - What the row says
+
+    /// The whole answer, so the row still reports it with the panel shut.
+    private var spokenValue: String {
+        let day = Self.dayFormatter.string(from: date)
+        guard showsTime && timeIsOn else { return day }
+        return "\(day) at \(timeText)"
+    }
+
+    private var timeText: String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+
+    // MARK: - Bindings
 
     /// The day the calendar writes back, with the time already on the field
     /// kept (#657).
@@ -323,29 +423,6 @@ struct EdDateTimeField: View {
                 ) ?? newDay
             }
         )
-    }
-
-    @ViewBuilder
-    private var timePanel: some View {
-        #if os(iOS)
-        DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
-            .labelsHidden()
-            .datePickerStyle(.wheel)
-            .tint(tint)
-            .frame(maxWidth: .infinity)
-            .accessibilityLabel(timeLabel)
-        #else
-        HStack {
-            DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .datePickerStyle(.stepperField)
-                .paperDatePickerOnMac()
-                .tint(tint)
-                .accessibilityLabel(timeLabel)
-            Spacer(minLength: 0)
-        }
-        .padding(Space.md)
-        #endif
     }
 
     // MARK: - Formatters
