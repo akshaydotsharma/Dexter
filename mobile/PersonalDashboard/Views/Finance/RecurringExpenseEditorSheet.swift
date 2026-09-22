@@ -229,22 +229,13 @@ struct RecurringExpenseEditorSheet: View {
                     .font(.edCaption)
                     .foregroundStyle(Tokens.mutedSoft)
             }
-            VStack(alignment: .leading, spacing: Space.sm) {
-                Toggle("Stop after a date", isOn: $hasEndDate.animation())
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.ink)
-                    .tint(Tokens.accentFinance)
-                if hasEndDate {
-                    DatePicker("Last posting on or before", selection: $endDate, displayedComponents: .date)
-                        .paperDatePickerOnMac()
-                        .font(.edFootnote)
-                        .foregroundStyle(Tokens.inkSoft)
-                        .tint(Tokens.accentFinance)
-                }
-            }
-            .padding(Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $endDate,
+                hasDate: $hasEndDate,
+                showsTime: false,
+                dateLabel: "Stop after a date",
+                tint: Tokens.accentFinance
+            )
         }
     }
 

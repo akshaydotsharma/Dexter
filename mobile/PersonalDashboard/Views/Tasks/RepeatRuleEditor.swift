@@ -117,6 +117,10 @@ struct RecurrenceDraft: Equatable {
 /// nothing for the selected rule.
 struct RepeatRuleEditor: View {
     @Binding var draft: RecurrenceDraft
+
+    /// At, Starting and Until a date all sit in one card, so they share one
+    /// open panel and behave as a single accordion (#657).
+    @State private var openDatePanel: String? = nil
     /// Hidden on the new-task editor, which starts a template today by
     /// definition, and shown when editing an existing one.
     var showsStartDate: Bool = true
@@ -344,18 +348,17 @@ struct RepeatRuleEditor: View {
         .accessibilityLabel("\(accessibilityLabel), \(label)")
     }
 
+    /// A rule always fires at some hour, so the switch is drawn on and fixed
+    /// and the row itself opens the clock (#657).
     private var timeRow: some View {
-        HStack {
-            Text("At")
-                .font(.edBody)
-                .foregroundStyle(Tokens.inkSoft)
-            Spacer()
-            DatePicker("", selection: $draft.timeOfDay, displayedComponents: [.hourAndMinute])
-                .paperDatePickerOnMac()
-                .labelsHidden()
-                .tint(Tokens.accentTasks)
-        }
-        .padding(Space.md)
+        EdDateTimeField(
+            date: $draft.timeOfDay,
+            showsDate: false,
+            timeLabel: "At",
+            tint: Tokens.accentTasks,
+            drawsCard: false,
+            openPanel: $openDatePanel
+        )
     }
 
     /// How far ahead the task appears. Spelled out rather than left as a number,
@@ -393,44 +396,27 @@ struct RepeatRuleEditor: View {
     }
 
     private var startRow: some View {
-        HStack {
-            Text("Starting")
-                .font(.edBody)
-                .foregroundStyle(Tokens.inkSoft)
-            Spacer()
-            DatePicker("", selection: $draft.startDate, displayedComponents: [.date])
-                .paperDatePickerOnMac()
-                .labelsHidden()
-                .tint(Tokens.accentTasks)
-        }
-        .padding(Space.md)
+        EdDateTimeField(
+            date: $draft.startDate,
+            showsTime: false,
+            dateLabel: "Starting",
+            tint: Tokens.accentTasks,
+            drawsCard: false,
+            openPanel: $openDatePanel
+        )
     }
 
     private var endRow: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Until a date")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.inkSoft)
-                Spacer()
-                Toggle("", isOn: $draft.hasEndDate.animation())
-                    .labelsHidden()
-                    .tint(Tokens.accentTasks)
-            }
-            .padding(Space.md)
-
-            if draft.hasEndDate {
-                Divider().background(Tokens.divider)
-                HStack {
-                    DatePicker("", selection: $draft.endDate, in: draft.startDate..., displayedComponents: [.date])
-                        .paperDatePickerOnMac()
-                        .labelsHidden()
-                        .tint(Tokens.accentTasks)
-                    Spacer(minLength: 0)
-                }
-                .padding(Space.md)
-            }
-        }
+        EdDateTimeField(
+            date: $draft.endDate,
+            hasDate: $draft.hasEndDate,
+            showsTime: false,
+            dateLabel: "Until a date",
+            tint: Tokens.accentTasks,
+            bounds: .from(draft.startDate),
+            drawsCard: false,
+            openPanel: $openDatePanel
+        )
     }
 
     /// What the rule actually means, as a sentence plus the first date it lands

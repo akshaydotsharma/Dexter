@@ -550,22 +550,19 @@ struct AddExpenseSheet: View {
         }
     }
 
+    /// An expense always happened on a day, so the switch is drawn on and
+    /// fixed and the row opens the calendar (#657). Bounded to today, because
+    /// you cannot have spent money tomorrow.
     private var dateField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Date").eyebrow()
-            HStack {
-                Text("When did this happen?")
-                    .font(.edBody)
-                    .foregroundStyle(Tokens.inkSoft)
-                Spacer()
-                DatePicker("", selection: $date, in: ...Date(), displayedComponents: .date)
-                    .paperDatePickerOnMac()
-                    .labelsHidden()
-                    .tint(Tokens.accentFinance)
-            }
-            .padding(Space.md)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $date,
+                showsTime: false,
+                dateLabel: "When did this happen?",
+                tint: Tokens.accentFinance,
+                bounds: .upTo(Date())
+            )
         }
     }
 

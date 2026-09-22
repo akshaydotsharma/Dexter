@@ -709,6 +709,9 @@ private struct TripEditorSheet: View {
     @State private var name: String = ""
     @State private var startDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var endDate: Date = Calendar.current.startOfDay(for: Date())
+    /// Start and End share one card, so they share one open panel: opening the
+    /// End calendar shuts the Start one rather than stacking two months (#657).
+    @State private var openDatePanel: String? = nil
     @State private var notes: String = ""
     @State private var loaded: Bool = false
     @FocusState private var nameFocused: Bool
@@ -795,29 +798,32 @@ private struct TripEditorSheet: View {
         }
     }
 
+    /// A trip has two days and always has both, so each switch is drawn on and
+    /// fixed and the row opens the calendar (#657). The end cannot precede the
+    /// start, so its calendar refuses every day before it.
     private var dateFields: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text("Dates").eyebrow()
-            VStack(spacing: Space.sm) {
-                HStack {
-                    Text("Start").font(.edBody).foregroundStyle(Tokens.inkSoft)
-                    Spacer()
-                    DatePicker("", selection: $startDate, displayedComponents: .date)
-                        .paperDatePickerOnMac()
-                        .labelsHidden()
-                        .tint(Tokens.accent(for: .itineraries))
-                }
-                Rectangle().fill(Tokens.divider).frame(height: 0.5)
-                HStack {
-                    Text("End").font(.edBody).foregroundStyle(Tokens.inkSoft)
-                    Spacer()
-                    DatePicker("", selection: $endDate, in: startDate..., displayedComponents: .date)
-                        .paperDatePickerOnMac()
-                        .labelsHidden()
-                        .tint(Tokens.accent(for: .itineraries))
-                }
+            VStack(spacing: 0) {
+                EdDateTimeField(
+                    date: $startDate,
+                    showsTime: false,
+                    dateLabel: "Start",
+                    tint: Tokens.accent(for: .itineraries),
+                    drawsCard: false,
+                    openPanel: $openDatePanel
+                )
+                Divider().background(Tokens.divider)
+                EdDateTimeField(
+                    date: $endDate,
+                    showsTime: false,
+                    dateLabel: "End",
+                    tint: Tokens.accent(for: .itineraries),
+                    bounds: .from(startDate),
+                    drawsCard: false,
+                    openPanel: $openDatePanel
+                )
             }
-            .padding(Space.md)
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
             .paperBorder(Tokens.border, radius: Radius.md)
         }

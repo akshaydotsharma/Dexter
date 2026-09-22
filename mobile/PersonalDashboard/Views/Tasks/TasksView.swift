@@ -1650,28 +1650,19 @@ struct TaskEditorSheet: View {
                         }
                         labeled("Due date") {
                             VStack(spacing: 0) {
-                                HStack {
-                                    Text("Set a due date")
-                                        .font(.edBody)
-                                        .foregroundStyle(Tokens.inkSoft)
-                                    Spacer()
-                                    Toggle("", isOn: $hasDueDate.animation())
-                                        .labelsHidden()
-                                        .tint(Tokens.accentTasks)
-                                }
-                                .padding(Space.md)
+                                // #657. The calendar opens under the row rather
+                                // than over the sheet. The time row is drawn on
+                                // and fixed: a `LocalTodo` due date is a single
+                                // absolute `Date` that the reminder fires at, so
+                                // a task cannot carry a day without an hour.
+                                EdDateTimeField(
+                                    date: $dueDate,
+                                    hasDate: $hasDueDate,
+                                    tint: Tokens.accentTasks,
+                                    drawsCard: false
+                                )
 
                                 if hasDueDate {
-                                    Divider().background(Tokens.divider)
-                                    HStack {
-                                        DatePicker("", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
-                                            .paperDatePickerOnMac()
-                                            .labelsHidden()
-                                            .tint(Tokens.accentTasks)
-                                        Spacer(minLength: 0)
-                                    }
-                                    .padding(Space.md)
-
                                     // #444. Inside the same card as the date, because
                                     // the reminder has no time of its own — it fires at
                                     // the date above, so it belongs to it rather than
@@ -1946,31 +1937,16 @@ struct TaskEditorSheet: View {
                     // Date & Time
                     macSectionHeader("Date & Time")
                     macGroup {
-                        HStack(spacing: Space.md) {
-                            macIconTile("calendar", Tokens.accentToday)
-                            Text("Due Date").font(.edBody).foregroundStyle(Tokens.ink)
-                            Spacer()
-                            Toggle("", isOn: $hasDueDate.animation())
-                                .labelsHidden()
-                                .tint(Tokens.accentTasks)
-                        }
-                        .padding(.horizontal, Space.md)
-                        .padding(.vertical, Space.sm)
+                        // #657. The same inline field the iOS sheet uses.
+                        EdDateTimeField(
+                            date: $dueDate,
+                            hasDate: $hasDueDate,
+                            dateLabel: "Due Date",
+                            tint: Tokens.accentTasks,
+                            drawsCard: false
+                        )
 
                         if hasDueDate {
-                            macRowDivider
-                            HStack(spacing: Space.md) {
-                                macIconTile("clock", Tokens.accentTasks)
-                                DatePicker("", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
-                                    .paperDatePickerOnMac()
-                                    .labelsHidden()
-                                    .datePickerStyle(.compact)
-                                    .tint(Tokens.accentTasks)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, Space.md)
-                            .padding(.vertical, Space.sm)
-
                             // #444. Same card as the date it fires at.
                             macRowDivider
                             remindMeRow
