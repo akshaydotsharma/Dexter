@@ -1,6 +1,6 @@
 # Ground meal estimates in real food data (#653)
 
-**Status**: complete — PR #654 open, awaiting device QA
+**Status**: DONE — merged to main as 62153f7 on 2026-09-22 (PR #654, closing #653, #655, #656)
 **Started**: 2026-09-22
 **Last Updated**: 2026-09-22 03:30 SGT
 **Branch**: `feat/grounded-meal-estimates`
@@ -34,26 +34,29 @@ Every exact row came from the library or a hand-typed total.
       (NXDOMAIN); the service is now the Singapore Food Insights Database at
       `pphtpc.hpb.gov.sg/bff/v1/food-portal` (2026-09-22)
 
-## Current Step
+## Outcome
 
-- [ ] Device QA. The build is on the phone (`C2241792`, 2026-09-22 03:26). Log a
-      real meal through the composer and check the preview shows sourced
-      composition and a portion that is not a guess.
+Merged. Four feature commits plus the two follow-up fixes the first device QA
+found: #655 (raw-vs-cooked weight, composite rows, contradicted candidates) and
+#656 (an item edit that did not rescale and dropped its provenance).
 
-## Next Steps
+The meal that prompted #655 went from 1,594 kcal to 1,286, against the user's
+own estimate of about 1,100, across eight items built from the ingredients he
+described.
 
-- [ ] Merge #654 once QA passes
-- [ ] Consider: chat and the Shortcut still have no lookups, so their estimates
-      fall back to the model's own band. Converting chat is the obvious next
-      step; the Shortcut's 22 s ceiling makes it a real design question.
+## Not done, and deliberately so
 
-## Completed
-
-- [x] All seven scope items on #653. Four commits, PR #654.
-- [x] `d8963b7` FoodData Central client
-- [x] `5959dac` lookup tool, provenance, ledger, derived band
-- [x] `0bd4cc5` saved library and past portions
-- [x] `7f781c7` the 2,689-dish Singapore table
+- Chat and the Shortcut still have NO lookups, so their estimates fall back to
+  the model's self-reported band. Converting chat is the obvious next step; the
+  Shortcut's 22 s ceiling makes it a real design question rather than a port.
+- The Singapore table is a snapshot taken 2026-09-22, refreshed by re-running
+  `mobile/scripts/build-sg-food-table.py`. A live per-query call was considered
+  and rejected: it is an undocumented internal BFF whose predecessor host
+  vanished entirely, it rate limits, and a spot check found 0 of 125 live rows
+  absent from the snapshot. If currency starts to matter, publish the built
+  table and fetch that one file rather than calling HPB at estimate time.
+- FDC's generic `Dal` row is 145 kcal/100 g, which is a thicker dal than a home
+  toor dal. Worth revisiting if the user reports dal reading high.
 
 ## Key Decisions Made
 
