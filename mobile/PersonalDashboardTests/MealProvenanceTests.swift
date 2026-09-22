@@ -1035,3 +1035,201 @@ final class MealUserSourcesTests: XCTestCase {
         XCTAssertTrue(service.library("chicken biryani").isEmpty)
     }
 }
+
+/// Weight basis, and what the device can check about it (#655).
+///
+/// The defect: "250 g chicken" is almost always a RAW weight, and every
+/// composition record states a cooked food as eaten. Read as cooked it
+/// over-states the item by about a third, on every meat, rice, pasta and pulse
+/// the user weighs, silently.
+///
+/// The schema key is what makes the model answer the question at all. These
+/// tests cover the one part of the answer the device can verify.
+final class MealWeightBasisTests: XCTestCase {
+
+    private func meal(_ items: [EstimatedMealItem]) -> EstimatedMeal {
+        EstimatedMeal(mealType: "lunch", items: items, confidence: "high")
+    }
+
+    /// A model that says it converted a raw weight and returns the RAW number
+    /// unchanged has contradicted itself, and the contradiction is visible: the
+    /// description holds 250 and so does the item.
+    func testAnUnconvertedRawWeightIsDemoted() {
+        let estimate = meal([
+            EstimatedMealItem(
+                name: "Stir-fried chicken",
+                portionQuantity: 250, portionUnit: "g",
+                massSource: "stated",
+                portionBasis: "converted_from_raw"
+            )
+        ])
+
+        let result = FoodLookupResolution.resolve(
+            estimate,
+            ledger: FoodLookupLedger(),
+            description: "one stir fried 250 g chicken"
+        )
+        XCTAssertEqual(
+            result.resolved.first?.massSource, .estimated,
+            "it claims a conversion and returns the number it started from"
+        )
+    }
+
+    /// A conversion that actually happened keeps its claim. 250 g raw yields
+    /// about 180 g cooked, and 180 appears nowhere in the description.
+    func testAGenuineConversionKeepsItsClaim() {
+        let estimate = meal([
+            EstimatedMealItem(
+                name: "Stir-fried chicken",
+                portionQuantity: 180, portionUnit: "g",
+                massSource: "stated",
+                portionBasis: "converted_from_raw"
+            )
+        ])
+
+        let result = FoodLookupResolution.resolve(
+            estimate,
+            ledger: FoodLookupLedger(),
+            description: "one stir fried 250 g chicken"
+        )
+        XCTAssertEqual(result.resolved.first?.massSource, .stated)
+    }
+
+    /// An as-eaten weight the user stated is still promoted. The check is about
+    /// a contradicted conversion, not about raw weights in general.
+    func testAnAsEatenWeightIsStillPromoted() {
+        let estimate = meal([
+            EstimatedMealItem(
+                name: "Cooked rice",
+                portionQuantity: 260, portionUnit: "g",
+                massSource: "estimated",
+                portionBasis: "as_eaten"
+            )
+        ])
+
+        let result = FoodLookupResolution.resolve(
+            estimate,
+            ledger: FoodLookupLedger(),
+            description: "260 g of cooked rice"
+        )
+        XCTAssertEqual(result.resolved.first?.massSource, .stated)
+    }
+
+    /// An item carrying no basis at all behaves exactly as it did before #655,
+    /// which is what keeps the paths that do not ask for it working.
+    func testAnItemWithNoBasisIsUnaffected() {
+        let estimate = meal([
+            EstimatedMealItem(
+                name: "Dal", portionQuantity: 180, portionUnit: "g", massSource: "estimated"
+            )
+        ])
+
+        let result = FoodLookupResolution.resolve(
+            estimate,
+            ledger: FoodLookupLedger(),
+            description: "180 g of dal"
+        )
+        XCTAssertEqual(result.resolved.first?.massSource, .stated)
+    }
+
+    /// The key is REQUIRED in the tool schema. Optional in practice means
+    /// unanswered on exactly the items that need it.
+    func testThePortionBasisKeyIsRequired() throws {
+        let schema = try XCTUnwrap(MealToolSchema.itemSchema.objectValue)
+        let required = (schema["required"]?.arrayValue ?? []).compactMap(\.stringValue)
+        XCTAssertTrue(required.contains("portion_basis"))
+
+        let properties = try XCTUnwrap(schema["properties"]?.objectValue)
+        let basis = try XCTUnwrap(properties["portion_basis"]?.objectValue)
+        XCTAssertEqual(
+            (basis["enum"]?.arrayValue ?? []).compactMap(\.stringValue),
+            ["as_eaten", "converted_from_raw"]
+        )
+    }
+
+    /// The two rules that decide which record gets picked at all, pinned so a
+    /// later prompt edit cannot quietly drop them.
+    func testTheRulesThatCausedTheOverEstimateArePresent() {
+        XCTAssertTrue(MealToolSchema.estimateRules.contains("WEIGHT IS AS EATEN"))
+        XCTAssertTrue(MealToolSchema.estimateRules.contains("BUILD FROM THE INGREDIENTS WHEN THE USER NAMES THEM"))
+        XCTAssertTrue(MealToolSchema.foodLookupRule.contains("A CANDIDATE'S DESCRIPTION CAN DISQUALIFY IT"))
+    }
+}
+
+/// The meal from #655, replayed against the live model (#655).
+///
+/// The user logged this and it came back at 1,594 kcal against his own estimate
+/// of about 1,100. Every dish had resolved to a real record and the arithmetic
+/// was exact; the over-statement came from a composite restaurant row, a
+/// candidate whose description contradicted the meal, and a raw chicken weight
+/// read as a cooked one.
+///
+/// The assertion is a CEILING, not a target. Nobody can say this meal is
+/// exactly 1,100 kcal, and a test pinning a figure would be asserting something
+/// nobody can check. What can be said is that 1,594 was wrong by enough to
+/// notice, and that an estimate above about 1,400 means the three causes are
+/// still in play.
+final class LiveMealOverEstimateTests: XCTestCase {
+
+    func testTheFriedRiceMealNoLongerOverStates() async throws {
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(
+            env["DEXTER_LIVE_MEAL_LOOKUP"] == "1" || env["TEST_RUNNER_DEXTER_LIVE_MEAL_LOOKUP"] == "1",
+            "set DEXTER_LIVE_MEAL_LOOKUP=1 to spend a real Anthropic call"
+        )
+        let fdc = env["USDA_FDC_API_KEY"] ?? env["TEST_RUNNER_USDA_FDC_API_KEY"] ?? ""
+        try XCTSkipIf(fdc.isEmpty, "no USDA_FDC_API_KEY in the environment")
+        try XCTSkipIf((AppConfig.anthropicAPIKey ?? "").isEmpty, "no ANTHROPIC_API_KEY reached the test process")
+
+        // The description exactly as it was dictated, Devanagari and all. The
+        // mixed script is not incidental: `statedQuantities(in:)` reads digits,
+        // and "दो सौ पचास ग्राम" is two hundred and fifty grams written in
+        // words, so the device cannot recover that weight and the model has to
+        // handle it.
+        let description = """
+        लंच इंडियन स्टाइल फ्राइड राइस विद वन लॉन्ग बीन। वनफोर्थ अनियन one egg and one spring onion \
+        I had it with तीन-चौथाई कप अरहर दाल. and वन स्टर फ्राइड दो सौ पचास ग्राम चिकन। \
+        The amount of rice for the fried rice was also a little less than... थ्री फोर्थ कप raw rice cooked
+        """
+
+        let client = AnthropicClient()
+        let lookups = FoodLookupService(fdc: FoodDataCentralClient(apiKey: fdc))
+
+        let grounded = try await client.estimateMeal(
+            description: description, mealTypeHint: .lunch, lookups: lookups
+        )
+        let resolution = FoodLookupResolution.resolve(
+            grounded.estimate,
+            ledger: grounded.lookupLedger,
+            wasGrounded: !grounded.groundingSources.isEmpty,
+            description: description
+        )
+        let checked = MealEstimateGuards.check(
+            resolution.estimate,
+            fallbackMealType: .lunch,
+            groundingSources: grounded.groundingSources,
+            provenance: resolution.resolved
+        )
+
+        for item in checked.items {
+            print("""
+            ITEM \(item.name) — \(item.portionDescription), \
+            \(Int(item.calories.rounded())) kcal, P\(Int(item.proteinG.rounded())), \
+            composition: \(item.densitySource?.displayName ?? "-"), \
+            portion: \(item.massSource?.displayName ?? "-")
+            """)
+        }
+        print("TOTAL \(Int(checked.nutrients.calories.rounded())) kcal, "
+              + "P\(Int(checked.nutrients.proteinG.rounded())), band \(checked.confidence)")
+        print("ASSUMPTIONS \(checked.assumptionsNote ?? "-")")
+
+        XCTAssertLessThan(
+            checked.nutrients.calories, 1400,
+            "this meal estimated at 1,594 kcal before #655 against the user's own ~1,100"
+        )
+        XCTAssertGreaterThan(
+            checked.nutrients.calories, 700,
+            "a collapse the other way is not a fix"
+        )
+    }
+}

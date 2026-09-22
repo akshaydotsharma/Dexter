@@ -80,6 +80,20 @@ enum FoodLookupResolution {
             if stated.contains(index), !claimedMass.isSourced {
                 claimedMass = .stated
             }
+            // #655. A model that says it converted a raw weight and returns
+            // the raw number unchanged has contradicted itself, and the
+            // contradiction is visible from here: the description holds the
+            // figure and the item holds the same one.
+            //
+            // This is the one raw-versus-cooked error the device can actually
+            // catch. It cannot see an unconverted weight the user never wrote
+            // down, which is why the key is REQUIRED in the schema rather than
+            // asked for in prose — the schema is what makes the model answer,
+            // and this only checks the answer.
+            if raw.portionBasis == "converted_from_raw", stated.contains(index) {
+                claimedMass = .estimated
+            }
+
             // A history claim is checkable for the same reason a portion-table
             // quote is: the device is holding the list the model was shown.
             if claimedMass == .history,

@@ -91,6 +91,22 @@ enum MealToolSchema {
     - "contains_alcohol": true if any item is beer, wine, cider, a spirit or
       a mixed drink. Get this right even when the alcohol is a small part of
       the meal; it changes how the numbers are checked.
+    - WEIGHT IS AS EATEN. "portion_quantity" is always the weight of the food
+      as it reached the plate, because that is what every nutrition record
+      describes. A weight the user gives for meat, fish, rice, pasta or
+      pulses is usually the RAW weight: 250 g of raw chicken is about 180 g
+      cooked, 100 g of raw rice is about 260 g cooked. Convert it, set
+      "portion_basis" to "converted_from_raw", and say which yield you used.
+      Taking a raw weight as a cooked one over-states the item by a third and
+      nothing downstream can tell.
+    - BUILD FROM THE INGREDIENTS WHEN THE USER NAMES THEM. "Fried rice with
+      three-quarters of a cup of raw rice, one egg, a quarter onion and a
+      spring onion" is a recipe, not a menu item: make one item per
+      ingredient. A composite database row for a named dish is an average of
+      how RESTAURANTS make it, and it carries far more oil than a home pan
+      does. Use a composite row when the user names a dish and not its
+      contents ("chicken rice from the hawker centre"), and ingredients
+      whenever they have told you what went in.
     - "source_id" and "mass_source": say where each half of the item came
       from. The numbers are `mass x composition`, the two are independent,
       and the device grades the estimate on how many of them you did not
@@ -188,6 +204,16 @@ enum MealToolSchema {
       use none of them: set no "source_id", estimate the item yourself, and
       say so in "assumptions". An honest guess is worth more than a wrong row
       with an id on it.
+    - A CANDIDATE'S DESCRIPTION CAN DISQUALIFY IT. The names carry the
+      preparation, and the preparation is most of the number: "skin eaten",
+      "deep-fried", "NFS", "with cream sauce", "sweetened". If the
+      description of the meal does not support what the candidate says was
+      done to the food, it is the wrong row however well the name matches.
+      "Chicken breast, sauteed, skin eaten" is not a stir-fry nobody
+      mentioned skin in.
+    - PREFER A RECORD ON THE SAME BASIS AS YOUR PORTION. Records exist for raw
+      and for cooked forms of the same food. Match the one you are stating a
+      weight for, and convert the weight rather than the record.
     - When a candidate IS the dish, put its id in "source_id" and state
       "portion_quantity" in grams or millilitres. The device computes the
       nutrients from that record itself, so you cannot mis-transcribe them.
@@ -343,6 +369,22 @@ enum MealToolSchema {
                 "type": .string("string"),
                 "description": .string("OPTIONAL. The id of a \(FoodLookupTool.name) candidate this item's per-100 g figures came from, e.g. \"fdc:2706437\". Set it ONLY for a candidate you were actually shown and that IS this dish. The device then computes the nutrients itself from that record, so you cannot get them wrong. An id that was never offered is ignored.")
             ]),
+            // #655. The weight basis, as a KEY. It was going to be a sentence
+            // in the rules, and a sentence is what #484 to #487 cost four
+            // rounds to learn not to trust: it is answered on the first two
+            // items and forgotten by the fifth. A required enum is answered on
+            // every one.
+            //
+            // The defect it exists for: "250 g chicken" is almost always the
+            // RAW weight, and every composition record states a cooked food as
+            // eaten. Read as a cooked weight it over-states the item by about a
+            // third, silently, on every meat, rice, pasta and pulse the user
+            // weighs.
+            "portion_basis": .object([
+                "type": .string("string"),
+                "enum": .array([.string("as_eaten"), .string("converted_from_raw")]),
+                "description": .string("Whether portion_quantity is the weight AS EATEN (\"as_eaten\"), or a raw weight you have already converted to the cooked weight (\"converted_from_raw\"). portion_quantity must ALWAYS be the as-eaten weight. A weight the user states for meat, fish, rice, pasta or pulses is usually RAW: convert it, set this to \"converted_from_raw\", and name the yield you used in \"assumptions\".")
+            ]),
             "mass_source": .object([
                 "type": .string("string"),
                 "enum": .array([
@@ -357,7 +399,10 @@ enum MealToolSchema {
             .string("name"), .string("portion_quantity"), .string("portion_unit"),
             .string("calories"), .string("protein_g"), .string("carbs_g"),
             .string("fat_g"), .string("fibre_g"), .string("sugar_g"),
-            .string("sodium_mg"), .string("saturated_fat_g")
+            .string("sodium_mg"), .string("saturated_fat_g"),
+            // #655. Required, or it is optional in practice and the question
+            // goes unanswered on exactly the items that need it.
+            .string("portion_basis")
         ])
     ])
 
@@ -402,7 +447,8 @@ enum MealToolSchema {
                 // is the only thing allowed to believe either of them, because
                 // it is the only thing holding the record of what was offered.
                 sourceID: dict["source_id"]?.stringValue,
-                massSource: dict["mass_source"]?.stringValue
+                massSource: dict["mass_source"]?.stringValue,
+                portionBasis: dict["portion_basis"]?.stringValue
             )
         }
 

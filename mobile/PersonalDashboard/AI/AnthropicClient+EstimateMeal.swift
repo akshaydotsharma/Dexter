@@ -52,6 +52,15 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
     /// asked to cite its source can write itself a citation.
     let sourceID: String?
 
+    /// Whether `portionQuantity` is an as-eaten weight or one the model
+    /// converted from a raw weight the user gave (#655).
+    ///
+    /// Decoded rather than ignored because it is CHECKABLE against the
+    /// description: a model that says it converted a raw weight and returns the
+    /// raw number unchanged has contradicted itself, and that is exactly the
+    /// failure the key exists to catch. See `FoodLookupResolution`.
+    let portionBasis: String?
+
     /// How the model says it knows the portion (#653), as the raw string.
     ///
     /// A String rather than a `MealMassSource` because this is the wire, and a
@@ -79,7 +88,8 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         satFatG: Double? = nil,
         savedItemID: String? = nil,
         sourceID: String? = nil,
-        massSource: String? = nil
+        massSource: String? = nil,
+        portionBasis: String? = nil
     ) {
         self.name = name
         self.portionQuantity = portionQuantity
@@ -95,6 +105,7 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         self.savedItemID = savedItemID
         self.sourceID = sourceID
         self.massSource = massSource
+        self.portionBasis = portionBasis
     }
 
     enum CodingKeys: String, CodingKey {
@@ -112,6 +123,7 @@ struct EstimatedMealItem: Decodable, Sendable, Equatable {
         case savedItemID = "saved_item_id"
         case sourceID    = "source_id"
         case massSource  = "mass_source"
+        case portionBasis = "portion_basis"
     }
 }
 
@@ -760,6 +772,7 @@ extension AnthropicClient {
               "sodium_mg": 142,
               "saturated_fat_g": 3.1,
               "source_id": "fdc:2706437",
+              "portion_basis": "as_eaten",
               "mass_source": "standard_portion"
             }
           ],

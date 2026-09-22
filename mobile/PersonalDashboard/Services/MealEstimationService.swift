@@ -425,10 +425,24 @@ struct MealEstimationService {
         // estimate path. A clamp applied to a number the user just typed is
         // visible the moment the field redraws with the clamped value, and
         // appending a sentence on every edit would grow the note without bound.
+        // #656. The band moves with the edit. A portion the user just typed is
+        // the strongest mass source there is, so correcting a dish should raise
+        // the meal's confidence, not leave it reading whatever the model said
+        // before the correction.
+        //
+        // `derivedConfidence` returns the meal's existing band unchanged when
+        // the items carry no provenance, so a meal logged before #653 is not
+        // re-graded by being edited.
+        let band = MealEstimateGuards.derivedConfidence(
+            items: result.items,
+            reported: meal.confidence
+        )
+
         try meals.updateMeal(
             meal,
             nutrients: result.totals,
             items: result.items,
+            confidence: band,
             isSuspect: !invalidating.isEmpty,
             suspectReason: .some(reason)
         )
