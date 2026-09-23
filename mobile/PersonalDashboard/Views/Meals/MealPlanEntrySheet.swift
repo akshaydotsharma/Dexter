@@ -156,6 +156,7 @@ struct MealPlanEntrySheet: View {
                             mealTypeSection
                             titleSection
                             estimateSection
+                            findItemBranch
                             daySection
                             numbersSection
                             ingredientsSection
@@ -329,6 +330,39 @@ struct MealPlanEntrySheet: View {
         return hasNumbers ? "Estimate again" : "Estimate"
     }
 
+    /// The second way to fill this block, stated as plainly as Tracking states
+    /// it (#659).
+    ///
+    /// Before this, the only way in was a small ghost "Find an item" button
+    /// buried in the Nutrition section's header, which read as a lookup
+    /// TOOL for that section rather than as an alternative to typing a dish.
+    /// `MealOrBranch` and `MealFindItemButton` are the same shared views the
+    /// Tracking composer draws its own fork with, at the same width, so a
+    /// user who has learned the gesture on one surface finds it on the other.
+    ///
+    /// `addedCount` is left at its default of zero rather than `items.count`:
+    /// this sheet's `items` also holds whatever an estimate produced, so that
+    /// count would call an estimated dish a "pick" and mislead about what the
+    /// button actually adds.
+    ///
+    /// Hidden while `phase == .estimating` for the same reason the field and
+    /// the accessories go quiet then: the block is mid-write, and a live fork
+    /// into a picker would open onto a meal that is still being read.
+    @ViewBuilder
+    private var findItemBranch: some View {
+        if phase != .estimating {
+            MealOrBranch()
+                .frame(maxWidth: MealComposer.mealBranchWidth)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            MealFindItemButton {
+                showingPicker = true
+            }
+            .frame(maxWidth: MealComposer.mealBranchWidth)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
     // MARK: - Numbers
 
     /// The eight, always here and always editable.
@@ -353,15 +387,13 @@ struct MealPlanEntrySheet: View {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
                 Text("Nutrition").eyebrow()
                 Spacer(minLength: Space.sm)
-                // A planned block is often a packet: the overnight oats, the
-                // shake, the wafer. Finding it beats typing eight numbers off
-                // the back of it for the second time (#625).
-                Button("Find an item") { showingPicker = true }
-                    .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
                 if anyNumberEntered {
                     // Erases every number typed or estimated into this sheet.
-                    // It was `.ghost`, i.e. identical to the "Find an item"
-                    // lookup beside it, so nothing told the two apart (#645).
+                    // It was `.ghost`, the same weight as the "Find an item"
+                    // lookup that used to sit beside it, so nothing told the
+                    // two apart (#645). That lookup moved to `findItemBranch`
+                    // under Estimate (#659); Clear keeps its danger styling on
+                    // its own now that there is nothing left to blend into.
                     Button("Clear", action: clearNumbers)
                         .buttonStyle(EdButtonStyle(kind: .danger, size: .sm))
                 }
@@ -516,12 +548,27 @@ struct MealPlanEntrySheet: View {
     /// opposite of that, so `manual` is the honest half of the pair the enum
     /// offers. The block still saves WITH its numbers either way, because
     /// `nutrientsToWrite` reads the fields and not this flag.
+    ///
+    /// ### Why a block still without words gets `title` (#659)
+    ///
+    /// `canSave` requires a title, so picks alone used to leave a block that
+    /// could not be saved: nobody had typed anything for the dish, and the
+    /// picks are not the dish field. `MealEstimationService.libraryDescription`
+    /// is what names a pick-only meal on Tracking too, so a plan block built
+    /// the same way gets the same honest name — "Farmers Union Greek Style
+    /// Yogurt 150 g" rather than a placeholder. Left alone once the field
+    /// already has words in it: those are the user's own, and a second round
+    /// of picks must not overwrite what they typed.
     private func adoptPicks(_ picks: [FoodItemPick]) {
         let entries = picks.map(\.entry)
         guard !entries.isEmpty else { return }
 
         // The one commit path, with the plan's own answer to the counters.
         FoodItemPick.commit(picks, countingUse: false)
+
+        if trimmedTitle.isEmpty {
+            title = MealEstimationService.libraryDescription(for: entries)
+        }
 
         items += entries
 
