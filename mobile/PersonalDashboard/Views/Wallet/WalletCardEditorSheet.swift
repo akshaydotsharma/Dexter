@@ -241,69 +241,45 @@ struct WalletCardEditorSheet: View {
         }
     }
 
+    /// #657. The "Include time" toggle became the Time row, so the card keeps
+    /// the same two answers with one control fewer.
     private var primaryDateField: some View {
         let label = kind == .stay ? "Check-in" : "Date"
         return VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text(label).eyebrow()
-            VStack(spacing: 0) {
-                datePickerRow(
-                    selection: $dayDate,
-                    range: nil,
-                    includesTime: hasTime,
-                    accessibilityLabel: label
-                )
-
-                Divider().background(Tokens.divider)
-
-                toggleRow(title: "Include time", isOn: $hasTime)
-            }
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $dayDate,
+                hasTime: $hasTime,
+                dateLabel: label,
+                tint: Tokens.accent(for: .wallet)
+            )
         }
     }
 
     private var endDateField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Check-out").eyebrow()
-            VStack(spacing: 0) {
-                datePickerRow(
-                    selection: $endDate,
-                    range: Calendar.current.startOfDay(for: dayDate)...,
-                    includesTime: hasEndTime,
-                    accessibilityLabel: "Check-out"
-                )
-
-                Divider().background(Tokens.divider)
-
-                toggleRow(title: "Include time", isOn: $hasEndTime)
-            }
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $endDate,
+                hasTime: $hasEndTime,
+                dateLabel: "Check-out",
+                tint: Tokens.accent(for: .wallet),
+                bounds: .from(Calendar.current.startOfDay(for: dayDate))
+            )
         }
     }
 
+    /// Arrival shares the card's day, so the field is a time and nothing else.
     private var arrivalTimeField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Arrival").eyebrow()
-            VStack(spacing: 0) {
-                if hasArrival {
-                    HStack {
-                        DatePicker("", selection: $arrivalTime, displayedComponents: [.hourAndMinute])
-                            .paperDatePickerOnMac()
-                            .labelsHidden()
-                            .tint(Tokens.accent(for: .wallet))
-                            .accessibilityLabel("Arrival time")
-                        Spacer(minLength: 0)
-                    }
-                    .padding(Space.md)
-
-                    Divider().background(Tokens.divider)
-                }
-
-                toggleRow(title: "Include arrival", isOn: $hasArrival)
-            }
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $arrivalTime,
+                hasTime: $hasArrival,
+                showsDate: false,
+                timeLabel: "Include arrival",
+                tint: Tokens.accent(for: .wallet)
+            )
         }
     }
 
@@ -425,51 +401,6 @@ struct WalletCardEditorSheet: View {
                 .accessibilityLabel(label)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    @ViewBuilder
-    private func datePickerRow(
-        selection: Binding<Date>,
-        range: PartialRangeFrom<Date>?,
-        includesTime: Bool,
-        accessibilityLabel: String
-    ) -> some View {
-        HStack {
-            if let range {
-                DatePicker(
-                    "",
-                    selection: selection,
-                    in: range,
-                    displayedComponents: includesTime ? [.date, .hourAndMinute] : .date
-                )
-                .paperDatePickerOnMac()
-                .labelsHidden()
-                .tint(Tokens.accent(for: .wallet))
-            } else {
-                DatePicker(
-                    "",
-                    selection: selection,
-                    displayedComponents: includesTime ? [.date, .hourAndMinute] : .date
-                )
-                .paperDatePickerOnMac()
-                .labelsHidden()
-                .tint(Tokens.accent(for: .wallet))
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(Space.md)
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private func toggleRow(title: String, isOn: Binding<Bool>) -> some View {
-        HStack {
-            Text(title).font(.edBody).foregroundStyle(Tokens.inkSoft)
-            Spacer()
-            Toggle("", isOn: isOn)
-                .labelsHidden()
-                .tint(Tokens.accent(for: .wallet))
-        }
-        .padding(Space.md)
     }
 
     private func placeholder(for kind: WalletCardKind) -> String {

@@ -430,35 +430,15 @@ struct TaskTicketDetailSheet: View {
                 field($eventTitle, placeholder: "What is this ticket for?")
             }
             labeled("Date") {
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("Set a date")
-                            .font(.edBody)
-                            .foregroundStyle(Tokens.inkSoft)
-                        Spacer()
-                        Toggle("", isOn: $hasEventDate.animation())
-                            .labelsHidden()
-                            .tint(accent)
-                    }
-                    .padding(Space.md)
-
-                    if hasEventDate {
-                        Divider().background(Tokens.divider)
-                        HStack {
-                            // Date only. The time is a free-text field below, kept
-                            // verbatim as printed — see `LocalTaskTicket` on why a
-                            // single absolute Date is the wrong shape here.
-                            DatePicker("", selection: $eventDate, displayedComponents: [.date])
-                                .paperDatePickerOnMac()
-                                .labelsHidden()
-                                .tint(accent)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(Space.md)
-                    }
-                }
-                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                .paperBorder(Tokens.border, radius: Radius.md)
+                // Date only (#657). The time is a free-text field below, kept
+                // verbatim as printed — see `LocalTaskTicket` on why a single
+                // absolute Date is the wrong shape here.
+                EdDateTimeField(
+                    date: $eventDate,
+                    hasDate: $hasEventDate,
+                    showsTime: false,
+                    tint: accent
+                )
             }
             labeled("Time as printed") {
                 field($startTimeText, placeholder: "e.g. 20:00 or Doors 19:00")

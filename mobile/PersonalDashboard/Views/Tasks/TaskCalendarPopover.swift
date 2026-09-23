@@ -635,10 +635,13 @@ struct TaskCalendarPopover: View {
     /// Task due times are plain device-local dates, so they use the local
     /// formatter. A due time pinned to midnight reads as "no particular time"
     /// and shows the priority instead.
+    ///
+    /// That rule was written here first and is now `TaskDueTime`, which #657
+    /// made the editor honour too: a task may be due on a DAY, and this is what
+    /// such a day has always looked like.
     private func taskDetail(_ todo: LocalTodo) -> String? {
         guard let due = todo.dueDate else { return nil }
-        let cal = Calendar.current
-        if cal.startOfDay(for: due) == due {
+        guard TaskDueTime.isSet(on: due) else {
             let priority = TaskPriority(rawValue: todo.priority) ?? .none
             return priority == .none ? nil : priority.label
         }

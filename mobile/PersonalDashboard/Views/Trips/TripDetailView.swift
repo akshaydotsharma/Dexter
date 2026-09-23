@@ -2229,117 +2229,55 @@ struct ItineraryItemEditorSheet: View {
         }
     }
 
-    /// Primary date picker. For non-stay kinds: label "Date". For stay:
-    /// label "Check-in". Picker displays date alone or date + time depending
-    /// on `hasTime`, so the time renders inline with the date (no narrow
-    /// truncated time-only picker).
+    /// Primary date field. For non-stay kinds the eyebrow reads "Date"; for a
+    /// stay it reads "Check-in".
+    ///
+    /// The old "Include time" toggle is gone (#657): the Time row IS that
+    /// toggle now, so the item keeps the same two answers with one control
+    /// fewer. An item always falls on a day, so the Date switch is drawn on and
+    /// fixed and the row opens the calendar.
     private var primaryDateField: some View {
         let label = kind == .stay ? "Check-in" : "Date"
         return VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text(label).eyebrow()
-            VStack(spacing: 0) {
-                HStack {
-                    DatePicker(
-                        "",
-                        selection: $dayDate,
-                        displayedComponents: hasTime ? [.date, .hourAndMinute] : .date
-                    )
-                    .paperDatePickerOnMac()
-                    .labelsHidden()
-                    .tint(Tokens.accent(for: .itineraries))
-                    Spacer(minLength: 0)
-                }
-                .padding(Space.md)
-
-                Divider().background(Tokens.divider)
-
-                HStack {
-                    Text("Include time").font(.edBody).foregroundStyle(Tokens.inkSoft)
-                    Spacer()
-                    Toggle("", isOn: $hasTime)
-                        .labelsHidden()
-                        .tint(Tokens.accent(for: .itineraries))
-                }
-                .padding(Space.md)
-            }
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $dayDate,
+                hasTime: $hasTime,
+                dateLabel: label,
+                tint: Tokens.accent(for: .itineraries)
+            )
         }
     }
 
-    /// Stay-only second picker for the check-out date / time. Constrained to
-    /// `>= dayDate` so the user can't pick a check-out before the check-in.
+    /// Stay-only second field for the check-out day and time. Bounded to
+    /// `>= dayDate` so the user cannot pick a check-out before the check-in.
     private var endDateField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Check-out").eyebrow()
-            VStack(spacing: 0) {
-                HStack {
-                    DatePicker(
-                        "",
-                        selection: $endDate,
-                        in: Calendar.current.startOfDay(for: dayDate)...,
-                        displayedComponents: hasEndTime ? [.date, .hourAndMinute] : .date
-                    )
-                    .paperDatePickerOnMac()
-                    .labelsHidden()
-                    .tint(Tokens.accent(for: .itineraries))
-                    Spacer(minLength: 0)
-                }
-                .padding(Space.md)
-
-                Divider().background(Tokens.divider)
-
-                HStack {
-                    Text("Include time").font(.edBody).foregroundStyle(Tokens.inkSoft)
-                    Spacer()
-                    Toggle("", isOn: $hasEndTime)
-                        .labelsHidden()
-                        .tint(Tokens.accent(for: .itineraries))
-                }
-                .padding(Space.md)
-            }
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $endDate,
+                hasTime: $hasEndTime,
+                dateLabel: "Check-out",
+                tint: Tokens.accent(for: .itineraries),
+                bounds: .from(Calendar.current.startOfDay(for: dayDate))
+            )
         }
     }
 
     /// Arrival-time field for a timed activity or transport leg. Arrival shares
-    /// the item's day, so the picker shows only the time. A toggle mirrors the
-    /// "Include time" pattern; the picker appears only when arrival is on, so it
-    /// never surfaces a stray 12:00 AM. Gated to `.activity`/`.transport` with a
-    /// departure present by the caller.
+    /// the item's day, so the field is a time and nothing else. The clock opens
+    /// only once the switch is on, so it never surfaces a stray 12:00 AM. Gated
+    /// to `.activity`/`.transport` with a departure present by the caller.
     private var arrivalTimeField: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Arrival time").eyebrow()
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Include arrival time").font(.edBody).foregroundStyle(Tokens.inkSoft)
-                    Spacer()
-                    Toggle("", isOn: $hasArrival)
-                        .labelsHidden()
-                        .tint(Tokens.accent(for: .itineraries))
-                }
-                .padding(Space.md)
-
-                if hasArrival {
-                    Divider().background(Tokens.divider)
-
-                    HStack {
-                        DatePicker(
-                            "",
-                            selection: $arrivalTime,
-                            displayedComponents: .hourAndMinute
-                        )
-                        .paperDatePickerOnMac()
-                        .labelsHidden()
-                        .tint(Tokens.accent(for: .itineraries))
-                        Spacer(minLength: 0)
-                    }
-                    .padding(Space.md)
-                }
-            }
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-            .paperBorder(Tokens.border, radius: Radius.md)
+            EdDateTimeField(
+                date: $arrivalTime,
+                hasTime: $hasArrival,
+                showsDate: false,
+                timeLabel: "Arrival time",
+                tint: Tokens.accent(for: .itineraries)
+            )
         }
     }
 
