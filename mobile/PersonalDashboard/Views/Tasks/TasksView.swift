@@ -1060,7 +1060,15 @@ private struct TaskRow: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "calendar")
                                     .font(.system(size: 10))
-                                Text(due, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                // #657. A task may now be due on a DAY, with no
+                                // hour. Printing "12:00 AM" for one would invent
+                                // a precision the person deliberately declined.
+                                Text(
+                                    due,
+                                    format: todo.hasDueTime
+                                        ? .dateTime.month(.abbreviated).day().hour().minute()
+                                        : .dateTime.month(.abbreviated).day()
+                                )
                                 // #444. An armed reminder is otherwise invisible
                                 // outside the editor, so the one place the due
                                 // moment is already shown is where it belongs.
@@ -1313,7 +1321,10 @@ private struct TaskRow: View {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
-        if !todo.completed && date < now { return Tokens.danger }
+        // #657. A task due on a day with no hour is not late at 00:01 that
+        // morning. `overdueAfter` reads the hour when there is one and the end
+        // of the day when there is not.
+        if !todo.completed && TaskDueTime.overdueAfter(date) <= now { return Tokens.danger }
         if date < tomorrow { return Tokens.warning }
         return Tokens.inkSoft
     }
@@ -1367,8 +1378,15 @@ struct TaskEditorSheet: View {
     // one that the picker never shows, and they would otherwise ride into storage
     // (#444).
     @State private var dueDate: Date = WallClock.minutePrecision(Date().addingTimeInterval(3600))
+    /// Whether the due date names an hour (#657). Off for a new task: most
+    /// things are due on a day, and a person who wants an hour says so.
+    @State private var hasDueTime: Bool = false
     /// Whether to notify at `dueDate` (#444). Only reachable while `hasDueDate`
-    /// is on, and cleared when it goes off.
+    /// AND `hasDueTime` are on, and cleared when either goes off.
+    ///
+    /// The time is a precondition because the due moment IS the reminder
+    /// moment. A task due "Thursday" has no moment to fire at, and firing it at
+    /// Thursday midnight would be a banner nobody asked for in their sleep.
     @State private var remindMe: Bool = false
     /// Set when the person arms a reminder but notifications are switched off for
     /// Dexter, so the row can say so instead of silently doing nothing.
@@ -1451,6 +1469,15 @@ struct TaskEditorSheet: View {
                 // hidden `true` from being saved by a person who armed a reminder
                 // and then decided against the due date.
                 if !hasDate {
+                    remindMe = false
+                    remindersBlocked = false
+                }
+            }
+            // #657. Same reasoning one level down: without an hour there is no
+            // moment to fire at, so an armed reminder cannot survive the time
+            // being switched off.
+            .onChange(of: hasDueTime) { _, hasTime in
+                if !hasTime {
                     remindMe = false
                     remindersBlocked = false
                 }
@@ -1658,11 +1685,12 @@ struct TaskEditorSheet: View {
                                 EdDateTimeField(
                                     date: $dueDate,
                                     hasDate: $hasDueDate,
+                                    hasTime: $hasDueTime,
                                     tint: Tokens.accentTasks,
                                     drawsCard: false
                                 )
 
-                                if hasDueDate {
+                                if hasDueDate && hasDueTime {
                                     // #444. Inside the same card as the date, because
                                     // the reminder has no time of its own — it fires at
                                     // the date above, so it belongs to it rather than
@@ -1941,12 +1969,13 @@ struct TaskEditorSheet: View {
                         EdDateTimeField(
                             date: $dueDate,
                             hasDate: $hasDueDate,
+                            hasTime: $hasDueTime,
                             dateLabel: "Due Date",
                             tint: Tokens.accentTasks,
                             drawsCard: false
                         )
 
-                        if hasDueDate {
+                        if hasDueDate && hasDueTime {
                             // #444. Same card as the date it fires at.
                             macRowDivider
                             remindMeRow
@@ -2128,7 +2157,11 @@ struct TaskEditorSheet: View {
         guard let todo else { return }
         title = todo.title
         descriptionText = todo.description ?? ""
-        if let due = todo.dueDate { hasDueDate = true; dueDate = due }
+        if let due = todo.dueDate {
+            hasDueDate = true
+            dueDate = due
+            hasDueTime = TaskDueTime.isSet(on: due)
+        }
         // Only meaningful with a date, and `hasDueDate`'s own onChange would clear
         // it anyway, so read it through the same gate the editor enforces (#444).
         remindMe = todo.hasArmedReminder
@@ -2188,7 +2221,9 @@ struct TaskEditorSheet: View {
         // here rather than only on the seed so re-saving a task whose stored date
         // predates this normalises it too, instead of writing the stray seconds
         // straight back.
-        let finalDue = hasDueDate ? WallClock.minutePrecision(dueDate) : nil
+        let finalDue = hasDueDate
+            ? TaskDueTime.normalised(dueDate, hasTime: hasDueTime)
+            : nil
         let finalAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalMapsLink = googleMapsLink.trimmingCharacters(in: .whitespacesAndNewlines)
         // Can only be armed against a date (#444).

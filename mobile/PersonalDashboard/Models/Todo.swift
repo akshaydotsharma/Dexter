@@ -56,6 +56,13 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     /// editor needs to open the template behind it.
     var isRecurringOccurrence: Bool { !recurringTaskUUID.isEmpty }
 
+    /// Whether the due date names an hour, or only a day (#657). See
+    /// `TaskDueTime` for why this is derived rather than stored.
+    var hasDueTime: Bool {
+        guard let dueDate else { return false }
+        return TaskDueTime.isSet(on: dueDate)
+    }
+
     /// Typed view of `priority` for the UI. Unknown raw values fall back to
     /// `.none` so a bad stored value never renders a blank/missing bar.
     var taskPriority: TaskPriority { TaskPriority(rawValue: priority) ?? .none }

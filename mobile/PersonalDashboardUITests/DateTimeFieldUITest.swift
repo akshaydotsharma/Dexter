@@ -57,11 +57,16 @@ final class DateTimeFieldUITest: XCTestCase {
             "The calendar did not open under the row"
         )
 
-        // The Time row hangs off the date, so it is only here now. Pressing it
-        // shuts the calendar and opens the clock: one panel between the two.
-        let timeRow = app.buttons["Time"].firstMatch
-        XCTAssertTrue(timeRow.waitForExistence(timeout: 5), "Time row not found under the date")
-        timeRow.tap()
+        // The Time row hangs off the date, so it is only here now — and it is
+        // OFF, because a task is due on a day unless the person says otherwise
+        // (#657). Switching it on shuts the calendar and opens the clock: one
+        // panel between the two.
+        let timeSwitch = app.switches["Time"].firstMatch
+        XCTAssertTrue(timeSwitch.waitForExistence(timeout: 5), "Time switch not found under the date")
+        XCTAssertEqual(timeSwitch.value as? String, "0", "The time was on before it was asked for")
+        XCTAssertFalse(app.datePickers.firstMatch.exists, "A clock was on screen with the time off")
+
+        timeSwitch.tap()
         sleep(1)
         attach(name: "03-task-clock-open")
 
