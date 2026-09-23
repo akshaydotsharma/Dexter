@@ -158,6 +158,20 @@ struct EdDayPickerCalendar: View {
     /// card, so there is no space to fill and nothing to fill it with.
     var showsNeighbourMonths: Bool = false
 
+    /// Whether the month spreads to the width it is given (#657).
+    ///
+    /// Off by default, which is what a POPOVER needs: it floats, so it has to
+    /// decide its own width, and 300pt is the width every Dexter calendar has
+    /// been drawn at since #230.
+    ///
+    /// On inside an editor card, where the container has already decided the
+    /// width and a 300pt month leaves a margin down each side doing nothing.
+    /// Only the SPACING between cells grows — a `Circle` inscribes itself in
+    /// the smaller of its two dimensions, so a day stays a 32pt disc however
+    /// wide its column gets. Capped, because past about 460pt the discs are so
+    /// far apart that a week stops reading as a row.
+    var fillsWidth: Bool = false
+
     @State private var month: Date = Date()
     @State private var seeded = false
 
@@ -204,7 +218,11 @@ struct EdDayPickerCalendar: View {
             footer
         }
         .padding(Space.lg)
-        .frame(width: EdDayPickerMetrics.cardWidth)
+        .frame(
+            width: fillsWidth ? nil : EdDayPickerMetrics.cardWidth,
+            alignment: .leading
+        )
+        .frame(maxWidth: fillsWidth ? EdDayPickerMetrics.filledMaxWidth : nil)
     }
 
     /// The same month, with its neighbours either side of it.
@@ -507,6 +525,9 @@ enum EdDayPickerMetrics {
     static let pageGutter: CGFloat = Space.lg
     /// Centre to centre, which is what one step moves.
     static let pageStep: CGFloat = pageWidth + pageGutter
+    /// The widest a filled-width month is drawn at. Past this the day discs
+    /// are far enough apart that a week stops reading as a row.
+    static let filledMaxWidth: CGFloat = 460
     /// Rows every month in the reel is padded to. Six is the most a month can
     /// need, so no month is ever cut short to reach it.
     static let reelRows: Int = 6

@@ -57,27 +57,29 @@ final class DateTimeFieldUITest: XCTestCase {
             "The calendar did not open under the row"
         )
 
-        // The clock lives INSIDE the panel, at the foot of the calendar, not
-        // as a second row in the card.
+        // The Time row hangs off the date, so it is only here now. Pressing it
+        // shuts the calendar and opens the clock: one panel between the two.
+        let timeRow = app.buttons["Time"].firstMatch
+        XCTAssertTrue(timeRow.waitForExistence(timeout: 5), "Time row not found under the date")
+        timeRow.tap()
+        sleep(1)
+        attach(name: "03-task-clock-open")
+
+        XCTAssertFalse(app.buttons["Previous month"].exists, "Both panels were open at once")
         XCTAssertTrue(
             app.datePickers.firstMatch.waitForExistence(timeout: 5),
-            "The clock is not inside the calendar panel"
+            "The clock did not open under the Time row"
         )
 
-        // Shutting the panel takes the clock with it, and the row still reports
-        // the whole answer.
+        // And back: pressing Date shuts the clock and brings the calendar back.
         let dateRow = app.buttons["Date"].firstMatch
         XCTAssertTrue(dateRow.waitForExistence(timeout: 5), "Date row not found")
         dateRow.tap()
         sleep(1)
-        attach(name: "03-task-panel-shut")
+        attach(name: "03B-task-calendar-back")
 
-        XCTAssertFalse(app.buttons["Previous month"].exists, "The calendar stayed open")
-        XCTAssertFalse(app.datePickers.firstMatch.exists, "The clock outlived its panel")
-        XCTAssertTrue(
-            (dateRow.value as? String)?.contains(" at ") == true,
-            "The shut row does not report the time: \(String(describing: dateRow.value))"
-        )
+        XCTAssertTrue(app.buttons["Previous month"].exists, "The calendar did not come back")
+        XCTAssertFalse(app.datePickers.firstMatch.exists, "The clock stayed open")
     }
 
     // MARK: - Mandatory: an expense's date

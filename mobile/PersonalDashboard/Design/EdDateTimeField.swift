@@ -19,17 +19,21 @@ import SwiftUI
 /// were reading stays where it was, and the chosen value sits under the label
 /// the whole time.
 ///
-/// ### The time lives in the calendar
+/// ### Two rows, one panel
 ///
-/// It began as a second row beside the date, which is what Reminders does. It
-/// reads worse here: a date and a time are one answer to one question, and a
-/// card holding several fields was getting two rows for each of them. So the
-/// time sits at the foot of the panel the day is chosen in, next to Today and
-/// Tomorrow, and the row above reports the whole answer — "Tue 22 Sep 2026 at
-/// 8:16 PM" — with the panel shut.
+/// A Date row and a Time row, each with its own switch, and exactly one panel
+/// open between them. Switching Date on opens the calendar; switching Time on
+/// shuts the calendar and opens the clock; pressing the Date row again shuts
+/// the clock and brings the calendar back. That is the Reminders accordion,
+/// and it is what keeps a card with a date, a time and a reminder in it
+/// shorter than a phone.
+///
+/// The time was briefly a strip inside the calendar. It saved a row and cost
+/// the thing the row was for: with the panel shut you could no longer switch a
+/// time off, or see that there was one to switch, without opening the day.
 ///
 /// A field that is a time and NOTHING else — an arrival, a repeat rule's hour —
-/// has no calendar to sit in, so there the time is the row.
+/// has no date row above it, so its Time row is the whole field.
 ///
 /// ### One calendar in the app
 ///
@@ -129,7 +133,7 @@ struct EdDateTimeField: View {
                 row(
                     icon: dateIcon,
                     label: dateLabel,
-                    value: spokenValue,
+                    value: Self.dayFormatter.string(from: date),
                     isOn: dateIsOn,
                     binding: hasDate,
                     panel: dateKey
@@ -141,16 +145,20 @@ struct EdDateTimeField: View {
                         tint: tint,
                         bounds: bounds,
                         drawsCard: false,
-                        showsNeighbourMonths: showsNeighbourMonths
+                        showsNeighbourMonths: showsNeighbourMonths,
+                        fillsWidth: true
                     )
                     .frame(maxWidth: .infinity)
-                    if showsTime {
-                        Divider().background(Tokens.divider)
-                        timeStrip
-                    }
                 }
-            } else if showsTime {
-                // No day to put a clock inside, so the clock is the field.
+            }
+
+            // Time hangs off the date. A field with no date on it has no moment
+            // for a time to name, so the row is not offered rather than offered
+            // and refused.
+            if showsTime && (!showsDate || dateIsOn) {
+                if showsDate {
+                    Divider().background(Tokens.divider)
+                }
                 row(
                     icon: timeIcon,
                     label: timeLabel,
@@ -180,10 +188,8 @@ struct EdDateTimeField: View {
             }
         }
         .onChange(of: timeIsOn) { _, isOn in
-            // Only the time-only field has a panel of its own to open. When a
-            // date is present the clock is already on screen, inside the
-            // calendar that had to be open for the switch to be reachable.
-            guard !showsDate else { return }
+            // Switching a time on is a request to choose one, so the clock
+            // opens with it — and, being one panel, shuts the calendar.
             withAnimation(.easeInOut(duration: 0.2)) {
                 if isOn {
                     open.wrappedValue = timeKey
@@ -325,46 +331,9 @@ struct EdDateTimeField: View {
             .accessibilityHidden(true)
     }
 
-    // MARK: - The clock, inside the calendar
+    // MARK: - The clock
 
-    /// The foot of the calendar panel: what time, on the day chosen above it.
-    ///
-    /// Deliberately a strip inside the panel rather than a row of its own in
-    /// the card. A date and a time are one answer, and a card holding three
-    /// dated fields would otherwise carry six rows before it said anything.
-    private var timeStrip: some View {
-        HStack(spacing: Space.md) {
-            Image(systemName: timeIcon)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(timeIsOn ? tint : Tokens.mutedSoft)
-                .frame(width: 18)
-            Text(timeLabel)
-                .font(.edBody)
-                .foregroundStyle(Tokens.ink)
-            Spacer(minLength: Space.sm)
-            if timeIsOn {
-                compactClock
-            }
-            if let hasTime {
-                edSwitch(hasTime, label: timeLabel)
-            }
-        }
-        .padding(Space.md)
-    }
-
-    /// One line, because it sits in a strip. Apple's compact clock opens its own
-    /// small wheel in place when tapped, which is the behaviour every iOS user
-    /// already has for a time.
-    private var compactClock: some View {
-        DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
-            .labelsHidden()
-            .tint(tint)
-            .paperDatePickerOnMac()
-            .accessibilityLabel(timeLabel)
-    }
-
-    /// The full wheel, for a field that is a time and nothing else. It has the
-    /// whole panel to itself there, so it may as well be readable at a glance.
+    /// The wheel Reminders shows, drawn inside our panel in the section accent.
     @ViewBuilder
     private var timeWheel: some View {
         #if os(iOS)
@@ -388,14 +357,7 @@ struct EdDateTimeField: View {
         #endif
     }
 
-    // MARK: - What the row says
-
-    /// The whole answer, so the row still reports it with the panel shut.
-    private var spokenValue: String {
-        let day = Self.dayFormatter.string(from: date)
-        guard showsTime && timeIsOn else { return day }
-        return "\(day) at \(timeText)"
-    }
+    // MARK: - What the rows say
 
     private var timeText: String {
         date.formatted(date: .omitted, time: .shortened)
