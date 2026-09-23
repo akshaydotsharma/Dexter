@@ -117,6 +117,59 @@ final class DateTimeFieldUITest: XCTestCase {
         )
     }
 
+    // MARK: - Reopening something that already has both
+
+    /// Opening a task that already carries a date and a time must show both
+    /// switches on and both panels SHUT (#657).
+    ///
+    /// The regression this guards is subtle and was shipped once: the panels
+    /// were opened from `.onChange(of:)` on the switch values, and a load is a
+    /// change, so seeding the editor threw the calendar open before the person
+    /// had asked for anything. Only a round trip through a saved task catches
+    /// it — a fresh sheet seeds nothing.
+    func test_reopening_a_dated_task_shows_both_panels_shut() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["LAUNCH_SECTION"] = "tasks"
+        app.launch()
+        sleep(2)
+
+        // Make one with both halves set.
+        openManualTaskSheet(app)
+        // By placeholder, not `.firstMatch`: the sheet has several text fields
+        // and their query order is not their visual order, so `.firstMatch`
+        // picks up the address field further down.
+        let title = app.textFields["What needs to be done?"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5), "Title field not found")
+        title.tap()
+        sleep(1)
+        title.typeText("Dated and timed")
+
+        app.switches["Date"].firstMatch.tap()
+        sleep(1)
+        app.switches["Time"].firstMatch.tap()
+        sleep(1)
+        app.buttons["Save"].firstMatch.tap()
+        sleep(2)
+        attach(name: "09-task-saved")
+
+        // And open it again.
+        let details = app.buttons["Edit task details"].firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 10), "Edit task details button not found")
+        details.tap()
+        sleep(2)
+        attach(name: "10-task-reopened")
+
+        XCTAssertEqual(app.switches["Date"].firstMatch.value as? String, "1", "The date did not survive")
+        XCTAssertEqual(app.switches["Time"].firstMatch.value as? String, "1", "The time did not survive")
+        XCTAssertFalse(app.buttons["Previous month"].exists, "The calendar opened itself on load")
+        XCTAssertFalse(app.datePickers.firstMatch.exists, "The clock opened itself on load")
+
+        // And the rows still open when asked.
+        app.buttons["Date"].firstMatch.tap()
+        sleep(1)
+        XCTAssertTrue(app.buttons["Previous month"].exists, "The date row stopped opening the calendar")
+    }
+
     // MARK: - Two mandatory rows in one card
 
     /// A trip's Start and End sit in the same card, so this is the one place

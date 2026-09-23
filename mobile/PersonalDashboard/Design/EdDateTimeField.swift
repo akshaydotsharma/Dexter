@@ -174,30 +174,6 @@ struct EdDateTimeField: View {
             }
         }
         .background(cardBackground)
-        .onChange(of: dateIsOn) { _, isOn in
-            // Switching a date on is a request to choose one, so the calendar
-            // opens with it. Switching it off closes the panel.
-            withAnimation(.easeInOut(duration: 0.2)) {
-                if isOn {
-                    open.wrappedValue = dateKey
-                } else if open.wrappedValue == dateKey {
-                    // Only clear what belongs to this field. With a shared
-                    // accordion, a sibling's open panel is none of our business.
-                    open.wrappedValue = nil
-                }
-            }
-        }
-        .onChange(of: timeIsOn) { _, isOn in
-            // Switching a time on is a request to choose one, so the clock
-            // opens with it — and, being one panel, shuts the calendar.
-            withAnimation(.easeInOut(duration: 0.2)) {
-                if isOn {
-                    open.wrappedValue = timeKey
-                } else if open.wrappedValue == timeKey {
-                    open.wrappedValue = nil
-                }
-            }
-        }
     }
 
     @ViewBuilder
@@ -234,7 +210,7 @@ struct EdDateTimeField: View {
         if let binding {
             HStack(spacing: Space.md) {
                 rowButton(icon: icon, label: label, value: value, isOn: isOn, panel: panel)
-                edSwitch(binding, label: label)
+                edSwitch(binding, label: label, panel: panel)
             }
             .padding(Space.md)
         } else {
@@ -312,12 +288,47 @@ struct EdDateTimeField: View {
     /// macOS draws a bare `Toggle` as a CHECKBOX, so the same field read as a
     /// switch on the phone and a tick box on the Mac. `.switch` is the same
     /// object in both places, which is what a shared control has to be.
-    private func edSwitch(_ binding: Binding<Bool>, label: String) -> some View {
-        Toggle("", isOn: binding.animation(.easeInOut(duration: 0.2)))
+    private func edSwitch(_ binding: Binding<Bool>, label: String, panel: String) -> some View {
+        Toggle("", isOn: opening(binding, panel: panel))
             .labelsHidden()
             .toggleStyle(.switch)
             .tint(tint)
             .accessibilityLabel(label)
+    }
+
+    /// The switch's value, and the panel that goes with it.
+    ///
+    /// Deliberately a proxy binding rather than `.onChange(of:)` (#657). The
+    /// two look equivalent and are not: `onChange` cannot tell a person moving
+    /// the switch from the editor SEEDING it, so opening a task that already
+    /// had a date and a time threw both panels open before the person had
+    /// asked for anything. Every load is a change.
+    ///
+    /// A setter only runs when something is set, so a seeded value passes
+    /// through it untouched and the field opens shut.
+    private func opening(_ source: Binding<Bool>, panel: String) -> Binding<Bool> {
+        Binding(
+            get: { source.wrappedValue },
+            set: { isOn in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    source.wrappedValue = isOn
+                    if isOn {
+                        // Switching a value on is a request to choose one, so
+                        // its panel opens — and, being one panel between them,
+                        // shuts whichever was open.
+                        open.wrappedValue = panel
+                    } else if open.wrappedValue == panel
+                                || (panel == dateKey && open.wrappedValue == timeKey) {
+                        // Switching the DATE off takes the time row with it, so
+                        // it has to close the clock as well as the calendar.
+                        // Only ever this field's own keys: with a shared
+                        // accordion, a sibling's open panel is none of our
+                        // business.
+                        open.wrappedValue = nil
+                    }
+                }
+            }
+        )
     }
 
     /// The switch on a value that cannot be absent. Drawn on, takes no taps, so
