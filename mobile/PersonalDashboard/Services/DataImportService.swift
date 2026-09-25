@@ -263,6 +263,10 @@ final class DataImportService {
         /// library would otherwise report "nothing to import" and refuse the
         /// only copy of it there is.
         case foodItems
+        /// #661. Same reason as the cases above: an archive carrying only
+        /// habits would otherwise report "nothing to import".
+        case habits
+        case habitCheckIns
 
         var id: String { rawValue }
 
@@ -290,6 +294,8 @@ final class DataImportService {
             case .mealTargets:       return "Nutrition targets"
             case .mealPlanEntries:   return "Planned meals"
             case .foodItems:         return "Saved food items"
+            case .habits:            return "Habits"
+            case .habitCheckIns:     return "Habit check-ins"
             }
         }
 
@@ -317,6 +323,8 @@ final class DataImportService {
             case .mealTargets:       return "target"
             case .mealPlanEntries:   return "calendar.badge.clock"
             case .foodItems:         return "basket"
+            case .habits:            return "flame"
+            case .habitCheckIns:     return "checkmark.circle"
             }
         }
     }
@@ -450,6 +458,9 @@ final class DataImportService {
         let existingMealPlanIDs    = try existingStringUUIDs(LocalMealPlanEntry.self, keyPath: \.clientUUID)
         // #625. A String `clientUUID` too, like the three above.
         let existingFoodItemIDs    = try existingStringUUIDs(LocalFoodItem.self,   keyPath: \.clientUUID)
+        // #661. String ids, like the four above.
+        let existingHabitIDs       = try existingStringUUIDs(LocalHabit.self,        keyPath: \.clientUUID)
+        let existingHabitCheckInIDs = try existingStringUUIDs(LocalHabitCheckIn.self, keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -485,6 +496,8 @@ final class DataImportService {
         record(.mealTargets,       (payload.mealTargets ?? []).map(\.clientUUID),      existing: existingMealTargetIDs)
         record(.mealPlanEntries,   (payload.mealPlanEntries ?? []).map(\.clientUUID),  existing: existingMealPlanIDs)
         record(.foodItems,         (payload.foodItems ?? []).map(\.clientUUID),        existing: existingFoodItemIDs)
+        record(.habits,            (payload.habits ?? []).map(\.clientUUID),           existing: existingHabitIDs)
+        record(.habitCheckIns,     (payload.habitCheckIns ?? []).map(\.clientUUID),    existing: existingHabitCheckInIDs)
 
         return (skip, repair)
     }
@@ -544,6 +557,8 @@ final class DataImportService {
         let existingMealTargetUUIDs  = mode == .replaceMatching ? [] : try existingStringUUIDs(MealTargets.self,  keyPath: \.clientUUID)
         let existingMealPlanUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalMealPlanEntry.self, keyPath: \.clientUUID)
         let existingFoodItemUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalFoodItem.self,   keyPath: \.clientUUID)
+        let existingHabitUUIDs       = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalHabit.self,        keyPath: \.clientUUID)
+        let existingHabitCheckInUUIDs = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalHabitCheckIn.self, keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
@@ -1000,6 +1015,45 @@ final class DataImportService {
                 modelContext.insert(item)
             }
 
+            // #661: habits and their check-ins. Rows only, no files.
+            //
+            // Both day fields go through `WallClock.repairedDayAnchor`. That is
+            // idempotent on an anchored value, so an ordinary archive is written
+            // back unchanged, and it snaps a value a peer wrote as a device-local
+            // midnight onto the day that peer meant. This is the inbound half of
+            // #506: `SyncApplier` commits every op through this loop, so a launch
+            // migration alone could not keep a peer from re-introducing a shift.
+            for dto in payload.habits ?? [] where !existingHabitUUIDs.contains(dto.clientUUID) {
+                modelContext.insert(LocalHabit(
+                    clientUUID: dto.clientUUID,
+                    name: dto.name,
+                    emoji: dto.emoji,
+                    colorKey: dto.colorKey,
+                    schedule: dto.schedule,
+                    weekdayMask: dto.weekdayMask,
+                    targetCount: dto.targetCount,
+                    unit: dto.unit,
+                    startDay: WallClock.repairedDayAnchor(dto.startDay),
+                    archivedAt: dto.archivedAt,
+                    deletedAt: dto.deletedAt,
+                    sortIndex: dto.sortIndex,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt
+                ))
+            }
+            for dto in payload.habitCheckIns ?? [] where !existingHabitCheckInUUIDs.contains(dto.clientUUID) {
+                modelContext.insert(LocalHabitCheckIn(
+                    clientUUID: dto.clientUUID,
+                    habitUUID: dto.habitUUID,
+                    day: WallClock.repairedDayAnchor(dto.day),
+                    count: dto.count,
+                    status: dto.status,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt,
+                    deletedAt: dto.deletedAt
+                ))
+            }
+
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
                 let restoredPath = try restoreReceipt(for: dto, archiveEntries: preview.entries)
                 if let written = restoredPath.writtenPath { writtenReceiptPaths.append(written) }
@@ -1284,6 +1338,8 @@ final class DataImportService {
         try deleteMatching(MealTargets.self,      ids: Set((payload.mealTargets ?? []).map(\.clientUUID)),       key: \.clientUUID)
         try deleteMatching(LocalMealPlanEntry.self, ids: Set((payload.mealPlanEntries ?? []).map(\.clientUUID)),  key: \.clientUUID)
         try deleteMatching(LocalFoodItem.self,      ids: Set((payload.foodItems ?? []).map(\.clientUUID)),        key: \.clientUUID)
+        try deleteMatching(LocalHabit.self,         ids: Set((payload.habits ?? []).map(\.clientUUID)),           key: \.clientUUID)
+        try deleteMatching(LocalHabitCheckIn.self,  ids: Set((payload.habitCheckIns ?? []).map(\.clientUUID)),    key: \.clientUUID)
         try deleteMatching(LocalProcessedEmail.self, ids: Set((payload.processedEmails ?? []).map(\.messageKey)), key: \.messageKey)
     }
 
@@ -1381,6 +1437,8 @@ final class DataImportService {
             "MealTargets":          payload.mealTargets?.count ?? 0,
             "LocalMealPlanEntry":   payload.mealPlanEntries?.count ?? 0,
             "LocalFoodItem":        payload.foodItems?.count ?? 0,
+            "LocalHabit":           payload.habits?.count ?? 0,
+            "LocalHabitCheckIn":    payload.habitCheckIns?.count ?? 0,
         ]
     }
 

@@ -184,6 +184,13 @@ targets:
       # Today card backed by a live @Query rather than a view model, and
       # because it reads the Meals section's own summary type.
       - path: PersonalDashboard/Views/Today/TodayMealsCard.swift
+      # Daily habits (#661). The Today card, the section (one directory, every
+      # file in it is cross-platform) and the service. The two @Models and the
+      # pure `HabitLedger` need no entry: PersonalDashboard/Models is globbed at
+      # the top of this list, and so is Design (the habit palette).
+      - path: PersonalDashboard/Views/Today/TodayHabitsCard.swift
+      - path: PersonalDashboard/Views/Habits
+      - path: PersonalDashboard/Services/HabitService.swift
       - path: PersonalDashboard/Views/Notes/NoteAutosave.swift
       - path: PersonalDashboard/Views/Notes/NotesView.swift
       - path: PersonalDashboard/Views/Components/MarkdownEditor.swift

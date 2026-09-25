@@ -34,6 +34,9 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     /// lowercase, so `LAUNCH_SECTION=meals` and `dexter://focus/meals/<uuid>`
     /// both resolve without the explicit spelling `visionBoard` needs above.
     case meals
+    /// Daily habits (#661). Lowercase default raw value, so `LAUNCH_SECTION=habits`
+    /// resolves without an explicit spelling.
+    case habits
     case settings
     case helpCenter
 
@@ -54,6 +57,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .vocabulary:  return "Vocabulary"
         case .visionBoard: return "Vision Board"
         case .meals:       return "Meals"
+        case .habits:      return "Habits"
         case .settings:    return "Settings"
         case .helpCenter:  return "Help center"
         }
@@ -77,6 +81,8 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .visionBoard: return "rectangle.3.group"
         // A place setting: the section is about what you ate, not about food.
         case .meals:       return "fork.knife"
+        // A flame: the section is read by its streaks.
+        case .habits:      return "flame"
         case .settings:    return "gearshape"
         case .helpCenter:  return "questionmark.circle"
         }
@@ -170,6 +176,17 @@ enum Tokens {
     /// sidebar. A reader picks a row out by its colour family long before they
     /// could measure a hue, and three greens is a family nobody can index.
     static let accentMeals     = Color.paper(0x0C5AA8, 0x60ABF6)
+    /// Habits section accent (#661). Gold, hue about 52 degrees.
+    ///
+    /// The widest family gap left on the wheel after Meals took azure is the
+    /// 48 degrees between Notes amber (26) and Vision moss (86). Gold sits near
+    /// the middle of it, and it is the colour of a kept streak. The light value
+    /// clears 5:1 against `surface`; the dark value is a pastel for near-black.
+    ///
+    /// It is the section's identity and the default habit colour. It never
+    /// encodes a verdict: done is drawn in the habit's own colour and missed in
+    /// `danger`, so the gold on a cell means "this habit", not "good".
+    static let accentHabits    = Color.paper(0x7F6E00, 0xE3C44A)
 
     /// The Plan tab's floating chat button (#604).
     ///
@@ -454,6 +471,7 @@ enum Tokens {
         case .vocabulary:  return accentVocabulary
         case .visionBoard: return accentVision
         case .meals:       return accentMeals
+        case .habits:      return accentHabits
         case .settings:    return accentSettings
         case .helpCenter:  return accentHelp
         }
