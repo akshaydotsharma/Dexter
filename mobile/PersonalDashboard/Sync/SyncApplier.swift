@@ -323,6 +323,14 @@ struct SyncApplier {
             case "LocalFoodItem":
                 payload.foodItems = (payload.foodItems ?? [])
                     + [try decoder.decode(DataArchive.FoodItemDTO.self, from: data)]
+            // #661. A peer on a build that predates habits hits the `default`
+            // arm and skips these ops with a log line.
+            case "LocalHabit":
+                payload.habits = (payload.habits ?? [])
+                    + [try decoder.decode(DataArchive.HabitDTO.self, from: data)]
+            case "LocalHabitCheckIn":
+                payload.habitCheckIns = (payload.habitCheckIns ?? [])
+                    + [try decoder.decode(DataArchive.HabitCheckInDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -520,6 +528,10 @@ struct SyncApplier {
         // own copy of the numbers and must survive the item being retired, which
         // is the same call every consumer of `mealItem(quantity:)` makes.
         case "LocalFoodItem":        return try deleteString(LocalFoodItem.self, id: recordID, key: \.clientUUID)
+        // #661. The app soft-deletes both, so these arms only run for a hard
+        // delete (a reset, or a row a peer removed outright).
+        case "LocalHabit":           return try deleteString(LocalHabit.self, id: recordID, key: \.clientUUID)
+        case "LocalHabitCheckIn":    return try deleteString(LocalHabitCheckIn.self, id: recordID, key: \.clientUUID)
         default:
             SyncLog.line("SyncApplier: cannot delete unknown entity \(entity)")
             return false

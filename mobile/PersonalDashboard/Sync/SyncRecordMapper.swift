@@ -100,6 +100,11 @@ enum SyncRecordMapper {
         // own copy of the numbers, so correcting an item on one device cannot
         // rewrite a meal on another.
         out += try map("LocalFoodItem", payload.foodItems ?? []) { $0.clientUUID }
+        // #661. Both ids are Strings. A check-in's id is derived from the habit
+        // and the day, so the phone and the Mac ticking the same day produce ONE
+        // record, and last write wins on it instead of two rows disagreeing.
+        out += try map("LocalHabit", payload.habits ?? []) { $0.clientUUID }
+        out += try map("LocalHabitCheckIn", payload.habitCheckIns ?? []) { $0.clientUUID }
 
         return out
     }

@@ -242,6 +242,10 @@ final class DataExportService {
         let mealPlanEntries = try modelContext.fetch(FetchDescriptor<LocalMealPlanEntry>())
         // #625: the saved food item library. Rows only, no files.
         let foodItems = try modelContext.fetch(FetchDescriptor<LocalFoodItem>())
+        // #661: habits and their check-ins. Soft-deleted rows travel too, so a
+        // delete reaches a peer as an upsert.
+        let habits = try modelContext.fetch(FetchDescriptor<LocalHabit>())
+        let habitCheckIns = try modelContext.fetch(FetchDescriptor<LocalHabitCheckIn>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -286,6 +290,8 @@ final class DataExportService {
         let mealTargetsDTOs: [DataArchive.MealTargetsDTO] = mealTargets.map(Self.dto)
         let mealPlanDTOs: [DataArchive.MealPlanEntryDTO] = mealPlanEntries.map(Self.dto)
         let foodItemDTOs: [DataArchive.FoodItemDTO] = foodItems.map(Self.dto)
+        let habitDTOs: [DataArchive.HabitDTO] = habits.map(Self.dto)
+        let habitCheckInDTOs: [DataArchive.HabitCheckInDTO] = habitCheckIns.map(Self.dto)
 
         return DataArchive.Payload(
             tasks: taskDTOs,
@@ -313,7 +319,9 @@ final class DataExportService {
             meals: mealDTOs,
             mealTargets: mealTargetsDTOs,
             mealPlanEntries: mealPlanDTOs,
-            foodItems: foodItemDTOs
+            foodItems: foodItemDTOs,
+            habits: habitDTOs,
+            habitCheckIns: habitCheckInDTOs
         )
     }
 
@@ -348,6 +356,8 @@ final class DataExportService {
             "MealTargets":          payload.mealTargets?.count ?? 0,
             "LocalMealPlanEntry":   payload.mealPlanEntries?.count ?? 0,
             "LocalFoodItem":        payload.foodItems?.count ?? 0,
+            "LocalHabit":           payload.habits?.count ?? 0,
+            "LocalHabitCheckIn":    payload.habitCheckIns?.count ?? 0,
         ]
     }
 
@@ -698,6 +708,40 @@ final class DataExportService {
             groundingSourcesData: meal.groundingSourcesData,
             createdAt: meal.createdAt,
             updatedAt: meal.updatedAt
+        )
+    }
+
+    /// #661. Every column, flat. `startDay` is the stored anchor, verbatim.
+    private static func dto(_ habit: LocalHabit) -> DataArchive.HabitDTO {
+        DataArchive.HabitDTO(
+            clientUUID: habit.clientUUID,
+            name: habit.name,
+            emoji: habit.emoji,
+            colorKey: habit.colorKey,
+            schedule: habit.schedule,
+            weekdayMask: habit.weekdayMask,
+            targetCount: habit.targetCount,
+            unit: habit.unit,
+            startDay: habit.startDay,
+            archivedAt: habit.archivedAt,
+            deletedAt: habit.deletedAt,
+            sortIndex: habit.sortIndex,
+            createdAt: habit.createdAt,
+            updatedAt: habit.updatedAt
+        )
+    }
+
+    /// #661. `day` is the stored anchor, verbatim.
+    private static func dto(_ checkIn: LocalHabitCheckIn) -> DataArchive.HabitCheckInDTO {
+        DataArchive.HabitCheckInDTO(
+            clientUUID: checkIn.clientUUID,
+            habitUUID: checkIn.habitUUID,
+            day: checkIn.day,
+            count: checkIn.count,
+            status: checkIn.status,
+            createdAt: checkIn.createdAt,
+            updatedAt: checkIn.updatedAt,
+            deletedAt: checkIn.deletedAt
         )
     }
 

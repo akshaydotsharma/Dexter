@@ -46,6 +46,9 @@ struct TodayView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xl) {
                         header
+                        // Habits lead the day cards (#661): they are the only
+                        // card whose rows are ticked off every single day.
+                        habitsCard
                         tasksCard
                         // Second, above the two reference cards: it is the only
                         // card on this surface whose subject is the day itself,
@@ -216,6 +219,19 @@ struct TodayView: View {
                 router.go(to: .notes)
             }
         }
+    }
+
+    // MARK: - Habits card
+
+    /// Today's due habits with a one-tap check-off (#661). The card owns its own
+    /// two queries, so nothing here loads or reloads for it.
+    private var habitsCard: some View {
+        TodayHabitsCard(onOpen: { habit in
+            if let habit, let id = UUID(uuidString: habit.clientUUID) {
+                router.focus = ActivityFocus(section: .habits, id: id)
+            }
+            router.go(to: .habits)
+        })
     }
 
     // MARK: - Meals card

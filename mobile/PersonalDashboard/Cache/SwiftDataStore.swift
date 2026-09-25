@@ -382,6 +382,12 @@ final class SwiftDataStore {
         // while a meal is one estimate frozen at one moment: putting them in one
         // table would make every roll-up over meals count the library too.
         LocalFoodItem.self,
+        // Daily habits (#661). Two new tables and no change to anything above
+        // them. A habit is its own model rather than a `RecurringTask` because a
+        // recurring task walks past missed days and so never records a miss,
+        // which is the one thing a habit review needs.
+        LocalHabit.self,
+        LocalHabitCheckIn.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

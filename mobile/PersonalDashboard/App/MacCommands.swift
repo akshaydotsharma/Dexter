@@ -81,6 +81,8 @@ struct DexterCommands: Commands {
         // take Cmd-1 through Cmd-9, so inserting it next to Finance where it
         // sits in the sidebar would silently move four existing shortcuts.
         .meals,
+        // Habits (#661), also after the ninth entry so no shortcut moves.
+        .habits,
         .settings, .helpCenter,
     ]
 

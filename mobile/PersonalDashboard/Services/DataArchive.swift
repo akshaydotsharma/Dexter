@@ -105,6 +105,12 @@ enum DataArchive {
         // rather than failing the whole restore.
         var foodItems: [FoodItemDTO]? = nil
 
+        // MARK: Added in #661 — daily habits and their check-ins.
+        // Optional like every field added after v1, so an archive written before
+        // habits existed decodes with nil and imports as "no habits".
+        var habits: [HabitDTO]? = nil
+        var habitCheckIns: [HabitCheckInDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -878,6 +884,46 @@ enum DataArchive {
         var updatedAt: Date = Date()
     }
 
+    /// One habit (#661). Every property is a `var` with a default, the
+    /// `FoodItemDTO` form: an archive or a peer on a build that predates a
+    /// field simply carries no key for it, and the row decodes with the value a
+    /// row created before that field would have had.
+    ///
+    /// `startDay` travels as the stored UTC day ANCHOR. The importer passes it
+    /// through `WallClock.repairedDayAnchor`, which is idempotent on an anchor,
+    /// never through `dayAnchor(from:)` (#506).
+    struct HabitDTO: Codable {
+        var clientUUID: String = ""
+        var name: String = ""
+        var emoji: String = ""
+        var colorKey: String = "gold"
+        var schedule: String = "daily"
+        var weekdayMask: Int = 0b111_1111
+        var targetCount: Int = 1
+        var unit: String? = nil
+        var startDay: Date = Date(timeIntervalSince1970: 0)
+        var archivedAt: Date? = nil
+        var deletedAt: Date? = nil
+        var sortIndex: Int = 0
+        var createdAt: Date = Date()
+        var updatedAt: Date = Date()
+    }
+
+    /// One habit check-in (#661). Same all-defaults form as `HabitDTO`.
+    ///
+    /// `clientUUID` is derived from the habit and the day, so a restore or a
+    /// peer writing the same day lands on the same row rather than a second one.
+    struct HabitCheckInDTO: Codable {
+        var clientUUID: String = ""
+        var habitUUID: String = ""
+        var day: Date = Date(timeIntervalSince1970: 0)
+        var count: Int = 0
+        var status: String = "done"
+        var createdAt: Date = Date()
+        var updatedAt: Date = Date()
+        var deletedAt: Date? = nil
+    }
+
     /// Every model this archive format carries, used for the manifest's claimed
     /// list. Order is stable so archives diff cleanly.
     static let exportedModels = [
@@ -905,6 +951,10 @@ enum DataArchive {
         // model in `schemaModels` and in no backup, so the first build without
         // it destroys the rows and there is no copy to restore from.
         "LocalFoodItem",
+        // #661. Both names: habits restored without their check-ins would come
+        // back with every past day reading as missed.
+        "LocalHabit",
+        "LocalHabitCheckIn",
     ]
 
     static func makeEncoder() -> JSONEncoder {
