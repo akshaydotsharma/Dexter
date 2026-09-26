@@ -359,7 +359,7 @@ struct TodayView: View {
 
 // MARK: - Card
 
-/// The shared Today container: eyebrow, count, bordered surface, footer link.
+/// The shared Today container: heading, count, bordered surface, footer link.
 ///
 /// Internal rather than file-private because `TodayMealsCard` lives in its own
 /// file (#547) and has to be the SAME card, not a copy of it. A second
@@ -388,14 +388,22 @@ struct TodayCard<Content: View, Footer: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(spacing: Space.xs) {
-                Text(title.uppercased())
-                    .eyebrow()
+            // A real section heading (#665). The scale reads page > section >
+            // card: the date is `.edDisplay`, this is `.edTitle` (the size the
+            // top bar and list screens title with), and the rows inside use
+            // `.edHeading` and below. The count is secondary, so it sits on
+            // the same baseline in `.edFootnote`. The first version was an
+            // uppercase eyebrow, smaller than the card text it labelled.
+            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                Text(title)
+                    .font(.edTitle)
+                    .foregroundStyle(Tokens.ink)
+                    .accessibilityAddTraits(.isHeader)
                 if !isLoading && !isEmpty {
-                    Text("·")
-                        .eyebrow()
                     Text("\(count) \(countLabel)")
-                        .eyebrow()
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.muted)
+                        .monospacedDigit()
                 }
                 Spacer()
             }

@@ -54,16 +54,26 @@ enum HabitDayFormat {
 /// - done: solid in the habit colour, with a check
 /// - partial: a ring filled part-way round, in the habit colour
 /// - skipped: a flat paper disc with a dash
-/// - not done (a past due day with nothing logged): an empty circle. There is
-///   no "missed" mark and no red: a day is done or it is empty (#661)
 /// - pending (today): an empty ring in the habit colour, the "do me" state
-/// - not due / before start: a SMALLER, fainter empty circle, so the days the
-///   habit asks for still stand out from the days it does not
-/// - future: a dashed outline
+/// - every other day: ONE empty circle. A past due day with nothing logged, a
+///   day the habit does not ask for, a day before the start, and a future day
+///   all look the same (#664). There is no "missed" mark and no red (#661).
+///
+/// The states still differ where it matters: a future day is disabled by
+/// `HabitDayCell`, and every state keeps its own accessibility label.
+///
+/// Every mark in one view is one size (#664). The first version shrank and
+/// faded the not-due mark and dashed the future one, so a strip whose start
+/// day had moved back showed prominent and faded circles side by side, which
+/// read as a bug.
 struct HabitDayMark: View {
     let state: HabitDayState
     let tint: Color
-    var size: CGFloat = 28
+    var size: CGFloat = HabitDayMark.sectionSize
+
+    /// The one mark size on the Habits page: the 7-day strip AND the month
+    /// grid (#664). The Today card passes its own, larger size.
+    static let sectionSize: CGFloat = 30
 
     var body: some View {
         ZStack {
@@ -77,28 +87,22 @@ struct HabitDayMark: View {
             case .skipped:
                 Circle().fill(Tokens.paper2)
                 glyph("minus", Tokens.muted)
-            case .missed:
-                emptyMark(scale: 1)
             case .pending:
                 Circle().strokeBorder(tint, lineWidth: max(1.5, size * 0.07))
-            case .unscheduled, .notStarted:
-                emptyMark(scale: 0.62)
-                    .opacity(0.7)
-            case .future:
-                Circle().strokeBorder(Tokens.border, style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+            case .missed, .unscheduled, .notStarted, .future:
+                emptyMark
             }
         }
         .frame(width: size, height: size)
     }
 
-    /// The empty day: a paper disc with a thin rule. `scale` shrinks it for a
-    /// day the habit does not ask for.
-    private func emptyMark(scale: CGFloat) -> some View {
+    /// The empty day: a paper disc with a thin rule. The one look for every
+    /// day with nothing logged that is not today.
+    private var emptyMark: some View {
         ZStack {
             Circle().fill(Tokens.paper2.opacity(0.6))
             Circle().strokeBorder(Tokens.borderStrong, lineWidth: 1)
         }
-        .frame(width: size * scale, height: size * scale)
     }
 
     private func progressRing(fraction: Double) -> some View {
@@ -139,8 +143,9 @@ struct HabitDayActions {
 ///
 /// A tap is a direct check / uncheck, with no sheet. Partial and Skip live in
 /// the context menu (long-press on iOS, right-click on the Mac). Only future
-/// days are disabled. It is a Button, not a tap gesture, so macOS QA and
-/// VoiceOver can reach it.
+/// days are locked, and they render as a plain label, not a Button. Every
+/// other day is a Button, not a tap gesture, so macOS QA and VoiceOver can
+/// reach it.
 struct HabitDayCell<Label: View>: View {
     let day: Date
     let state: HabitDayState
@@ -148,13 +153,16 @@ struct HabitDayCell<Label: View>: View {
     @ViewBuilder let label: () -> Label
 
     var body: some View {
-        Button { actions.toggle(day) } label: {
-            label().contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!state.isLoggable)
-        .contextMenu {
-            if state.isLoggable {
+        if state.isLoggable {
+            Button { actions.toggle(day) } label: {
+                // At least 44pt tall around the smaller mark (#664), so the target
+                // stays the column width by 44pt whatever the mark size is.
+                label()
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
                 Button { actions.set(day, .done) } label: { SwiftUI.Label("Done", systemImage: "checkmark") }
                 if actions.isCountHabit {
                     Button { actions.partial(day) } label: { SwiftUI.Label("Partial…", systemImage: "circle.lefthalf.filled") }
@@ -162,9 +170,18 @@ struct HabitDayCell<Label: View>: View {
                 Button { actions.set(day, .skipped) } label: { SwiftUI.Label("Skip", systemImage: "minus") }
                 Button { actions.set(day, .cleared) } label: { SwiftUI.Label("Clear", systemImage: "arrow.uturn.backward") }
             }
+            .accessibilityLabel("\(HabitDayFormat.long(day)), \(state.label)")
+            .accessibilityHint(hint)
+        } else {
+            // A future day is not a Button at all, rather than a DISABLED one:
+            // a disabled plain Button dims its label, and #664 wants the future
+            // to look exactly like every other empty day. It still cannot be
+            // tapped, and it still says "upcoming".
+            label()
+                .frame(minHeight: 44)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(HabitDayFormat.long(day)), \(state.label)")
         }
-        .accessibilityLabel("\(HabitDayFormat.long(day)), \(state.label)")
-        .accessibilityHint(hint)
     }
 
     private var hint: String {
@@ -191,7 +208,7 @@ struct HabitWeekStrip: View {
                     VStack(spacing: Space.xs) {
                         Text(HabitDayFormat.weekdayLetter(day))
                             .eyebrow()
-                        HabitDayMark(state: state, tint: tint, size: 34)
+                        HabitDayMark(state: state, tint: tint, size: HabitDayMark.sectionSize)
                         Text(HabitDayFormat.dayNumber(day))
                             .font(.edCaption)
                             .foregroundStyle(Tokens.muted)
@@ -274,7 +291,7 @@ struct HabitMonthView: View {
                         let state = HabitLedger.state(rule, entry: entries[day], on: day, today: today)
                         HabitDayCell(day: day, state: state, actions: actions) {
                             VStack(spacing: 2) {
-                                HabitDayMark(state: state, tint: tint, size: 30)
+                                HabitDayMark(state: state, tint: tint, size: HabitDayMark.sectionSize)
                                 Text(HabitDayFormat.dayNumber(day))
                                     .font(.edCaption)
                                     .foregroundStyle(day == HabitLedger.key(today) ? Tokens.ink : Tokens.muted)
@@ -337,7 +354,13 @@ struct HabitMonthView: View {
 ///
 /// The same visual language as `HabitWeekStrip` (weekday letter above, the same
 /// mark), without the date number: the card is a glance, and the letter is
-/// what a reader scans by. Display only; the card row owns the tap.
+/// what a reader scans by.
+///
+/// Past marks are display only; the card row owns their tap. The LAST column
+/// (today) can be the check control (#665): pass `today` and that column
+/// becomes a Button, at least 44pt tall and the column wide, with its own
+/// label, hint and context menu. The Today card used to draw a second check
+/// button beside the streak, so today showed twice.
 ///
 /// Each mark is its own accessibility element ("Tuesday, done"), so VoiceOver
 /// can step through the week instead of hearing one run-on label.
@@ -346,25 +369,117 @@ struct HabitWeekTrend: View {
     let states: [HabitDayState]
     let tint: Color
     var size: CGFloat = 28
+    var today: TodayControl? = nil
+
+    /// What makes today's column a control.
+    struct TodayControl {
+        /// One tap: check / uncheck, or add one for a count habit.
+        let onTap: () -> Void
+        /// Shown in a context menu when today has something logged, so a
+        /// count habit can get back to 0. Nil hides the menu.
+        let onClear: (() -> Void)?
+        /// Drawn over the mark: a count habit's count while under target.
+        let overlayText: String?
+        let accessibilityLabel: String
+        let accessibilityHint: String
+    }
 
     var body: some View {
+        let pairs = Array(zip(days, states))
         HStack(spacing: 0) {
-            ForEach(Array(zip(days, states).enumerated()), id: \.offset) { _, pair in
+            ForEach(Array(pairs.enumerated()), id: \.offset) { index, pair in
                 let (day, state) = pair
-                VStack(spacing: 4) {
-                    Text(HabitDayFormat.weekdayLetter(day))
-                        .eyebrow()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    HabitDayMark(state: state, tint: tint, size: size)
+                if index == pairs.count - 1, let today {
+                    Button(action: today.onTap) {
+                        column(day: day, state: state, overlayText: today.overlayText)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if let onClear = today.onClear {
+                            Button(action: onClear) {
+                                Label("Clear today", systemImage: "arrow.uturn.backward")
+                            }
+                        }
+                    }
+                    .accessibilityLabel(today.accessibilityLabel)
+                    .accessibilityHint(today.accessibilityHint)
+                } else {
+                    column(day: day, state: state, overlayText: nil)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(HabitDayFormat.weekdayName(day)), \(state.label)")
                 }
-                .frame(maxWidth: .infinity)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(HabitDayFormat.weekdayName(day)), \(state.label)")
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Last 7 days")
+    }
+
+    private func column(day: Date, state: HabitDayState, overlayText: String?) -> some View {
+        VStack(spacing: 4) {
+            Text(HabitDayFormat.weekdayLetter(day))
+                .eyebrow()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            ZStack {
+                HabitDayMark(state: state, tint: tint, size: size)
+                if let overlayText {
+                    Text(overlayText)
+                        .font(.edCaption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Tokens.ink)
+                        .monospacedDigit()
+                }
+            }
+        }
+    }
+}
+
+/// Lays out a row as N equal columns, with the FIRST subview across the
+/// leading N-1 columns and the SECOND centred on the last column (#665).
+///
+/// `HabitWeekTrend` divides the same width into N equal columns, so a view in
+/// the second slot sits exactly over today's mark at any width. That is the
+/// streak pill on the Today card. It is placed by the same arithmetic as the
+/// columns, never by a padding guessed from one screen width.
+struct LastColumnLayout: Layout {
+    var columns: Int = 7
+
+    static func lastColumnCentre(width: CGFloat, columns: Int) -> CGFloat {
+        let column = width / CGFloat(max(columns, 1))
+        return width - column / 2
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 320
+        let column = width / CGFloat(max(columns, 1))
+        let height = subviews.enumerated().map { index, view in
+            let w = index == 0 ? width - column : column
+            return view.sizeThatFits(ProposedViewSize(width: w, height: proposal.height)).height
+        }.max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let column = bounds.width / CGFloat(max(columns, 1))
+        if subviews.indices.contains(0) {
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.midY),
+                anchor: .leading,
+                proposal: ProposedViewSize(width: bounds.width - column, height: bounds.height)
+            )
+        }
+        if subviews.indices.contains(1) {
+            // Centred on the last column. A pill wider than the column
+            // overflows evenly on both sides, so its centre stays on the mark.
+            subviews[1].place(
+                at: CGPoint(x: bounds.minX + Self.lastColumnCentre(width: bounds.width, columns: columns), y: bounds.midY),
+                anchor: .center,
+                proposal: .unspecified
+            )
+        }
     }
 }
 
