@@ -1,52 +1,51 @@
 import SwiftUI
 
-/// Dexter's own day field, in place of the system date picker (#599).
+/// Dexter's compact day chip, for a day chosen inside a flowing row (#599,
+/// #669).
 ///
 /// ### Why not `DatePicker`
 ///
 /// `DatePicker(.compact)` draws Apple's control, not ours: system blue, system
-/// corner radii, system type, and a popover with its own chrome. It was the one
-/// thing on the plan sheet that belonged to a different app. Every other field
-/// on that sheet is a Dexter field, so the day was the odd one out in the one
-/// place a user is most likely to be comparing them — a column of fields, read
-/// top to bottom.
+/// corner radii, system type, and a popover with its own chrome. Every other
+/// field around it is a Dexter field, so the day was the odd one out.
 ///
-/// ### The grammar it follows instead
+/// ### Why it no longer opens a popover
 ///
-/// The `TripCalendarPopover` (#230) already established what a Dexter calendar
-/// looks like: a 300pt card, an eyebrow weekday row, 32pt circular day cells,
-/// an accent fill for the day that matters and a ring for today. This is that
-/// calendar made selectable, so the two are the same object with the same
-/// reading, and a third calendar design does not enter the app.
+/// It used to, and since #657 every other section sets a date with a calendar
+/// that opens UNDER its row (`EdDateTimeField`). #669 brought Meals into line.
+/// A column of fields takes `EdDateTimeField` itself; this chip is for the one
+/// place that cannot, a flowing row of controls (the plan chat's suggestion
+/// footer), where a full-width row would push its neighbours onto lines of
+/// their own.
+///
+/// So the chip only reports and toggles `isOpen`. The CALLER draws
+/// `EdDayPickerCalendar(drawsCard: false, fillsWidth: true)` under the row the
+/// chip sits in. That is the same panel, in the same place relative to its
+/// row, as the inline field; a flow layout simply cannot hold it as a child.
 ///
 /// ### One field, one value
 ///
-/// The field shows the day in full ("Thu 17 Sep 2026") rather than as digits.
+/// The chip shows the day in full ("Thu 17 Sep 2026") rather than as digits.
 /// A plan is written in weekdays — "Thursday's dinner" — and a row of digits
 /// makes the reader do the conversion every time.
 struct EdDayPicker: View {
     @Binding var day: Date
+    /// Whether the caller's calendar panel is open under the row.
+    @Binding var isOpen: Bool
 
     /// What the field is for, spoken and shown above it by the caller.
     var accessibilityName: String = "Day"
-    /// The hue the selected day is drawn in. Defaults to the Meals accent
-    /// because that is where this began; every caller passes its own section's.
+    /// The hue of the calendar glyph. Defaults to the Meals accent because
+    /// that is where this began; every caller passes its own section's.
     var tint: Color = Tokens.accent(for: .meals)
-    /// The days that may be chosen. Nil is any day, which a plan needs: the
-    /// future is the part of it that matters.
-    var bounds: ClosedRange<Date>? = nil
-    /// True in a column of fields, where the day field matches the width of the
+    /// True in a column of fields, where the chip matches the width of the
     /// ones above and below it. False in a flowing row, where a field that took
     /// the whole width would push its neighbours onto their own lines.
     var fillsWidth: Bool = true
 
-    @State private var isOpen = false
-
-    private var calendar: Calendar { Calendar.current }
-
     var body: some View {
         Button {
-            isOpen.toggle()
+            withAnimation(.easeInOut(duration: 0.2)) { isOpen.toggle() }
         } label: {
             HStack(spacing: Space.sm) {
                 Image(systemName: "calendar")
@@ -56,9 +55,12 @@ struct EdDayPicker: View {
                     .font(.edBody)
                     .foregroundStyle(Tokens.ink)
                 Spacer(minLength: Space.sm)
+                // The same chevron as `EdDateTimeField`'s row, turning the
+                // same way, so the chip reads as "opens underneath".
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Tokens.mutedSoft)
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
             }
             .padding(.horizontal, Space.md)
             .padding(.vertical, Space.sm + 2)
@@ -70,10 +72,7 @@ struct EdDayPicker: View {
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityName)
         .accessibilityValue(Self.spokenFormatter.string(from: day))
-        .accessibilityHint("Opens a calendar")
-        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
-            EdDayPickerCalendar(day: $day, tint: tint, bounds: bounds) { isOpen = false }
-        }
+        .accessibilityHint(isOpen ? "Closes the calendar" : "Opens a calendar")
     }
 
     private static let fieldFormatter: DateFormatter = {
@@ -89,10 +88,11 @@ struct EdDayPicker: View {
     }()
 }
 
-/// The calendar inside `EdDayPicker`, in the Dexter card grammar.
+/// Dexter's one calendar, in the Dexter card grammar.
 ///
-/// Held as its own type so a caller that already has a surface to put a
-/// calendar on — a sheet, a panel — can use it without the field.
+/// Drawn in place by `EdDateTimeField` and under `EdDayPicker`'s row, and in
+/// a full-width surface by the Plan tab. Held as its own type so any caller
+/// with a surface to put a calendar on can use it.
 struct EdDayPickerCalendar: View {
     @Binding var day: Date
     var tint: Color = Tokens.accent(for: .meals)

@@ -10,6 +10,8 @@ struct MealTrendsFilterBar: View {
     @Binding var selection: MealTrendSelection
 
     @State private var showingCustom = false
+    /// The From / To accordion: one calendar open between them (#669).
+    @State private var openRangePanel: String? = nil
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -33,9 +35,14 @@ struct MealTrendsFilterBar: View {
                 // invented: `presentationDetents` do nothing on macOS, and the
                 // sheet there renders as a small centred window that clips its
                 // own content (#341).
+                //
+                // No fixed height on the Mac any more (#669): the From / To
+                // calendars open in place, so the popover grows with them.
                 #if os(macOS)
                 .popover(isPresented: $showingCustom, arrowEdge: .bottom) {
-                    customPicker.frame(width: 320, height: 210)
+                    customPicker
+                        .frame(width: 320)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 #endif
             }
@@ -44,8 +51,10 @@ struct MealTrendsFilterBar: View {
         }
         #if os(iOS)
         .sheet(isPresented: $showingCustom) {
-            customPicker
-                .presentationDetents([.medium])
+            // Scrolls, and may go large, because an open calendar (#669) is
+            // taller than a medium detent holds with both rows and Apply.
+            ScrollView { customPicker }
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
         #endif
@@ -63,26 +72,35 @@ struct MealTrendsFilterBar: View {
     private var customPicker: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             Text("Custom range").eyebrow()
-            // Dexter's own calendar on both ends, not the system one. A range
-            // has no day after today: there are no meals logged in the future.
-            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
-                Text("From").eyebrow()
-                EdDayPicker(
-                    day: $selection.customStart,
-                    accessibilityName: "From",
+            // Dexter's own calendar on both ends, not the system one, opening
+            // under its row the way every date field does since #657 (#669).
+            // One card, one accordion: the two ends share `openRangePanel`,
+            // so opening To shuts From, exactly as a trip's Start and End do.
+            // A range has no day after today: there are no meals logged in
+            // the future.
+            VStack(spacing: 0) {
+                EdDateTimeField(
+                    date: $selection.customStart,
+                    showsTime: false,
+                    dateLabel: "From",
                     tint: Tokens.accentMeals,
-                    bounds: Self.distantPast...Date()
+                    bounds: Self.distantPast...Date(),
+                    drawsCard: false,
+                    openPanel: $openRangePanel
+                )
+                Divider().background(Tokens.divider)
+                EdDateTimeField(
+                    date: $selection.customEnd,
+                    showsTime: false,
+                    dateLabel: "To",
+                    tint: Tokens.accentMeals,
+                    bounds: Self.distantPast...Date(),
+                    drawsCard: false,
+                    openPanel: $openRangePanel
                 )
             }
-            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
-                Text("To").eyebrow()
-                EdDayPicker(
-                    day: $selection.customEnd,
-                    accessibilityName: "To",
-                    tint: Tokens.accentMeals,
-                    bounds: Self.distantPast...Date()
-                )
-            }
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+            .paperBorder(Tokens.border, radius: Radius.md)
             // The commit for the custom range. `.borderedProminent` was the one
             // control in Meals drawn by the system rather than by the palette,
             // so it arrived as a tinted capsule in a section built entirely from
