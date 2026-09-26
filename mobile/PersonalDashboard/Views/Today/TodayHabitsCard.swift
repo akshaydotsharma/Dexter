@@ -146,7 +146,6 @@ private struct TodayHabitRow: View {
                         Text(habit.name)
                             .font(.edBodyMedium)
                             .foregroundStyle(Tokens.ink)
-                            .strikethrough(isDone, color: Tokens.muted)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                         Spacer(minLength: Space.sm)
@@ -157,7 +156,6 @@ private struct TodayHabitRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(accessibilitySummary)
                 .accessibilityHint("Opens Habits")
-                .opacity(isDone ? 0.55 : 1)
 
                 if streak > 0 {
                     streakBadge
@@ -185,8 +183,7 @@ private struct TodayHabitRow: View {
         .animation(.easeOut(duration: 0.2), value: isDone)
     }
 
-    /// The streak, in the habit colour. Kept at full strength when the row
-    /// dims: a streak that just grew is the reward.
+    /// The streak, in the habit colour: a streak that just grew is the reward.
     private var streakBadge: some View {
         HStack(spacing: 3) {
             Image(systemName: "flame.fill")
