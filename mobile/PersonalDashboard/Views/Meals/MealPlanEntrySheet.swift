@@ -270,13 +270,19 @@ struct MealPlanEntrySheet: View {
     /// which day a block BELONGS to. They are the same value only until you want
     /// to move Thursday's dinner to Friday, which is the most common edit a plan
     /// gets and which the calendar cannot express at all.
+    ///
+    /// The calendar opens UNDER the row, the way every other section sets a
+    /// date since #657, rather than in a popover over the sheet (#669). A
+    /// block always has a day, so the switch is drawn on and fixed, and the
+    /// row opens the calendar. No bounds: the future is the part of a plan
+    /// that matters.
     private var daySection: some View {
         VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
             Text("Day").eyebrow()
-            // Dexter's own calendar, not the system one. See `EdDayPicker`.
-            EdDayPicker(
-                day: $day,
-                accessibilityName: "Day this meal is planned for",
+            EdDateTimeField(
+                date: $day,
+                showsTime: false,
+                dateLabel: "Planned for",
                 tint: mealType.tint
             )
         }

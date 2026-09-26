@@ -55,17 +55,22 @@ enum HabitDayFormat {
 /// - partial: a ring filled part-way round, in the habit colour
 /// - skipped: a flat paper disc with a dash
 /// - pending (today): an empty ring in the habit colour, the "do me" state
-/// - every other day: ONE empty circle. A past due day with nothing logged, a
-///   day the habit does not ask for, a day before the start, and a future day
-///   all look the same (#664). There is no "missed" mark and no red (#661).
+/// - every other past day: ONE empty circle. A past due day with nothing
+///   logged, a day the habit does not ask for, and a day before the start all
+///   look the same (#664). There is no "missed" mark and no red (#661).
+/// - future: the same empty circle, faded (#669). #664 drew it identical to
+///   the past empty days, and a day you cannot tap then read as one you had
+///   simply not done. Only the month grid ever shows a future day: the 7-day
+///   strip and the Today card both end on today.
 ///
-/// The states still differ where it matters: a future day is disabled by
-/// `HabitDayCell`, and every state keeps its own accessibility label.
+/// Every state keeps its own accessibility label, and a future day is not a
+/// Button at all (`HabitDayCell`).
 ///
 /// Every mark in one view is one size (#664). The first version shrank and
 /// faded the not-due mark and dashed the future one, so a strip whose start
 /// day had moved back showed prominent and faded circles side by side, which
-/// read as a bug.
+/// read as a bug. The future fade (#669) keeps that size: it changes opacity
+/// only, and it sits on the one boundary a reader already expects, today.
 struct HabitDayMark: View {
     let state: HabitDayState
     let tint: Color
@@ -74,6 +79,10 @@ struct HabitDayMark: View {
     /// The one mark size on the Habits page: the 7-day strip AND the month
     /// grid (#664). The Today card passes its own, larger size.
     static let sectionSize: CGFloat = 30
+
+    /// How far a future day fades (#669), the mark AND its day number, so the
+    /// month grid reads "not yet" at a glance. One value, so the two agree.
+    static let futureOpacity: Double = 0.4
 
     var body: some View {
         ZStack {
@@ -89,8 +98,10 @@ struct HabitDayMark: View {
                 glyph("minus", Tokens.muted)
             case .pending:
                 Circle().strokeBorder(tint, lineWidth: max(1.5, size * 0.07))
-            case .missed, .unscheduled, .notStarted, .future:
+            case .missed, .unscheduled, .notStarted:
                 emptyMark
+            case .future:
+                emptyMark.opacity(Self.futureOpacity)
             }
         }
         .frame(width: size, height: size)
@@ -143,7 +154,8 @@ struct HabitDayActions {
 ///
 /// A tap is a direct check / uncheck, with no sheet. Partial and Skip live in
 /// the context menu (long-press on iOS, right-click on the Mac). Only future
-/// days are locked, and they render as a plain label, not a Button. Every
+/// days are locked, and they render as a plain, faded label (#669), not a
+/// Button. Every
 /// other day is a Button, not a tap gesture, so macOS QA and VoiceOver can
 /// reach it.
 struct HabitDayCell<Label: View>: View {
@@ -173,10 +185,11 @@ struct HabitDayCell<Label: View>: View {
             .accessibilityLabel("\(HabitDayFormat.long(day)), \(state.label)")
             .accessibilityHint(hint)
         } else {
-            // A future day is not a Button at all, rather than a DISABLED one:
-            // a disabled plain Button dims its label, and #664 wants the future
-            // to look exactly like every other empty day. It still cannot be
-            // tapped, and it still says "upcoming".
+            // A future day is not a Button at all, rather than a DISABLED one,
+            // so nothing can reach it, not even a context menu. Its fade is
+            // drawn by the mark and the day number themselves (#669), so the
+            // look is set in one place and does not depend on how a disabled
+            // Button styles its label. It still says "upcoming".
             label()
                 .frame(minHeight: 44)
                 .accessibilityElement(children: .ignore)
@@ -225,8 +238,9 @@ struct HabitWeekStrip: View {
 
 /// One month of one habit, with month-to-month navigation (#661).
 ///
-/// Opens on the month it is given. `‹` stops at `earliestMonth`, `›` stops at
-/// the current month. The grid is weekday-aligned in the device's first-weekday
+/// Opens on the month it is given. `‹` and `›` move freely in both directions
+/// (#669): a past month shows how the habit went, a future month shows what is
+/// coming, and its days render faded and locked by `HabitDayCell`. The grid is weekday-aligned in the device's first-weekday
 /// order, which is the order the week strip reads in too.
 ///
 /// Every slot id is DISTINCT by construction: a day's id is its anchor, a blank
@@ -244,8 +258,6 @@ struct HabitMonthView: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
 
     var body: some View {
-        let currentMonth = HabitLedger.monthStart(for: today)
-        let earliest = min(HabitLedger.earliestMonth(rule, entries: entries), currentMonth)
         let shown = HabitLedger.monthStart(for: month)
         let summary = HabitLedger.monthSummary(rule, entries: entries, month: shown, today: today)
 
@@ -255,8 +267,6 @@ struct HabitMonthView: View {
                     Image(systemName: "chevron.left")
                 }
                 .buttonStyle(EdIconButtonStyle(tint: Tokens.inkSoft, size: 36))
-                .disabled(shown <= earliest)
-                .opacity(shown <= earliest ? 0.3 : 1)
                 .accessibilityLabel("Previous month")
 
                 Spacer()
@@ -269,8 +279,6 @@ struct HabitMonthView: View {
                     Image(systemName: "chevron.right")
                 }
                 .buttonStyle(EdIconButtonStyle(tint: Tokens.inkSoft, size: 36))
-                .disabled(shown >= currentMonth)
-                .opacity(shown >= currentMonth ? 0.3 : 1)
                 .accessibilityLabel("Next month")
             }
 
@@ -292,11 +300,14 @@ struct HabitMonthView: View {
                         HabitDayCell(day: day, state: state, actions: actions) {
                             VStack(spacing: 2) {
                                 HabitDayMark(state: state, tint: tint, size: HabitDayMark.sectionSize)
+                                // A future day's number fades with its mark
+                                // (#669), so the whole cell reads "not yet".
                                 Text(HabitDayFormat.dayNumber(day))
                                     .font(.edCaption)
                                     .foregroundStyle(day == HabitLedger.key(today) ? Tokens.ink : Tokens.muted)
                                     .fontWeight(day == HabitLedger.key(today) ? .semibold : .regular)
                                     .monospacedDigit()
+                                    .opacity(state == .future ? HabitDayMark.futureOpacity : 1)
                             }
                             .frame(maxWidth: .infinity)
                         }

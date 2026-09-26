@@ -11,6 +11,9 @@ struct HabitEditorSheet: View {
     let habit: LocalHabit?
 
     @State private var name: String = ""
+    /// No longer edited here (#669: the emoji field is gone). An existing
+    /// habit's stored emoji is loaded and passed back to `update` unchanged,
+    /// so saving an edit never wipes it; a new habit gets none.
     @State private var emoji: String = ""
     @State private var colorKey: String = HabitColor.gold.rawValue
     @State private var schedule: HabitSchedule = .daily
@@ -41,31 +44,18 @@ struct HabitEditorSheet: View {
                 Tokens.paper.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.lg) {
+                        // Only the name (#669). The emoji input that sat to
+                        // its left is gone; the field takes the full width.
                         labeled("Name") {
-                            HStack(spacing: Space.sm) {
-                                TextField(PlainFieldPlaceholder.title("😀"), text: $emoji)
-                                    .paperFieldOnMac()
-                                    .font(.system(size: 20))
-                                    .multilineTextAlignment(.center)
-                                    .frame(width: 48, height: 44)
-                                    .plainFieldPlaceholder("😀", isVisible: emoji.isEmpty, padding: Space.md)
-                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                                    .paperBorder(Tokens.border, radius: Radius.md)
-                                    .accessibilityLabel("Emoji")
-                                    .onChange(of: emoji) { _, new in
-                                        // One mark per habit. Keep only the newest character.
-                                        if new.count > 1, let last = new.last { emoji = String(last) }
-                                    }
-                                TextField(PlainFieldPlaceholder.title("Drink water"), text: $name)
-                                    .paperFieldOnMac()
-                                    .font(.edBody)
-                                    .foregroundStyle(Tokens.ink)
-                                    .padding(Space.md)
-                                    .plainFieldPlaceholder("Drink water", isVisible: name.isEmpty, padding: Space.md)
-                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
-                                    .paperBorder(Tokens.border, radius: Radius.md)
-                                    .submitLabel(.done)
-                            }
+                            TextField(PlainFieldPlaceholder.title("Drink water"), text: $name)
+                                .paperFieldOnMac()
+                                .font(.edBody)
+                                .foregroundStyle(Tokens.ink)
+                                .padding(Space.md)
+                                .plainFieldPlaceholder("Drink water", isVisible: name.isEmpty, padding: Space.md)
+                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                                .paperBorder(Tokens.border, radius: Radius.md)
+                                .submitLabel(.done)
                         }
 
                         labeled("Colour") { colourRow }
