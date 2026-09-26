@@ -184,7 +184,8 @@ final class LocalVisionBlock {
             members: members,
             items: items,
             createdAt: createdAt,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            archivedAt: archivedAt
         )
     }
 
