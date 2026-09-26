@@ -174,19 +174,6 @@ private struct MacRootView: View {
     /// System Settings all park this kind of row at the foot of the sidebar.
     private let utilitySections: [AppSection] = [.settings, .helpCenter]
 
-    /// Whether the process was launched with a valid `LAUNCH_SECTION` target.
-    ///
-    /// Read here rather than on `AppRouter` so the iOS-shared file stays
-    /// untouched. Mirrors the parsing in `AppRouter.path`'s initialiser,
-    /// including `.dashboard`, which that initialiser redirects to Activity
-    /// rather than rejecting.
-    private static var hasLaunchTarget: Bool {
-        guard let raw = ProcessInfo.processInfo.environment["LAUNCH_SECTION"]?.lowercased() else {
-            return false
-        }
-        return AppSection(rawValue: raw) != nil
-    }
-
     /// Reads the router and writes back through `go(to:)`, so the sidebar and
     /// every programmatic navigation move the same state.
     private var selection: Binding<AppSection> {
@@ -228,20 +215,10 @@ private struct MacRootView: View {
         // Let the menu bar act on THIS window's router when it is focused.
         .publishRouterToCommands(router)
         .task {
-            // `currentSection` reads an empty path as `.chat`, so seed the
-            // historical macOS default of opening on Tasks. Idempotent, which
-            // matters because `.task` on a `WindowGroup`'s root view runs once
-            // per WINDOW, not per process.
-            //
-            // Emptiness alone is not enough to decide. `AppRouter.path`'s
-            // initialiser deliberately leaves the path empty for
-            // `LAUNCH_SECTION=chat`, because on iOS chat IS the stack root.
-            // Seeding on emptiness therefore swallowed that one target and
-            // left Chat the only section unreachable by script. So seed only
-            // when no valid launch target was requested at all.
-            if router.path.isEmpty && !Self.hasLaunchTarget {
-                router.go(to: .tasks)
-            }
+            // The launch default (Today, #665) is set by `AppRouter.path`'s
+            // initialiser for BOTH platforms, so there is no macOS seed here
+            // any more. The old seed opened on Tasks. `LAUNCH_SECTION=chat`
+            // still yields an empty path, which reads as Chat.
 
             // Cross-device sync (#348). Safe to run from a per-window `.task`
             // even though sync is process-scoped: `runForegroundPass` no-ops

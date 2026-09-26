@@ -29,17 +29,33 @@ struct ActivityFocus: Equatable {
 @Observable
 @MainActor
 final class AppRouter {
-    var path: [AppSection] = {
-        if let raw = ProcessInfo.processInfo.environment["LAUNCH_SECTION"]?.lowercased(),
-           let s = AppSection(rawValue: raw),
-           s != .chat {
+    var path: [AppSection] = AppRouter.launchPath(
+        launchSection: ProcessInfo.processInfo.environment["LAUNCH_SECTION"]
+    )
+
+    /// The section a cold launch lands on (#665): TODAY, unless a
+    /// `LAUNCH_SECTION` names another.
+    ///
+    /// Chat stays the ROOT of the stack, so Today is simply the one section
+    /// pushed over it at launch. This keeps every existing rule true: the
+    /// bottom bar's sparkle still pops to chat, `go(to:)` still replaces the
+    /// top section, and a `dexter://` deep link still lands on its target,
+    /// because it writes `path` after launch. Making Today the root instead
+    /// would have meant rewriting `popToChat`, `currentSection` and the
+    /// ContentView overlay, for no visible difference.
+    ///
+    /// `LAUNCH_SECTION=chat` returns the empty stack, which IS chat. An
+    /// unknown value falls back to the default, as before.
+    nonisolated static func launchPath(launchSection: String?) -> [AppSection] {
+        if let raw = launchSection?.lowercased(), let s = AppSection(rawValue: raw) {
+            if s == .chat { return [] }
             // Dashboard is hidden (issue #30). Redirect any deep-link that
             // targets it to Activity, the closest replacement surface.
             if s == .dashboard { return [.activity] }
             return [s]
         }
-        return []
-    }()
+        return [.today]
+    }
     var drawerOpen: Bool = (ProcessInfo.processInfo.environment["LAUNCH_DRAWER"] == "1")
 
     /// Live drag delta for the drawer, in points. Positive while the user is

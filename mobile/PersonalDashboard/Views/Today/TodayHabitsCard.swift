@@ -63,6 +63,7 @@ struct TodayHabitsCard: View {
                         days: weekDays,
                         week: HabitLedger.states(habit.rule, entries: entries, days: weekDays, today: today),
                         onCheck: { check(habit, today: today) },
+                        onClear: { clear(habit, today: today) },
                         onOpen: { onOpen(habit) }
                     )
                     if index < due.count - 1 {
@@ -86,8 +87,17 @@ struct TodayHabitsCard: View {
     }
 
     private func check(_ habit: LocalHabit, today: Date) {
+        write { try HabitService.default().tap(habit, today: today) }
+    }
+
+    /// The way back to 0 for a count habit, whose tap only ever adds (#665).
+    private func clear(_ habit: LocalHabit, today: Date) {
+        write { try HabitService.default().set(habit, on: today, to: .cleared, today: today) }
+    }
+
+    private func write(_ body: () throws -> Void) {
         do {
-            try HabitService.default().tap(habit, today: today)
+            try body()
             errorMessage = nil
             Haptics.tick()
         } catch {
@@ -98,15 +108,19 @@ struct TodayHabitsCard: View {
 
 /// One habit on the Today card.
 ///
-/// Two lines. The name line: badge, name, the streak, and the one-tap check on
-/// the trailing edge. Under it, the last seven days at full width, big enough to
-/// read at a glance: that trend is the point of the card.
+/// Two lines. The name line: badge and name, with the streak pill at the
+/// trailing end, centred over today's column of the trend (#665). Under it,
+/// the last seven days at full width, big enough to read at a glance: that
+/// trend is the point of the card.
 ///
-/// Done today dims the NAME LINE only. The trend keeps full strength, because a
-/// dimmed week would be hardest to read on exactly the days that went well.
+/// Today shows ONCE, as the last mark of the trend, and that mark is the check
+/// control (#665). A tap checks / unchecks a yes/no habit and adds one to a
+/// count habit; "Clear today" in its context menu takes a count habit back to
+/// 0. A tap anywhere else on the trend opens Habits, as before.
 ///
-/// The check is a sibling Button, never nested inside the open Button. The name
-/// line is a Button that opens the section; the trend opens it too, on a tap.
+/// Done today dims the NAME only. The trend and the streak keep full strength,
+/// because a dimmed week would be hardest to read on exactly the days that
+/// went well.
 private struct TodayHabitRow: View {
     let habit: LocalHabit
     let todayState: HabitDayState
@@ -115,6 +129,7 @@ private struct TodayHabitRow: View {
     let days: [Date]
     let week: [HabitDayState]
     let onCheck: () -> Void
+    let onClear: () -> Void
     let onOpen: () -> Void
 
     private var isDone: Bool { todayState == .done }
@@ -122,7 +137,9 @@ private struct TodayHabitRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            HStack(spacing: Space.md) {
+            // The same 7-column division as the trend below, so the pill sits
+            // over today's mark at any width.
+            LastColumnLayout(columns: max(days.count, 1)) {
                 Button(action: onOpen) {
                     HStack(spacing: Space.md) {
                         HabitBadge(habit: habit, size: 32)
@@ -134,6 +151,7 @@ private struct TodayHabitRow: View {
                             .multilineTextAlignment(.leading)
                         Spacer(minLength: Space.sm)
                     }
+                    .frame(minHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -144,21 +162,31 @@ private struct TodayHabitRow: View {
                 if streak > 0 {
                     streakBadge
                 }
-
-                checkButton
             }
 
-            HabitWeekTrend(days: days, states: week, tint: habit.tint, size: 30)
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onOpen)
+            HabitWeekTrend(
+                days: days,
+                states: week,
+                tint: habit.tint,
+                size: 30,
+                today: HabitWeekTrend.TodayControl(
+                    onTap: onCheck,
+                    onClear: todayCount > 0 || isDone ? onClear : nil,
+                    overlayText: target > 1 && todayCount < target ? "\(todayCount)" : nil,
+                    accessibilityLabel: checkLabel,
+                    accessibilityHint: target > 1 ? "Adds one for today" : (isDone ? "Uncheck today" : "Check today")
+                )
+            )
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onOpen)
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.md)
         .animation(.easeOut(duration: 0.2), value: isDone)
     }
 
-    /// The streak, next to the name and in the habit colour. Kept at full
-    /// strength when the row dims: a streak that just grew is the reward.
+    /// The streak, in the habit colour. Kept at full strength when the row
+    /// dims: a streak that just grew is the reward.
     private var streakBadge: some View {
         HStack(spacing: 3) {
             Image(systemName: "flame.fill")
@@ -177,43 +205,11 @@ private struct TodayHabitRow: View {
         .accessibilityLabel("\(streak) day streak")
     }
 
-    @ViewBuilder
-    private var checkButton: some View {
-        Button(action: onCheck) {
-            if target > 1 {
-                // A count habit: the count, and a ring that fills toward the target.
-                ZStack {
-                    HabitDayMark(
-                        state: todayCount >= target ? .done
-                            : (todayCount > 0 ? .partial(count: todayCount, target: target) : .pending),
-                        tint: habit.tint,
-                        size: 34
-                    )
-                    if todayCount < target {
-                        Text("\(todayCount)")
-                            .font(.edCaption)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Tokens.ink)
-                            .monospacedDigit()
-                    }
-                }
-                .frame(width: 44, height: 44)
-                .contentShape(Circle())
-            } else {
-                HabitDayMark(state: isDone ? .done : .pending, tint: habit.tint, size: 30)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(checkLabel)
-    }
-
     private var checkLabel: String {
         if target > 1 {
-            return "Add one to \(habit.name), \(todayCount) of \(target)"
+            return "Today, \(habit.name), \(todayCount) of \(target)"
         }
-        return isDone ? "Mark \(habit.name) not done" : "Mark \(habit.name) done"
+        return "Today, \(habit.name), \(isDone ? "done" : "not done")"
     }
 
     private var accessibilitySummary: String {

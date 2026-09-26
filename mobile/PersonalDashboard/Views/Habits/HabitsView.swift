@@ -301,8 +301,8 @@ struct HabitReviewCard: View {
     let onEdit: () -> Void
     let actions: HabitDayActions
 
-    /// The month the expanded view shows. Reset to the current month each time
-    /// the card opens.
+    /// The month the expanded view shows. Reset to the current month by the
+    /// tap that opens the card.
     @State private var month: Date = HabitLedger.monthStart(for: HabitLedger.todayAnchor())
 
     @State private var isRenaming = false
@@ -345,32 +345,44 @@ struct HabitReviewCard: View {
                 .transition(.opacity)
             }
         }
-        .onChange(of: isExpanded) { _, open in
-            if open { month = HabitLedger.monthStart(for: today) }
-        }
         .padding(Space.lg)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
         .paperBorder(isPulsing ? Tokens.accentHabits : Tokens.border, lineWidth: isPulsing ? 1.5 : 0.5)
     }
 
-    /// The explicit expand control. A Button, so macOS QA can drive it.
+    /// The explicit expand control (#664). A Button, so macOS QA can drive it.
+    ///
+    /// It reads as an expansion ("View month ⌄" / "Hide month ⌃") and the
+    /// WHOLE row is the target: the card's full width and at least 44pt tall,
+    /// on a tinted strip so the edges of the target are visible. The first
+    /// version was a ~24pt line of footnote text, which is easy to miss and
+    /// easy to tap just beside.
     private var monthToggle: some View {
-        Button(action: onToggleExpand) {
+        Button(action: toggleMonth) {
             HStack(spacing: Space.xs) {
                 Image(systemName: "calendar")
                     .font(.system(size: 12, weight: .semibold))
-                Text(isExpanded ? "Hide month" : "Month")
+                Text(isExpanded ? "Hide month" : "View month")
                     .font(.edFootnote)
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
             }
             .foregroundStyle(Tokens.inkSoft)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Space.xs)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(Tokens.surface2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(isExpanded ? "Hide month view" : "Show month view")
+        .accessibilityLabel(isExpanded ? "Hide month for \(habit.name)" : "View month for \(habit.name)")
+        .accessibilityIdentifier("habitMonthToggle")
+    }
+
+    /// Opening always starts on the current month. The reset happens in the
+    /// tap itself, not in an `.onChange(of: isExpanded)`, so the open and the
+    /// reset are one state change and cannot land in separate renders.
+    private func toggleMonth() {
+        if !isExpanded { month = HabitLedger.monthStart(for: today) }
+        onToggleExpand()
     }
 
     private var header: some View {
