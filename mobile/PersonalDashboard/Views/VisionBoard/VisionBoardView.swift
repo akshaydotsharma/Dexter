@@ -43,6 +43,8 @@ struct VisionBoardView: View {
     /// The pass-through rects that edit text, so the pointer layer can show an
     /// I-beam over them instead of the block's open hand.
     @State private var textRects: [CGRect] = []
+    /// The toolbar's Archived popover (#671).
+    @State private var showingArchive = false
     @Bindable var router: AppRouter
 
     /// Written by hand only because the editor needs the view model instance.
@@ -78,11 +80,26 @@ struct VisionBoardView: View {
         }
         .activeSection(.visionBoard)
         .macSectionChrome("Vision Board") {
-            Button { Task { await createBlockAtFirstFreeSlot() } } label: {
-                Image(systemName: "plus")
+            // One HStack: `macSectionChrome` wraps its closure in a single
+            // ToolbarItem, and a second bare button would replace the first.
+            HStack {
+                Button { showingArchive = true } label: {
+                    Image(systemName: "archivebox")
+                }
+                .help("Archived blocks")
+                .accessibilityLabel("Archived blocks")
+                .popover(isPresented: $showingArchive, arrowEdge: .bottom) {
+                    VisionArchivedPopover(viewModel: viewModel) { id in
+                        Task { await unarchive(id) }
+                    }
+                }
+
+                Button { Task { await createBlockAtFirstFreeSlot() } } label: {
+                    Image(systemName: "plus")
+                }
+                .help("New block")
+                .accessibilityLabel("New block")
             }
-            .help("New block")
-            .accessibilityLabel("New block")
         }
         // File > New and ⌘N while the board is on screen.
         .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Block") {
@@ -363,6 +380,17 @@ struct VisionBoardView: View {
             interaction.selected = id
             interaction.pendingTitleEdit = id
         }
+    }
+
+    // MARK: - Archive
+
+    /// Back onto the board and selected, so the block you asked for is the one
+    /// the eye lands on. The popover stays open while others remain, which
+    /// lets several blocks come back in one visit.
+    private func unarchive(_ id: UUID) async {
+        guard let restored = await viewModel.unarchiveBlock(id) else { return }
+        interaction.selected = restored
+        if viewModel.archivedBlocks.isEmpty { showingArchive = false }
     }
 
     // MARK: - Motion

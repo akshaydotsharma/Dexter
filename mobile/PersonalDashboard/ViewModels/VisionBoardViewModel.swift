@@ -17,6 +17,9 @@ import SwiftData
 @MainActor
 final class VisionBoardViewModel {
     private(set) var blocks: [VisionBlock] = []
+    /// Blocks put away with Archive (#671), most recent first. Not on the
+    /// canvas and not part of any layout calculation.
+    private(set) var archivedBlocks: [VisionBlock] = []
     /// Every live task, by id. Tiles resolve through this; a member id with no
     /// entry here is a task that was deleted from the Tasks surface and is
     /// simply not rendered.
@@ -58,6 +61,7 @@ final class VisionBoardViewModel {
             let allTasks = try await todos.list()
             tasksByID = Dictionary(uniqueKeysWithValues: allTasks.map { ($0.id, $0) })
             blocks = try await board.list()
+            archivedBlocks = try await board.listArchived()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -176,6 +180,37 @@ final class VisionBoardViewModel {
             blocks.removeAll { $0.id == id }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Archive (#671)
+
+    func archiveBlock(_ id: UUID) async {
+        do {
+            try await board.archive(id)
+            blocks.removeAll { $0.id == id }
+            archivedBlocks = try await board.listArchived()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Back onto the board where it was, or the nearest free slot if something
+    /// has been put there since. Returns the id so the board can select it.
+    @discardableResult
+    func unarchiveBlock(_ id: UUID) async -> UUID? {
+        guard let block = archivedBlocks.first(where: { $0.id == id }) else { return nil }
+        let desired = VisionBoardLayout.Slot(col: block.col, row: block.row, w: block.w, h: block.h)
+        let slot = VisionBoardLayout.nearestFreeSlot(to: desired, in: blocks, excluding: nil) ?? desired
+        do {
+            let restored = try await board.unarchive(id, to: slot)
+            archivedBlocks.removeAll { $0.id == id }
+            blocks.append(restored)
+            resort()
+            return restored.id
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
         }
     }
 

@@ -363,6 +363,11 @@ struct VisionBlockCard: View {
         )
         entries.append(.separator)
         entries.append(
+            .item(title: "Archive block", systemImage: "archivebox") {
+                Task { await viewModel.archiveBlock(block.id) }
+            }
+        )
+        entries.append(
             .item(title: "Delete block", systemImage: "trash") {
                 Task { await viewModel.deleteBlock(block.id) }
             }

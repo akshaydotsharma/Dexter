@@ -210,6 +210,46 @@ struct VisionBoardService {
         try store.context.save()
     }
 
+    // MARK: - Archive (#671)
+
+    /// Archived blocks, most recently archived first. Members are filtered to
+    /// live tasks exactly as `list()` does, so the archive shows the same count
+    /// the block will show once it is back.
+    func listArchived() async throws -> [VisionBlock] {
+        let descriptor = FetchDescriptor<LocalVisionBlock>(
+            predicate: #Predicate { $0.deletedAt == nil && $0.archivedAt != nil }
+        )
+        let rows = try store.context.fetch(descriptor)
+        let live = try liveTodoIDs()
+        return rows
+            .sorted { ($0.archivedAt ?? .distantPast) > ($1.archivedAt ?? .distantPast) }
+            .map { row in
+                var dto = row.toDTO()
+                dto.members = dto.members.filter { live.contains($0) }
+                return dto
+            }
+    }
+
+    /// Take the block off the board and keep everything on it. The frame is
+    /// left as it was, so unarchiving can aim for the same spot.
+    func archive(_ id: UUID) async throws {
+        _ = try await mutate(id) { $0.archivedAt = Date() }
+    }
+
+    /// Put an archived block back on the board at `slot`. The caller has
+    /// already resolved the slot against the live blocks, since the block's old
+    /// position may have been filled while it was away.
+    @discardableResult
+    func unarchive(_ id: UUID, to slot: VisionBoardLayout.Slot) async throws -> VisionBlock {
+        try await mutate(id) {
+            $0.archivedAt = nil
+            $0.col = max(0, slot.col)
+            $0.row = max(0, slot.row)
+            $0.w = max(VisionGrid.minColumns, slot.w)
+            $0.h = max(VisionGrid.minRows, slot.h)
+        }
+    }
+
     // MARK: - Membership
 
     /// File a task into a block, removing it from any other block first.
