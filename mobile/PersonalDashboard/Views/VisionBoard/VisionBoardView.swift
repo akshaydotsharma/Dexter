@@ -43,8 +43,11 @@ struct VisionBoardView: View {
     /// The pass-through rects that edit text, so the pointer layer can show an
     /// I-beam over them instead of the block's open hand.
     @State private var textRects: [CGRect] = []
-    /// The toolbar's Archived popover (#671).
-    @State private var showingArchive = false
+    /// Whether the Archive page is showing instead of the canvas (#671).
+    /// `LAUNCH_VISION_ARCHIVE=1` opens straight onto it, the same hook Notes
+    /// has, so the page can be photographed with no synthetic click.
+    @State private var showingArchive =
+        ProcessInfo.processInfo.environment["LAUNCH_VISION_ARCHIVE"] == "1"
     @Bindable var router: AppRouter
 
     /// Written by hand only because the editor needs the view model instance.
@@ -60,6 +63,40 @@ struct VisionBoardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // A ZStack, not a Group: a Group would hand `.task` and `.onReceive`
+        // to whichever branch is showing, and re-run the load on every switch.
+        ZStack {
+            if showingArchive {
+                VisionArchiveView(viewModel: viewModel) { id in
+                    Task { await unarchive(id) }
+                }
+                .macDetailChrome(
+                    title: "Archive",
+                    subtitle: archiveSubtitle,
+                    onBack: closeArchive
+                )
+            } else {
+                board
+            }
+        }
+        .activeSection(.visionBoard)
+        .task {
+            await viewModel.load()
+            interaction.reduceMotion = reduceMotion
+        }
+        .onChange(of: reduceMotion) { interaction.reduceMotion = reduceMotion }
+        // Tiles are real tasks, so anything that writes a task elsewhere — the
+        // Shortcut capture path, chat, the Tasks surface in another window —
+        // has to be able to change what this board shows.
+        .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
+            Task { await viewModel.load() }
+        }
+    }
+
+    /// The canvas and its section chrome. Chrome is applied per branch, never
+    /// on the outer ZStack, or the Archive would inherit a second title and a
+    /// second toolbar.
+    private var board: some View {
         ZStack {
             Tokens.paper.canvasIgnoresSafeArea()
 
@@ -78,21 +115,15 @@ struct VisionBoardView: View {
                 .allowsHitTesting(true)
             }
         }
-        .activeSection(.visionBoard)
         .macSectionChrome("Vision Board") {
             // One HStack: `macSectionChrome` wraps its closure in a single
             // ToolbarItem, and a second bare button would replace the first.
             HStack {
-                Button { showingArchive = true } label: {
+                Button(action: openArchive) {
                     Image(systemName: "archivebox")
                 }
                 .help("Archived blocks")
                 .accessibilityLabel("Archived blocks")
-                .popover(isPresented: $showingArchive, arrowEdge: .bottom) {
-                    VisionArchivedPopover(viewModel: viewModel) { id in
-                        Task { await unarchive(id) }
-                    }
-                }
 
                 Button { Task { await createBlockAtFirstFreeSlot() } } label: {
                     Image(systemName: "plus")
@@ -101,21 +132,11 @@ struct VisionBoardView: View {
                 .accessibilityLabel("New block")
             }
         }
-        // File > New and ⌘N while the board is on screen.
+        // File > New and ⌘N while the board is on screen. Not on the Archive:
+        // a block made there would land on a board you cannot see.
         .focusedSceneValue(\.newItemAction, NewItemAction(title: "New Block") {
             Task { await createBlockAtFirstFreeSlot() }
         })
-        .task {
-            await viewModel.load()
-            interaction.reduceMotion = reduceMotion
-        }
-        .onChange(of: reduceMotion) { interaction.reduceMotion = reduceMotion }
-        // Tiles are real tasks, so anything that writes a task elsewhere — the
-        // Shortcut capture path, chat, the Tasks surface in another window —
-        // has to be able to change what this board shows.
-        .onReceive(NotificationCenter.default.publisher(for: .localStoreDidChange)) { _ in
-            Task { await viewModel.load() }
-        }
     }
 
     // MARK: - Canvas
@@ -384,13 +405,28 @@ struct VisionBoardView: View {
 
     // MARK: - Archive
 
-    /// Back onto the board and selected, so the block you asked for is the one
-    /// the eye lands on. The popover stays open while others remain, which
-    /// lets several blocks come back in one visit.
+    private var archiveSubtitle: String {
+        let count = viewModel.archivedBlocks.count
+        return count == 1 ? "Vision Board · 1 block" : "Vision Board · \(count) blocks"
+    }
+
+    private func openArchive() {
+        // Nothing on the canvas may stay selected or mid-edit behind a page
+        // that hides it.
+        interaction.popover = nil
+        withAnimation(.easeOut(duration: 0.2)) { showingArchive = true }
+    }
+
+    private func closeArchive() {
+        withAnimation(.easeOut(duration: 0.2)) { showingArchive = false }
+    }
+
+    /// Back onto the board, and the Archive stays open: bringing back several
+    /// blocks is one visit, not one round trip each. The block is selected so
+    /// it is the one the eye lands on when you return to the board.
     private func unarchive(_ id: UUID) async {
         guard let restored = await viewModel.unarchiveBlock(id) else { return }
         interaction.selected = restored
-        if viewModel.archivedBlocks.isEmpty { showingArchive = false }
     }
 
     // MARK: - Motion

@@ -56,6 +56,9 @@ struct VisionBlock: Identifiable, Hashable, Sendable {
 
     let createdAt: Date
     let updatedAt: Date
+    /// When the block was archived, or nil for a block on the board (#671).
+    /// Drives the Archive page's order and its "Archived 3 days ago" line.
+    var archivedAt: Date? = nil
 
     /// The block's presentation tier, driven by its OWN rendered width and never
     /// by the window's. Recomputed live during a resize, which is the whole

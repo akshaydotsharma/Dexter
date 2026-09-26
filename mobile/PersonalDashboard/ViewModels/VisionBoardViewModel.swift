@@ -178,6 +178,7 @@ final class VisionBoardViewModel {
         do {
             try await board.delete(id)
             blocks.removeAll { $0.id == id }
+            archivedBlocks.removeAll { $0.id == id }
         } catch {
             errorMessage = error.localizedDescription
         }
