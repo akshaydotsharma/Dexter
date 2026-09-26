@@ -7,8 +7,7 @@ import SwiftUI
 /// A page, not a popover, because the reason to open it is to read what a block
 /// held before deciding to bring it back — and the archive only grows. A popover
 /// that lists titles answers neither: it hides the contents and it runs out of
-/// room. So each block renders with every row it had, the newest archive first,
-/// and a search field narrows the page by title, intent or any row's text.
+/// room. So each block renders with every row it had, the newest archive first.
 ///
 /// Read-only on purpose. An archived block is put away; the board is where it
 /// gets worked on, and Unarchive is one click from here.
@@ -16,28 +15,18 @@ struct VisionArchiveView: View {
     let viewModel: VisionBoardViewModel
     let onUnarchive: (UUID) -> Void
 
-    @State private var query = ""
-
     private let columns = [
         GridItem(.adaptive(minimum: 320, maximum: 520), spacing: Space.lg, alignment: .top)
     ]
 
     var body: some View {
-        let matches = filtered
-
         ScrollView {
             VStack(alignment: .leading, spacing: Space.lg) {
-                if !viewModel.archivedBlocks.isEmpty {
-                    searchField
-                }
-
                 if viewModel.archivedBlocks.isEmpty {
                     emptyState("Nothing archived yet. Archive a block from its menu on the board to put it away here.")
-                } else if matches.isEmpty {
-                    emptyState("No archived block matches \u{201C}\(query)\u{201D}.")
                 } else {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: Space.lg) {
-                        ForEach(matches) { block in
+                        ForEach(viewModel.archivedBlocks) { block in
                             VisionArchivedBlockCard(
                                 block: block,
                                 rows: viewModel.rows(for: block),
@@ -47,50 +36,13 @@ struct VisionArchiveView: View {
                             .transition(.opacity)
                         }
                     }
-                    .animation(.easeOut(duration: 0.2), value: matches.map(\.id))
+                    .animation(.easeOut(duration: 0.2), value: viewModel.archivedBlocks.map(\.id))
                 }
             }
             .padding(Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Tokens.paper)
-    }
-
-    /// Title, intent, and every row's text, case- and diacritic-insensitive. A
-    /// block you remember by one of its items should be findable by that item.
-    private var filtered: [VisionBlock] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return viewModel.archivedBlocks }
-        return viewModel.archivedBlocks.filter { block in
-            let haystack = [block.title, block.intent ?? ""]
-                + viewModel.rows(for: block).map(\.title)
-            return haystack.contains { $0.localizedStandardContains(needle) }
-        }
-    }
-
-    private var searchField: some View {
-        HStack(spacing: Space.sm) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
-                .foregroundStyle(Tokens.mutedSoft)
-            TextField("Search archived blocks", text: $query)
-                .textFieldStyle(.plain)
-                .font(.edBody)
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Tokens.mutedSoft)
-                }
-                .buttonStyle(.plain)
-                .help("Clear search")
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, Space.md)
-        .padding(.vertical, Space.sm)
-        .frame(maxWidth: 420)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.md)
     }
 
     private func emptyState(_ text: String) -> some View {
