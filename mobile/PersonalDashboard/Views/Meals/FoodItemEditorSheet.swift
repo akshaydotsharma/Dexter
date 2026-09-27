@@ -10,10 +10,15 @@ import SwiftData
 ///
 /// ### Which cases are live, and which are a route nothing takes today
 ///
-/// `existing` and `fromMealItem` are the two the app constructs. The first is
-/// the per-row Edit in the picker, the second is "Save to library" on a dish in
-/// `MealDetailSheet`. Both are CORRECTIONS: fixing a number, or keeping
+/// `existing` and `fromMeal` are the two the app constructs. The first is the
+/// per-row Edit in the picker, the second is "Save to library" on a logged meal
+/// in `MealDetailSheet`. Both are CORRECTIONS: fixing a number, or keeping
 /// something already eaten. Neither asks the user to curate a list.
+///
+/// `fromMeal` keeps the WHOLE meal as one row, not one of its dishes (#673).
+/// It replaced a per-dish save: the rice or the curry on its own is not what
+/// gets eaten again, the meal is, and a library of components made every repeat
+/// a reassembly job.
 ///
 /// `new`, `draft`, `scannedDraft` and `newBarcode` are the confirm-before-save
 /// route, and nothing constructs them any more (#625). A search hit and a
@@ -39,8 +44,8 @@ enum FoodItemEditorTarget: Identifiable {
     case newBarcode(String)
     /// A row already in the library.
     case existing(LocalFoodItem)
-    /// One dish off a meal that was already logged, being kept.
-    case fromMealItem(MealItemEntry)
+    /// A meal that was already logged, being kept as one item.
+    case fromMeal(LocalMeal)
 
     var id: String {
         switch self {
@@ -49,7 +54,7 @@ enum FoodItemEditorTarget: Identifiable {
         case .scannedDraft(let d):  return "scan-\(d.externalID ?? d.barcode ?? d.name)"
         case .newBarcode(let code): return "code-\(code)"
         case .existing(let item):   return item.clientUUID
-        case .fromMealItem(let e):  return "meal-\(e.id.uuidString)"
+        case .fromMeal(let meal):   return "meal-\(meal.clientUUID)"
         }
     }
 }
@@ -127,9 +132,9 @@ struct FoodItemEditorSheet: View {
 
     /// True when the base portion is a number the user still has to supply.
     ///
-    /// Only `.fromMealItem` can set it: a logged dish states its portion in
-    /// whatever words the estimate used, and "1.5 bowls" of a bowl is not a
-    /// measurement. See `loadFromMealItem`.
+    /// Only `.fromMeal` can set it: a logged meal's dishes state their portions
+    /// in whatever words the estimate used, and "1.5 bowls" of a bowl is not a
+    /// measurement. See `loadFromMeal`.
     @State private var baseUnresolved = false
     /// The portion the meal item stated, for the sentence that asks for grams.
     @State private var unresolvedPortion: String = ""
@@ -196,7 +201,7 @@ struct FoodItemEditorSheet: View {
         switch target {
         case .existing:                     return "Saved item"
         case .draft, .scannedDraft:         return "Check these numbers"
-        case .fromMealItem:                 return "Keep this item"
+        case .fromMeal:                     return "Keep this meal"
         case .new, .newBarcode:             return "New item"
         }
     }
@@ -216,8 +221,8 @@ struct FoodItemEditorSheet: View {
             return "Dexter read the barcode and found this in Open Food Facts, which is public and crowd-sourced. Check it against the packet before you save."
         case .newBarcode:
             return "Dexter read the barcode and the food database did not know it. Type what the packet says."
-        case .fromMealItem:
-            return "These numbers came from an estimate of a meal you logged, not from a packet. Correct anything you know better."
+        case .fromMeal:
+            return "These are the totals of a meal you logged, not numbers off a packet. Correct anything you know better."
         case .new, .existing:
             return nil
         }
@@ -633,8 +638,8 @@ struct FoodItemEditorSheet: View {
         case .existing(let item):
             loadExisting(item)
 
-        case .fromMealItem(let entry):
-            loadFromMealItem(entry)
+        case .fromMeal(let meal):
+            loadFromMeal(meal)
         }
     }
 
@@ -687,47 +692,40 @@ struct FoodItemEditorSheet: View {
         values[.saturatedFat] = MealItemDraft.string(item.satFatG)
     }
 
-    /// One dish off a logged meal, which is the one entry point whose portion
-    /// may not be a measurement at all.
+    /// A whole logged meal, which is the one entry point whose portion may not
+    /// be a measurement at all (#673).
     ///
-    /// ### Why an unscalable unit is asked about rather than converted
+    /// ### Why the portion is the sum of the dishes, or nothing
     ///
-    /// `MealItemEntry.portionUnit` is free text on purpose: an estimate says
-    /// "bowl", "slice", "cup". A library row cannot be, because everything
-    /// logged from it scales by a ratio and 1.5 bowls of a bowl is not a
-    /// measurement. `FoodItemService.saveFromMealItem` throws
-    /// `unknownPortionUnit` on exactly that, and the honest answer is to ask
-    /// for the weight rather than to guess one. Guessing is how a row lands
-    /// wrong by a factor of 28 and stays wrong on every meal logged from it.
+    /// A library row scales by a ratio, so its base portion must be a weight or
+    /// a volume. A meal has no portion of its own; its dishes do. When every
+    /// dish is stated in the same measured unit, their sum IS the meal's
+    /// portion. When any dish is "1 bowl" or "2 slices", or the meal has no
+    /// breakdown at all, there is no honest number, so the form asks for the
+    /// weight rather than guessing one. Guessing is how a row lands wrong by a
+    /// factor of 28 and stays wrong on every meal logged from it.
     ///
     /// ### Why the test here is narrower than the service's
     ///
-    /// The service's normaliser is private to it, and it accepts a handful of
-    /// spellings ("gram", "gms") beyond the two raw values. This asks only
+    /// The service's unit normaliser is private to it, and it accepts a handful
+    /// of spellings ("gram", "gms") beyond the two raw values. This asks only
     /// whether the unit IS one of the two. A second copy of that vocabulary in
     /// a view is exactly the drift that puts two answers in the codebase, and
     /// being narrower is safe in one direction only: the worst case is that a
-    /// legacy row spelled "grams" asks the user to restate 150 as 150, with the
-    /// portion named in the sentence above the field.
-    private func loadFromMealItem(_ entry: MealItemEntry) {
-        name = entry.name
-        values[.calories]     = MealItemDraft.string(entry.calories)
-        values[.protein]      = MealItemDraft.string(entry.proteinG)
-        values[.carbs]        = MealItemDraft.string(entry.carbsG)
-        values[.fat]          = MealItemDraft.string(entry.fatG)
-        values[.fibre]        = MealItemDraft.string(entry.fibreG)
-        values[.sugar]        = MealItemDraft.string(entry.sugarG)
-        values[.sodium]       = MealItemDraft.string(entry.sodiumMg)
-        values[.saturatedFat] = MealItemDraft.string(entry.satFatG)
+    /// legacy row spelled "grams" asks the user to restate the weight.
+    private func loadFromMeal(_ meal: LocalMeal) {
+        name = MealDisplayName.short(for: meal)
+        for nutrient in Nutrient.allCases {
+            values[nutrient] = MealItemDraft.string(meal.nutrients[nutrient])
+        }
 
-        let raw = entry.portionUnit.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let resolved = FoodPortionUnit(rawValue: raw), entry.portionQuantity > 0 {
-            unit = resolved
-            baseQuantity = MealItemDraft.string(entry.portionQuantity)
-            defaultPortion = MealItemDraft.string(entry.portionQuantity)
+        if let (total, measured) = Self.measuredPortion(of: meal.items) {
+            unit = measured
+            baseQuantity = MealItemDraft.string(total)
+            defaultPortion = MealItemDraft.string(total)
         } else {
             baseUnresolved = true
-            unresolvedPortion = entry.portionDescription
+            unresolvedPortion = "the whole meal"
             unit = .grams
             // Empty, not a guess. There is no honest number to put here, and a
             // prefilled 100 would be accepted by a user who assumed the app
@@ -735,6 +733,24 @@ struct FoodItemEditorSheet: View {
             baseQuantity = ""
             defaultPortion = ""
         }
+    }
+
+    /// The meal's weight or volume, when every dish states one in the SAME
+    /// unit. Nil for no dishes, a zero portion, or a mix such as grams beside
+    /// millilitres, which cannot be added without a density nobody stated.
+    static func measuredPortion(of items: [MealItemEntry]) -> (Double, FoodPortionUnit)? {
+        guard !items.isEmpty else { return nil }
+        var unit: FoodPortionUnit?
+        var total = 0.0
+        for item in items {
+            let raw = item.portionUnit.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let resolved = FoodPortionUnit(rawValue: raw), item.portionQuantity > 0 else { return nil }
+            if let unit, unit != resolved { return nil }
+            unit = resolved
+            total += item.portionQuantity
+        }
+        guard let unit else { return nil }
+        return (total, unit)
     }
 
     // MARK: - Save
@@ -851,7 +867,7 @@ struct FoodItemEditorSheet: View {
         case .new:                      return FoodItemSource.manual
         case .draft:                    return FoodItemSource.openFoodFacts
         case .scannedDraft, .newBarcode: return FoodItemSource.barcode
-        case .fromMealItem:             return FoodItemSource.meal
+        case .fromMeal:                 return FoodItemSource.meal
         case .existing(let item):       return item.source
         }
     }
