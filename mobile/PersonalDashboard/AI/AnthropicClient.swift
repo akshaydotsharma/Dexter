@@ -82,9 +82,17 @@ struct AnthropicClient: Sendable {
     /// For the streaming path this value means "time to wait for more data",
     /// not total duration, so a longer one does not let a finished stream hang:
     /// it lets a slow generation keep arriving.
+    ///
+    /// Raised from 150 to 300 for #677, where the meal estimate's own
+    /// `request.timeoutInterval` moved to 300 to match its doubled
+    /// `max_tokens`. Raising a CAP only allows a longer wait; it does not
+    /// shorten any existing request. Every other caller on this session sets
+    /// its own smaller `request.timeoutInterval` explicitly (streaming chat at
+    /// 120, statement extraction at 120, expense extraction at 90, targets and
+    /// meal naming at 60), so none of them is affected by this change.
     static let defaultSession: URLSession = {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 150
+        config.timeoutIntervalForRequest = 300
         return URLSession(configuration: config)
     }()
 
