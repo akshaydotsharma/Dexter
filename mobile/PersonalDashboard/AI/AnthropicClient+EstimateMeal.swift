@@ -411,6 +411,15 @@ extension AnthropicClient {
         // block" — a true statement about a response that had simply been
         // truncated. 8192 leaves room for the reasoning and a dozen dishes.
         //
+        // 8192 was too tight for a 12-line receipt photo (#677). The request
+        // that follows a `look_up_foods` tool round has more to reason about
+        // than a description alone, and a share prompt ("all the wings, the
+        // beer, 2/3 of the rest") adds a division on top. That request spent
+        // 6,106 tokens thinking and was cut off at "confidence": with 11
+        // dishes already written. Replays showed thinking varying from 2.6k to
+        // 6.1k tokens across otherwise identical calls, so 16384 is roughly
+        // twice the failing turn's need, not a fixed multiple of dish count.
+        //
         // NOT prompt-cached (#580). The prompt is one user block whose SECOND
         // paragraph is the meal description, so a breakpoint would have to sit
         // after text that differs every meal and would write an entry nothing
@@ -455,7 +464,7 @@ extension AnthropicClient {
         while true {
             let body: AnthropicJSONValue = .object([
                 "model": .string(Self.model),
-                "max_tokens": .int(8192),
+                "max_tokens": .int(16384),
                 // Declared on every estimate, used on almost none. The rule in
                 // the prompt is what keeps a generic meal from paying for a
                 // search; advertising the tool costs only its declaration.
@@ -493,7 +502,13 @@ extension AnthropicClient {
             // meal. An ungrounded estimate never approaches either number, so
             // raising this costs the fast path nothing: a request that is going
             // to take 16 s still takes 16 s.
-            request.timeoutInterval = 150
+            //
+            // 150 was in turn too tight for the doubled `max_tokens` above
+            // (#677). The failing 8192-token request already took 72 s
+            // non-streaming, and a request that fills a 16384 budget can
+            // approach the old 150 s ceiling on its own, before any search
+            // time is added on top. 300 gives that headroom.
+            request.timeoutInterval = 300
 
             do {
                 request.httpBody = try Self.encoder.encode(body)
