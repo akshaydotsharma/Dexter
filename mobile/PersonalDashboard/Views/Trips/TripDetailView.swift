@@ -1988,6 +1988,10 @@ struct ItineraryItemEditorSheet: View {
     /// Only settable when a departure (`hasTime`) is present.
     @State private var arrivalTime: Date = Calendar.current.startOfDay(for: Date())
     @State private var hasArrival: Bool = false
+    /// The one open panel across Date/Time, Check-out and Arrival (#675). Each
+    /// field left to its own accordion let the departure and arrival clocks
+    /// open together, which no other editor in the app does.
+    @State private var openDatePanel: String? = nil
     @State private var notes: String = ""
     @State private var address: String = ""
     @State private var googleMapsLink: String = ""
@@ -2244,7 +2248,8 @@ struct ItineraryItemEditorSheet: View {
                 date: $dayDate,
                 hasTime: $hasTime,
                 dateLabel: label,
-                tint: Tokens.accent(for: .itineraries)
+                tint: Tokens.accent(for: .itineraries),
+                openPanel: $openDatePanel
             )
         }
     }
@@ -2258,8 +2263,12 @@ struct ItineraryItemEditorSheet: View {
                 date: $endDate,
                 hasTime: $hasEndTime,
                 dateLabel: "Check-out",
+                // Its own label, because panel keys are built from labels and a
+                // second "Time" would open the check-in clock with it.
+                timeLabel: "Check-out time",
                 tint: Tokens.accent(for: .itineraries),
-                bounds: .from(Calendar.current.startOfDay(for: dayDate))
+                bounds: .from(Calendar.current.startOfDay(for: dayDate)),
+                openPanel: $openDatePanel
             )
         }
     }
@@ -2276,7 +2285,8 @@ struct ItineraryItemEditorSheet: View {
                 hasTime: $hasArrival,
                 showsDate: false,
                 timeLabel: "Arrival time",
-                tint: Tokens.accent(for: .itineraries)
+                tint: Tokens.accent(for: .itineraries),
+                openPanel: $openDatePanel
             )
         }
     }
