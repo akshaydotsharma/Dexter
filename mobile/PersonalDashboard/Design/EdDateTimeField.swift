@@ -41,11 +41,11 @@ import SwiftUI
 /// same calendar the Meals plan and the day field already draw. A third
 /// calendar design does not enter the app.
 ///
-/// ### The clock is still Apple's
+/// ### The clock
 ///
-/// Dexter has no time control of its own, and Reminders shows the system clock
-/// too. It is drawn inside our panel, in the section's accent. Building
-/// `EdTimePicker` is its own design job and its own ticket.
+/// On the phone it is the system wheel, as in Reminders, drawn inside our panel
+/// in the section's accent. macOS has no wheel style, so the Mac draws
+/// `EdTimeWheel`, which copies that shape (#675).
 struct EdDateTimeField: View {
 
     /// The day, and the time when `hasTime` is on. One `Date` rather than two,
@@ -355,16 +355,9 @@ struct EdDateTimeField: View {
             .frame(maxWidth: .infinity)
             .accessibilityLabel(timeLabel)
         #else
-        HStack {
-            DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .datePickerStyle(.stepperField)
-                .paperDatePickerOnMac()
-                .tint(tint)
-                .accessibilityLabel(timeLabel)
-            Spacer(minLength: 0)
-        }
-        .padding(Space.md)
+        // macOS has no wheel style; its stepper field sat pinned to the left
+        // edge while the phone showed a centred wheel (#675).
+        EdTimeWheel(date: $date, tint: tint, accessibilityLabel: timeLabel)
         #endif
     }
 
