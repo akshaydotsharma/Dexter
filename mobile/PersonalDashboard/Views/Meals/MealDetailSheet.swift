@@ -336,7 +336,7 @@ struct MealDetailSheet: View {
         .sheet(item: $editorTarget) { target in
             // The editor writes the library row and hands it back. Nothing on
             // this meal changes: a logged meal is what was eaten, and keeping
-            // one of its dishes is a statement about the NEXT one (#625).
+            // it is a statement about the NEXT one (#625, #673).
             FoodItemEditorSheet(target: target) { _ in
                 editorTarget = nil
             }
@@ -717,36 +717,20 @@ struct MealDetailSheet: View {
                         )
                     }
 
-                    HStack(spacing: Space.sm) {
-                        // #656. Present only when there is something to save,
-                        // and named for what it actually does: the meal total,
-                        // the confidence band and the day's figures all move
-                        // with it. "Apply to this item" described the scope of
-                        // the edit and hid its consequences.
-                        if draft.wrappedValue.hasChanges {
-                            Button("Save and update the meal") {
-                                applyItem(draft.wrappedValue)
-                            }
-                            .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+                    // #656. Present only when there is something to save, and
+                    // named for what it actually does: the meal total, the
+                    // confidence band and the day's figures all move with it.
+                    // "Apply to this item" described the scope of the edit and
+                    // hid its consequences.
+                    //
+                    // No "Save to library" here any more (#673). A dish on its
+                    // own is not what gets eaten again; the meal is, and that
+                    // save lives with the meal's own actions.
+                    if draft.wrappedValue.hasChanges {
+                        Button("Save and update the meal") {
+                            applyItem(draft.wrappedValue)
                         }
-
-                        // Keep this dish, so the next time it is eaten it is
-                        // picked rather than estimated again (#625).
-                        //
-                        // A plain button inside the row's own drawer, which is
-                        // the gesture grammar this sheet already uses for a row
-                        // action: the row opens on a TAP and its actions are
-                        // buttons inside it. Never a long press, and never a
-                        // context menu that only one platform can find
-                        // (`feedback_inline_edit_gestures`).
-                        Button("Save to library") {
-                            // The entry goes through untouched, legacy unit and
-                            // all. The editor asks for a weight when the portion
-                            // cannot be scaled ("1.5 bowls"), and pre-validating
-                            // it here would mean two answers to one question.
-                            editorTarget = .fromMealItem(draft.wrappedValue.entry)
-                        }
-                        .buttonStyle(EdButtonStyle(kind: .ghost, size: .sm))
+                        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
                     }
                 }
                 .padding(.top, Space.xs)
@@ -881,6 +865,11 @@ struct MealDetailSheet: View {
             Button("Delete") { confirmingDelete = true }
                 .buttonStyle(EdButtonStyle(kind: .danger, size: .sm))
             Spacer(minLength: Space.sm)
+            // Keep the whole meal, so the next time it is eaten it is picked
+            // rather than estimated again (#625, #673). The editor asks for a
+            // weight when the dishes' portions do not add up to one.
+            Button("Save to library") { editorTarget = .fromMeal(meal) }
+                .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
             Button("Repeat today") { repeatToday() }
                 .buttonStyle(EdButtonStyle(kind: .secondary, size: .sm))
         }
