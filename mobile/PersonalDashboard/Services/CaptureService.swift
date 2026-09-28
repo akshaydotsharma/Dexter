@@ -61,7 +61,20 @@ struct CaptureService: Sendable {
 
     /// Hard upper bound — the App Intent's overall budget is ~30 s and we
     /// want to surface a clean error well before the system kills us.
-    static let timeoutSeconds: UInt64 = 22
+    ///
+    /// ## 22 s to 26 s (#681)
+    ///
+    /// The ~30 s is Apple's: an intent run from Siri, Shortcuts or any system
+    /// surface has 30 seconds to finish (WWDC26, "Discover new capabilities in
+    /// the App Intents framework"; `LongRunningIntent` is the way past it).
+    /// So 30 here would be the kill point itself, not a timeout.
+    ///
+    /// 26 keeps 4 s for what this clock does not see: the background launch
+    /// and the context build before the timer starts, and the dialog after it
+    /// fires. It moved because #681 defers `log_meal` behind tool search, and
+    /// a meal's first turn then measured past 22 s. The timeout cancels the
+    /// whole capture, so a meal whose first turn runs past it is not written.
+    static let timeoutSeconds: UInt64 = 26
 
     init() {}
 

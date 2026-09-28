@@ -42,12 +42,12 @@ import SwiftData
 /// case for an app opened further apart than the five-minute TTL.
 ///
 ///   scenario              total_in before -> after      cold $/turn
-///   capture/one-task        28,693 -> 14,704  -49%      .0860 -> .0476  -45%
-///   capture/three-tools     28,722 -> 14,733  -49%      .0943 -> .0655  -31%
-///   capture/meal            28,717 -> 14,728  -49%      .1020 -> .0672  -34%
-///   capture/trip            28,747 -> 14,758  -49%      .1037 -> .0595  -43%
-///   capture/edit-delete     28,709 -> 14,720  -49%      .0842 -> .0461  -45%
-///   capture/expense (1 search) 28,695 -> 31,474 +10%    .0846 -> .0603  -29%
+///   capture/one-task        28,693 -> 10,272  -64%      .0860 -> .0351  -59%
+///   capture/three-tools     28,722 -> 10,301  -64%      .0943 -> .0470  -50%
+///   capture/meal (1 search) 28,717 -> 25,026  -13%      .1020 -> .0754  -26%
+///   capture/trip            28,747 -> 10,326  -64%      .1037 -> .0479  -54%
+///   capture/edit-delete (1 search) 28,709 -> 21,872 -24% .0842 -> .0470  -44%
+///   capture/expense (1 search) 28,695 -> 22,601 -21%    .0846 -> .0472  -44%
 ///   chat/long-note          31,755 -> 13,335  -58%      .0845 -> .0381  -55%
 ///   chat/three-tools        31,765 -> 13,345  -58%      .0879 -> .0507  -42%
 ///   chat/meal (1 search)    31,760 -> 31,858   +0%      .0971 -> .0724  -25%
@@ -57,8 +57,11 @@ import SwiftData
 /// after. A turn that SEARCHES reads the cached prefix twice (the API samples
 /// once before the search and once after), so its raw token count does not
 /// fall, while its bill does, because the second pass is a 0.1x cache read.
-/// Capture's floor stops at -49% because `log_meal` stays loaded for the 22 s
-/// Shortcut timeout (see `ToolDefinitions.captureLoadedToolNames`).
+/// Capture now loads the same set as chat; `log_meal` is deferred and the
+/// Shortcut timeout moved from 22 s to 26 s (`CaptureService.timeoutSeconds`).
+/// Four meal captures wrote the meal at 20.3, 22.9, 23.6 and 22.5 s and
+/// finished the loop at 23.9, 24.9, 26.3 and 25.3 s
+/// (`testCaptureMealWallClockAgainstTheTimeout`).
 @MainActor
 final class LiveToolSurfaceCostTests: XCTestCase {
 
@@ -228,50 +231,105 @@ final class LiveToolSurfaceCostTests: XCTestCase {
 
     func testCaptureLoopCostAndToolChoice() async throws {
         try skipUnlessLive()
-        let prompt = ChatToDrafts.systemPrompt(
-            timezone: "Asia/Singapore",
-            nowIso: ISO8601DateFormatter().string(from: Date()),
-            contextBlock: await AssistantContextBuilder(store: store).build()
-        )
+        let prompt = await capturePrompt()
         let client = AnthropicClient()
         var failures: [String] = []
 
         for scenario in captureScenarios() {
-            var messages = [AnthropicMessage(role: "user", content: [.text(scenario.input)])]
-            var calls: [(String, [String: AnthropicJSONValue])] = []
-
-            for turn in 1...ChatToDrafts.maxIterations {
-                let started = Date()
-                let response = try await client.send(
-                    systemPrompt: prompt,
-                    messages: messages,
-                    tools: Self.captureTools
-                )
-                try Self.report(response.usage, label: "\(scenario.name) turn \(turn)",
-                                seconds: Date().timeIntervalSince(started), searches: 0)
-
-                let uses = response.content.compactMap { block -> (String, String, [String: AnthropicJSONValue])? in
-                    if case let .toolUse(id, name, input) = block { return (id, name, input) }
-                    return nil
-                }
-                if uses.isEmpty || response.stop_reason == "max_tokens" { break }
-                calls += uses.map { ($0.1, $0.2) }
-
-                // The same reply shape ChatToDrafts sends, with a fresh id,
-                // so a created trip can be filled in on the next turn.
-                messages.append(.assistantReplay(response.content))
-                messages.append(AnthropicMessage(role: "user", content: uses.map { use in
-                    .toolResult(
-                        toolUseId: use.0,
-                        content: "OK: create \(use.1) \(UUID().uuidString.lowercased())",
-                        isError: false
-                    )
-                }))
-                if response.stop_reason == "end_turn" { break }
-            }
-            failures += Self.check(scenario.name, calls: calls, expect: scenario.expect)
+            let loop = try await runCaptureLoop(scenario.name, input: scenario.input, prompt: prompt, client: client)
+            failures += Self.check(scenario.name, calls: loop.calls, expect: scenario.expect)
         }
         XCTAssertTrue(failures.isEmpty, "wrong tool choice:\n" + failures.joined(separator: "\n"))
+    }
+
+    /// The meal capture, three more times, for its WALL CLOCK against
+    /// `CaptureService.timeoutSeconds` (#681). `log_meal` is deferred, so the
+    /// first turn now runs a search, and the timeout cancels the whole
+    /// capture: a meal whose writing turn ends past it is never written.
+    func testCaptureMealWallClockAgainstTheTimeout() async throws {
+        try skipUnlessLive()
+        let prompt = await capturePrompt()
+        let client = AnthropicClient()
+        guard let meal = captureScenarios().first(where: { $0.name == "capture/meal" }) else {
+            return XCTFail("no meal scenario")
+        }
+        var failures: [String] = []
+        for run in 1...3 {
+            let loop = try await runCaptureLoop("capture/meal-run\(run)", input: meal.input, prompt: prompt, client: client)
+            failures += Self.check("capture/meal-run\(run)", calls: loop.calls, expect: meal.expect)
+        }
+        XCTAssertTrue(failures.isEmpty, "wrong tool choice:\n" + failures.joined(separator: "\n"))
+    }
+
+    /// One capture loop, as `ChatToDrafts.run` drives it, INCLUDING its guard
+    /// on a deferred tool called without its required keys (#681). Prints a
+    /// `LOOP` line: the whole loop's wall clock, and when the first call the
+    /// app would actually execute arrived, which is when the phone writes.
+    private func runCaptureLoop(
+        _ name: String,
+        input: String,
+        prompt: AnthropicSystemPrompt,
+        client: AnthropicClient
+    ) async throws -> (calls: [(String, [String: AnthropicJSONValue])], seconds: TimeInterval) {
+        var messages = [AnthropicMessage(role: "user", content: [.text(input)])]
+        var calls: [(String, [String: AnthropicJSONValue])] = []
+        var rejected: [String] = []
+        let loopStarted = Date()
+        var firstWrite: TimeInterval?
+
+        for turn in 1...ChatToDrafts.maxIterations {
+            let started = Date()
+            let response = try await client.send(systemPrompt: prompt, messages: messages, tools: Self.captureTools)
+            try Self.report(response.usage, label: "\(name) turn \(turn)",
+                            seconds: Date().timeIntervalSince(started), searches: 0)
+
+            let uses = response.content.compactMap { block -> (String, String, [String: AnthropicJSONValue])? in
+                if case let .toolUse(id, tool, input) = block { return (id, tool, input) }
+                return nil
+            }
+            if uses.isEmpty || response.stop_reason == "max_tokens" { break }
+
+            var results: [AnthropicContentBlock] = []
+            for use in uses {
+                let missing = ToolDefinitions.missingRequiredKeys(tool: use.1, input: use.2, in: Self.captureTools)
+                if !missing.isEmpty {
+                    rejected.append("\(use.1) missing \(missing.joined(separator: ","))")
+                    results.append(.toolResult(
+                        toolUseId: use.0,
+                        content: ToolDefinitions.notLoadedResult(tool: use.1, missing: missing),
+                        isError: true
+                    ))
+                    continue
+                }
+                calls.append((use.1, use.2))
+                if firstWrite == nil { firstWrite = Date().timeIntervalSince(loopStarted) }
+                // The same reply shape ChatToDrafts sends, with a fresh id,
+                // so a created trip can be filled in on the next turn.
+                results.append(.toolResult(
+                    toolUseId: use.0,
+                    content: "OK: create \(use.1) \(UUID().uuidString.lowercased())",
+                    isError: false
+                ))
+            }
+            messages.append(.assistantReplay(response.content))
+            messages.append(AnthropicMessage(role: "user", content: results))
+            if response.stop_reason == "end_turn" { break }
+        }
+        let total = Date().timeIntervalSince(loopStarted)
+        print(String(
+            format: "LOOP %@: total=%.1fs first_write_at=%@ timeout=%ds rejected=[%@]",
+            name, total, firstWrite.map { String(format: "%.1fs", $0) } ?? "none",
+            Int(CaptureService.timeoutSeconds), rejected.joined(separator: "; ")
+        ))
+        return (calls, total)
+    }
+
+    private func capturePrompt() async -> AnthropicSystemPrompt {
+        ChatToDrafts.systemPrompt(
+            timezone: "Asia/Singapore",
+            nowIso: ISO8601DateFormatter().string(from: Date()),
+            contextBlock: await AssistantContextBuilder(store: store).build()
+        )
     }
 
     // MARK: - Chat: one streamed turn, as the chat surface sends it

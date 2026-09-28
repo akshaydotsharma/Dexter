@@ -54,7 +54,7 @@ Long-lived notes about this codebase live at:
 - `mobile/PersonalDashboard/AI/ToolDefinitions.swift` — 28 tools with UUID-string ids
 - `mobile/PersonalDashboard/AI/MealToolSchema.swift` — the ONE statement of the meal-estimate schema and rules, shared by the composer's prompt and the `log_meal` / `update_meal` tools (#546)
 - `mobile/PersonalDashboard/AI/MealLogSummary.swift` — what a written meal reports back: the numbers, the flags, the remaining-today figures, the Shortcut's spoken sentence
-- `mobile/PersonalDashboard/Services/CaptureService.swift` — App Intent entry point; wraps `ChatToDrafts` with a 22 s timeout
+- `mobile/PersonalDashboard/Services/CaptureService.swift` — App Intent entry point; wraps `ChatToDrafts` with a 26 s timeout (Apple kills an App Intent at 30 s)
 - `mobile/PersonalDashboard/Services/AIStreamingService.swift` — chat-side wrapper around `ChatStream`
 - `mobile/PersonalDashboard/ViewModels/ChatViewModel.swift` — chat state; `confirm(_:)` calls `ExecuteDraftAction`
 - `mobile/PersonalDashboard/Models/Local/{LocalTodo,LocalNote,LocalList,LocalNoteFolder}.swift` — SwiftData @Model classes (keyed on `clientUUID`)

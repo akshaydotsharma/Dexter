@@ -58,9 +58,13 @@ final class ToolSearchSurfaceTests: XCTestCase {
                 "\(surface.name): a loaded name matches no tool, so it would silently defer nothing"
             )
         }
-        XCTAssertTrue(ToolDefinitions.captureLoadedToolNames.contains("log_meal"),
-                      "capture keeps log_meal loaded for the 22 s Shortcut timeout")
+        XCTAssertFalse(ToolDefinitions.captureLoadedToolNames.contains("log_meal"),
+                       "capture defers log_meal too; the timeout moved instead")
         XCTAssertFalse(ToolDefinitions.chatLoadedToolNames.contains("log_meal"))
+        XCTAssertLessThan(
+            CaptureService.timeoutSeconds, 30,
+            "30 s is Apple's App Intent limit; the timeout must fire before the system kills the intent"
+        )
         XCTAssertTrue(
             ToolDefinitions.chatRequestTools.contains {
                 $0.name == WebSearchGrounding.toolName && !$0.deferLoading

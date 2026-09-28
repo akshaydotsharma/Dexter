@@ -656,7 +656,7 @@ enum ToolDefinitions {
     /// Anthropic's server-side web search, declared by type.
     ///
     /// It is NOT in `allTools`, and that is the whole design. `allTools` is what
-    /// the Shortcut sends, and the Shortcut has a hard 22 s timeout in
+    /// the Shortcut sends, and the Shortcut has a hard 26 s timeout in
     /// `CaptureService` and auto-executes without a preview: a search there
     /// costs a timeout on a write nobody reviewed. Chat sends `chatTools`
     /// instead, so the model can look up a branded product before it calls
@@ -779,20 +779,21 @@ enum ToolDefinitions {
         "edit_task", "append_to_note"
     ]
 
-    /// Tools every CAPTURE request loads up front: the everyday set plus
-    /// `log_meal`.
+    /// Tools every CAPTURE request loads up front: the everyday set, the
+    /// same as chat (#681).
     ///
-    /// `log_meal` is large (4,331 tokens) and loaded anyway because the
-    /// Shortcut path has a hard 22 s timeout (`CaptureService`). A search adds
-    /// a server step to the turn: a meal capture measured 25.7 s mean with the
-    /// search against 21.7 s without it (n=3 each, 2026-09-28), and the
-    /// loop's first call alone already sits near the ceiling. Deferring it
-    /// would save tokens and turn meal captures into timeouts.
-    static let captureLoadedToolNames: Set<String> = everydayToolNames.union(["log_meal"])
+    /// `log_meal` (4,331 tokens) was loaded here at first, because a search
+    /// adds a server step and the Shortcut had a 22 s timeout: a meal's first
+    /// turn measured 25.7 s mean with the search against 21.7 s without
+    /// (n=3, 2026-09-28). The user chose the tokens: `log_meal` is deferred
+    /// and the timeout moved to 26 s (`CaptureService.timeoutSeconds`, which
+    /// states why not 30).
+    static let captureLoadedToolNames: Set<String> = everydayToolNames
 
-    /// Tools every CHAT request loads up front: the everyday set, without
-    /// `log_meal`. Chat has no 22 s ceiling, so a meal pays the search's few
-    /// seconds and every other chat turn stops paying 4,331 tokens.
+    /// Tools every CHAT request loads up front: the everyday set. A meal pays
+    /// the search's few seconds, and every other turn stops paying 4,331
+    /// tokens. Loading `log_meal` would only pay if 68% or more of turns were
+    /// meals.
     static let chatLoadedToolNames: Set<String> = everydayToolNames
 
     /// `tools` rebuilt for tool search: the search tool first, then every

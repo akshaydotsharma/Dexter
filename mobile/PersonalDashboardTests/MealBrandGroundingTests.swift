@@ -262,7 +262,7 @@ final class MealBrandGroundingTests: XCTestCase {
     // MARK: - Which paths can search
 
     /// Chat advertises the search tool; the Shortcut does not. `CaptureService`
-    /// runs under a hard 22 s timeout and auto-executes without a preview, so a
+    /// runs under a hard 26 s timeout and auto-executes without a preview, so a
     /// search there costs a timeout on a write nobody reviewed.
     func testOnlyTheChatToolListCarriesWebSearch() {
         XCTAssertFalse(
