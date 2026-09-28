@@ -73,8 +73,13 @@ final class CaptureToolSurfaceTests: XCTestCase {
                 "was likely reintroduced at the ChatToDrafts.run() call site."
             )
         }
-        // And nothing was silently dropped from the shared pool either.
-        XCTAssertEqual(toolNames, Set(ToolDefinitions.allTools.map(\.name)))
+        // And nothing was silently dropped from the shared pool either. Since
+        // #681 most of them travel deferred behind the tool search tool, but
+        // every one is still in the request.
+        XCTAssertEqual(
+            toolNames,
+            Set(ToolDefinitions.allTools.map(\.name)).union([ToolDefinitions.toolSearch.name])
+        )
     }
 }
 

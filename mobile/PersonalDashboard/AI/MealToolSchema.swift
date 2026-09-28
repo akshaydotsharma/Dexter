@@ -171,7 +171,7 @@ enum MealToolSchema {
     ///
     /// Kept apart from `estimateRules` for the same reason `brandLookupRule` is:
     /// it must reach only the path that can actually run the lookup. The
-    /// Shortcut has 22 seconds and no preview, and chat has not been converted
+    /// Shortcut has 26 seconds and no preview, and chat has not been converted
     /// yet, so telling either one to call a tool it does not declare would
     /// describe a capability it does not have.
     ///
@@ -231,7 +231,7 @@ enum MealToolSchema {
     /// Kept apart from `estimateRules` for one reason: `estimateRules` reaches
     /// all three paths and this rule must reach only the two that can actually
     /// search. The Shortcut declares no web-search tool, because it runs under a
-    /// hard 22 s timeout and writes without a preview, and telling a model to
+    /// hard 26 s timeout and writes without a preview, and telling a model to
     /// search when it has nothing to search with is how a capture turns into an
     /// apology instead of a meal.
     ///

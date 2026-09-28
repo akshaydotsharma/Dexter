@@ -6,6 +6,18 @@ import Foundation
 struct AnthropicClient: Sendable {
     static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     static let model = "claude-sonnet-5"
+    /// The model for a route that is a plain, tool-free generation AND was
+    /// measured to give the same answer as `model` on the same inputs (#681).
+    ///
+    /// Two routes qualify today: meal naming (`nameMeals`) and the Urdu to
+    /// Devanagari script conversion (`HindiScriptNormalizer`). Every tool loop,
+    /// every extraction and every estimate stays on `model`. A new caller does
+    /// not get this by default; it has to name it, after its own comparison.
+    ///
+    /// Haiku 4.5 takes no adaptive thinking and no `effort`, and supports only
+    /// the basic web search variant. Neither route sends any of those, so the
+    /// request bodies are unchanged apart from the model string.
+    static let lightModel = "claude-haiku-4-5"
     static let anthropicVersion = "2023-06-01"
     /// Shared output ceiling for every `send` / `stream` caller: the chat loop,
     /// the capture (Shortcut) loop, the email-ingest loop, both ticket
@@ -112,18 +124,24 @@ struct AnthropicClient: Sendable {
     /// verified against the live API before it shipped: without it, a rejected
     /// marker would fail every AI call in the app instead of costing one
     /// duplicate request and a console line.
+    ///
+    /// `model` is chosen per call, never globally (#681). Every caller that
+    /// does not name one runs on `model`; only a route measured to give the
+    /// same answer on `lightModel` names that instead.
     func send(
         systemPrompt: AnthropicSystemPrompt,
         messages: [AnthropicMessage],
         tools: [AnthropicTool],
-        maxTokens: Int = Self.maxTokens
+        maxTokens: Int = Self.maxTokens,
+        model: String = Self.model
     ) async throws -> AnthropicResponse {
         do {
             return try await sendOnce(
                 systemPrompt: Self.promptCachingEnabled ? systemPrompt : systemPrompt.withoutCacheControl,
                 messages: messages,
                 tools: tools,
-                maxTokens: maxTokens
+                maxTokens: maxTokens,
+                model: model
             )
         } catch AnthropicError.http(let status, let body)
             where Self.isCacheControlRejection(status: status, body: body) {
@@ -132,7 +150,8 @@ struct AnthropicClient: Sendable {
                 systemPrompt: systemPrompt.withoutCacheControl,
                 messages: messages,
                 tools: tools,
-                maxTokens: maxTokens
+                maxTokens: maxTokens,
+                model: model
             )
         }
     }
@@ -141,14 +160,15 @@ struct AnthropicClient: Sendable {
         systemPrompt: AnthropicSystemPrompt,
         messages: [AnthropicMessage],
         tools: [AnthropicTool],
-        maxTokens: Int
+        maxTokens: Int,
+        model: String
     ) async throws -> AnthropicResponse {
         guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
             throw AnthropicError.notConfigured
         }
 
         let body = AnthropicRequest(
-            model: Self.model,
+            model: model,
             max_tokens: maxTokens,
             system: systemPrompt,
             messages: messages,
@@ -475,7 +495,11 @@ struct AnthropicClient: Sendable {
                     fields["input"] = input
                     finished.append(.object(fields))
                 }
-            case WebSearchGrounding.resultBlockType:
+            case WebSearchGrounding.resultBlockType, ToolDefinitions.toolSearchResultBlockType:
+                // Both arrive whole in `content_block_start`, with no deltas.
+                // The search result is kept for the same reason as the web
+                // search one: a paused turn that loaded a tool is replayed, and
+                // its `server_tool_use` must travel with its result (#681).
                 finished.append(block.start)
             default:
                 break
@@ -497,15 +521,24 @@ struct AnthropicClient: Sendable {
             // This is the ONLY record that carries `stop_reason` and the final
             // `output_tokens`. `message_stop` carries neither, so both are
             // cached here and yielded from the terminator below (#554).
+            //
+            // Its usage is CUMULATIVE for the whole turn. That matters once a
+            // server tool runs inside the turn (#681): a tool search, or a web
+            // search, makes the API sample twice, and `message_start` only
+            // knows about the first pass. When this record restates the input
+            // counters, they replace the ones `message_start` gave, or a
+            // searched turn is logged at about half its real input.
             struct Payload: Decodable {
                 struct Delta: Decodable { let stop_reason: String? }
-                struct Usage: Decodable { let output_tokens: Int? }
                 let delta: Delta?
-                let usage: Usage?
+                let usage: AnthropicUsage?
             }
             guard let p = try? Self.decoder.decode(Payload.self, from: data) else { return }
             if let reason = p.delta?.stop_reason { terminal.stopReason = reason }
             if let tokens = p.usage?.output_tokens { terminal.outputTokens = tokens }
+            if let usage = p.usage, usage.input_tokens != nil {
+                terminal.usage = usage
+            }
 
         case "message_start":
             // The ONLY record that carries the cache counters. `message_delta`
@@ -966,9 +999,22 @@ enum AnthropicContentBlock: Codable {
             let content = (try? c.decode(String.self, forKey: .content)) ?? ""
             let isError = (try? c.decode(Bool.self, forKey: .is_error)) ?? false
             self = .toolResult(toolUseId: id, content: content, isError: isError)
+        case WebSearchGrounding.serverToolUseBlockType,
+             ToolDefinitions.toolSearchResultBlockType,
+             WebSearchGrounding.resultBlockType:
+            // A SERVER tool's call and its result, kept verbatim (#681).
+            //
+            // The capture loop replays the assistant turn into its next request.
+            // A turn that loaded a deferred tool through tool search holds the
+            // `server_tool_use` and its `tool_search_tool_result`, and the API
+            // needs both back unchanged: the result's `tool_reference` is what
+            // makes the discovered tool callable in the replayed history. The
+            // old mapping to `.text("")` made `assistantReplay` drop them.
+            self = .raw(try AnthropicJSONValue(from: decoder))
         default:
             // Unknown block type — treat as empty text rather than failing
-            // the whole message decode.
+            // the whole message decode. `thinking` lands here on purpose; see
+            // `AnthropicMessage.assistantReplay`.
             self = .text("")
         }
     }
@@ -1026,18 +1072,47 @@ struct AnthropicTool: Codable {
     /// cap, which the API reads as its own default.
     let maxUses: Int?
 
+    /// True keeps this tool's definition OUT of the model's context until the
+    /// model loads it with the tool search tool (#681).
+    ///
+    /// The full definition is still sent on every request: the API needs it to
+    /// run the search and to expand the reference the search returns. What
+    /// changes is what enters the prompt. A deferred tool is not rendered into
+    /// the cached prefix at all, so it costs nothing on a request that never
+    /// loads it, and loading it later appends rather than rewrites, so the
+    /// prefix stays byte-identical.
+    ///
+    /// Only ever set through `deferred()`, and only by
+    /// `ToolDefinitions.withToolSearch`, which guarantees the search tool is in
+    /// the same array. A request whose tools are ALL deferred is a 400.
+    let deferLoading: Bool
+
     init(
         name: String,
         description: String,
         input_schema: AnthropicJSONValue,
         serverToolType: String? = nil,
-        maxUses: Int? = nil
+        maxUses: Int? = nil,
+        deferLoading: Bool = false
     ) {
         self.name = name
         self.description = description
         self.input_schema = input_schema
         self.serverToolType = serverToolType
         self.maxUses = maxUses
+        self.deferLoading = deferLoading
+    }
+
+    /// The same tool, held back until the model searches for it (#681).
+    func deferred() -> AnthropicTool {
+        AnthropicTool(
+            name: name,
+            description: description,
+            input_schema: input_schema,
+            serverToolType: serverToolType,
+            maxUses: maxUses,
+            deferLoading: true
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1046,6 +1121,7 @@ struct AnthropicTool: Codable {
         case input_schema
         case type
         case max_uses
+        case defer_loading
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1058,6 +1134,9 @@ struct AnthropicTool: Codable {
         }
         try c.encode(description, forKey: .description)
         try c.encode(input_schema, forKey: .input_schema)
+        // Omitted, not `false`, when the tool is loaded: every request built
+        // before #681 keeps exactly the bytes it had.
+        if deferLoading { try c.encode(true, forKey: .defer_loading) }
     }
 
     init(from decoder: Decoder) throws {
@@ -1065,6 +1144,7 @@ struct AnthropicTool: Codable {
         name = try c.decode(String.self, forKey: .name)
         serverToolType = try c.decodeIfPresent(String.self, forKey: .type)
         maxUses = try c.decodeIfPresent(Int.self, forKey: .max_uses)
+        deferLoading = (try c.decodeIfPresent(Bool.self, forKey: .defer_loading)) ?? false
         description = (try? c.decode(String.self, forKey: .description)) ?? ""
         input_schema = (try? c.decode(AnthropicJSONValue.self, forKey: .input_schema))
             ?? .object([:])

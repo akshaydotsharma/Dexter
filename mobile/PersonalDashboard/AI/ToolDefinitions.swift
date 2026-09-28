@@ -656,7 +656,7 @@ enum ToolDefinitions {
     /// Anthropic's server-side web search, declared by type.
     ///
     /// It is NOT in `allTools`, and that is the whole design. `allTools` is what
-    /// the Shortcut sends, and the Shortcut has a hard 22 s timeout in
+    /// the Shortcut sends, and the Shortcut has a hard 26 s timeout in
     /// `CaptureService` and auto-executes without a preview: a search there
     /// costs a timeout on a write nobody reviewed. Chat sends `chatTools`
     /// instead, so the model can look up a branded product before it calls
@@ -715,6 +715,158 @@ enum ToolDefinitions {
     /// so `PromptCacheShapeTests` keeps measuring the array it was written
     /// against.
     static let chatTools: [AnthropicTool] = allTools + [webSearch]
+
+    // MARK: - Tool search (#681)
+
+    /// Anthropic's server-side tool search, regex variant.
+    ///
+    /// ## Why this exists
+    ///
+    /// Every chat and capture request used to carry all 28 definitions:
+    /// 22,137 of the capture request's 28,713 input tokens (`count_tokens`,
+    /// 2026-09-28), including a request that only adds one task. `log_meal`
+    /// and `update_meal` alone are 8,380 of them. The prompt cache cannot
+    /// absorb that for this app: it lives five minutes, and a personal app is
+    /// usually opened further apart than that, so most requests paid the
+    /// 1.25x write surcharge on the whole block instead of the 0.1x read.
+    ///
+    /// With tool search, a DEFERRED tool is sent but not rendered into the
+    /// prompt. The model sees the loaded core, and loads anything else by
+    /// name when the request needs it. Every one of the 28 tools can still be
+    /// called, so no capability is lost.
+    ///
+    /// ## Why regex and not BM25
+    ///
+    /// Both stable system prompts already list every tool by exact name under
+    /// AVAILABLE TOOLS, so the model never has to guess what exists. A regex
+    /// on those names (`^(draft_trip|add_itinerary_item)$`) is an exact
+    /// lookup, and one search loads every tool the turn needs. BM25 ranks
+    /// natural-language queries, which is the right tool for a catalogue the
+    /// model has never seen and the wrong one for a lookup by known name.
+    ///
+    /// ## Model support, verified live 2026-09-28
+    ///
+    /// The docs' compatibility table lists Haiku 4.5 but not Sonnet 5. The
+    /// live API accepts both variants on `claude-sonnet-5` and returns
+    /// `server_tool_use` then `tool_search_tool_result` then the `tool_use`.
+    static let toolSearch = AnthropicTool(
+        name: "tool_search_tool_regex",
+        description: "",
+        input_schema: .object([:]),
+        serverToolType: "tool_search_tool_regex_20251119"
+    )
+
+    /// The block a search's results arrive in. Kept verbatim on replay; see
+    /// `AnthropicContentBlock`.
+    static let toolSearchResultBlockType = "tool_search_tool_result"
+
+    /// The everyday writes every request loads up front: create a task, a
+    /// note or a list, add to a list, tick a task off, change a task, add to a
+    /// note. Each is under 750 tokens; together about 3,000.
+    ///
+    /// `draft_task`, `draft_note` and `draft_list` load as a set because
+    /// CAPTURE DEFAULTS in both prompts choose between exactly those three for
+    /// every new item. Deferring one of them tilts that choice.
+    ///
+    /// `edit_task` and `append_to_note` are here because of a measured bias,
+    /// not a guess. With only the four creates loaded, "remind me to book the
+    /// car service on Friday" drafted a SECOND "Book the car service" task
+    /// where the all-tools baseline moved the due date on the one that exists
+    /// (live, 2026-09-28). The rule in `toolLoadingRule` did not stop it, so
+    /// the two edits the prompt leans on hardest load with the creates.
+    private static let everydayToolNames: Set<String> = [
+        "draft_task", "draft_note", "draft_list", "add_to_list", "complete_task",
+        "edit_task", "append_to_note"
+    ]
+
+    /// Tools every CAPTURE request loads up front: the everyday set, the
+    /// same as chat (#681).
+    ///
+    /// `log_meal` (4,331 tokens) was loaded here at first, because a search
+    /// adds a server step and the Shortcut had a 22 s timeout: a meal's first
+    /// turn measured 25.7 s mean with the search against 21.7 s without
+    /// (n=3, 2026-09-28). The user chose the tokens: `log_meal` is deferred
+    /// and the timeout moved to 26 s (`CaptureService.timeoutSeconds`, which
+    /// states why not 30).
+    static let captureLoadedToolNames: Set<String> = everydayToolNames
+
+    /// Tools every CHAT request loads up front: the everyday set. A meal pays
+    /// the search's few seconds, and every other turn stops paying 4,331
+    /// tokens. Loading `log_meal` would only pay if 68% or more of turns were
+    /// meals.
+    static let chatLoadedToolNames: Set<String> = everydayToolNames
+
+    /// `tools` rebuilt for tool search: the search tool first, then every
+    /// tool named in `loaded` and every server tool, then every other client
+    /// tool with `defer_loading` set. Order within each group is `tools`'
+    /// own, so the array, and the prefix it renders, are identical on every
+    /// request.
+    static func withToolSearch(_ tools: [AnthropicTool], loaded: Set<String>) -> [AnthropicTool] {
+        let upFront = tools.filter { $0.serverToolType != nil || loaded.contains($0.name) }
+        let held = tools
+            .filter { $0.serverToolType == nil && !loaded.contains($0.name) }
+            .map { $0.deferred() }
+        return [toolSearch] + upFront + held
+    }
+
+    /// What `ChatToDrafts` sends (#681). Every tool in `allTools`, once.
+    static let captureRequestTools = withToolSearch(allTools, loaded: captureLoadedToolNames)
+
+    /// What `ChatStream` sends (#681). Every tool in `chatTools`, once; web
+    /// search stays loaded because it is a server tool.
+    static let chatRequestTools = withToolSearch(chatTools, loaded: chatLoadedToolNames)
+
+    /// The `required` keys of `tool`'s schema that `input` lacks, when `tool`
+    /// travels DEFERRED in `tools`. Empty for a loaded tool, whatever it sent.
+    ///
+    /// A deferred tool's schema is not in the prompt until a search loads
+    /// it, and the model can still call it straight from its AVAILABLE TOOLS
+    /// line: measured live on 2026-09-28, a trip capture called `draft_trip`
+    /// and `add_itinerary_item` with no search at all. Those calls were
+    /// right, but they were written against a one-line description, and
+    /// `ExecuteDraftAction` defaults most missing fields rather than refusing
+    /// them. Capture auto-executes with no preview, so a guessed call missing
+    /// a required key is sent back to be retried with the schema loaded,
+    /// instead of being written half-formed.
+    ///
+    /// Loaded tools are never checked: the model saw their schema, and this
+    /// must not reject a call the app accepted before #681.
+    ///
+    /// Capture only. Chat does not use this: a chat turn is one call with no
+    /// second one to retry in, so rejecting would DROP what the user asked
+    /// for, and a chat draft lands as a card the user can see and edit. A
+    /// visible list with the default icon beats a list that silently never
+    /// arrived.
+    static func missingRequiredKeys(
+        tool name: String,
+        input: [String: AnthropicJSONValue],
+        in tools: [AnthropicTool]
+    ) -> [String] {
+        guard let tool = tools.first(where: { $0.name == name }), tool.deferLoading else { return [] }
+        let required = tool.input_schema.objectValue?["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        return required.filter { input[$0] == nil }
+    }
+
+    /// The tool_result a rejected call gets. Fixed text plus schema key names,
+    /// never user data.
+    static func notLoadedResult(tool name: String, missing: [String]) -> String {
+        "ERR_TOOL_NOT_LOADED: \(name) was called without its required "
+            + "\(missing.joined(separator: ", ")). Load it with tool_search_tool_regex "
+            + "to read its schema, then call it again."
+    }
+
+    /// The rule both stable system prompts end with (#681). Static, so the
+    /// cached prefix stays byte-identical.
+    ///
+    /// "Search FIRST" is measured, not stylistic. A softer first version let
+    /// the model call the loaded tools, stop, and search on the NEXT turn.
+    /// Capture survived that at the price of an extra API call; chat would
+    /// not have, because a chat turn is one call and nothing asks for more,
+    /// so the unloaded part of the request would have been silently dropped.
+    static let toolLoadingRule = """
+        TOOL LOADING:
+        Only some of the tools listed under AVAILABLE TOOLS are loaded up front. Choose tools exactly as you would if every tool were loaded. If the request needs ANY tool that is not loaded, your FIRST action is one tool_search_tool_regex search for the EXACT names of every such tool, e.g. the pattern "^(log_meal|add_expense)$". Only after that search do you make the tool calls, and you make ALL of them in the same response, loaded and newly loaded together. Never pick a loaded tool over the right one because the right one is not loaded yet, never skip part of the request for that reason, and never leave a call for a later turn.
+        """
 
     /// Map tool name → action type. Mirrors `toolToActionType` in
     /// server/ai/tools.js. Reuses `DraftActionType` from Models/Draft.swift
