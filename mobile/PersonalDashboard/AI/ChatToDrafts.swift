@@ -37,6 +37,9 @@ struct ChatToDrafts {
     /// single response don't count as multiple iterations.
     static let maxIterations = 5
 
+    /// The tool array every capture request sends (#681).
+    static var tools: [AnthropicTool] { ToolDefinitions.captureRequestTools }
+
     init(
         anthropic: AnthropicClient,
         context: AssistantContextBuilder,
@@ -76,6 +79,9 @@ struct ChatToDrafts {
         var failed: [FailedDraftRecord] = []
         var assistantText: String? = nil
         var truncated = false
+        // Calls sent back for a retry with the schema loaded, by tool name,
+        // until a later call of the same tool runs (#681).
+        var unretried: [String: FailedDraftRecord] = [:]
 
         // Capture sees the full toolset (including trip tools) so voice
         // requests like "plan a trip to Italy" route to draft_trip instead
@@ -86,7 +92,7 @@ struct ChatToDrafts {
             let response = try await anthropic.send(
                 systemPrompt: systemPrompt,
                 messages: messages,
-                tools: ToolDefinitions.allTools
+                tools: Self.tools
             )
 
             // Asked BEFORE a single tool call is read, let alone run (#554).
@@ -133,8 +139,27 @@ struct ChatToDrafts {
                     toolResultBlocks.append(.toolResult(toolUseId: call.id, content: "ERR_UNKNOWN_TOOL", isError: true))
                     continue
                 }
+                // A deferred tool called before its schema was loaded, and
+                // missing a key that schema requires (#681). Not run: sent back
+                // so the next iteration can load the tool and call it properly.
+                // It only becomes a failure if no later iteration does.
+                let missing = ToolDefinitions.missingRequiredKeys(tool: call.name, input: call.input, in: Self.tools)
+                if !missing.isEmpty {
+                    unretried[call.name] = FailedDraftRecord(
+                        tool: call.name,
+                        id: nil,
+                        message: "called without its required \(missing.joined(separator: ", "))"
+                    )
+                    toolResultBlocks.append(.toolResult(
+                        toolUseId: call.id,
+                        content: ToolDefinitions.notLoadedResult(tool: call.name, missing: missing),
+                        isError: true
+                    ))
+                    continue
+                }
                 do {
                     let outcome = try await executor.run(actionType: actionType, input: call.input)
+                    unretried[call.name] = nil
                     executed.append(outcome)
                     // Echo only fixed tokens back to the model. The
                     // outcome id is a server-issued UUID (safe), but the
@@ -181,6 +206,8 @@ struct ChatToDrafts {
                 break
             }
         }
+
+        failed.append(contentsOf: unretried.keys.sorted().compactMap { unretried[$0] })
 
         // Treat trailing assistant text ending in "?" as a clarification
         // question only if we didn't actually do anything.
@@ -249,6 +276,8 @@ struct ChatToDrafts {
         - draft_trip: Create a NEW trip with name, start_date, end_date, notes. Do NOT call unless both start_date AND end_date are known; ask the user for dates first if missing.
         - add_itinerary_item: Add stays / activities / places / restaurants to an existing trip (multi-item supported via items array; kind enum is stay|activity|place|restaurant)
         - log_meal: Log a meal the user says they ate, WITH your nutrition estimate of it (items, per-item portions and nutrients, confidence, assumptions)
+        - add_expense: Log ONE purchase or charge the user already made (amount, currency, category, merchant, date)
+        - add_recurring_expense: Set up a RECURRING monthly expense template (rent, subscriptions, insurance). Never also call add_expense for the same charge
 
         EDIT (for existing items - requires UUID):
         - complete_task: Mark a task as completed or incomplete
@@ -313,6 +342,8 @@ struct ChatToDrafts {
         - `` `inline code` `` for identifiers, `` ``` `` fenced blocks for code.
         - One-line confirmations / acknowledgements stay plain — don't decorate them.
         - Note bodies (draft_note / edit_note `body`): structure them with headings + lists when the content is long enough to benefit; short notes stay as plain prose.
+
+        \(ToolDefinitions.toolLoadingRule)
         """
 
     /// The tail that changes per request: the library, the timezone and the
@@ -354,6 +385,19 @@ struct ChatToDrafts {
     /// spacing, and the five-minute TTL is the option that cannot lose. Revisit
     /// once `cache_read_input_tokens` has said how often the prefix actually
     /// goes cold; `AnthropicCacheTTL.oneHour` is one word away.
+    ///
+    /// ### Re-checked for #681, with the smaller prefix
+    ///
+    /// Tool search cut the prefix from about 27,000 tokens to 13,057, but the
+    /// decision is a ratio, so the size does not move it. Per capture loop, in
+    /// units of the prefix P: five minutes costs 1.25P + 0.1P = 1.35P every
+    /// time; the hour costs 2P + 0.1P = 2.1P cold, and 0.2P for a loop that
+    /// lands 5 to 60 minutes after the previous one on the same path. The hour
+    /// wins only when that fraction f satisfies 2.1 - 1.9f < 1.35, so f > 0.39:
+    /// four loops in ten would have to arrive within the hour of another, on
+    /// the same surface (chat and capture have separate prefixes). No usage
+    /// log says that, so five minutes stays. The `[anthropic]` console line
+    /// prints `cache_read` on every call; that is where f can be read off.
     static func systemPrompt(timezone: String, nowIso: String, contextBlock: String) -> AnthropicSystemPrompt {
         AnthropicSystemPrompt(
             stable: stableSystemPrompt,

@@ -32,7 +32,18 @@ enum HindiScriptNormalizer {
     /// Claude; otherwise return it unchanged (no API call). Never throws —
     /// returns the input on any error so the voice pipeline degrades to showing
     /// the raw transcript rather than nothing.
-    static func normalize(_ text: String) async -> String {
+    /// The model the conversion runs on: Haiku, not Sonnet (#681).
+    ///
+    /// A script conversion with no tools, whose output is bounded by its
+    /// input. On 2026-09-28 four Urdu-script transcripts went through this
+    /// code path on both models (`LiveToolSurfaceCostTests`): all four came
+    /// back as Devanagari with no Urdu script left, two identical to Sonnet's,
+    /// and two differing only in accepted Hindi spelling variants (डॉक्टर /
+    /// डाक्टर, पराठे / परांठे). It also shortens the wait: this call sits
+    /// between the user finishing speaking and the preview appearing.
+    static let model = AnthropicClient.lightModel
+
+    static func normalize(_ text: String, model: String = Self.model) async -> String {
         guard containsPersoArabic(text) else { return text }
 
         let system = """
@@ -63,7 +74,8 @@ enum HindiScriptNormalizer {
                 systemPrompt: .uncached(system),
                 messages: [AnthropicMessage(role: "user", content: [.text(text)])],
                 tools: [],
-                maxTokens: 2048
+                maxTokens: 2048,
+                model: model
             )
             let converted = response.content
                 .compactMap { block -> String? in

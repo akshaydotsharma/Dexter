@@ -143,10 +143,21 @@ final class PromptCacheShapeTests: XCTestCase {
 
     /// Tools render before system, so a volatile tool block would break the
     /// cache even with a perfect system split.
+    ///
+    /// Since #681 the capture request sends `ChatToDrafts.tools`: the search
+    /// tool, the loaded core, then the rest deferred, each group in
+    /// `allTools` order.
     func testToolsPrecedeTheBreakpointAndAreTheSharedSet() async throws {
         let body = try await captureRequestBody()
         let tools = body["tools"] as? [[String: Any]] ?? []
-        XCTAssertEqual(tools.compactMap { $0["name"] as? String }, Self.expectedToolOrder)
+        XCTAssertEqual(
+            tools.compactMap { $0["name"] as? String },
+            ChatToDrafts.tools.map(\.name)
+        )
+        XCTAssertEqual(
+            Set(tools.compactMap { $0["name"] as? String }),
+            Set(Self.expectedToolOrder).union([ToolDefinitions.toolSearch.name])
+        )
     }
 
     // MARK: - 4. The stable half really is stable
@@ -297,7 +308,9 @@ final class PromptCacheShapeTests: XCTestCase {
         seedRealisticLibrary(in: store)
         let contextBlock = await AssistantContextBuilder(store: store).build()
 
-        let tools = try AnthropicClient.encoder.encode(ToolDefinitions.allTools).count
+        // Only LOADED tools render into the cached prefix (#681). A deferred
+        // definition is sent but not rendered, so it is not part of the prefix.
+        let tools = try AnthropicClient.encoder.encode(ChatToDrafts.tools.filter { !$0.deferLoading }).count
         let stable = ChatToDrafts.stableSystemPrompt.utf8.count
         let volatile = ChatToDrafts.volatileSystemBlock(
             timezone: "Asia/Singapore",

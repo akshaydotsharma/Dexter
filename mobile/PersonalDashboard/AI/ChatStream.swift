@@ -28,6 +28,9 @@ struct ChatStream {
         self.context = context
     }
 
+    /// The tool array every chat request sends (#681).
+    static var tools: [AnthropicTool] { ToolDefinitions.chatRequestTools }
+
     static func `default`() -> ChatStream {
         ChatStream(
             anthropic: AnthropicClient(),
@@ -105,7 +108,7 @@ struct ChatStream {
                         for try await event in anthropic.stream(
                             systemPrompt: systemPrompt,
                             messages: messages,
-                            tools: ToolDefinitions.chatTools
+                            tools: Self.tools
                         ) {
                             switch event {
                             case .textDelta(let chunk):
@@ -252,6 +255,8 @@ struct ChatStream {
         - draft_trip: Create a NEW trip with name, start_date, end_date, notes. Do NOT call unless both start_date AND end_date are known; ask the user for dates first.
         - add_itinerary_item: Add stays / activities / places / restaurants to an existing trip (multi-item supported via items array; kind enum is stay|activity|place|restaurant)
         - log_meal: Log a meal the user says they ate, WITH your nutrition estimate of it (items, per-item portions and nutrients, confidence, assumptions)
+        - add_expense: Log ONE purchase or charge the user already made (amount, currency, category, merchant, date)
+        - add_recurring_expense: Set up a RECURRING monthly expense template (rent, subscriptions, insurance). Never also call add_expense for the same charge
 
         EDIT (for existing items - requires UUID):
         - complete_task: Mark a task as completed or incomplete
@@ -316,6 +321,8 @@ struct ChatStream {
         - `` `inline code` `` for identifiers, `` ``` `` fenced blocks for code.
         - One-line confirmations / acknowledgements stay plain — don't decorate them.
         - Note bodies (draft_note / edit_note `body`): structure them with headings + lists when the content is long enough to benefit; short notes stay as plain prose.
+
+        \(ToolDefinitions.toolLoadingRule)
         """
 
     /// The tail that changes per request: the library, the timezone and the

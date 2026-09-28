@@ -43,7 +43,12 @@ extension AnthropicClient {
     ///
     /// - Returns: `id → name`, holding only the entries the model answered and
     ///   only where the name is non-empty and not a copy of the input.
-    func nameMeals(_ requests: [MealNamingRequest]) async throws -> [String: String] {
+    ///
+    /// Runs on `lightModel` (#681). See `mealNamingModel`.
+    func nameMeals(
+        _ requests: [MealNamingRequest],
+        model: String = Self.mealNamingModel
+    ) async throws -> [String: String] {
         guard !requests.isEmpty else { return [:] }
         guard let key = AppConfig.anthropicAPIKey, !key.isEmpty else {
             throw MealEstimationError.notConfigured
@@ -52,10 +57,10 @@ extension AnthropicClient {
         let prompt = Self.mealNamingPrompt(requests)
 
         let body: AnthropicJSONValue = .object([
-            "model": .string(Self.model),
+            "model": .string(model),
             // Names are short and there are at most forty of them. Generous
-            // enough for the thinking block this model returns, which spends
-            // the same budget the answer needs (#543).
+            // enough for the thinking block Sonnet returns, which spends the
+            // same budget the answer needs (#543); Haiku returns none.
             "max_tokens": .int(4096),
             "messages": .array([
                 .object([
@@ -118,6 +123,26 @@ extension AnthropicClient {
 
         return Self.names(from: decoded["names"]?.arrayValue ?? [], asked: requests)
     }
+
+    /// The model meal naming runs on: Haiku, not Sonnet (#681).
+    ///
+    /// Naming is a plain generation with no tools and a fixed output shape,
+    /// and the reply is filtered by `names(from:asked:)` whichever model wrote
+    /// it. On 2026-09-28 the same twelve descriptions went through this code
+    /// path on both models (`LiveToolSurfaceCostTests.testLightRoutesMatchSonnet`):
+    ///
+    ///   - both named the same 10 of 12; both returned "Greek salad" and
+    ///     "Protein shake" unchanged, which `names` drops as copies
+    ///   - no wrong or invented name on either side, every name inside the
+    ///     title rule
+    ///   - Haiku is a little less specific on three: "Oats with banana and
+    ///     peanut butter" (Sonnet kept the whey), "Sushi platter with miso
+    ///     soup", "Masala chai and biscuits"
+    ///
+    /// That is the same answer at a lower price, and Haiku 4.5 returns no
+    /// thinking block, which on Sonnet spent most of this call's output. If a
+    /// list ever reads worse, this one line moves it back.
+    static let mealNamingModel = lightModel
 
     /// Read the reply into `id → name`, dropping everything that cannot be used.
     ///
