@@ -95,6 +95,21 @@ enum MealCalendar {
         return slots
     }
 
+    /// The number of squares in a fixed-height grid: six weeks, the most any
+    /// month can span.
+    static let fixedSlotCount = 42
+
+    /// ``slots(forMonthOf:calendar:)`` padded with trailing blanks to six whole
+    /// weeks, so every month draws the same number of rows (#679). A calendar
+    /// whose height changed between months resized its popover on every step.
+    static func fixedSlots(forMonthOf date: Date, calendar: Calendar = .current) -> [MealCalendarSlot] {
+        var slots = slots(forMonthOf: date, calendar: calendar)
+        while slots.count < fixedSlotCount {
+            slots.append(MealCalendarSlot(index: slots.count, day: nil))
+        }
+        return slots
+    }
+
     /// The one-letter-or-two weekday headings, starting at `calendar.firstWeekday`.
     static func weekdaySymbols(calendar: Calendar = .current) -> [String] {
         let symbols = calendar.veryShortStandaloneWeekdaySymbols
@@ -163,15 +178,14 @@ enum MealCalendar {
 
     /// The heaviest counted day among the squares on screen.
     ///
-    /// The cell bars are normalised against this rather than against the calorie
-    /// target, because the grid has to work before targets are ever set and
-    /// because "heavier than the rest of this month" is the comparison the month
-    /// view is for. A verdict against a target is what the day card below gives,
-    /// and giving it twice in two different visual languages would make the two
-    /// look like different facts.
+    /// Since #679 this is the FALLBACK scale for the day rings, used only for a
+    /// day with no calorie target in force (see ``ringProgress(calories:target:heaviest:)``).
+    /// It stays because the grid has to work before targets are ever set, and
+    /// "heavier than the rest of this month" is still a fair reading when there
+    /// is nothing to measure a day against.
     ///
-    /// Returns nil when nothing in view was logged, which the cells read as "draw
-    /// no bars at all".
+    /// Returns nil when nothing in view was logged, which the rings read as "no
+    /// scale to draw against".
     static func heaviest(among slots: [MealCalendarSlot], readings: [Date: MealDayReading]) -> Double? {
         let values = slots.compactMap { slot -> Double? in
             guard let day = slot.day else { return nil }
@@ -179,5 +193,50 @@ enum MealCalendar {
         }
         guard let top = values.max(), top > 0 else { return nil }
         return top
+    }
+
+    /// How much of its ring a day fills, from 0 to 1, or nil for no ring at all
+    /// (#679).
+    ///
+    /// The user asked for the Apple Fitness reading: a ring that closes as the
+    /// day's calories approach the day's target. So the denominator is the
+    /// calorie target in force on that day. A day with no target falls back to
+    /// the heaviest day in view, so a log kept before targets existed still
+    /// reads as a comparison rather than as an empty grid.
+    ///
+    /// - `calories == nil` (unlogged) is nil: no ring and no track. A blank
+    ///   square is the grid's word for "no record", and a ring of any size would
+    ///   contradict it.
+    /// - A logged day at zero is 0, not nil: the track draws with no arc, so it
+    ///   can never be mistaken for an unlogged day.
+    /// - The result is clamped at 1. Past the target the ring is simply closed;
+    ///   how FAR past is the job of ``isOver(calories:target:)`` and the day
+    ///   card, not of a second lap.
+    static func ringProgress(calories: Double?, target: Double?, heaviest: Double?) -> Double? {
+        guard let calories else { return nil }
+        let scale: Double?
+        if let target, target > 0 {
+            scale = target
+        } else if let heaviest, heaviest > 0 {
+            scale = heaviest
+        } else {
+            scale = nil
+        }
+        guard let scale else { return 0 }
+        return min(max(calories / scale, 0), 1)
+    }
+
+    /// Whether a day's ring draws in the over colour (#679).
+    ///
+    /// Reads the same verdict the day card draws (`Nutrient.calories.verdict`),
+    /// so the ring and the card can never disagree about a day. Only an over day
+    /// changes hue: a closed ring alone cannot say "too much", because it looks
+    /// the same at 100% and at 180%. Under and on-track stay in the section
+    /// accent, since the arc's length already says how far along the day got.
+    ///
+    /// False with no target, or for an unlogged day: there is no verdict to draw.
+    static func isOver(calories: Double?, target: Double?) -> Bool {
+        guard let calories, let target else { return false }
+        return Nutrient.calories.verdict(value: calories, target: target) == .over
     }
 }
