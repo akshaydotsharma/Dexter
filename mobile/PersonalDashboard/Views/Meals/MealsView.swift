@@ -271,11 +271,11 @@ struct MealsView: View {
         // tab switch and on every keystroke in the chat, and a per-view flag
         // would fire the pass again each time the view was recreated.
         .task { await Self.nameUnnamedMealsOnce() }
-        // Picking a day is the popover's whole purpose, so it closes on the pick
-        // rather than waiting to be dismissed. Also fires for the "Today" button
-        // and the deep link, where closing an already-closed popover is a no-op.
-        .onChange(of: selectedDay) { _, _ in showingCalendar = false }
-        // The same rule for the Plan tab's day, which the same control picks.
+        // A tracking day picked in the grid closes the popover through the
+        // popover's `onPickDay`, NOT through a change of `selectedDay`: the
+        // Today button also changes the day, and it must leave the popover open
+        // on today (#679). A change-driven close could not tell the two apart.
+        // The Plan tab's day keeps the change-driven close.
         .onChange(of: planDay) { _, _ in showingCalendar = false }
         .sheet(item: $openMeal) { meal in
             MealDetailSheet(meal: meal)
@@ -397,7 +397,9 @@ struct MealsView: View {
             month: $visibleMonth,
             selectedDay: $selectedDay,
             readings: MealCalendar.readings(in: allMeals),
-            today: Date()
+            targets: allTargets,
+            today: Date(),
+            onPickDay: { showingCalendar = false }
         )
     }
 
@@ -414,8 +416,9 @@ struct MealsView: View {
     /// is now the ONLY thing above the fold naming the day the numbers belong to
     /// and it has to say so in every state.
     ///
-    /// It is also why there is no separate Today button: returning is picking
-    /// today in the calendar this control already opens.
+    /// It is also why there is no separate Today button in the chrome: returning
+    /// is one tap on the calendar's own Today button (#679), inside the popover
+    /// this control already opens.
     ///
     /// ### Why "15 Sep" and not "Monday"
     ///
@@ -664,6 +667,8 @@ struct MealsView: View {
         tab = landing.tab
         selectedDay = landing.day
         visibleMonth = landing.month
+        // A deep link lands on the day, not in the grid.
+        showingCalendar = false
         pulsedMealID = meal.clientUUID
 
         let id = meal.clientUUID

@@ -80,6 +80,23 @@ final class MealsCalendarTests: XCTestCase {
         XCTAssertEqual(days.last, date(2026, 9, 30))
     }
 
+    /// Every month draws six rows, whatever it needs (#679).
+    ///
+    /// February 2027 fits in four Monday-first weeks and August 2026 needs six.
+    /// If the grid's height followed the month, stepping between them would
+    /// resize the popover mid-slide, which is the flicker #679 reported.
+    func testEveryMonthDrawsTheSameSixRows() {
+        for month in [date(2027, 2, 1), date(2026, 9, 1), date(2026, 8, 1)] {
+            let slots = MealCalendar.fixedSlots(forMonthOf: month, calendar: calendar)
+            XCTAssertEqual(slots.count, MealCalendar.fixedSlotCount)
+            XCTAssertEqual(slots.map(\.index), Array(0..<MealCalendar.fixedSlotCount),
+                           "Slot ids must stay unique positions after the padding.")
+            XCTAssertEqual(slots.compactMap(\.day),
+                           MealCalendar.slots(forMonthOf: month, calendar: calendar).compactMap(\.day),
+                           "Padding adds blanks only; the days are unchanged.")
+        }
+    }
+
     /// A month whose first day IS the first column takes no leading padding.
     ///
     /// June 2026 starts on a Monday. The off-by-one this catches is a modulo
@@ -241,9 +258,20 @@ final class MealsCalendarTests: XCTestCase {
         XCTAssertEqual(cell.calories, 1020, "The two good meals and only those.")
     }
 
-    /// The bar scale is the heaviest day among the squares on screen, and it is
-    /// nil when nothing in view was logged, which the cells read as "draw no bars".
-    func testTheBarScaleIsTheHeaviestDayInView() throws {
+    // MARK: - The day rings (#679)
+
+    /// A ring measures its day against the calorie target in force that day.
+    func testTheRingFillsAgainstTheCalorieTarget() {
+        XCTAssertEqual(MealCalendar.ringProgress(calories: 1000, target: 2000, heaviest: 3000), 0.5)
+        XCTAssertEqual(
+            MealCalendar.ringProgress(calories: 1500, target: 2000, heaviest: nil), 0.75,
+            "A target does not need a heaviest day to draw against."
+        )
+    }
+
+    /// With no target, the ring falls back to the heaviest day in view, and that
+    /// scale is nil when nothing in view was logged.
+    func testWithNoTargetTheRingFallsBackToTheHeaviestDayInView() throws {
         let day = Date(timeIntervalSince1970: 1_757_462_400)
         let lighter = Calendar.current.date(byAdding: .day, value: -1, to: day)!
         try log("Chicken rice", on: day, calories: 1800)
@@ -251,8 +279,15 @@ final class MealsCalendarTests: XCTestCase {
 
         let readings = MealCalendar.readings(in: try everyMeal())
         let slots = MealCalendar.slots(forMonthOf: day, calendar: Calendar.current)
+        let heaviest = MealCalendar.heaviest(among: slots, readings: readings)
 
-        XCTAssertEqual(MealCalendar.heaviest(among: slots, readings: readings), 1800)
+        XCTAssertEqual(heaviest, 1800)
+        XCTAssertEqual(MealCalendar.ringProgress(calories: 1800, target: nil, heaviest: heaviest), 1)
+        XCTAssertEqual(MealCalendar.ringProgress(calories: 300, target: nil, heaviest: heaviest)!, 1.0 / 6, accuracy: 1e-9)
+        XCTAssertEqual(
+            MealCalendar.ringProgress(calories: 900, target: 0, heaviest: heaviest), 0.5,
+            "A zero target is no target: it must not divide."
+        )
 
         // A month with nothing in it has no scale at all.
         let empty = MealCalendar.slots(
@@ -260,6 +295,38 @@ final class MealsCalendarTests: XCTestCase {
             calendar: Calendar.current
         )
         XCTAssertNil(MealCalendar.heaviest(among: empty, readings: readings))
+    }
+
+    /// Past the target the ring is closed, never a second lap.
+    func testTheRingIsClampedAtOneFullTurn() {
+        XCTAssertEqual(MealCalendar.ringProgress(calories: 3600, target: 2000, heaviest: nil), 1)
+        XCTAssertEqual(MealCalendar.ringProgress(calories: 2000, target: 2000, heaviest: nil), 1)
+    }
+
+    /// Only an over day changes hue, and it reads the same verdict the day card
+    /// draws: over is more than 110% of the calorie target.
+    func testOnlyAnOverDayIsDrawnAsOver() {
+        XCTAssertTrue(MealCalendar.isOver(calories: 2300, target: 2000))
+        XCTAssertFalse(MealCalendar.isOver(calories: 2200, target: 2000), "110% is still on track.")
+        XCTAssertFalse(MealCalendar.isOver(calories: 1000, target: 2000), "Under is not over.")
+        XCTAssertFalse(MealCalendar.isOver(calories: 5000, target: nil), "No target, no verdict.")
+        XCTAssertFalse(MealCalendar.isOver(calories: nil, target: 2000), "An unlogged day has no verdict.")
+        XCTAssertEqual(
+            MealCalendar.isOver(calories: 2300, target: 2000),
+            Nutrient.calories.verdict(value: 2300, target: 2000) == .over
+        )
+    }
+
+    /// A logged day at zero draws its track; an unlogged day draws nothing. The
+    /// two must never look alike.
+    func testAZeroDayDrawsATrackAndAnUnloggedDayDrawsNoRing() {
+        XCTAssertEqual(MealCalendar.ringProgress(calories: 0, target: 2000, heaviest: 1800), 0)
+        XCTAssertEqual(
+            MealCalendar.ringProgress(calories: 0, target: nil, heaviest: nil), 0,
+            "Logged with no scale at all is still a track, not an absence."
+        )
+        XCTAssertNil(MealCalendar.ringProgress(calories: nil, target: 2000, heaviest: 1800))
+        XCTAssertNil(MealCalendar.ringProgress(calories: nil, target: nil, heaviest: nil))
     }
 
     // MARK: - Where a deep link lands

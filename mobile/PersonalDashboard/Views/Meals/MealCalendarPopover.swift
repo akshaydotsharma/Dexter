@@ -14,9 +14,10 @@ import SwiftUI
 /// ### Why it wraps `MealCalendarCard` rather than replacing it
 ///
 /// The grid is the same grid #559 built and tested: the month arithmetic, the
-/// leap-February handling, the future-day rule, the quantity bar that spends no
-/// hue. None of that changes because the frame around it did. This type adds the
-/// popover's width and presentation and nothing else.
+/// leap-February handling, the future-day rule, the day rings (#679). None of
+/// that changes because the frame around it did. This type adds the popover's
+/// width, its presentation, and the dismiss after the Today button, and nothing
+/// else.
 ///
 /// The card draws its own `surface` and border inside the popover, which is the
 /// house pattern — `TaskCalendarPopover` and `TripCalendarPopover` both present a
@@ -26,11 +27,17 @@ struct MealCalendarPopover: View {
     @Binding var month: Date
     @Binding var selectedDay: Date
     let readings: [Date: MealDayReading]
+    /// Every target record, sorted by `effectiveFrom`, for the rings (#679).
+    var targets: [MealTargets] = []
     var today: Date = Date()
+    /// Closes the popover after a day in the grid is picked. The Today button
+    /// does not call it: it moves the grid to today and leaves the popover
+    /// open (#679).
+    var onPickDay: () -> Void = {}
 
     /// Matches `TaskCalendarPopover`, so the two calendars in this app are the
     /// same size in the same kind of container. Seven columns inside it leave
-    /// about 40 pt a square, which holds a four-digit calorie figure.
+    /// about 40 pt a square, which holds a 36 pt day ring.
     private let contentWidth: CGFloat = 340
 
     var body: some View {
@@ -38,7 +45,9 @@ struct MealCalendarPopover: View {
             month: $month,
             selectedDay: $selectedDay,
             readings: readings,
-            today: today
+            targets: targets,
+            today: today,
+            onPickDay: onPickDay
         )
         .frame(width: contentWidth)
         .presentationBackground(Tokens.surface)
