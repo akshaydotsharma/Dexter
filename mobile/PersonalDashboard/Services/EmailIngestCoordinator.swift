@@ -129,6 +129,16 @@ final class EmailIngestCoordinator: NSObject, UNUserNotificationCenterDelegate {
             return
         }
 
+        // A Shortcut capture's result (#685): a tap opens what it wrote. Only
+        // our notifications carry the key, so nothing else reaches this branch.
+        if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+           let destination = CaptureNotifications.destination(from: response.notification.request.content.userInfo) {
+            Task { @MainActor in
+                DeepLinkBus.shared.pending = .focus(sectionRaw: destination.section, id: destination.id)
+            }
+            return
+        }
+
         guard response.actionIdentifier == EmailIngestNotifications.undoActionId else { return }
         let userInfo = response.notification.request.content.userInfo
         guard let raw = userInfo[EmailIngestNotifications.logUUIDKey] as? String,
@@ -155,6 +165,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // Recurring-expense materialisation background task (#236). Best-effort;
         // the foreground pass in PersonalDashboardApp is the reliable path.
         RecurringExpenseCoordinator.shared.registerBackgroundTask()
+        // Resume any Shortcut capture a previous process left queued or in
+        // flight (#685). Here and not in the SwiftUI `.task`, because a
+        // Shortcut launches the app in the BACKGROUND, where no scene (and so
+        // no `.task`) may ever appear, while this always runs.
+        CaptureQueueRunner.shared.kick(reason: "launch")
         return true
     }
 }

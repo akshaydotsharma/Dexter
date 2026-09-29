@@ -72,6 +72,11 @@ struct PersonalDashboardApp: App {
                     await TaskReminderScheduler.registerCategory()
                     TaskReminderScheduler.startObservingStoreChanges()
                     await TaskReminderScheduler.reconcile()
+                    // Shortcut captures report by notification (#685), and iOS
+                    // cannot show the permission prompt to the backgrounded app
+                    // that posts them, so it is asked here. Only once the queue
+                    // has been used: a fresh install is not asked for nothing.
+                    await CaptureNotifications.requestAuthorizationIfUsed()
                 }
         }
         .modelContainer(SwiftDataStore.shared.container)
@@ -91,6 +96,9 @@ struct PersonalDashboardApp: App {
                 // and freed room under the pending cap, and permission may have
                 // just been granted in Settings while the app was away.
                 Task { await TaskReminderScheduler.reconcile() }
+                // Pick up any Shortcut capture iOS suspended mid-run (#685). A
+                // no-op when a pass is already running or nothing is queued.
+                CaptureQueueRunner.shared.kick(reason: "foreground")
             }
             // Opt-in automatic backup (#141). Fires on becoming active (covers
             // cold launch and foregrounding) and on entering background (catches

@@ -243,9 +243,10 @@ final class LiveToolSurfaceCostTests: XCTestCase {
     }
 
     /// The meal capture, three more times, for its WALL CLOCK against
-    /// `CaptureService.timeoutSeconds` (#681). `log_meal` is deferred, so the
-    /// first turn now runs a search, and the timeout cancels the whole
-    /// capture: a meal whose writing turn ends past it is never written.
+    /// `CaptureService.timeoutSeconds` (#681; the per-job cap of the
+    /// background queue since #685). `log_meal` is deferred, so the first turn
+    /// now runs a search, and the cap cancels the whole capture: a meal whose
+    /// writing turn ends past it is never written.
     func testCaptureMealWallClockAgainstTheTimeout() async throws {
         try skipUnlessLive()
         let prompt = await capturePrompt()

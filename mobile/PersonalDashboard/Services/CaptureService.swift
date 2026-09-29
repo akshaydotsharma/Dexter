@@ -59,25 +59,32 @@ struct CaptureResponse: Sendable {
 /// HTTP transport anymore — Anthropic is reached directly from the phone.
 struct CaptureService: Sendable {
 
-    /// Hard upper bound — the App Intent's overall budget is ~30 s and we
-    /// want to surface a clean error well before the system kills us.
+    /// The cap on one capture, in seconds. Since #685 this is the cap on one
+    /// QUEUED job, not on the App Intent.
     ///
-    /// ## 22 s to 26 s (#681)
+    /// ## History: 22 s, then 26 s, then 60 s
     ///
-    /// The ~30 s is Apple's: an intent run from Siri, Shortcuts or any system
-    /// surface has 30 seconds to finish (WWDC26, "Discover new capabilities in
-    /// the App Intents framework"; `LongRunningIntent` is the way past it).
-    /// So 30 here would be the kill point itself, not a timeout.
+    /// Until #685 the whole model loop ran inside the intent's `perform()`,
+    /// and an intent run from Siri, Shortcuts or any system surface has 30 s
+    /// to finish (WWDC26, "Discover new capabilities in the App Intents
+    /// framework"). So this sat just under 30: 22 s, then 26 s when #681
+    /// deferred `log_meal` behind tool search and a meal's first turn measured
+    /// past 22 s. At 26 s a meal still timed out, and a 30 s trial was killed
+    /// by iOS first ("an unknown error occurred").
     ///
-    /// 26 keeps 4 s for what this clock does not see: the background launch
-    /// and the context build before the timer starts, and the dialog after it
-    /// fires. It moved because #681 defers `log_meal` behind tool search, and
-    /// a meal's first turn then measured past 22 s. The timeout cancels the
-    /// whole capture, so a meal whose first turn runs past it is not written.
-    static let timeoutSeconds: UInt64 = 26
+    /// Now the intent only enqueues (`CaptureQueue`) and returns at once, and
+    /// `CaptureQueueRunner` runs the loop after it, so Apple's 30 s no longer
+    /// bounds the capture. 60 s is the user's choice for one job (#685): past
+    /// it the job is cancelled, reported by notification, and the runner moves
+    /// on. What bounds it now is iOS's background time, which is logged per job
+    /// because nobody knows its real size on this device yet.
+    static let timeoutSeconds: UInt64 = 60
 
     init() {}
 
+    /// One capture with its own timeout. Kept for direct callers; the
+    /// Shortcut path no longer calls it (#685), because `CaptureQueueRunner`
+    /// owns the cap there and needs to tell it apart from an iOS interruption.
     func capture(
         input: String,
         sessionId: String? = nil,
@@ -85,8 +92,7 @@ struct CaptureService: Sendable {
     ) async throws -> CaptureResponse {
         let tz = timezone ?? TimeZone.current.identifier
 
-        // Wrap the on-device call so a hung LLM request doesn't blow past
-        // the App Intent budget.
+        // Wrap the on-device call so a hung LLM request cannot run forever.
         return try await withThrowingTaskGroup(of: CaptureResponse.self) { group in
             group.addTask {
                 await Self.runCapture(input: input, timezone: tz)
@@ -208,11 +214,17 @@ struct CaptureService: Sendable {
         )
     }
 
+    /// The pipeline against the REAL store, with no timeout of its own. The
+    /// queue runner calls this directly (#685) and races it against its own cap.
     @MainActor
-    private static func runCapture(input: String, timezone: String) async -> CaptureResponse {
+    static func runCapture(
+        input: String,
+        timezone: String,
+        hooks: ChatToDrafts.Hooks = .none
+    ) async -> CaptureResponse {
         let pipeline = ChatToDrafts.default()
         do {
-            return response(for: try await pipeline.run(input: input, timezone: timezone))
+            return response(for: try await pipeline.run(input: input, timezone: timezone, hooks: hooks))
         } catch let err as AnthropicError {
             return CaptureResponse(
                 status: .error,

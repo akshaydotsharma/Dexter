@@ -786,8 +786,10 @@ enum ToolDefinitions {
     /// adds a server step and the Shortcut had a 22 s timeout: a meal's first
     /// turn measured 25.7 s mean with the search against 21.7 s without
     /// (n=3, 2026-09-28). The user chose the tokens: `log_meal` is deferred
-    /// and the timeout moved to 26 s (`CaptureService.timeoutSeconds`, which
-    /// states why not 30).
+    /// and the timeout moved to 26 s. That still timed meals out, so #685
+    /// moved the capture out of the App Intent into a background queue with a
+    /// 60 s cap per job (`CaptureService.timeoutSeconds`). `log_meal` stays
+    /// deferred.
     static let captureLoadedToolNames: Set<String> = everydayToolNames
 
     /// Tools every CHAT request loads up front: the everyday set. A meal pays
