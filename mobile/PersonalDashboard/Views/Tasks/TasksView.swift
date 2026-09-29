@@ -1063,6 +1063,8 @@ private struct TaskRow: View {
                                 // #657. A task may now be due on a DAY, with no
                                 // hour. Printing "12:00 AM" for one would invent
                                 // a precision the person deliberately declined.
+                                // A deliberate 12:00 AM is stored a second past
+                                // midnight, so it still prints its hour (#683).
                                 Text(
                                     due,
                                     format: todo.hasDueTime

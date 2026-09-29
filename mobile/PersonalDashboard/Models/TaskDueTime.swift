@@ -19,9 +19,26 @@ import Foundation
 /// exists today was written through a picker seeded an hour ahead of now, so
 /// they all read as timed, and nothing has to be repaired.
 ///
-/// The edge is real and small: a person who deliberately sets 12:00 AM gets a
-/// task that reads as having no time. It is a display difference on a value
-/// nobody picks, and it costs a schema change to close.
+/// ### A deliberate 12:00 AM (#683)
+///
+/// That leaves one moment the convention cannot say: a task the person meant
+/// to be due AT midnight. It used to read as having no time at all. Closing it
+/// with a column costs the schema change above, so it is closed with a second
+/// convention instead: **a deliberate 12:00 AM is stored one second past
+/// midnight** (`deliberateMidnightOffset`).
+///
+/// Nothing else can produce that value. Every timed writer goes through
+/// `normalised`, which truncates to the minute first, so the only non-zero
+/// second a stored due date can carry is this one. And one second is below
+/// everything that reads the value: the row and the calendar print hours and
+/// minutes, so it shows "12:00 AM"; a reminder fires at the START of its
+/// minute (`TaskReminderScheduler.fireDate`), so it fires at midnight; and
+/// `isSet` already said "not exactly midnight", so it needed no change.
+///
+/// The rule for a writer is therefore one line: never store a timed due date
+/// without passing it through `normalised(_:hasTime: true)`. A raw
+/// `WallClock.minutePrecision` on a timed value would fold the second away
+/// and turn a 12:00 AM task back into a dayless one.
 ///
 /// The convention is not new. `TaskCalendarPopover` has read a midnight due
 /// time as "no particular time" since it was written; what #657 changed is that
@@ -42,11 +59,36 @@ enum TaskDueTime {
     /// fraction of one that no picker shows and that would otherwise ride into
     /// the store (#444). Local midnight when there is not, which is the whole
     /// convention above.
+    ///
+    /// A time that lands on midnight is pushed one second past it, so it still
+    /// reads as a time (#683). See "A deliberate 12:00 AM" above.
     static func normalised(_ due: Date, hasTime: Bool, calendar: Calendar = .current) -> Date {
-        hasTime
-            ? WallClock.minutePrecision(due)
-            : calendar.startOfDay(for: due)
+        guard hasTime else { return calendar.startOfDay(for: due) }
+        let minute = WallClock.minutePrecision(due)
+        guard minute == calendar.startOfDay(for: minute) else { return minute }
+        return minute.addingTimeInterval(deliberateMidnightOffset)
     }
+
+    /// The repaired due date for a row written before #683, or nil to leave it.
+    ///
+    /// Before #683 a deliberate 12:00 AM was stored at exactly midnight, the
+    /// same value as "no time". Most such rows cannot be told apart, but one
+    /// kind can: a row with an armed reminder. #657 offers the reminder only
+    /// once Time is on and clears it when Time goes off, so a midnight row
+    /// with `remindMe` set was a deliberate 12:00 AM. Those rows move to the
+    /// sentinel; every other row is left alone.
+    static func repairedDeliberateMidnight(
+        _ due: Date?, remindMe: Bool, calendar: Calendar = .current
+    ) -> Date? {
+        guard remindMe, let due, !isSet(on: due, calendar: calendar) else { return nil }
+        return normalised(due, hasTime: true, calendar: calendar)
+    }
+
+    /// How far past midnight a deliberate 12:00 AM is stored (#683).
+    ///
+    /// One second: below the minute that every display and the reminder
+    /// scheduler read at, and a value no minute-granularity picker produces.
+    static let deliberateMidnightOffset: TimeInterval = 1
 
     /// The moment the task stops being "not yet due".
     ///

@@ -454,6 +454,9 @@ final class SwiftDataStore {
         // moving with the device timezone (#506). Must run before any trip or
         // wallet UI can query. Guarded internally.
         migrateDayFieldsToUTCAnchor()
+        // Moves a deliberate 12:00 AM written before #683 onto the one-second
+        // sentinel, so it reads as timed again. Guarded internally.
+        migrateArmedMidnightDueTimes()
         #if DEBUG
         // Export / import launch hooks (#319 verification). No-op unless
         // DEXTER_EXPORT_TO / DEXTER_IMPORT_FROM are set.
@@ -525,6 +528,39 @@ final class SwiftDataStore {
             await DebugLaunchHooks.runDataHooks(context: hookContext)
         }
         #endif
+    }
+
+    /// One-time repair (#683): a task with an armed reminder at exactly local
+    /// midnight was a deliberate 12:00 AM, and it now moves to the sentinel
+    /// `TaskDueTime` uses for that. See `TaskDueTime.repairedDeliberateMidnight`.
+    ///
+    /// `updatedAt` is left alone on purpose. The sync diff compares content, so
+    /// the repair still reaches the peer, and a repair must not win last-write
+    /// over a genuine edit made on another device. Every device computes the
+    /// same repaired value, so two devices repairing the same row agree.
+    ///
+    /// Gated by a `UserDefaults` flag so it runs exactly once. Never crashes
+    /// launch; a failure leaves the flag unset to retry.
+    private func migrateArmedMidnightDueTimes() {
+        let flagKey = "armedMidnightDueTimes_v1"
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: flagKey) else { return }
+
+        let ctx = container.mainContext
+        do {
+            let rows = try ctx.fetch(FetchDescriptor<LocalTodo>(predicate: #Predicate { $0.remindMe == true }))
+            var didChange = false
+            for row in rows {
+                if let repaired = TaskDueTime.repairedDeliberateMidnight(row.dueDate, remindMe: row.remindMe) {
+                    row.dueDate = repaired
+                    didChange = true
+                }
+            }
+            if didChange { try ctx.save() }
+            defaults.set(true, forKey: flagKey)
+        } catch {
+            NSLog("SwiftDataStore: armed-midnight due time repair failed: %@", String(describing: error))
+        }
     }
 
     /// One-time backfill (#238): before the `transport` itinerary kind existed,
