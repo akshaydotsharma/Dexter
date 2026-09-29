@@ -59,11 +59,14 @@ final class ToolSearchSurfaceTests: XCTestCase {
             )
         }
         XCTAssertFalse(ToolDefinitions.captureLoadedToolNames.contains("log_meal"),
-                       "capture defers log_meal too; the timeout moved instead")
+                       "capture defers log_meal too; the capture moved out of the intent instead (#685)")
         XCTAssertFalse(ToolDefinitions.chatLoadedToolNames.contains("log_meal"))
-        XCTAssertLessThan(
-            CaptureService.timeoutSeconds, 30,
-            "30 s is Apple's App Intent limit; the timeout must fire before the system kills the intent"
+        // #685: the intent no longer waits on the model, so Apple's 30 s intent
+        // limit does not bound this any more. It is the cap on one QUEUED job,
+        // run after the intent has replied, and the user set it at 60 s.
+        XCTAssertEqual(
+            CaptureService.timeoutSeconds, 60,
+            "the per-job cap for a queued Shortcut capture is 60 s (#685)"
         )
         XCTAssertTrue(
             ToolDefinitions.chatRequestTools.contains {

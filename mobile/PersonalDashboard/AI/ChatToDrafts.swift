@@ -63,7 +63,26 @@ struct ChatToDrafts {
         )
     }
 
-    func run(input: String, timezone: String) async throws -> ChatToDraftsResult {
+    /// Callbacks a queued Shortcut capture listens on (#685). Both default to
+    /// nil, so every other caller runs exactly as before.
+    ///
+    /// - `onTurn` fires as each model call starts (1-based), so the queue can
+    ///   log how much background time iOS has left at every turn.
+    /// - `beforeWrite` is AWAITED before each `ExecuteDraftAction.run`, with
+    ///   the tool name. The queue persists "writes started" in it, and that
+    ///   record is what stops a job iOS killed mid-write from being re-run
+    ///   and writing the same item twice. It has to land on disk BEFORE the
+    ///   write, never after: after would leave a window in which the item
+    ///   exists and the job still looks safe to retry. So it THROWS when the
+    ///   record cannot be saved, and the run stops before writing anything it
+    ///   could not account for.
+    struct Hooks {
+        var onTurn: (@MainActor (Int) -> Void)? = nil
+        var beforeWrite: (@MainActor (String) async throws -> Void)? = nil
+        static let none = Hooks()
+    }
+
+    func run(input: String, timezone: String, hooks: Hooks = .none) async throws -> ChatToDraftsResult {
         let contextBlock = await context.build()
         let systemPrompt = Self.systemPrompt(
             timezone: timezone,
@@ -88,7 +107,8 @@ struct ChatToDrafts {
         // of falling through to draft_note. Tools that need dates the user
         // didn't speak will surface an assistant text response asking for
         // them — the Shortcut returns that as a spoken dialog.
-        for _ in 0..<Self.maxIterations {
+        for turn in 0..<Self.maxIterations {
+            hooks.onTurn?(turn + 1)
             let response = try await anthropic.send(
                 systemPrompt: systemPrompt,
                 messages: messages,
@@ -157,6 +177,13 @@ struct ChatToDrafts {
                     ))
                     continue
                 }
+                // A cancelled run starts no new write (#685). The queue cancels a
+                // job at its 60 s cap and reports it failed; a write landing after
+                // that report would contradict it. Outside the `do` below on
+                // purpose: its catch-all would turn the cancellation into one
+                // more failed draft and carry on to the next call.
+                try Task.checkCancellation()
+                try await hooks.beforeWrite?(call.name)
                 do {
                     let outcome = try await executor.run(actionType: actionType, input: call.input)
                     unretried[call.name] = nil

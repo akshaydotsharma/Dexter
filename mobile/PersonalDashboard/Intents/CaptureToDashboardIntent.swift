@@ -9,24 +9,35 @@ import SwiftUI
 /// Screen / Siri) can trigger:
 ///   Dictate Text -> CaptureToDashboard(input: $dictation) -> Show Notification
 ///
-/// The on-device pipeline applies tool calls directly to SwiftData and
-/// reports outcomes:
-///   - executed actions -> dialog summarises what was applied, snippet view
-///     lists each item with an icon and a deep-link back into the app.
-///   - LLM follow-up question -> dialog surfaces the question, nothing
-///     persisted, no snippet.
-///   - failure -> dialog surfaces a brief error, no snippet.
+/// ## Reply at once, work after (#685)
+///
+/// `perform()` no longer runs the model. It saves the phrase to
+/// `CaptureQueue` (a JSON file, on disk before the dialog is spoken), starts
+/// `CaptureQueueRunner`, and returns "Got it, working on it." straight away.
+/// The runner does the work after the intent has returned, and reports it by
+/// local notification.
+///
+/// Why: iOS stops an intent at ~30 s, and since #681 deferred `log_meal`
+/// behind tool search a meal capture takes 24-27 s of model time alone. The
+/// 26 s timeout cancelled it, and a 30 s timeout was killed by iOS first
+/// ("an unknown error occurred"). Loading `log_meal` up front would fit, at
+/// 4,331 tokens per capture; the user rejected that.
+///
+/// The notification says what the dialog used to say, from the same text:
+///   - executed actions -> `executedDialog(for:)`, a meal's spoken sentence
+///     included, plus the truncation note when a later turn was cut off.
+///   - LLM follow-up question -> the question.
+///   - failure -> "Couldn't capture — <reason>".
+/// See `notificationText(for:)`.
 struct CaptureToDashboardIntent: AppIntent {
     static var title: LocalizedStringResource = "Capture to Dexter"
     static var description = IntentDescription(
-        "Add a task, note, or list to Dexter from text or voice. Runs on-device against your local data, no server hop."
+        "Add a task, note, or list to Dexter from text or voice. Replies at once, then runs on-device against your local data and reports the result as a notification."
     )
 
     /// Stay backgrounded so the side button feels instant and the user
     /// doesn't lose their current context. Action Button + Shortcut +
-    /// Show Notification is the intended runtime path. The result snippet
-    /// renders inline in the Shortcuts sheet; the "Open in Dexter" Link
-    /// inside it is the only way the user jumps into the app.
+    /// Show Notification is the intended runtime path.
     static var openAppWhenRun: Bool = false
 
     /// The free-text phrase to capture. When invoked from a Shortcut with
@@ -44,42 +55,54 @@ struct CaptureToDashboardIntent: AppIntent {
         Summary("Capture \(\.$input) to Dexter")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
+    /// Spoken the moment the phrase is safely queued.
+    static let queuedDialog = "Got it, working on it."
+
+    /// MainActor because the runner is, and because the kick has to START its
+    /// background task before this returns: once `perform()` returns, iOS may
+    /// suspend the process, and a background task begun after that point is
+    /// never begun.
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .result(dialog: "Nothing to capture.")
         }
 
-        let service = CaptureService()
-        let response: CaptureResponse
+        // On disk first, dialog second. "Got it" must never be said about a
+        // phrase that exists only in memory: a process killed right after the
+        // dialog would lose it with no trace and no notification.
         do {
-            response = try await service.capture(input: trimmed)
+            try await CaptureQueue.shared.enqueue(input: trimmed, timezone: TimeZone.current.identifier)
         } catch {
             return .result(dialog: IntentDialog(stringLiteral: "Couldn't capture — \(error.localizedDescription)"))
         }
+        CaptureQueueRunner.shared.kick(reason: "shortcut")
+        return .result(dialog: IntentDialog(stringLiteral: Self.queuedDialog))
+    }
 
+    // MARK: - Result text (#685)
+
+    /// The words the dialog used to speak for a finished capture, now the body
+    /// of its notification, plus a short title for the banner.
+    ///
+    /// Lifted verbatim out of the old `perform()` so the wording did not fork
+    /// when the dialog stopped carrying it: same truncation note (#554), same
+    /// fallback question, same "Couldn't capture — " prefix.
+    static func notificationText(for response: CaptureResponse) -> (title: String, body: String) {
         switch response.status {
         case .executed:
             let items = response.executed ?? []
             // A capture that applied some of the request and was then cut off
             // must say so out loud. Silence here reads as "all done" (#554).
-            let summary = Self.executedDialog(for: items)
+            let summary = executedDialog(for: items)
                 + (response.truncated ? CaptureService.partialTruncationNote : "")
-            let openIntent = Self.openIntent(for: items)
-            return .result(
-                dialog: IntentDialog(stringLiteral: summary),
-                view: CaptureResultSnippetView(
-                    items: items,
-                    openIntent: openIntent,
-                    actionLabel: "Go to app"
-                )
-            )
+            return ("Captured", summary)
         case .needsClarification:
-            let q = response.followUpQuestion ?? "I need a bit more detail."
-            return .result(dialog: IntentDialog(stringLiteral: q))
+            return ("Dexter needs more detail", response.followUpQuestion ?? "I need a bit more detail.")
         case .error:
             let first = response.errors?.first?.message ?? "something went wrong"
-            return .result(dialog: IntentDialog(stringLiteral: "Couldn't capture — \(first)"))
+            return ("Capture failed", "Couldn't capture — \(first)")
         }
     }
 
