@@ -180,6 +180,18 @@ final class RecurrenceRuleTests: XCTestCase {
         XCTAssertEqual(parts.day, 12)
     }
 
+    /// #683. A repeat at 12:00 AM writes occurrences that still read as timed,
+    /// not as dayless tasks at exactly midnight.
+    func testDueDateAtMidnightReadsAsATime() {
+        let rule = rule(.daily, minutes: 0, start: "2026-09-12")
+        let due = rule.dueDate(on: day("2026-09-12"))
+        XCTAssertTrue(TaskDueTime.isSet(on: due, calendar: calendar))
+        let parts = calendar.dateComponents([.day, .hour, .minute], from: due)
+        XCTAssertEqual(parts.day, 12)
+        XCTAssertEqual(parts.hour, 0)
+        XCTAssertEqual(parts.minute, 0)
+    }
+
     // MARK: - Keys
 
     func testDayKeyRoundTrips() {

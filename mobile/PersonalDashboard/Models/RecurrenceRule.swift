@@ -114,14 +114,17 @@ struct RecurrenceRule: Equatable, Sendable {
     ///
     /// Falls back to seconds-from-midnight if `bySettingHour` cannot build the
     /// time, which happens for the hour a spring-forward skips.
+    ///
+    /// A repeat always states a time of day, so the result goes through the
+    /// timed normalisation: a rule set for 12:00 AM would otherwise write
+    /// occurrences at exactly midnight, which reads as "no time" (#683).
     func dueDate(on day: Date) -> Date {
         let start = calendar.startOfDay(for: day)
         let hour = timeOfDayMinutes / 60
         let minute = timeOfDayMinutes % 60
-        if let exact = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: start) {
-            return exact
-        }
-        return start.addingTimeInterval(TimeInterval(timeOfDayMinutes * 60))
+        let raw = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: start)
+            ?? start.addingTimeInterval(TimeInterval(timeOfDayMinutes * 60))
+        return TaskDueTime.normalised(raw, hasTime: true, calendar: calendar)
     }
 
     // MARK: - Per-frequency walks
