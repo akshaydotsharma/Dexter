@@ -246,6 +246,10 @@ final class DataExportService {
         // delete reaches a peer as an upsert.
         let habits = try modelContext.fetch(FetchDescriptor<LocalHabit>())
         let habitCheckIns = try modelContext.fetch(FetchDescriptor<LocalHabitCheckIn>())
+        // #687: Planner blocks. Soft-deleted rows travel too, like habits.
+        let planBlocks = try modelContext.fetch(FetchDescriptor<LocalPlanBlock>())
+        // #689: hide and decline decisions. Soft-deleted rows travel too.
+        let eventOverrides = try modelContext.fetch(FetchDescriptor<LocalEventOverride>())
 
         var listItems: [DataArchive.ListItemDTO] = []
         for list in lists {
@@ -292,6 +296,8 @@ final class DataExportService {
         let foodItemDTOs: [DataArchive.FoodItemDTO] = foodItems.map(Self.dto)
         let habitDTOs: [DataArchive.HabitDTO] = habits.map(Self.dto)
         let habitCheckInDTOs: [DataArchive.HabitCheckInDTO] = habitCheckIns.map(Self.dto)
+        let planBlockDTOs: [DataArchive.PlanBlockDTO] = planBlocks.map(Self.dto)
+        let eventOverrideDTOs: [DataArchive.EventOverrideDTO] = eventOverrides.map(Self.dto)
 
         return DataArchive.Payload(
             tasks: taskDTOs,
@@ -321,7 +327,9 @@ final class DataExportService {
             mealPlanEntries: mealPlanDTOs,
             foodItems: foodItemDTOs,
             habits: habitDTOs,
-            habitCheckIns: habitCheckInDTOs
+            habitCheckIns: habitCheckInDTOs,
+            planBlocks: planBlockDTOs,
+            eventOverrides: eventOverrideDTOs
         )
     }
 
@@ -358,6 +366,8 @@ final class DataExportService {
             "LocalFoodItem":        payload.foodItems?.count ?? 0,
             "LocalHabit":           payload.habits?.count ?? 0,
             "LocalHabitCheckIn":    payload.habitCheckIns?.count ?? 0,
+            "LocalPlanBlock":       payload.planBlocks?.count ?? 0,
+            "LocalEventOverride":   payload.eventOverrides?.count ?? 0,
         ]
     }
 
@@ -728,6 +738,34 @@ final class DataExportService {
             sortIndex: habit.sortIndex,
             createdAt: habit.createdAt,
             updatedAt: habit.updatedAt
+        )
+    }
+
+    /// #689. Every column, flat.
+    private static func dto(_ o: LocalEventOverride) -> DataArchive.EventOverrideDTO {
+        DataArchive.EventOverrideDTO(
+            clientUUID: o.clientUUID, eventKey: o.eventKey, occurrenceStart: o.occurrenceStart,
+            action: o.action, title: o.title, eventStart: o.eventStart, calendarTitle: o.calendarTitle,
+            appliesToSeries: o.appliesToSeries,
+            createdAt: o.createdAt, updatedAt: o.updatedAt, deletedAt: o.deletedAt
+        )
+    }
+
+    /// #687. Every column, flat. `day` is the stored anchor, verbatim.
+    private static func dto(_ block: LocalPlanBlock) -> DataArchive.PlanBlockDTO {
+        DataArchive.PlanBlockDTO(
+            clientUUID: block.clientUUID,
+            kind: block.kind,
+            title: block.title,
+            day: block.day,
+            start: block.start,
+            end: block.end,
+            durationMinutes: block.durationMinutes,
+            taskUUID: block.taskUUID,
+            notes: block.notes,
+            createdAt: block.createdAt,
+            updatedAt: block.updatedAt,
+            deletedAt: block.deletedAt
         )
     }
 

@@ -77,6 +77,11 @@ targets:
         # English fallback used when no OpenAI key is configured.
         NSSpeechRecognitionUsageDescription: "Dexter transcribes your voice into chat messages. With no transcription key set it falls back to on-device English recognition."
         NSMicrophoneUsageDescription: "Dexter records your voice so it can transcribe what you say into the chat."
+        # Planner (#687). Full READ access to the calendars in Apple Calendar,
+        # so meetings sit beside tasks. Dexter never writes an event. The legacy
+        # key is kept for completeness; iOS 17 reads the full-access one.
+        NSCalendarsFullAccessUsageDescription: "Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event."
+        NSCalendarsUsageDescription: "Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event."
         # Receipt capture for Finance (issue #114, Phase B). Camera + photo
         # library access used by AddExpense flow to extract details via Vision.
         NSCameraUsageDescription: "Used to capture receipts so Dexter can log expenses for you."
@@ -191,6 +196,14 @@ targets:
       - path: PersonalDashboard/Views/Today/TodayHabitsCard.swift
       - path: PersonalDashboard/Views/Habits
       - path: PersonalDashboard/Services/HabitService.swift
+      # Planner (#687). The section (one directory, every file cross-platform),
+      # the EventKit read service and the block writer. The @Model and the pure
+      # engine need no entry: PersonalDashboard/Models is globbed above.
+      - path: PersonalDashboard/Views/Planner
+      - path: PersonalDashboard/Services/PlannerCalendarService.swift
+      - path: PersonalDashboard/Services/PlanBlockService.swift
+      # Hide and decline for calendar events (#689).
+      - path: PersonalDashboard/Services/EventOverrideService.swift
       - path: PersonalDashboard/Views/Notes/NoteAutosave.swift
       - path: PersonalDashboard/Views/Notes/NotesView.swift
       - path: PersonalDashboard/Views/Components/MarkdownEditor.swift
@@ -548,6 +561,9 @@ targets:
         # Custom fonts ship as a Fonts/ folder reference; register them for
         # AppKit/SwiftUI. `.custom()` falls back to system font if this fails.
         ATSApplicationFontsPath: Fonts
+        # Planner (#687). Same read-only calendar access as the iPhone.
+        NSCalendarsFullAccessUsageDescription: "Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event."
+        NSCalendarsUsageDescription: "Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.akshaysharma.personaldashboard.mac

@@ -238,10 +238,32 @@ if [ "$blocked" != "0" ] || pgrep -x DexterMac >/dev/null; then
 fi
 
 # --- launch this worktree's build on the real store ---
-LAUNCH_SECTION="$SECTION" nohup "$BIN" >"$OUT_DIR/app.log" 2>&1 &
-PID=$!
-disown 2>/dev/null || true
-echo "==> launched pid=$PID section=$SECTION"
+#
+# Launched through LaunchServices (`open`), NOT as a child of this shell (#687).
+# A process spawned from a terminal inherits that terminal as its TCC
+# "responsible process". tccd then judges privacy prompts (Calendars, Contacts,
+# ...) against the TERMINAL's entitlements: with cmux or any hardened-runtime
+# terminal as the parent, `requestFullAccessToEvents` is denied in ~20 ms with
+# no prompt ("Prompting policy for hardened runtime; service: kTCCServiceCalendar
+# requires entitlement ... missing for responsible=com.cmuxterm.app"). `open`
+# makes launchd the parent, so the app is its own responsible process and the
+# system prompt appears. `--env` passes LAUNCH_SECTION through (macOS 13+).
+APP_BUNDLE="${BIN%/Contents/MacOS/*}"
+/usr/bin/open -n --env "LAUNCH_SECTION=$SECTION" \
+    --stdout "$OUT_DIR/app.log" --stderr "$OUT_DIR/app.log" "$APP_BUNDLE"
+PID=""
+for _ in $(seq 1 20); do
+    for cand in $(pgrep -x DexterMac || true); do
+        if [ "$(ps -o command= -p "$cand")" = "$BIN" ]; then PID="$cand"; fi
+    done
+    [ -n "$PID" ] && break
+    sleep 0.5
+done
+if [ -z "$PID" ]; then
+    echo "FAIL: open reported success but no DexterMac process from $BIN appeared."
+    exit 1
+fi
+echo "==> launched pid=$PID section=$SECTION (via LaunchServices)"
 
 # --- identity assertion + capture ---
 #

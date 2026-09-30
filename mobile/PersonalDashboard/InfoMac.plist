@@ -28,6 +28,10 @@
 	<false/>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dexter records your voice so it can transcribe what you say into a meal description or a question you're asking it.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

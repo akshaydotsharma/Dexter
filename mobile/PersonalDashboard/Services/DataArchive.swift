@@ -111,6 +111,15 @@ enum DataArchive {
         var habits: [HabitDTO]? = nil
         var habitCheckIns: [HabitCheckInDTO]? = nil
 
+        // MARK: Added in #687 — Planner blocks.
+        // Optional like every field added after v1, so an archive written before
+        // the Planner existed decodes with nil and imports as "nothing planned".
+        var planBlocks: [PlanBlockDTO]? = nil
+
+        // MARK: Added in #689 — hide and decline decisions for calendar events.
+        // Optional like every field added after v1.
+        var eventOverrides: [EventOverrideDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -924,6 +933,45 @@ enum DataArchive {
         var deletedAt: Date? = nil
     }
 
+    /// One Planner block (#687). Same all-defaults form as `HabitDTO`.
+    ///
+    /// `day` travels as the stored UTC day ANCHOR, and the importer passes it
+    /// through `WallClock.repairedDayAnchor` (#506). `start` and `end` are
+    /// absolute instants and travel verbatim.
+    struct PlanBlockDTO: Codable {
+        var clientUUID: String = ""
+        var kind: String = "manual"
+        var title: String = ""
+        var day: Date = Date(timeIntervalSince1970: 0)
+        var start: Date? = nil
+        var end: Date? = nil
+        var durationMinutes: Int = 30
+        var taskUUID: String = ""
+        /// Added in #687 round 3. OPTIONAL, read back as `?? ""`: an archive or
+        /// a peer written before the field carries no key, and a non-optional
+        /// field would fail the whole restore (#555).
+        var notes: String? = nil
+        var createdAt: Date = Date()
+        var updatedAt: Date = Date()
+        var deletedAt: Date? = nil
+    }
+
+    /// One hide or decline decision about a calendar event (#689). All
+    /// defaults, like `HabitDTO`; `occurrenceStart` nil means the whole series.
+    struct EventOverrideDTO: Codable {
+        var clientUUID: String = ""
+        var eventKey: String = ""
+        var occurrenceStart: Date? = nil
+        var action: String = "hidden"
+        var title: String = ""
+        var eventStart: Date = Date(timeIntervalSince1970: 0)
+        var calendarTitle: String = ""
+        var appliesToSeries: Bool? = nil
+        var createdAt: Date = Date()
+        var updatedAt: Date = Date()
+        var deletedAt: Date? = nil
+    }
+
     /// Every model this archive format carries, used for the manifest's claimed
     /// list. Order is stable so archives diff cleanly.
     static let exportedModels = [
@@ -955,6 +1003,12 @@ enum DataArchive {
         // back with every past day reading as missed.
         "LocalHabit",
         "LocalHabitCheckIn",
+        // #687. Planned blocks are user-authored and exist nowhere else: a block
+        // is private to Dexter and is never written to any calendar.
+        "LocalPlanBlock",
+        // #689. A hide must survive a restore and reach the other device, or
+        // the event comes back from the calendar.
+        "LocalEventOverride",
     ]
 
     static func makeEncoder() -> JSONEncoder {

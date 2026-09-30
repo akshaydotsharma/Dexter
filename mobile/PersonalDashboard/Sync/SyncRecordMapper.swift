@@ -105,6 +105,12 @@ enum SyncRecordMapper {
         // record, and last write wins on it instead of two rows disagreeing.
         out += try map("LocalHabit", payload.habits ?? []) { $0.clientUUID }
         out += try map("LocalHabitCheckIn", payload.habitCheckIns ?? []) { $0.clientUUID }
+        // #687. A String id. A block owns no array and no file, so the whole row
+        // is one sync unit and last write wins on it.
+        out += try map("LocalPlanBlock", payload.planBlocks ?? []) { $0.clientUUID }
+        // #689. The id is derived from the decision, so the phone and the Mac
+        // hiding the same event produce ONE record.
+        out += try map("LocalEventOverride", payload.eventOverrides ?? []) { $0.clientUUID }
 
         return out
     }

@@ -37,6 +37,9 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     /// Daily habits (#661). Lowercase default raw value, so `LAUNCH_SECTION=habits`
     /// resolves without an explicit spelling.
     case habits
+    /// Planner (#687). Lowercase default raw value, so `LAUNCH_SECTION=planner`
+    /// resolves without an explicit spelling.
+    case planner
     case settings
     case helpCenter
 
@@ -58,6 +61,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .visionBoard: return "Vision Board"
         case .meals:       return "Meals"
         case .habits:      return "Habits"
+        case .planner:     return "Planner"
         case .settings:    return "Settings"
         case .helpCenter:  return "Help center"
         }
@@ -83,6 +87,8 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .meals:       return "fork.knife"
         // A flame: the section is read by its streaks.
         case .habits:      return "flame"
+        // A day with its hours: the section is a day read against its time.
+        case .planner:     return "calendar.day.timeline.left"
         case .settings:    return "gearshape"
         case .helpCenter:  return "questionmark.circle"
         }
@@ -187,6 +193,10 @@ enum Tokens {
     /// encodes a verdict: done is drawn in the habit's own colour and missed in
     /// `danger`, so the gold on a cell means "this habit", not "good".
     static let accentHabits    = Color.paper(0x7F6E00, 0xE3C44A)
+    /// Planner section accent (#687). Ink, like Chat: the Planner spends no hue
+    /// of its own, so the four source hues (work cyan, personal plum, task
+    /// indigo, manual ink hatch) stay free for the blocks it shows.
+    static let accentPlanner   = Color.paper(0x1F1B16, 0xF2EBDA)
 
     /// The Plan tab's floating chat button (#604).
     ///
@@ -472,6 +482,7 @@ enum Tokens {
         case .visionBoard: return accentVision
         case .meals:       return accentMeals
         case .habits:      return accentHabits
+        case .planner:     return accentPlanner
         case .settings:    return accentSettings
         case .helpCenter:  return accentHelp
         }

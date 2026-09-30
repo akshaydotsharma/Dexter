@@ -49,6 +49,10 @@
 	<array>
 		<string>_http._tcp</string>
 	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Dexter reads your work and personal calendars so the Planner can show meetings beside your tasks. It never adds or changes an event.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Used to capture receipts so Dexter can log expenses for you.</string>
 	<key>NSLocalNetworkUsageDescription</key>
