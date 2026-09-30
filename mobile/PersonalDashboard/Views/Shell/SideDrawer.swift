@@ -123,6 +123,9 @@ struct SideDrawer: View {
             // shape of surface — a day of entries totalled against a target —
             // and a reader looking for one has the other in view (#543).
             DrawerRow(section: .today, router: router)
+            // Planner sits beside Today: Today says what is on, the Planner
+            // says whether it fits (#687).
+            DrawerRow(section: .planner, router: router)
             // Habits sits under Today because its card leads that page (#661).
             DrawerRow(section: .habits, router: router)
             DrawerRow(section: .itineraries, router: router)

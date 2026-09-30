@@ -164,7 +164,7 @@ private struct MacRootView: View {
     /// section (issue #30) and the two utility sections, which are pinned to
     /// the bottom of the sidebar instead (see `utilitySections`).
     private let sections: [AppSection] = [
-        .chat, .today, .habits, .tasks, .visionBoard, .notes, .lists,
+        .chat, .today, .planner, .habits, .tasks, .visionBoard, .notes, .lists,
         .itineraries, .wallet, .finance, .meals, .vocabulary, .activity,
     ]
 
@@ -294,6 +294,8 @@ private struct MacRootView: View {
             MealsView(router: router)
         case .habits:
             HabitsView(router: router)
+        case .planner:
+            PlannerView(router: router)
         case .vocabulary:
             PersonalVocabularyView(router: router)
         case .activity:

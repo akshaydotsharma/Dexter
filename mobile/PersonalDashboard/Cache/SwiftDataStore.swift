@@ -388,6 +388,10 @@ final class SwiftDataStore {
         // which is the one thing a habit review needs.
         LocalHabit.self,
         LocalHabitCheckIn.self,
+        // Planner blocks (#687). One new table and no change to anything above
+        // it. A placement is its own row rather than a field on `LocalTodo`, so
+        // re-planning a task never looks like a moved deadline.
+        LocalPlanBlock.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

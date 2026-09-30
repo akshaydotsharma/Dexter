@@ -17,6 +17,8 @@ struct SettingsView: View {
     /// Daily nutrition targets (#544). The same sheet the Meals section opens,
     /// so there is one derive-review-save flow and not two.
     @State private var showingMealTargets: Bool = false
+    /// Planner workday and calendars (#687).
+    @State private var showingPlanner: Bool = false
 
     /// Currency all finances are DISPLAYED in (#220). SGD stays the canonical
     /// stored base — this is a display-only conversion applied at format time.
@@ -58,6 +60,9 @@ struct SettingsView: View {
         .sheet(isPresented: $showingMealTargets) {
             MealTargetsSheet()
         }
+        .sheet(isPresented: $showingPlanner) {
+            PlannerSettingsView()
+        }
         .sheet(isPresented: $showingBackup) {
             BackupSettingsView()
         }
@@ -89,6 +94,7 @@ struct SettingsView: View {
                     aiSection
                     financeSection
                     mealsSection
+                    plannerSection
                     automationSection
                     dataSection
                     aboutSection
@@ -211,6 +217,22 @@ struct SettingsView: View {
                 automationRow(
                     title: "Daily targets",
                     subtitle: "The eight numbers a logged day is read against"
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Planner workday and calendars (#687). One row, like Meals: the settings
+    /// themselves live on the sheet the Planner also opens.
+    private var plannerSection: some View {
+        SettingsSection(title: "Planner") {
+            Button {
+                showingPlanner = true
+            } label: {
+                automationRow(
+                    title: "Workday and calendars",
+                    subtitle: "The hours the meter reads against, and which calendars count as work"
                 )
             }
             .buttonStyle(.plain)

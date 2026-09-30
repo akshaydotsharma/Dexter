@@ -331,6 +331,11 @@ struct SyncApplier {
             case "LocalHabitCheckIn":
                 payload.habitCheckIns = (payload.habitCheckIns ?? [])
                     + [try decoder.decode(DataArchive.HabitCheckInDTO.self, from: data)]
+            // #687. A peer on a build that predates the Planner hits the
+            // `default` arm and skips these ops with a log line.
+            case "LocalPlanBlock":
+                payload.planBlocks = (payload.planBlocks ?? [])
+                    + [try decoder.decode(DataArchive.PlanBlockDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -532,6 +537,9 @@ struct SyncApplier {
         // delete (a reset, or a row a peer removed outright).
         case "LocalHabit":           return try deleteString(LocalHabit.self, id: recordID, key: \.clientUUID)
         case "LocalHabitCheckIn":    return try deleteString(LocalHabitCheckIn.self, id: recordID, key: \.clientUUID)
+        // #687. The app soft-deletes blocks, so this arm only runs for a hard
+        // delete. Deleting a block never touches the task it placed.
+        case "LocalPlanBlock":       return try deleteString(LocalPlanBlock.self, id: recordID, key: \.clientUUID)
         default:
             SyncLog.line("SyncApplier: cannot delete unknown entity \(entity)")
             return false

@@ -83,6 +83,8 @@ struct DexterCommands: Commands {
         .meals,
         // Habits (#661), also after the ninth entry so no shortcut moves.
         .habits,
+        // Planner (#687), after the ninth entry so no shortcut moves.
+        .planner,
         .settings, .helpCenter,
     ]
 

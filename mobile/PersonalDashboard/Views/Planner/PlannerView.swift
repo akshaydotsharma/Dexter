@@ -1,0 +1,1064 @@
+import SwiftUI
+import SwiftData
+
+/// The Planner section (#687): Alternative B, "Agenda and Capacity".
+///
+/// One place that merges the work calendar, the personal calendar, Dexter
+/// Tasks and blocks added by hand, and answers "does today fit?" before any
+/// row is read.
+///
+/// ### Data
+///
+/// Two queries, both here: live tasks and live plan blocks. Calendar events
+/// come from `PlannerCalendarService` (EventKit, read-only) and are loaded once
+/// per visible range. Everything is copied into value snapshots and handed to
+/// `PlannerEngine`, so no row runs a query of its own (#442).
+///
+/// ### Layout
+///
+/// Day is a proportional time grid on both platforms (#687 round 2): every
+/// hour is the same height, tiles are sized by start and end, and empty space
+/// is the free time (a tap there adds at that time).
+/// iPhone: reached from the side drawer beside Today; Week is the week board,
+/// and "To plan" is a sheet from the top bar.
+/// Mac: a "To plan" inspector column, Day / Week in the native toolbar, and
+/// Week as seven columns of the same grid.
+struct PlannerView: View {
+    @Bindable var router: AppRouter
+
+    @Query(filter: #Predicate<LocalTodo> { $0.deletedAt == nil })
+    private var todos: [LocalTodo]
+
+    @Query(filter: #Predicate<LocalPlanBlock> { $0.deletedAt == nil })
+    private var blockRows: [LocalPlanBlock]
+
+    @State private var calendars = PlannerCalendarService.shared
+    @State private var selectedDay: Date = Calendar.current.startOfDay(for: Date())
+    @State private var mode: PlannerMode = PlannerMode.launchValue
+    @State private var events: [PlannerEvent] = []
+    @State private var now = Date()
+    @State private var sheet: PlannerSheetKind?
+    @State private var writeError: String?
+    @State private var inlineText = ""
+    @State private var launchSheetConsumed = false
+    /// The block being made on the grid, and its title while it is named.
+    @State private var draft: PlannerDraft?
+    @State private var draftTitle = ""
+
+    @AppStorage(PlannerSettings.Key.hiddenSources) private var hiddenRaw: String = ""
+    @AppStorage(PlannerSettings.Key.workdayStartMinute) private var startMinute: Int = PlannerSettings.defaultStartMinute
+    @AppStorage(PlannerSettings.Key.workdayLengthMinutes) private var lengthMinutes: Int = PlannerSettings.defaultLengthMinutes
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    // MARK: Derived
+
+    private var settings: WorkdaySettings {
+        WorkdaySettings(startMinute: min(max(startMinute, 0), 23 * 60), lengthMinutes: min(max(lengthMinutes, 60), 16 * 60))
+    }
+
+    private var hidden: Set<PlannerSource> { PlannerSettings.decodeSources(hiddenRaw) }
+    private var visible: Set<PlannerSource> { Set(PlannerSource.allCases).subtracting(hidden) }
+
+    private var tasks: [PlannerTask] {
+        todos.map {
+            PlannerTask(
+                id: $0.clientUUID.uuidString,
+                title: $0.title,
+                priority: TaskPriority(rawValue: $0.priority) ?? .none,
+                due: $0.dueDate,
+                completed: $0.completed
+            )
+        }
+    }
+
+    private var blocks: [PlannerBlock] {
+        blockRows.map {
+            PlannerBlock(
+                id: $0.clientUUID, kind: $0.kindEnum, title: $0.title,
+                day: WallClock.deviceDay(from: $0.day),
+                start: $0.start, end: $0.end,
+                durationMinutes: $0.durationMinutes, taskUUID: $0.taskUUID
+            )
+        }
+    }
+
+    /// The last length each task was planned for, so a re-plan starts there.
+    private func estimates(_ blocks: [PlannerBlock]) -> [String: Int] {
+        var out: [String: Int] = [:]
+        for b in blocks where b.kind == .task && !b.taskUUID.isEmpty { out[b.taskUUID] = b.durationMinutes }
+        return out
+    }
+
+    private var calendar: Calendar { .current }
+
+    private var weekStart: Date {
+        let d = calendar.startOfDay(for: selectedDay)
+        let wd = calendar.component(.weekday, from: d)
+        return calendar.date(byAdding: .day, value: -((wd + 5) % 7), to: d) ?? d
+    }
+
+    private var weekDays: [Date] {
+        (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: weekStart) }
+    }
+
+    /// The range of events to load: the selected week, plus the next eight days
+    /// from today for the plan sheet's free-time chips.
+    private var loadKey: PlannerLoadKey {
+        let today = calendar.startOfDay(for: Date())
+        let start = min(weekStart, today)
+        let end = max(calendar.date(byAdding: .day, value: 8, to: weekStart) ?? weekStart,
+                      calendar.date(byAdding: .day, value: 9, to: today) ?? today)
+        return PlannerLoadKey(start: start, end: end, revision: calendars.revision, access: calendars.access)
+    }
+
+    // MARK: Body
+
+    var body: some View {
+        let context = PlannerContext(
+            tasks: tasks, blocks: blocks, events: events, now: now,
+            settings: settings, visible: visible
+        )
+        return screen(context)
+            .activeSection(.planner)
+            .macSectionChrome("Planner") { macToolbar }
+            #if os(macOS)
+            .navigationSubtitle(subtitle)
+            #endif
+            .sheet(item: $sheet) { kind in
+                sheetView(kind, context: context)
+            }
+            .task(id: loadKey) { reloadEvents() }
+            .task { await calendars.requestAccessIfNeeded() }
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    now = Date()
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { calendars.refreshAccess(); now = Date() }
+            }
+            .onAppear { consumeLaunchSheet() }
+    }
+
+    private var subtitle: String {
+        mode == .week
+            ? "Week of \(PlannerStyle.dayMonthFormatter.string(from: weekStart))"
+            : "\(PlannerStyle.weekdayFormatter.string(from: selectedDay)) \(PlannerStyle.dayMonthFormatter.string(from: selectedDay))"
+    }
+
+    /// A fixed header (day, chips, meter) over a grid that fills the rest of
+    /// the height and scrolls on its own, so the meter stays in view while the
+    /// hours move (#687 round 2).
+    @ViewBuilder
+    private func screen(_ ctx: PlannerContext) -> some View {
+        ZStack {
+            Tokens.paper.canvasIgnoresSafeArea()
+            #if os(iOS)
+            VStack(spacing: 0) {
+                TopBar(
+                    title: "Planner",
+                    onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
+                ) {
+                    TopBarIconButton(systemName: "tray", accessibilityLabel: "Tasks to plan") {
+                        sheet = .toPlan
+                    }
+                    TopBarIconButton(systemName: "plus", accessibilityLabel: "Add a block") {
+                        sheet = .quickAdd("")
+                    }
+                }
+                if mode == .week {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) { weekBoardContent(ctx) }
+                            .padding(.horizontal, Space.lg)
+                            .padding(.top, Space.md)
+                            .padding(.bottom, 110)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        dayHeader(ctx)
+                        dayGrid(ctx, bottomInset: 96)
+                    }
+                    .padding(.horizontal, Space.lg)
+                    .padding(.top, Space.md)
+                    // Name the draft: a compact card above the keyboard.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if draft?.isNaming == true, sheet == nil {
+                            quickCreate
+                                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
+                                .paperBorder()
+                                .shadowLg()
+                                .padding(.horizontal, Space.md)
+                                .padding(.bottom, Space.sm)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                    }
+                }
+            }
+            #else
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if mode == .week {
+                        weekGridContent(ctx)
+                    } else {
+                        dayHeader(ctx)
+                        dayGrid(ctx, bottomInset: 0)
+                        inlineQuickAdd()
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                Rectangle().fill(Tokens.border).frame(width: 1)
+                PlannerInspector(
+                    candidates: candidates(ctx),
+                    onPlan: { sheet = .plan($0.task.id) }
+                )
+                .frame(width: 270)
+            }
+            #endif
+        }
+    }
+
+    // MARK: Day
+
+    @ViewBuilder
+    private func dayHeader(_ ctx: PlannerContext) -> some View {
+        let day = ctx.day(selectedDay)
+        let summary = PlannerEngine.capacity(of: day, settings: ctx.settings, visible: ctx.visible)
+        header(PlannerDayHeader(day: selectedDay, eyebrowOverride: calendar.isDateInToday(selectedDay) ? "Today · \(PlannerStyle.weekdayFormatter.string(from: selectedDay))" : nil))
+        PlannerSourceChips(counts: counts(day), hidden: hidden, onToggle: toggle)
+        accessCard
+        if let writeError {
+            Text(writeError).font(.edFootnote).foregroundStyle(Tokens.danger)
+        }
+        PlannerMeterCard(summary: summary, settings: ctx.settings, onFixes: summary.isOver ? { sheet = .fixes(selectedDay) } : nil)
+    }
+
+    private func dayGrid(_ ctx: PlannerContext, bottomInset: CGFloat) -> some View {
+        PlannerFillRemaining {
+            dayGridBody(ctx, bottomInset: bottomInset)
+        }
+    }
+
+    private func dayGridBody(_ ctx: PlannerContext, bottomInset: CGFloat) -> some View {
+        PlannerDayTimeGrid(
+            day: ctx.day(selectedDay),
+            visible: ctx.visible,
+            now: ctx.now,
+            settings: ctx.settings,
+            bottomInset: bottomInset,
+            onTapItem: tapped,
+            draft: draftHandlers
+        )
+        .frame(maxHeight: .infinity)
+    }
+
+    private func header<Head: View>(_ head: Head) -> some View {
+        HStack(alignment: .bottom, spacing: Space.sm) {
+            head
+            Spacer(minLength: Space.sm)
+            #if os(iOS)
+            VStack(alignment: .trailing, spacing: 6) {
+                modePicker.frame(width: 132)
+                dayNav
+            }
+            #endif
+        }
+    }
+
+    // MARK: Day nav and mode
+
+    @ViewBuilder
+    private var dayNav: some View {
+        #if os(macOS)
+        // Native control group on the Mac, so the three read as one toolbar
+        // control and take the system's own label styling.
+        ControlGroup {
+            Button { step(-1) } label: { Image(systemName: "chevron.left") }
+                .help(mode == .week ? "Previous week" : "Previous day")
+                .accessibilityLabel(mode == .week ? "Previous week" : "Previous day")
+            Button(mode == .week ? "This week" : "Today") { jumpToToday() }
+            Button { step(1) } label: { Image(systemName: "chevron.right") }
+                .help(mode == .week ? "Next week" : "Next day")
+                .accessibilityLabel(mode == .week ? "Next week" : "Next day")
+        }
+        .fixedSize()
+        #else
+        dayNavPhone
+        #endif
+    }
+
+    private var dayNavPhone: some View {
+        HStack(spacing: 2) {
+            Button { step(-1) } label: {
+                Image(systemName: "chevron.left").frame(width: 30, height: 28).contentShape(Rectangle())
+            }
+            .accessibilityLabel(mode == .week ? "Previous week" : "Previous day")
+            Button { jumpToToday() } label: {
+                Text(mode == .week ? "This week" : "Today")
+                    .font(.edCaption.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .frame(height: 28)
+            }
+            .accessibilityLabel(mode == .week ? "This week" : "Today")
+            Button { step(1) } label: {
+                Image(systemName: "chevron.right").frame(width: 30, height: 28).contentShape(Rectangle())
+            }
+            .accessibilityLabel(mode == .week ? "Next week" : "Next day")
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(Tokens.ink)
+        .background(Tokens.surface, in: Capsule())
+        .overlay(Capsule().stroke(Tokens.border, lineWidth: 1))
+    }
+
+    private var modePicker: some View {
+        Picker("View", selection: $mode) {
+            Text("Day").tag(PlannerMode.day)
+            Text("Week").tag(PlannerMode.week)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
+    /// macOS toolbar: day nav, Day / Week, filter, add. One `ToolbarItem`
+    /// renders one control (#524), so they are grouped in one `HStack`.
+    @ViewBuilder
+    private var macToolbar: some View {
+        #if os(macOS)
+        HStack(spacing: 10) {
+            dayNav
+            modePicker.frame(width: 130)
+            Menu {
+                ForEach(PlannerSource.allCases, id: \.self) { s in
+                    Toggle(s.label, isOn: Binding(get: { !hidden.contains(s) }, set: { _ in toggle(s) }))
+                }
+                Divider()
+                Button("Planner settings…") { sheet = .settings }
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+            }
+            .menuIndicator(.hidden)
+            .help("Filter sources")
+            .accessibilityLabel("Filter sources")
+            Button { sheet = .quickAdd("") } label: { Image(systemName: "plus") }
+                .help("Add a block")
+                .accessibilityLabel("Add a block")
+        }
+        #else
+        EmptyView()
+        #endif
+    }
+
+    private func step(_ direction: Int) {
+        let days = mode == .week ? 7 * direction : direction
+        selectedDay = calendar.date(byAdding: .day, value: days, to: selectedDay) ?? selectedDay
+    }
+
+    private func jumpToToday() {
+        selectedDay = calendar.startOfDay(for: Date())
+    }
+
+    private func toggle(_ source: PlannerSource) {
+        var h = hidden
+        if h.contains(source) { h.remove(source) } else { h.insert(source) }
+        hiddenRaw = PlannerSettings.encodeSources(h)
+    }
+
+    private func counts(_ day: PlannerDay) -> [PlannerSource: Int] {
+        var c: [PlannerSource: Int] = [:]
+        for i in day.all { c[i.source, default: 0] += 1 }
+        return c
+    }
+
+    // MARK: Access
+
+    @ViewBuilder
+    private var accessCard: some View {
+        switch calendars.access {
+        case .granted:
+            EmptyView()
+        default:
+            PlannerAccessCard(
+                access: calendars.access,
+                isRequesting: calendars.isRequesting,
+                promptDidNotAppear: calendars.promptDidNotAppear
+            ) {
+                Task { await calendars.requestAccessFromButton() }
+            }
+        }
+    }
+
+    private func tapped(_ item: PlannerItem) {
+        resolveDraft()
+        if let id = item.blockID {
+            sheet = .edit(id)
+        } else if case .taskDue = item.origin, let id = item.taskUUID {
+            sheet = .plan(id)
+        } else if case .event = item.origin {
+            sheet = .event(item.id)
+        }
+    }
+
+    // MARK: Drag to create (#687 round 3)
+
+    private var draftHandlers: PlannerDraftHandlers {
+        PlannerDraftHandlers(
+            draft: draft,
+            onChange: { s, e in
+                if draft?.isNaming == true { resolveDraft() }
+                draft = PlannerDraft(start: s, end: e, isNaming: false)
+            },
+            onCommit: { s, e in
+                if draft?.isNaming == true {
+                    // A click or tap away from a draft being named settles it
+                    // and does not start a new one.
+                    resolveDraft()
+                    return
+                }
+                draftTitle = ""
+                draft = PlannerDraft(start: s, end: e, isNaming: true)
+            },
+            popoverPresented: Binding(
+                get: { draft?.isNaming == true && sheet == nil },
+                set: { shown in if !shown, draft?.isNaming == true, sheet == nil { resolveDraft() } }
+            ),
+            quickCreate: { AnyView(quickCreate) }
+        )
+    }
+
+    @ViewBuilder
+    private var quickCreate: some View {
+        if let d = draft {
+            PlannerQuickCreate(
+                draft: d,
+                title: $draftTitle,
+                onSave: saveDraft,
+                onCancel: discardDraft,
+                onMoreOptions: {
+                    sheet = .newBlock(start: d.start, end: d.end, title: draftTitle)
+                    draft = nil
+                },
+                onPlaceTask: {
+                    sheet = .placeTask(start: d.start, end: d.end)
+                    draft = nil
+                }
+            )
+        }
+    }
+
+    /// Return or Save: write a manual block with the typed title.
+    private func saveDraft() {
+        guard let d = draft else { return }
+        let t = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        write { _ = try PlanBlockService.default().addManual(title: t, start: d.start, end: d.end) }
+        draft = nil
+        draftTitle = ""
+    }
+
+    private func discardDraft() {
+        draft = nil
+        draftTitle = ""
+    }
+
+    /// Click or tap away: a titled draft is saved, an untitled one is dropped
+    /// and writes nothing.
+    private func resolveDraft() {
+        guard draft != nil else { return }
+        if draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            discardDraft()
+        } else {
+            saveDraft()
+        }
+    }
+
+    // MARK: Overloaded day
+
+    private func fixesSheet(_ d: Date, ctx: PlannerContext) -> some View {
+        let day = ctx.day(d)
+        let movable = day.all.filter { $0.isBlock && ctx.visible.contains($0.source) }
+        let fixed = day.timed.filter { $0.isFixed && ctx.visible.contains($0.source) }
+        let conflicts = PlannerEngine.conflicts(in: day, visible: ctx.visible)
+        let summary = PlannerEngine.capacity(of: day, settings: ctx.settings, visible: ctx.visible)
+        return PlannerSheetScaffold(
+            title: "\(PlannerStyle.weekdayFormatter.string(from: d)) is over by \(PlannerFormat.duration(summary.overflowMinutes))",
+            subtitle: "Move what you planned; calendar events stay fixed"
+        ) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.sm) {
+                    Text("Can move").eyebrow()
+                    if movable.isEmpty {
+                        Text("Nothing on this day was planned by you. Everything here is a calendar event.")
+                            .font(.edCaption).foregroundStyle(Tokens.muted)
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(Array(movable.enumerated()), id: \.element.id) { index, item in
+                                if index > 0 { Rectangle().fill(Tokens.divider).frame(height: 1) }
+                                moveRow(item, day: day, ctx: ctx)
+                            }
+                        }
+                        .plannerCard()
+                    }
+                    Text("Fixed").eyebrow().padding(.top, 6)
+                    VStack(spacing: 4) {
+                        ForEach(fixed) { item in
+                            let inConflict = conflicts.contains { g in g.items.contains { $0.id == item.id } }
+                            PlannerTile(item: item, inConflict: inConflict, height: 36).frame(height: 36)
+                        }
+                    }
+                    if !conflicts.isEmpty {
+                        Text("\(conflicts.count) overlap\(conflicts.count == 1 ? "" : "s"), ringed in red.")
+                            .font(.edCaption).foregroundStyle(Tokens.danger)
+                    }
+                }
+            }
+        }
+    }
+
+    private func moveRow(_ item: PlannerItem, day: PlannerDay, ctx: PlannerContext) -> some View {
+        let minutes = max(5, item.durationMinutes)
+        let target = PlannerEngine.nearestDayWithRoom(
+            after: day.day, minutes: minutes,
+            freeMinutes: { PlannerEngine.capacity(of: ctx.day($0), settings: ctx.settings, visible: ctx.visible).freeMinutes },
+            settings: ctx.settings
+        )
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title).font(.edSubheadline.weight(.medium)).foregroundStyle(Tokens.ink).lineLimit(1)
+                Text([item.priority == .none ? nil : item.priority.label, PlannerFormat.duration(minutes)].compactMap { $0 }.joined(separator: " · "))
+                    .font(.edCaption).foregroundStyle(Tokens.muted)
+            }
+            Spacer(minLength: 4)
+            if let target, let id = item.blockID {
+                Button("To \(PlannerStyle.weekdayShortFormatter.string(from: target))") {
+                    write { if let row = try PlanBlockService.default().block(id: id) { try PlanBlockService.default().move(row, toDay: target) } }
+                }
+                .buttonStyle(PlannerSmallButtonStyle(filled: true))
+            } else {
+                Text("No room this week").font(.edCaption).foregroundStyle(Tokens.muted)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+    }
+
+    // MARK: Week
+
+    private func weekRows(_ ctx: PlannerContext) -> [(day: PlannerDay, summary: CapacitySummary)] {
+        weekDays.map { d in
+            let day = ctx.day(d)
+            return (day, PlannerEngine.capacity(of: day, settings: ctx.settings, visible: ctx.visible))
+        }
+    }
+
+    @ViewBuilder
+    private func weekHeader(_ ctx: PlannerContext, rows: [(day: PlannerDay, summary: CapacitySummary)]) -> some View {
+        let total = rows.reduce(0) { $0 + $1.summary.bookedMinutes }
+        let over = rows.filter { $0.summary.isOver }.count
+        let weekNumber = calendar.component(.weekOfYear, from: weekStart)
+        let end = weekDays.last ?? weekStart
+        header(
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Week \(weekNumber)").eyebrow()
+                Text("\(PlannerStyle.dayMonthFormatter.string(from: weekStart)) - \(PlannerStyle.dayMonthFormatter.string(from: end))")
+                    .font(.edTitle).foregroundStyle(Tokens.ink)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Text("\(PlannerFormat.duration(total)) booked\(over > 0 ? " · \(over) day\(over == 1 ? "" : "s") over" : "")")
+                    .font(.edCaption)
+                    .foregroundStyle(over > 0 ? Tokens.danger : Tokens.muted)
+            }
+        )
+        PlannerSourceChips(counts: [:], hidden: hidden, onToggle: toggle)
+        accessCard
+    }
+
+    /// iPhone: the week board (one row per day), unchanged this round.
+    @ViewBuilder
+    private func weekBoardContent(_ ctx: PlannerContext) -> some View {
+        let rows = weekRows(ctx)
+        weekHeader(ctx, rows: rows)
+        PlannerWeekBoard(
+            rows: rows.map { r in
+                PlannerWeekBoard.Row(
+                    day: r.day.day, summary: r.summary,
+                    titles: r.day.all.filter { ctx.visible.contains($0.source) }.map(\.title)
+                )
+            },
+            settings: ctx.settings
+        ) { d in
+            selectedDay = d
+            mode = .day
+        }
+        Text("Tap a day to open its hours. A task planned to a day with no hour counts toward that day.")
+            .font(.edCaption).foregroundStyle(Tokens.muted)
+    }
+
+    /// Mac: seven columns of the same grid and the same tiles.
+    @ViewBuilder
+    private func weekGridContent(_ ctx: PlannerContext) -> some View {
+        let rows = weekRows(ctx)
+        weekHeader(ctx, rows: rows)
+        PlannerFillRemaining {
+            PlannerWeekTimeGrid(
+                columns: rows.map { .init(day: $0.day, summary: $0.summary) },
+                visible: ctx.visible,
+                now: ctx.now,
+                settings: ctx.settings,
+                onOpenDay: { d in selectedDay = d; mode = .day },
+                onTapItem: tapped,
+                draft: draftHandlers
+            )
+        }
+    }
+
+    // MARK: To plan
+
+    private func candidates(_ ctx: PlannerContext) -> [PlannerEngine.Candidate] {
+        PlannerEngine.candidates(
+            tasks: ctx.tasks, blocks: ctx.blocks, today: ctx.now,
+            estimates: estimates(ctx.blocks)
+        )
+    }
+
+    private func toPlanSheet(_ ctx: PlannerContext) -> some View {
+        let all = candidates(ctx)
+        return PlannerSheetScaffold(title: "To plan", subtitle: "\(all.count) open task\(all.count == 1 ? "" : "s") with no plan") {
+            if all.isEmpty {
+                Text("Every open task has a plan.").font(.edFootnote).foregroundStyle(Tokens.muted)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(all.enumerated()), id: \.element.id) { index, c in
+                            if index > 0 { Rectangle().fill(Tokens.divider).frame(height: 1) }
+                            PlannerToPlanRow(candidate: c) { sheet = .plan(c.task.id) }
+                        }
+                    }
+                    .plannerCard()
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: Inline quick add (macOS)
+
+    #if os(macOS)
+    private func inlineQuickAdd() -> some View {
+        let trimmed = inlineText.trimmingCharacters(in: .whitespaces)
+        let parsed = PlannerQuickAdd.parse(inlineText, on: selectedDay)
+        return HStack(spacing: 8) {
+            Image(systemName: "plus").foregroundStyle(Tokens.muted)
+            TextField("Add a block: Call bank 3:30pm 15m", text: $inlineText)
+                .textFieldStyle(.plain)
+                .font(.edBody)
+                .onSubmit { addInline(parsed) }
+            if !trimmed.isEmpty {
+                Text(parsed.start.map { PlannerStyle.range($0, parsed.end!) } ?? "No time · \(PlannerFormat.duration(parsed.durationMinutes))")
+                    .font(.edCaption.weight(.medium))
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .background(Tokens.surface2, in: Capsule())
+                    .overlay(Capsule().stroke(Tokens.border, lineWidth: 1))
+                Button("Add") { addInline(parsed) }
+                    .buttonStyle(PlannerSmallButtonStyle(filled: true, tint: Tokens.ink))
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
+        .background(Tokens.surface, in: Capsule())
+        .overlay(Capsule().stroke(Tokens.borderStrong, lineWidth: 1))
+    }
+
+    private func addInline(_ parsed: PlannerQuickAdd.Result) {
+        guard !inlineText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        write { try PlanBlockService.default().add(parsed) }
+        inlineText = ""
+    }
+    #endif
+
+    // MARK: Sheets
+
+    /// Free intervals over the WHOLE day (not just the workday), for the
+    /// quick-add "overlaps" check.
+    private func openTime(on d: Date, ctx: PlannerContext) -> [DateInterval] {
+        let day = ctx.day(d)
+        let start = calendar.startOfDay(for: d)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        let busy = day.timed.filter(\.occupiesTime).map { DateInterval(start: $0.start!, end: $0.end!) }
+        return PlannerEngine.freeGaps(in: DateInterval(start: start, end: end), busy: busy)
+    }
+
+    @ViewBuilder
+    private func sheetView(_ kind: PlannerSheetKind, context ctx: PlannerContext) -> some View {
+        switch kind {
+        case .slot(let start):
+            PlannerSlotSheet(
+                start: start,
+                candidates: candidates(ctx),
+                onAddBlock: { parsed in write { try PlanBlockService.default().add(parsed) } },
+                onPlaceTask: { c, s, e in
+                    write { try PlanBlockService.default().planTask(taskUUID: c.task.id, title: c.task.title, start: s, end: e) }
+                }
+            )
+        case .plan(let taskID):
+            if let task = ctx.tasks.first(where: { $0.id == taskID }) {
+                planSheet(task, ctx: ctx)
+            } else {
+                PlannerSheetScaffold(title: "Task not found") { EmptyView() }
+            }
+        case .quickAdd(let text):
+            PlannerQuickAddSheet(
+                baseDay: selectedDay,
+                gapsOn: { openTime(on: $0, ctx: ctx) },
+                onAdd: { parsed in write { try PlanBlockService.default().add(parsed) } },
+                initialText: text
+            )
+        case .edit(let blockID):
+            if let row = blockRows.first(where: { $0.clientUUID == blockID }) {
+                PlannerBlockDetailsSheet(
+                    mode: .edit(row),
+                    onSave: { title, start, end, day, minutes, notes in
+                        write { try PlanBlockService.default().update(row, title: title, start: start, end: end, day: day, durationMinutes: minutes, notes: notes) }
+                    },
+                    onDelete: { write { try PlanBlockService.default().delete(row) } },
+                    onOpenTask: row.kindEnum == .task ? { openTask(row.taskUUID) } : nil
+                )
+            } else {
+                PlannerSheetScaffold(title: "Block not found") { EmptyView() }
+            }
+        case .newBlock(let start, let end, let title):
+            PlannerBlockDetailsSheet(
+                mode: .create(start: start, end: end, title: title),
+                onSave: { title, s, e, day, minutes, notes in
+                    write {
+                        if let s, let e {
+                            _ = try PlanBlockService.default().addManual(title: title, start: s, end: e, notes: notes)
+                        } else {
+                            _ = try PlanBlockService.default().addManual(title: title, day: day, durationMinutes: minutes, notes: notes)
+                        }
+                    }
+                }
+            )
+        case .placeTask(let start, let end):
+            PlannerSlotSheet(
+                start: start,
+                candidates: candidates(ctx),
+                onAddBlock: { _ in },
+                onPlaceTask: { c, s, e in
+                    write { try PlanBlockService.default().planTask(taskUUID: c.task.id, title: c.task.title, start: s, end: e) }
+                },
+                defaultLength: PlannerEngine.minutes(from: start, to: end),
+                showsNewBlock: false
+            )
+        case .event(let itemID):
+            if let ev = events.first(where: { "e-\($0.id)" == itemID }) {
+                PlannerEventDetailsSheet(event: ev)
+            } else {
+                PlannerSheetScaffold(title: "Event not found") { EmptyView() }
+            }
+        case .fixes(let d):
+            fixesSheet(d, ctx: ctx)
+        case .toPlan:
+            toPlanSheet(ctx)
+        case .settings:
+            PlannerSettingsView()
+        }
+    }
+
+    private func planSheet(_ task: PlannerTask, ctx: PlannerContext) -> some View {
+        let today = calendar.startOfDay(for: ctx.now)
+        let next = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
+        let options = next.map { d -> PlannerPlanTaskSheet.DayOption in
+            let s = PlannerEngine.capacity(of: ctx.day(d), settings: ctx.settings)
+            return .init(day: d, freeMinutes: s.freeMinutes, isWorkday: s.isWorkday)
+        }
+        let estimate = estimates(ctx.blocks)[task.id] ?? 30
+        return PlannerPlanTaskSheet(
+            task: task,
+            initialEstimate: estimate,
+            days: options,
+            slots: { minutes in
+                next.flatMap { d in
+                    PlannerEngine.slots(on: ctx.day(d), minutes: minutes, settings: ctx.settings, now: ctx.now)
+                }
+            },
+            onPlanDay: { day, minutes in
+                write { try PlanBlockService.default().planTask(taskUUID: task.id, title: task.title, toDay: day, durationMinutes: minutes) }
+            },
+            onPlanSlot: { slot in
+                write { try PlanBlockService.default().planTask(taskUUID: task.id, title: task.title, start: slot.start, end: slot.end) }
+            }
+        )
+    }
+
+    /// Leave the Planner for the task the block places.
+    private func openTask(_ uuid: String) {
+        guard let id = UUID(uuidString: uuid) else { return }
+        router.focus = ActivityFocus(section: .tasks, id: id)
+        router.go(to: .tasks)
+    }
+
+    // MARK: Writes
+
+    private func write(_ body: () throws -> Void) {
+        do {
+            try body()
+            writeError = nil
+        } catch {
+            writeError = "Couldn't save that change. \(error.localizedDescription)"
+        }
+    }
+
+    private func reloadEvents() {
+        let key = loadKey
+        events = calendars.events(from: key.start, to: key.end)
+    }
+
+    /// `LAUNCH_PLANNER_SHEET=slot|quickadd|plan|toplan|fixes|settings|draft|details|event` opens a
+    /// sheet at launch, so a screenshot of it needs no synthetic tap (see
+    /// `project_macos_agent_qa_constraints`). Consumed once.
+    private func consumeLaunchSheet() {
+        guard !launchSheetConsumed,
+              let raw = ProcessInfo.processInfo.environment["LAUNCH_PLANNER_SHEET"]?.lowercased()
+        else { return }
+        launchSheetConsumed = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(900))
+            reloadEvents()
+            let fresh = PlannerContext(tasks: tasks, blocks: blocks, events: events, now: Date(), settings: settings, visible: visible)
+            switch raw {
+            case "slot", "fill":
+                let free = PlannerEngine.freeTime(on: fresh.day(selectedDay), settings: settings, visible: visible, now: fresh.now)
+                sheet = .slot(free.first?.start ?? PlannerEngine.roundUp(Date(), toMinutes: 15))
+            case "quickadd":
+                sheet = .quickAdd(ProcessInfo.processInfo.environment["LAUNCH_PLANNER_TEXT"] ?? "Call bank 3:30pm 15m")
+            case "plan":
+                if let c = candidates(fresh).first { sheet = .plan(c.task.id) }
+            case "toplan":
+                sheet = .toPlan
+            case "draft":
+                // A named draft at the next free slot, as if dragged there.
+                let free = PlannerEngine.freeTime(on: fresh.day(selectedDay), settings: settings, visible: visible, now: fresh.now)
+                let s = free.first?.start ?? PlannerEngine.roundUp(Date(), toMinutes: 15)
+                draftTitle = ProcessInfo.processInfo.environment["LAUNCH_PLANNER_TEXT"] ?? ""
+                draft = PlannerDraft(start: s, end: s.addingTimeInterval(90 * 60), isNaming: true)
+            case "details":
+                if let b = blockRows.first(where: { $0.kindEnum == .manual && $0.isTimed }) { sheet = .edit(b.clientUUID) }
+            case "event":
+                if let e = fresh.day(selectedDay).timed.first(where: { $0.isFixed }) { sheet = .event(e.id) }
+            case "fixes":
+                sheet = .fixes(selectedDay)
+            case "settings":
+                sheet = .settings
+            default:
+                break
+            }
+        }
+    }
+}
+
+// MARK: - Supporting types
+
+enum PlannerMode: String, Hashable {
+    case day, week
+
+    /// `LAUNCH_PLANNER_MODE=day|week`, for QA screenshots. The old `agenda`
+    /// and `grid` values map to Day.
+    static var launchValue: PlannerMode {
+        let raw = ProcessInfo.processInfo.environment["LAUNCH_PLANNER_MODE"]?.lowercased() ?? ""
+        return raw == "week" ? .week : .day
+    }
+}
+
+enum PlannerSheetKind: Identifiable, Equatable {
+    /// A tap on empty grid space, at this time.
+    case slot(Date)
+    case plan(String)
+    case quickAdd(String)
+    case edit(String)
+    case fixes(Date)
+    case toPlan
+    case settings
+    /// "More options" on a draft: the details sheet for a new block.
+    case newBlock(start: Date, end: Date, title: String)
+    /// "Place a task here" on a draft.
+    case placeTask(start: Date, end: Date)
+    /// A calendar event's read-only details (the item id).
+    case event(String)
+
+    var id: String {
+        switch self {
+        case .slot(let d):     return "slot-\(d.timeIntervalSince1970)"
+        case .plan(let id):    return "plan-\(id)"
+        case .quickAdd(let t): return "add-\(t)"
+        case .edit(let id):    return "edit-\(id)"
+        case .fixes(let d):    return "fixes-\(d.timeIntervalSince1970)"
+        case .toPlan:          return "toplan"
+        case .settings:        return "settings"
+        case .newBlock(let s, let e, _): return "new-\(s.timeIntervalSince1970)-\(e.timeIntervalSince1970)"
+        case .placeTask(let s, _):       return "place-\(s.timeIntervalSince1970)"
+        case .event(let id):             return "event-\(id)"
+        }
+    }
+}
+
+struct PlannerLoadKey: Hashable {
+    let start: Date
+    let end: Date
+    let revision: Int
+    let access: PlannerCalendarService.Access
+}
+
+/// Everything the engine needs for one render, as values.
+struct PlannerContext {
+    let tasks: [PlannerTask]
+    let blocks: [PlannerBlock]
+    let events: [PlannerEvent]
+    let now: Date
+    let settings: WorkdaySettings
+    let visible: Set<PlannerSource>
+
+    func day(_ d: Date) -> PlannerDay {
+        PlannerEngine.day(d, events: events, blocks: blocks, tasks: tasks, now: now)
+    }
+}
+
+// MARK: - To plan
+
+struct PlannerToPlanRow: View {
+    let candidate: PlannerEngine.Candidate
+    let onPlan: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(PlannerStyle.priorityColor(candidate.task.priority)).frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(candidate.task.title)
+                    .font(.edSubheadline.weight(.medium))
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                Text(meta)
+                    .font(.edCaption.weight(candidate.overdueDays > 0 ? .medium : .regular))
+                    .foregroundStyle(candidate.overdueDays > 0 ? Tokens.danger : Tokens.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Button("Plan", action: onPlan)
+                .buttonStyle(PlannerSmallButtonStyle())
+                .accessibilityLabel("Plan \(candidate.task.title)")
+        }
+        .padding(.trailing, 10).padding(.vertical, 8)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var meta: String {
+        let length = PlannerFormat.duration(candidate.estimateMinutes)
+        if candidate.overdueDays > 0 {
+            return "\(candidate.overdueDays == 1 ? "1 day" : "\(candidate.overdueDays) days") overdue · \(length)"
+        }
+        guard let due = candidate.task.due else { return "No due date · \(length)" }
+        let cal = Calendar.current
+        let hasHour = TaskDueTime.isSet(on: due)
+        if cal.isDateInToday(due) {
+            return hasHour ? "Due \(PlannerStyle.clockAP(due)) · \(length)" : "Today, no time · \(length)"
+        }
+        return "Due \(PlannerStyle.weekdayShortFormatter.string(from: due)) · \(length)"
+    }
+}
+
+/// The macOS "To plan" column.
+struct PlannerInspector: View {
+    let candidates: [PlannerEngine.Candidate]
+    let onPlan: (PlannerEngine.Candidate) -> Void
+
+    private struct Bucket: Identifiable {
+        let title: String
+        let late: Bool
+        let items: [PlannerEngine.Candidate]
+        var id: String { title }
+    }
+
+    private var groups: [Bucket] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let weekEnd = cal.date(byAdding: .day, value: 7, to: today) ?? today
+        var overdue: [PlannerEngine.Candidate] = [], dueToday: [PlannerEngine.Candidate] = []
+        var week: [PlannerEngine.Candidate] = [], later: [PlannerEngine.Candidate] = [], undated: [PlannerEngine.Candidate] = []
+        for c in candidates {
+            if c.overdueDays > 0 { overdue.append(c); continue }
+            guard let due = c.task.due else { undated.append(c); continue }
+            if cal.isDate(due, inSameDayAs: today) { dueToday.append(c) }
+            else if due < weekEnd { week.append(c) }
+            else { later.append(c) }
+        }
+        return [
+            Bucket(title: "Overdue", late: true, items: overdue),
+            Bucket(title: "Due today", late: false, items: dueToday),
+            Bucket(title: "This week", late: false, items: week),
+            Bucket(title: "Later", late: false, items: later),
+            Bucket(title: "No date", late: false, items: undated),
+        ].filter { !$0.items.isEmpty }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("To plan").font(.edHeading).foregroundStyle(Tokens.ink)
+                Spacer()
+                Text("\(candidates.count) task\(candidates.count == 1 ? "" : "s")")
+                    .font(.edCaption).foregroundStyle(Tokens.muted)
+            }
+            .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 6)
+            if candidates.isEmpty {
+                Text("Every open task has a plan.")
+                    .font(.edCaption).foregroundStyle(Tokens.muted)
+                    .padding(.horizontal, 12)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(groups) { g in
+                            Text(g.title).eyebrow(g.late ? Tokens.danger : Tokens.muted)
+                                .padding(.horizontal, 12).padding(.top, 8)
+                            ForEach(g.items) { c in
+                                PlannerToPlanRow(candidate: c) { onPlan(c) }
+                                    .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                                    .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                                    .paperBorder(Tokens.border, radius: Radius.md)
+                                    .padding(.horizontal, 8)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 12)
+                }
+            }
+            Rectangle().fill(Tokens.border).frame(height: 1)
+            Text("Plan a task to a day with no hour, or into a free slot. Click empty time in the grid to add there.")
+                .font(.edCaption).foregroundStyle(Tokens.muted)
+                .padding(12)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Tokens.surface2)
+    }
+}
+
+/// Gives its content exactly the height left over, and never asks for more.
+///
+/// Belt and braces for #687 round 2. Once the Mac pane stopped being one
+/// scroll, anything above the grid with a large MINIMUM height pushed the
+/// whole split view taller than the window, and the sidebar, inspector and
+/// detail all slid off screen. The cause that bit was a `Text` with
+/// `.fixedSize(horizontal: false, vertical: true)` in the access card, which
+/// reports a huge height when measured at zero width. A `GeometryReader` has
+/// no minimum height of its own, so the grid can never add to that.
+struct PlannerFillRemaining<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        GeometryReader { geo in
+            content.frame(width: geo.size.width, height: geo.size.height)
+        }
+        .frame(maxHeight: .infinity)
+    }
+}
