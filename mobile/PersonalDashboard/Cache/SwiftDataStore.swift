@@ -392,6 +392,9 @@ final class SwiftDataStore {
         // it. A placement is its own row rather than a field on `LocalTodo`, so
         // re-planning a task never looks like a moved deadline.
         LocalPlanBlock.self,
+        // Dexter-only decisions about calendar events (#689): hide or decline.
+        // One new table and no change to anything above it.
+        LocalEventOverride.self,
         // MARK: Sync sidecars (#348)
         SyncDeviceState.self,
         SyncShadow.self,

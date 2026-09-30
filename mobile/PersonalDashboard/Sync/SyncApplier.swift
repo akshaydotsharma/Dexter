@@ -336,6 +336,10 @@ struct SyncApplier {
             case "LocalPlanBlock":
                 payload.planBlocks = (payload.planBlocks ?? [])
                     + [try decoder.decode(DataArchive.PlanBlockDTO.self, from: data)]
+            // #689. A peer on an older build skips these with a log line.
+            case "LocalEventOverride":
+                payload.eventOverrides = (payload.eventOverrides ?? [])
+                    + [try decoder.decode(DataArchive.EventOverrideDTO.self, from: data)]
             default:
                 // An entity this build does not know about, e.g. a peer running a
                 // newer version. Skipped rather than guessed at, and logged so it
@@ -540,6 +544,8 @@ struct SyncApplier {
         // #687. The app soft-deletes blocks, so this arm only runs for a hard
         // delete. Deleting a block never touches the task it placed.
         case "LocalPlanBlock":       return try deleteString(LocalPlanBlock.self, id: recordID, key: \.clientUUID)
+        // #689. Undo soft-deletes, so this runs only for a hard delete.
+        case "LocalEventOverride":   return try deleteString(LocalEventOverride.self, id: recordID, key: \.clientUUID)
         default:
             SyncLog.line("SyncApplier: cannot delete unknown entity \(entity)")
             return false

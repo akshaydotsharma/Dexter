@@ -116,6 +116,10 @@ enum DataArchive {
         // the Planner existed decodes with nil and imports as "nothing planned".
         var planBlocks: [PlanBlockDTO]? = nil
 
+        // MARK: Added in #689 — hide and decline decisions for calendar events.
+        // Optional like every field added after v1.
+        var eventOverrides: [EventOverrideDTO]? = nil
+
         static let empty = Payload(
             tasks: [], notes: [], noteFolders: [],
             lists: [], listItems: [],
@@ -952,6 +956,22 @@ enum DataArchive {
         var deletedAt: Date? = nil
     }
 
+    /// One hide or decline decision about a calendar event (#689). All
+    /// defaults, like `HabitDTO`; `occurrenceStart` nil means the whole series.
+    struct EventOverrideDTO: Codable {
+        var clientUUID: String = ""
+        var eventKey: String = ""
+        var occurrenceStart: Date? = nil
+        var action: String = "hidden"
+        var title: String = ""
+        var eventStart: Date = Date(timeIntervalSince1970: 0)
+        var calendarTitle: String = ""
+        var appliesToSeries: Bool? = nil
+        var createdAt: Date = Date()
+        var updatedAt: Date = Date()
+        var deletedAt: Date? = nil
+    }
+
     /// Every model this archive format carries, used for the manifest's claimed
     /// list. Order is stable so archives diff cleanly.
     static let exportedModels = [
@@ -986,6 +1006,9 @@ enum DataArchive {
         // #687. Planned blocks are user-authored and exist nowhere else: a block
         // is private to Dexter and is never written to any calendar.
         "LocalPlanBlock",
+        // #689. A hide must survive a restore and reach the other device, or
+        // the event comes back from the calendar.
+        "LocalEventOverride",
     ]
 
     static func makeEncoder() -> JSONEncoder {

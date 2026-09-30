@@ -48,6 +48,16 @@ struct PlannerEvent: Identifiable, Equatable, Sendable {
     let isAllDay: Bool
     /// The event's notes, for the read-only details sheet (#687 round 3).
     var notes: String = ""
+    /// Cross-device key (#689): `calendarItemExternalIdentifier`, or a
+    /// device-local fallback. See `PlannerEventOverrides.eventKey`.
+    var eventKey: String = ""
+    /// `EKEvent.occurrenceDate`: the ORIGINAL start of this occurrence, which
+    /// a moved occurrence keeps. Nil means use `start`.
+    var occurrenceDate: Date? = nil
+    /// True for an occurrence of a repeating event.
+    var isRecurring: Bool = false
+    /// Declined at the source, declined in Dexter, or neither (#689).
+    var decline: PlannerDeclineState = .none
 }
 
 /// A `LocalPlanBlock`, as a value.
@@ -103,6 +113,9 @@ struct PlannerItem: Identifiable, Equatable, Sendable {
     /// Days past due, for an overdue task. 0 when not overdue.
     let overdueDays: Int
     let completed: Bool
+    /// A declined event (#689): drawn faded and struck through, and left out
+    /// of the meter, the overflow, free time and conflicts.
+    var isDeclined: Bool = false
 
     var isFixed: Bool {
         if case .event = origin { return true }
@@ -122,10 +135,15 @@ struct PlannerItem: Identifiable, Equatable, Sendable {
     /// True when this row takes time on the day: a timed event or a timed block.
     var occupiesTime: Bool { start != nil && end != nil }
 
+    /// Takes time for the meter, free time and conflicts: occupies time and is
+    /// not declined. A declined tile still has a place on the grid.
+    var blocksTime: Bool { occupiesTime && !isDeclined }
+
     /// Counts against the workday: timed rows that occupy time, plus blocks
     /// planned to the day with no hour. All-day calendar events and task due
     /// dates are informational only.
     var countsTowardCapacity: Bool {
+        if isDeclined { return false }
         if occupiesTime { return true }
         return isBlock && start == nil
     }
@@ -227,7 +245,8 @@ enum PlannerEngine {
                     detail: detail(source: event.source, extra: event.location),
                     source: event.source, start: nil, end: nil, durationMinutes: 0,
                     origin: .event(calendarID: event.calendarID), taskUUID: nil,
-                    priority: .none, overdueDays: 0, completed: false
+                    priority: .none, overdueDays: 0, completed: false,
+                    isDeclined: event.decline != .none
                 ))
             } else {
                 guard event.start < dayEnd, event.end > dayStart else { continue }
@@ -239,7 +258,8 @@ enum PlannerEngine {
                     source: event.source, start: s, end: e,
                     durationMinutes: minutes(from: s, to: e),
                     origin: .event(calendarID: event.calendarID), taskUUID: nil,
-                    priority: .none, overdueDays: 0, completed: false
+                    priority: .none, overdueDays: 0, completed: false,
+                    isDeclined: event.decline != .none
                 ))
             }
         }
@@ -395,7 +415,7 @@ enum PlannerEngine {
         guard isWorkday(day.day, settings: settings, calendar: calendar) else { return [] }
         let window = workdayWindow(on: day.day, settings: settings, calendar: calendar)
         let busy = day.timed
-            .filter { visible.contains($0.source) && $0.occupiesTime }
+            .filter { visible.contains($0.source) && $0.blocksTime }
             .map { DateInterval(start: $0.start!, end: $0.end!) }
         var gaps = freeGaps(in: window, busy: busy)
         if let now, calendar.isDate(now, inSameDayAs: day.day) {
@@ -471,8 +491,12 @@ enum PlannerEngine {
                     assigned.append((item.id, laneEnds.count - 1))
                 }
             }
+            // A declined tile keeps its lane but is never "in conflict", and
+            // does not put another tile in conflict (#689).
+            let live = group.filter { !$0.isDeclined }
+            let clashing = Set(conflictGroups(live).filter { $0.count > 1 }.flatMap { $0.map(\.id) })
             for (id, idx) in assigned {
-                out.append(Lane(itemID: id, index: idx, count: laneEnds.count, inConflict: group.count > 1))
+                out.append(Lane(itemID: id, index: idx, count: laneEnds.count, inConflict: clashing.contains(id)))
             }
         }
         return out
@@ -527,7 +551,7 @@ enum PlannerEngine {
 
     /// Every row that overlaps another, for the "N conflicts" count.
     static func conflicts(in day: PlannerDay, visible: Set<PlannerSource> = Set(PlannerSource.allCases)) -> [ConflictGroup] {
-        conflictGroups(day.timed.filter { visible.contains($0.source) })
+        conflictGroups(day.timed.filter { visible.contains($0.source) && !$0.isDeclined })
             .filter { $0.count > 1 }
             .map(makeConflict)
     }

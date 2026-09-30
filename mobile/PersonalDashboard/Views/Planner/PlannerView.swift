@@ -32,6 +32,12 @@ struct PlannerView: View {
     @Query(filter: #Predicate<LocalPlanBlock> { $0.deletedAt == nil })
     private var blockRows: [LocalPlanBlock]
 
+    /// Dexter-only decisions about calendar events (#689).
+    @Query(filter: #Predicate<LocalEventOverride> { $0.deletedAt == nil })
+    private var overrideRows: [LocalEventOverride]
+
+    private var overrideRules: [EventOverrideRule] { overrideRows.map(\.rule) }
+
     @State private var calendars = PlannerCalendarService.shared
     @State private var selectedDay: Date = Calendar.current.startOfDay(for: Date())
     @State private var mode: PlannerMode = PlannerMode.launchValue
@@ -44,6 +50,8 @@ struct PlannerView: View {
     /// The block being made on the grid, and its title while it is named.
     @State private var draft: PlannerDraft?
     @State private var draftTitle = ""
+    /// "Removed … · Undo", straight after a hide (#689).
+    @State private var toast: PlannerToast?
 
     @AppStorage(PlannerSettings.Key.hiddenSources) private var hiddenRaw: String = ""
     @AppStorage(PlannerSettings.Key.workdayStartMinute) private var startMinute: Int = PlannerSettings.defaultStartMinute
@@ -116,10 +124,27 @@ struct PlannerView: View {
 
     var body: some View {
         let context = PlannerContext(
-            tasks: tasks, blocks: blocks, events: events, now: now,
-            settings: settings, visible: visible
+            tasks: tasks, blocks: blocks, rawEvents: events, overrides: overrideRules,
+            now: now, settings: settings, visible: visible
         )
         return screen(context)
+            .environment(\.plannerEventActions, eventActions(context))
+            .overlay(alignment: .bottom) {
+                if let toast {
+                    PlannerToastView(toast: toast) { undoToast(toast) }
+                        .padding(.horizontal, Space.lg)
+                        #if os(iOS)
+                        .padding(.bottom, 96)
+                        #else
+                        .padding(.bottom, 24)
+                        #endif
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .task(id: toast.id) {
+                            try? await Task.sleep(for: .seconds(6))
+                            if self.toast?.id == toast.id { withAnimation { self.toast = nil } }
+                        }
+                }
+            }
             .activeSection(.planner)
             .macSectionChrome("Planner") { macToolbar }
             #if os(macOS)
@@ -685,7 +710,7 @@ struct PlannerView: View {
         let day = ctx.day(d)
         let start = calendar.startOfDay(for: d)
         let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
-        let busy = day.timed.filter(\.occupiesTime).map { DateInterval(start: $0.start!, end: $0.end!) }
+        let busy = day.timed.filter(\.blocksTime).map { DateInterval(start: $0.start!, end: $0.end!) }
         return PlannerEngine.freeGaps(in: DateInterval(start: start, end: end), busy: busy)
     }
 
@@ -752,8 +777,13 @@ struct PlannerView: View {
                 showsNewBlock: false
             )
         case .event(let itemID):
-            if let ev = events.first(where: { "e-\($0.id)" == itemID }) {
-                PlannerEventDetailsSheet(event: ev)
+            if let ev = ctx.events.first(where: { "e-\($0.id)" == itemID }) {
+                PlannerEventDetailsSheet(
+                    event: ev,
+                    onDecline: { scope in declineEvent(ev, scope) },
+                    onUndoDecline: { undoDecline(ev) },
+                    onRemove: { scope in removeEvent(ev, scope) }
+                )
             } else {
                 PlannerSheetScaffold(title: "Event not found") { EmptyView() }
             }
@@ -792,6 +822,42 @@ struct PlannerView: View {
         )
     }
 
+    // MARK: Hide and decline (#689)
+
+    private func eventActions(_ ctx: PlannerContext) -> PlannerEventActions {
+        let byItemID = Dictionary(ctx.events.map { ("e-\($0.id)", $0) }, uniquingKeysWith: { a, _ in a })
+        return PlannerEventActions(
+            event: { byItemID[$0.id] },
+            decline: { ev, scope in declineEvent(ev, scope) },
+            undoDecline: { ev in undoDecline(ev) },
+            remove: { ev, scope in removeEvent(ev, scope) },
+            details: { item in sheet = .event(item.id) }
+        )
+    }
+
+    private func declineEvent(_ ev: PlannerEvent, _ scope: EventOverrideService.Scope) {
+        write { try EventOverrideService.default().set(.declined, for: ev, scope: scope) }
+    }
+
+    private func undoDecline(_ ev: PlannerEvent) {
+        write { try EventOverrideService.default().clearDecline(for: ev) }
+    }
+
+    private func removeEvent(_ ev: PlannerEvent, _ scope: EventOverrideService.Scope) {
+        var id: String?
+        write { id = try EventOverrideService.default().set(.hidden, for: ev, scope: scope).clientUUID }
+        guard let id else { return }
+        let what = scope == .series && ev.isRecurring ? "all “\(ev.title)” events" : "“\(ev.title)”"
+        withAnimation(.easeOut(duration: 0.2)) {
+            toast = PlannerToast(message: "Removed \(what) from the Planner", overrideID: id)
+        }
+    }
+
+    private func undoToast(_ t: PlannerToast) {
+        write { try EventOverrideService.default().remove(id: t.overrideID) }
+        withAnimation { toast = nil }
+    }
+
     /// Leave the Planner for the task the block places.
     private func openTask(_ uuid: String) {
         guard let id = UUID(uuidString: uuid) else { return }
@@ -826,7 +892,7 @@ struct PlannerView: View {
         Task {
             try? await Task.sleep(for: .milliseconds(900))
             reloadEvents()
-            let fresh = PlannerContext(tasks: tasks, blocks: blocks, events: events, now: Date(), settings: settings, visible: visible)
+            let fresh = PlannerContext(tasks: tasks, blocks: blocks, rawEvents: events, overrides: overrideRules, now: Date(), settings: settings, visible: visible)
             switch raw {
             case "slot", "fill":
                 let free = PlannerEngine.freeTime(on: fresh.day(selectedDay), settings: settings, visible: visible, now: fresh.now)
@@ -846,7 +912,11 @@ struct PlannerView: View {
             case "details":
                 if let b = blockRows.first(where: { $0.kindEnum == .manual && $0.isTimed }) { sheet = .edit(b.clientUUID) }
             case "event":
-                if let e = fresh.day(selectedDay).timed.first(where: { $0.isFixed }) { sheet = .event(e.id) }
+                // LAUNCH_PLANNER_TEXT picks the event by title prefix.
+                let want = ProcessInfo.processInfo.environment["LAUNCH_PLANNER_TEXT"] ?? ""
+                if let e = fresh.day(selectedDay).timed.first(where: { $0.isFixed && (want.isEmpty || $0.title.hasPrefix(want)) }) {
+                    sheet = .event(e.id)
+                }
             case "fixes":
                 sheet = .fixes(selectedDay)
             case "settings":
@@ -914,10 +984,26 @@ struct PlannerLoadKey: Hashable {
 struct PlannerContext {
     let tasks: [PlannerTask]
     let blocks: [PlannerBlock]
+    /// Calendar events AFTER the Dexter overrides (#689). There is no way to
+    /// build a context without passing the rules, so no view can show a hidden
+    /// event or count a declined one.
     let events: [PlannerEvent]
     let now: Date
     let settings: WorkdaySettings
     let visible: Set<PlannerSource>
+
+    init(
+        tasks: [PlannerTask], blocks: [PlannerBlock],
+        rawEvents: [PlannerEvent], overrides: [EventOverrideRule],
+        now: Date, settings: WorkdaySettings, visible: Set<PlannerSource>
+    ) {
+        self.tasks = tasks
+        self.blocks = blocks
+        self.events = PlannerEventOverrides.apply(rawEvents, rules: overrides)
+        self.now = now
+        self.settings = settings
+        self.visible = visible
+    }
 
     func day(_ d: Date) -> PlannerDay {
         PlannerEngine.day(d, events: events, blocks: blocks, tasks: tasks, now: now)

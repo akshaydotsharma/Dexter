@@ -1,9 +1,15 @@
 import SwiftUI
+import SwiftData
 
 /// The Planner's settings (#687): the workday, and per calendar whether it is
 /// shown and whether it counts as Work or Personal. Deliberately small.
 struct PlannerSettingsView: View {
     @State private var calendars = PlannerCalendarService.shared
+    @Query(
+        filter: #Predicate<LocalEventOverride> { $0.deletedAt == nil },
+        sort: [SortDescriptor<LocalEventOverride>(\.updatedAt, order: .reverse)]
+    )
+    private var overrides: [LocalEventOverride]
     @AppStorage(PlannerSettings.Key.workdayStartMinute) private var startMinute: Int = PlannerSettings.defaultStartMinute
     @AppStorage(PlannerSettings.Key.workdayLengthMinutes) private var lengthMinutes: Int = PlannerSettings.defaultLengthMinutes
 
@@ -18,10 +24,12 @@ struct PlannerSettingsView: View {
     }
 
     var body: some View {
-        PlannerSheetScaffold(title: "Planner settings") {
+        PlannerSheetScaffold(title: "Planner settings", fullHeight: true) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     workday
+                    // Before the calendars, which can be a long list.
+                    hiddenList
                     calendarList
                 }
                 .padding(.bottom, Space.lg)
@@ -83,6 +91,59 @@ struct PlannerSettingsView: View {
                 }
             }
         }
+    }
+
+    /// Hidden and declined events (#689): restore any of them.
+    private var hiddenList: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Text("Hidden and declined events").eyebrow()
+            if overrides.isEmpty {
+                Text("Nothing hidden or declined. Use Remove from Planner or Decline in Dexter on an event.")
+                    .font(.edCaption).foregroundStyle(Tokens.muted)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(overrides.enumerated()), id: \.element.clientUUID) { index, o in
+                        if index > 0 { Rectangle().fill(Tokens.divider).frame(height: 0.5) }
+                        overrideRow(o)
+                    }
+                }
+                .plannerCard()
+                Text("These are Dexter-only. Your calendar and the organiser never saw them.")
+                    .font(.edCaption).foregroundStyle(Tokens.muted)
+            }
+        }
+    }
+
+    private func overrideRow(_ o: LocalEventOverride) -> some View {
+        HStack(spacing: Space.sm) {
+            Image(systemName: o.actionEnum == .hidden ? "eye.slash" : "xmark.circle")
+                .foregroundStyle(Tokens.muted)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(o.title.isEmpty ? "Event" : o.title)
+                    .font(.edBody).foregroundStyle(Tokens.ink).lineLimit(1)
+                Text(overrideDetail(o))
+                    .font(.edCaption).foregroundStyle(Tokens.muted).lineLimit(1)
+            }
+            Spacer(minLength: Space.sm)
+            Button("Restore") {
+                try? EventOverrideService.default().remove(id: o.clientUUID)
+            }
+            .buttonStyle(PlannerSmallButtonStyle())
+            .accessibilityLabel("Restore \(o.title)")
+        }
+        .padding(.horizontal, Space.md).padding(.vertical, Space.sm)
+    }
+
+    private func overrideDetail(_ o: LocalEventOverride) -> String {
+        let what = o.actionEnum == .hidden ? "Hidden" : "Declined"
+        let when: String
+        if o.appliesToSeries {
+            when = "every occurrence"
+        } else {
+            when = "\(PlannerStyle.shortDayFormatter.string(from: o.eventStart)), \(PlannerStyle.clockAP(o.eventStart))"
+        }
+        return [what, when, o.calendarTitle.isEmpty ? nil : o.calendarTitle].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func calendarRow(_ cal: PlannerCalendar) -> some View {

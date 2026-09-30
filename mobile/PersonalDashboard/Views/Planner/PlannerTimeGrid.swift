@@ -45,7 +45,7 @@ struct PlannerTile: View {
                     Text(item.title)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Tokens.ink)
-                        .strikethrough(item.completed, color: Tokens.muted)
+                        .strikethrough(item.completed || item.isDeclined, color: Tokens.muted)
                         .lineLimit(height >= PlannerGridMetrics.twoLineHeight * 1.6 ? 2 : 1)
                 }
                 if height >= PlannerGridMetrics.twoLineHeight, let s = item.start, let e = item.end {
@@ -73,7 +73,8 @@ struct PlannerTile: View {
                     .stroke(Tokens.danger, lineWidth: 1.2)
             }
         }
-        .opacity(item.completed ? 0.6 : 1)
+        // Declined (#689): faded and struck through, as Google Calendar does.
+        .opacity(item.isDeclined ? 0.45 : (item.completed ? 0.6 : 1))
         .contentShape(RoundedRectangle(cornerRadius: 5))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
@@ -83,6 +84,7 @@ struct PlannerTile: View {
         var parts = [item.title]
         if let s = item.start, let e = item.end { parts.append(PlannerStyle.range(s, e)) }
         parts.append(item.detail)
+        if item.isDeclined { parts.append("declined") }
         if inConflict { parts.append("overlaps another item") }
         return parts.joined(separator: ", ")
     }
@@ -99,6 +101,7 @@ struct PlannerDayColumn: View {
     var hourHeight: CGFloat = PlannerGridMetrics.hourHeight
     let onTapItem: (PlannerItem) -> Void
     let draft: PlannerDraftHandlers
+    @Environment(\.plannerEventActions) private var eventActions
 
     var body: some View {
         let items = day.timed.filter { visible.contains($0.source) }
@@ -131,6 +134,7 @@ struct PlannerDayColumn: View {
                         PlannerTile(item: item, inConflict: lane?.inConflict ?? false, height: g.height - 1)
                     }
                     .buttonStyle(.plain)
+                    .plannerEventMenu(item, actions: eventActions)
                     .frame(width: max(8, laneW - 3), height: max(PlannerGridMetrics.minTileHeight, g.height - 1))
                     .offset(x: laneW * CGFloat(lane?.index ?? 0) + 1, y: g.y)
                 }
@@ -292,6 +296,7 @@ struct PlannerWeekTimeGrid: View {
     let onOpenDay: (Date) -> Void
     let onTapItem: (PlannerItem) -> Void
     let draft: PlannerDraftHandlers
+    @Environment(\.plannerEventActions) private var eventActions
 
     @State private var topHour: Int?
 
@@ -356,6 +361,7 @@ struct PlannerWeekTimeGrid: View {
                     PlannerTile(item: item, height: 18).frame(height: 18)
                 }
                 .buttonStyle(.plain)
+                .plannerEventMenu(item, actions: eventActions)
             }
             if allDay.count > 2 {
                 Text("+\(allDay.count - 2) more").font(.edCaption).foregroundStyle(Tokens.muted)

@@ -7,6 +7,8 @@ import SwiftUI
 struct PlannerSheetScaffold<Content: View>: View {
     let title: String
     var subtitle: String? = nil
+    /// Open at full height on the iPhone (for a sheet that is mostly a list).
+    var fullHeight: Bool = false
     @Environment(\.dismiss) private var dismiss
     @ViewBuilder let content: Content
 
@@ -40,7 +42,7 @@ struct PlannerSheetScaffold<Content: View>: View {
         .frame(width: 440, height: 560)
         #else
         .presentationDragIndicator(.visible)
-        .presentationDetents([.medium, .large])
+        .presentationDetents(fullHeight ? [.large] : [.medium, .large])
         #endif
     }
 }
@@ -635,27 +637,101 @@ struct PlannerBlockDetailsSheet: View {
     }
 }
 
-// MARK: - Calendar event (read-only)
+// MARK: - Calendar event
 
-/// A calendar event's details (#687 round 3). Read-only: Dexter never edits a
-/// calendar.
+/// A calendar event's details (#687 round 3), with Dexter-only actions (#689).
+/// The event itself stays read-only: Decline and Remove are Dexter records,
+/// the source calendar does not change, and the organiser is not told.
 struct PlannerEventDetailsSheet: View {
     let event: PlannerEvent
+    var onDecline: ((EventOverrideService.Scope) -> Void)? = nil
+    var onUndoDecline: (() -> Void)? = nil
+    var onRemove: ((EventOverrideService.Scope) -> Void)? = nil
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var pending: Pending?
+
+    private enum Pending: Identifiable {
+        case decline, remove
+        var id: Self { self }
+    }
 
     var body: some View {
         PlannerSheetScaffold(title: event.title, subtitle: event.source == .work ? "Work calendar" : "Personal calendar") {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.md) {
+                    if event.decline != .none {
+                        Label(event.decline == .atSource ? "You declined this in your calendar" : "Declined in Dexter",
+                              systemImage: "xmark.circle")
+                            .font(.edFootnoteStrong)
+                            .foregroundStyle(Tokens.danger)
+                    }
                     row("Time", when)
                     row("Calendar", event.calendarTitle)
                     if !event.location.isEmpty { row("Location", event.location) }
                     if !event.notes.isEmpty { row("Notes", event.notes) }
-                    Text("Read only. Change this event in the Calendar app.")
+                    actions
+                    Text("Dexter only. The organiser is not told, and your calendar does not change.")
                         .font(.edCaption).foregroundStyle(Tokens.muted)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .confirmationDialog(dialogTitle, isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
+                            titleVisibility: .visible, presenting: pending) { p in
+            Button("Only this event") { run(p, .occurrence) }
+                .accessibilityIdentifier("planner.series.only")
+            Button("All events in the series") { run(p, .series) }
+                .accessibilityIdentifier("planner.series.all")
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This is a repeating event.")
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        VStack(spacing: Space.sm) {
+            switch event.decline {
+            case .none:
+                if onDecline != nil {
+                    Button { ask(.decline) } label: { Text("Decline in Dexter") }
+                        .buttonStyle(EdButtonStyle(kind: .secondary, fullWidth: true))
+                        .accessibilityIdentifier("planner.event.decline")
+                }
+            case .inDexter:
+                if let onUndoDecline {
+                    Button { onUndoDecline(); dismiss() } label: { Text("Undo decline") }
+                        .buttonStyle(EdButtonStyle(kind: .secondary, fullWidth: true))
+                        .accessibilityIdentifier("planner.event.undodecline")
+                }
+            case .atSource:
+                EmptyView()
+            }
+            if onRemove != nil {
+                Button { ask(.remove) } label: { Text("Remove from Planner") }
+                    .buttonStyle(EdButtonStyle(kind: .danger, fullWidth: true))
+                    .accessibilityIdentifier("planner.event.remove")
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private var dialogTitle: String {
+        pending == .remove ? "Remove from Planner" : "Decline in Dexter"
+    }
+
+    private func ask(_ p: Pending) {
+        if event.isRecurring { pending = p } else { run(p, .occurrence) }
+    }
+
+    private func run(_ p: Pending, _ scope: EventOverrideService.Scope) {
+        switch p {
+        case .decline: onDecline?(scope)
+        case .remove:  onRemove?(scope)
+        }
+        pending = nil
+        dismiss()
     }
 
     private var when: String {

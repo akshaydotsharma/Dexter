@@ -293,6 +293,7 @@ struct PlannerMeterCard: View {
 struct PlannerAllDayRow: View {
     let items: [PlannerItem]
     let onTap: (PlannerItem) -> Void
+    @Environment(\.plannerEventActions) private var eventActions
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -309,6 +310,7 @@ struct PlannerAllDayRow: View {
                 ForEach(items) { item in
                     Button { onTap(item) } label: { pill(item) }
                         .buttonStyle(.plain)
+                        .plannerEventMenu(item, actions: eventActions)
                 }
             }
             // Take the offered width, so the flow measures its wrapped height
@@ -333,6 +335,7 @@ struct PlannerAllDayRow: View {
             Text(item.title)
                 .font(.edCaption.weight(.medium))
                 .foregroundStyle(Tokens.ink)
+                .strikethrough(item.isDeclined, color: Tokens.muted)
                 .lineLimit(1)
             if let note = note(item) {
                 Text(note)
@@ -350,7 +353,8 @@ struct PlannerAllDayRow: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(Tokens.danger, lineWidth: 1.2)
             }
         }
-        .accessibilityLabel([item.title, note(item)].compactMap { $0 }.joined(separator: ", "))
+        .opacity(item.isDeclined ? 0.45 : 1)
+        .accessibilityLabel([item.title, item.isDeclined ? "declined" : nil, note(item)].compactMap { $0 }.joined(separator: ", "))
     }
 
     private func note(_ item: PlannerItem) -> String? {

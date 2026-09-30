@@ -270,6 +270,8 @@ final class DataImportService {
         /// #687. Same reason as the cases above: an archive carrying only
         /// Planner blocks would otherwise report "nothing to import".
         case planBlocks
+        /// #689. Same reason as the cases above.
+        case eventOverrides
 
         var id: String { rawValue }
 
@@ -300,6 +302,7 @@ final class DataImportService {
             case .habits:            return "Habits"
             case .habitCheckIns:     return "Habit check-ins"
             case .planBlocks:        return "Planner blocks"
+            case .eventOverrides:    return "Hidden and declined events"
             }
         }
 
@@ -330,6 +333,7 @@ final class DataImportService {
             case .habits:            return "flame"
             case .habitCheckIns:     return "checkmark.circle"
             case .planBlocks:        return "calendar.day.timeline.left"
+            case .eventOverrides:    return "eye.slash"
             }
         }
     }
@@ -468,6 +472,7 @@ final class DataImportService {
         let existingHabitCheckInIDs = try existingStringUUIDs(LocalHabitCheckIn.self, keyPath: \.clientUUID)
         // #687. A String id, like the habits above.
         let existingPlanBlockIDs   = try existingStringUUIDs(LocalPlanBlock.self,    keyPath: \.clientUUID)
+        let existingOverrideIDs    = try existingStringUUIDs(LocalEventOverride.self, keyPath: \.clientUUID)
 
         var skip: [Entity: EntityCounts] = [:]
         var repair: [Entity: EntityCounts] = [:]
@@ -506,6 +511,7 @@ final class DataImportService {
         record(.habits,            (payload.habits ?? []).map(\.clientUUID),           existing: existingHabitIDs)
         record(.habitCheckIns,     (payload.habitCheckIns ?? []).map(\.clientUUID),    existing: existingHabitCheckInIDs)
         record(.planBlocks,        (payload.planBlocks ?? []).map(\.clientUUID),       existing: existingPlanBlockIDs)
+        record(.eventOverrides,    (payload.eventOverrides ?? []).map(\.clientUUID),   existing: existingOverrideIDs)
 
         return (skip, repair)
     }
@@ -568,6 +574,7 @@ final class DataImportService {
         let existingHabitUUIDs       = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalHabit.self,        keyPath: \.clientUUID)
         let existingHabitCheckInUUIDs = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalHabitCheckIn.self, keyPath: \.clientUUID)
         let existingPlanBlockUUIDs   = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalPlanBlock.self,   keyPath: \.clientUUID)
+        let existingOverrideUUIDs    = mode == .replaceMatching ? [] : try existingStringUUIDs(LocalEventOverride.self, keyPath: \.clientUUID)
         var writtenReceiptPaths: [String] = []
         // #319: tracked alongside receipts so a rollback removes restored ticket
         // files too, rather than leaving orphans behind after a failed import.
@@ -1083,6 +1090,23 @@ final class DataImportService {
                 ))
             }
 
+            // #689: hide and decline decisions. Instants travel verbatim.
+            for dto in payload.eventOverrides ?? [] where !existingOverrideUUIDs.contains(dto.clientUUID) {
+                modelContext.insert(LocalEventOverride(
+                    clientUUID: dto.clientUUID,
+                    eventKey: dto.eventKey,
+                    occurrenceStart: dto.occurrenceStart,
+                    action: EventOverrideAction(rawValue: dto.action) ?? .hidden,
+                    title: dto.title,
+                    eventStart: dto.eventStart,
+                    calendarTitle: dto.calendarTitle,
+                    appliesToSeries: dto.appliesToSeries ?? false,
+                    createdAt: dto.createdAt,
+                    updatedAt: dto.updatedAt,
+                    deletedAt: dto.deletedAt
+                ))
+            }
+
             for dto in payload.expenses where !existingExpenseUUIDs.contains(dto.clientUUID) {
                 let restoredPath = try restoreReceipt(for: dto, archiveEntries: preview.entries)
                 if let written = restoredPath.writtenPath { writtenReceiptPaths.append(written) }
@@ -1370,6 +1394,7 @@ final class DataImportService {
         try deleteMatching(LocalHabit.self,         ids: Set((payload.habits ?? []).map(\.clientUUID)),           key: \.clientUUID)
         try deleteMatching(LocalHabitCheckIn.self,  ids: Set((payload.habitCheckIns ?? []).map(\.clientUUID)),    key: \.clientUUID)
         try deleteMatching(LocalPlanBlock.self,     ids: Set((payload.planBlocks ?? []).map(\.clientUUID)),       key: \.clientUUID)
+        try deleteMatching(LocalEventOverride.self, ids: Set((payload.eventOverrides ?? []).map(\.clientUUID)),   key: \.clientUUID)
         try deleteMatching(LocalProcessedEmail.self, ids: Set((payload.processedEmails ?? []).map(\.messageKey)), key: \.messageKey)
     }
 
@@ -1470,6 +1495,7 @@ final class DataImportService {
             "LocalHabit":           payload.habits?.count ?? 0,
             "LocalHabitCheckIn":    payload.habitCheckIns?.count ?? 0,
             "LocalPlanBlock":       payload.planBlocks?.count ?? 0,
+            "LocalEventOverride":   payload.eventOverrides?.count ?? 0,
         ]
     }
 

@@ -208,9 +208,23 @@ final class PlannerCalendarService {
                 start: s,
                 end: max(e, s),
                 isAllDay: ev.isAllDay,
-                notes: ev.notes ?? ""
+                notes: ev.notes ?? "",
+                eventKey: PlannerEventOverrides.eventKey(
+                    externalID: ev.calendarItemExternalIdentifier,
+                    localID: ev.eventIdentifier
+                ),
+                occurrenceDate: ev.occurrenceDate,
+                isRecurring: ev.hasRecurrenceRules || ev.isDetached,
+                decline: Self.declinedAtSource(ev) ? .atSource : .none
             )
         }
+    }
+
+    /// True when MY attendee status on the event is Declined, in whatever
+    /// calendar app I answered it (#689). EventKit exposes the current user's
+    /// attendee record with `isCurrentUser`.
+    static func declinedAtSource(_ ev: EKEvent) -> Bool {
+        ev.attendees?.first(where: \.isCurrentUser)?.participantStatus == .declined
     }
 
     // MARK: Settings deep link
