@@ -84,4 +84,47 @@ final class PlannerDragGeometryTests: XCTestCase {
         XCTAssertFalse(G.isDrag(from: .zero, to: CGPoint(x: 2, y: 2)))
         XCTAssertTrue(G.isDrag(from: .zero, to: CGPoint(x: 0, y: 5)))
     }
+
+    // MARK: - Resize (#687 fix)
+
+    func testResizeDownSnapsTheEndToTheNearestQuarterHour() {
+        // A 10:00-10:30 tile, edge dragged 52 points down (52 minutes at 60pt/h).
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 630, deltaY: 52, hourHeight: h), 675, "11:22 rounds to 11:15")
+    }
+
+    func testResizeUpShortensButNeverBelowFifteenMinutes() {
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 660, deltaY: -30, hourHeight: h), 630)
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 660, deltaY: -500, hourHeight: h), 615)
+    }
+
+    func testResizeKeepsTheMinimumForAStartOffTheGrid() {
+        XCTAssertEqual(G.resizedEnd(start: 545, originalEnd: 575, deltaY: -200, hourHeight: h), 560, "9:05 start, 9:20 minimum end")
+    }
+
+    func testResizeIsClampedToMidnight() {
+        XCTAssertEqual(G.resizedEnd(start: 1380, originalEnd: 1410, deltaY: 400, hourHeight: h), 1440)
+    }
+
+    func testAResizeWithNoMovementKeepsTheEnd() {
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 630, deltaY: 0, hourHeight: h), 630)
+    }
+
+    func testMinutesOfAnInstant() {
+        let dayStart = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertEqual(G.minutes(of: dayStart.addingTimeInterval(5400), dayStart: dayStart), 90)
+    }
+
+    // MARK: - Drop a task (#687 fix)
+
+    func testADropLandsAtTheSnappedPointForTheTasksLength() {
+        XCTAssertEqual(G.dropRange(atY: y(14, 10), hourHeight: h, length: 45), .init(start: 14 * 60, end: 14 * 60 + 45))
+    }
+
+    func testADropNearMidnightIsPulledBackIntoTheDay() {
+        XCTAssertEqual(G.dropRange(atY: y(23, 40), hourHeight: h, length: 90), .init(start: 22 * 60 + 30, end: 1440))
+    }
+
+    func testADropNeverHasLessThanFifteenMinutes() {
+        XCTAssertEqual(G.dropRange(atY: y(9, 0), hourHeight: h, length: 0).minutes, 15)
+    }
 }

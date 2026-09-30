@@ -75,4 +75,34 @@ enum PlannerDragGeometry {
     static func isDrag(from a: CGPoint, to b: CGPoint) -> Bool {
         hypot(b.x - a.x, b.y - a.y) >= dragThreshold
     }
+
+    // MARK: Resize (#687 fix)
+
+    /// The new end of a tile whose bottom edge was dragged by `deltaY` points.
+    ///
+    /// The end snaps to the nearest quarter hour of the day, is never less than
+    /// 15 minutes after the start (even when the start is off the grid, say
+    /// 9:05), and never runs past midnight. Minutes are after the day's start.
+    static func resizedEnd(start: Int, originalEnd: Int, deltaY: CGFloat, hourHeight: CGFloat, step: Int = step) -> Int {
+        guard hourHeight > 0 else { return max(originalEnd, start + step) }
+        let raw = Double(originalEnd) + Double(deltaY / hourHeight) * 60
+        let snapped = nearestStep(raw, step: step)
+        return min(dayMinutes, max(start + step, snapped))
+    }
+
+    /// Minutes after `dayStart` for an instant (may be negative or past 1440
+    /// for an instant on another day).
+    static func minutes(of date: Date, dayStart: Date) -> Int {
+        Int((date.timeIntervalSince(dayStart) / 60).rounded())
+    }
+
+    // MARK: Drop a task (#687 fix)
+
+    /// Where a task dropped at `y` lands: the drop point snapped DOWN to the
+    /// quarter hour, for the task's `length`, pulled back so it never runs
+    /// past midnight. The same rule as a plain click (`tapRange`), with the
+    /// task's own length.
+    static func dropRange(atY y: CGFloat, hourHeight: CGFloat, length: Int, step: Int = step) -> Range {
+        tapRange(atY: y, hourHeight: hourHeight, length: max(step, min(length, dayMinutes)), step: step)
+    }
 }

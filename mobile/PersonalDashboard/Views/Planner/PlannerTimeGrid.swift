@@ -33,7 +33,9 @@ struct PlannerTile: View {
 
     var body: some View {
         let c = PlannerStyle.color(item.source)
-        HStack(spacing: 0) {
+        // Top-aligned: the full-height stripe makes the row as tall as the
+        // tile, and a centred text column put a long block's title mid-tile.
+        HStack(alignment: .top, spacing: 0) {
             Rectangle().fill(c).frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
@@ -102,6 +104,57 @@ struct PlannerDayColumn: View {
     let onTapItem: (PlannerItem) -> Void
     let draft: PlannerDraftHandlers
     @Environment(\.plannerEventActions) private var eventActions
+    @Environment(\.plannerTaskDrag) private var taskDrag
+    /// The tile whose bottom edge is being dragged, and its live end.
+    @State private var resize: (id: String, end: Date)?
+
+    /// Dexter owns manual blocks and task tiles, so those resize. Calendar
+    /// events are read-only and get no handle.
+    static func isResizable(_ item: PlannerItem) -> Bool {
+        guard item.occupiesTime, !item.isFixed else { return false }
+        if item.isBlock { return true }
+        if case .taskDue = item.origin { return true }
+        return false
+    }
+
+    private func resizeHandle(_ item: PlannerItem) -> some View {
+        let dayStart = day.day
+        let start = PlannerDragGeometry.minutes(of: item.start!, dayStart: dayStart)
+        let originalEnd = PlannerDragGeometry.minutes(of: item.end!, dayStart: dayStart)
+        func end(for delta: CGFloat) -> Date {
+            let m = PlannerDragGeometry.resizedEnd(start: start, originalEnd: originalEnd, deltaY: delta, hourHeight: hourHeight)
+            return dayStart.addingTimeInterval(TimeInterval(m * 60))
+        }
+        return ZStack(alignment: .bottom) {
+            #if os(iOS)
+            // A visible grab bar, so the edge reads as draggable.
+            Capsule().fill(PlannerStyle.color(item.source).opacity(0.55))
+                .frame(width: 22, height: 3)
+                .padding(.bottom, 3)
+                .allowsHitTesting(false)
+            #endif
+            PlannerResizeHandle(
+                identifier: "planner.resize.\(item.title)",
+                onChange: { delta in resize = (item.id, end(for: delta)) },
+                onCommit: { delta in
+                    let e = end(for: delta)
+                    resize = nil
+                    if e != item.end { draft.onResize(item, e) }
+                }
+            )
+            // The strip straddles the bottom edge (half in, half below), so
+            // even a 30 minute tile keeps most of its body for a tap that
+            // opens details.
+            #if os(macOS)
+            .frame(height: 6)
+            .offset(y: 2)
+            #else
+            .frame(height: 14)
+            .offset(y: 6)
+            #endif
+        }
+        .frame(maxWidth: .infinity)
+    }
 
     var body: some View {
         let items = day.timed.filter { visible.contains($0.source) }
@@ -109,6 +162,9 @@ struct PlannerDayColumn: View {
         GeometryReader { geo in
             let w = geo.size.width
             ZStack(alignment: .topLeading) {
+                // Where a To-plan task can be dropped (#687 fix). Never takes
+                // a click itself.
+                PlannerDropZone(dayStart: day.day, hourHeight: hourHeight)
                 // Empty space is the free time. Drag across it (or click, or
                 // tap) to make a draft block (#687 round 3).
                 PlannerGridPointerLayer(
@@ -123,20 +179,54 @@ struct PlannerDayColumn: View {
                     }
                 )
                 ForEach(items) { item in
+                    // While its edge is dragged, a tile shows the new end live.
+                    let end = resize?.id == item.id ? resize!.end : item.end!
                     let g = PlannerEngine.tileGeometry(
-                        start: item.start!, end: item.end!, dayStart: day.day,
+                        start: item.start!, end: end, dayStart: day.day,
                         hourHeight: hourHeight, minHeight: PlannerGridMetrics.minTileHeight
                     )
                     let lane = lanes[item.id]
                     let count = CGFloat(max(1, lane?.count ?? 1))
                     let laneW = w / count
+                    // The label gets the tile's exact size. A plain Button on iOS
+                    // otherwise centres a smaller label inside a taller frame,
+                    // which put a long block's title in its middle.
+                    let tileW = max(8, laneW - 3)
+                    let tileH = max(PlannerGridMetrics.minTileHeight, g.height - 1)
                     Button { onTapItem(item) } label: {
                         PlannerTile(item: item, inConflict: lane?.inConflict ?? false, height: g.height - 1)
+                            .frame(width: tileW, height: tileH, alignment: .topLeading)
                     }
                     .buttonStyle(.plain)
                     .plannerEventMenu(item, actions: eventActions)
-                    .frame(width: max(8, laneW - 3), height: max(PlannerGridMetrics.minTileHeight, g.height - 1))
+                    .frame(width: tileW, height: tileH)
+                    .overlay(alignment: .bottom) {
+                        if Self.isResizable(item) {
+                            resizeHandle(item)
+                        }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if resize?.id == item.id {
+                            Text(PlannerStyle.range(item.start!, end))
+                                .font(.system(size: 10, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Tokens.paper)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Tokens.ink, in: Capsule())
+                                .padding(4)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .offset(x: laneW * CGFloat(lane?.index ?? 0) + 1, y: g.y)
+                }
+                if let payload = taskDrag.payload, let t = taskDrag.target, t.dayStart == day.day {
+                    let g = PlannerEngine.tileGeometry(
+                        start: t.start, end: t.end, dayStart: day.day,
+                        hourHeight: hourHeight, minHeight: PlannerGridMetrics.minTileHeight
+                    )
+                    PlannerTaskGhost(title: payload.title, start: t.start, end: t.end, height: g.height - 1)
+                        .frame(width: max(8, w - 3), height: max(PlannerGridMetrics.minTileHeight, g.height - 1))
+                        .offset(x: 1, y: g.y)
                 }
                 if let d = draft.draft, Calendar.current.isDate(d.start, inSameDayAs: day.day) {
                     let g = PlannerEngine.tileGeometry(
@@ -392,6 +482,8 @@ struct PlannerDraftHandlers {
     /// Mac: the quick-create popover anchored to the draft tile.
     var popoverPresented: Binding<Bool>
     var quickCreate: () -> AnyView
+    /// A Dexter tile's bottom edge was dragged to a new end (#687 fix).
+    var onResize: (PlannerItem, Date) -> Void = { _, _ in }
 }
 
 /// The translucent draft tile, with its live time range.

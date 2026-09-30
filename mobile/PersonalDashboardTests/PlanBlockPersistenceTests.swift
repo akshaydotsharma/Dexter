@@ -205,4 +205,47 @@ final class PlanBlockPersistenceTests: XCTestCase {
         try DataImportService(modelContext: store.context).commit(preview: preview, mode: .replaceMatching)
         XCTAssertEqual(try rows().first?.notes, "From the Mac")
     }
+
+    // MARK: - Task length (#687 fix)
+
+    /// Saving a timed task that has no block creates one with the chosen
+    /// length, and the Planner then remembers that length for the task.
+    func testSavingATimedTaskCreatesItsBlockWithTheNewLength() throws {
+        let row = try service.planTask(taskUUID: "t-deck", title: "Send deck", start: todayAt(17, 0), end: todayAt(18, 30))
+        XCTAssertEqual(row.kindEnum, .task)
+        XCTAssertEqual(row.durationMinutes, 90)
+        let blocks = try rows().map {
+            PlannerBlock(id: $0.clientUUID, kind: $0.kindEnum, title: $0.title, day: WallClock.deviceDay(from: $0.day),
+                         start: $0.start, end: $0.end, durationMinutes: $0.durationMinutes, taskUUID: $0.taskUUID)
+        }
+        let task = PlannerTask(id: "t-deck", title: "Send deck", priority: .p0, due: todayAt(17, 0), completed: false)
+        let day = PlannerEngine.day(Date(), events: [], blocks: blocks, tasks: [task], now: todayAt(8, 0))
+        XCTAssertEqual(day.timed.count, 1, "the block replaces the 30 minute due tile")
+        XCTAssertEqual(day.timed.first?.durationMinutes, 90)
+    }
+
+    func testResizingAPlannedTaskUpdatesItsBlock() throws {
+        let row = try service.planTask(taskUUID: "t", title: "OKRs", start: todayAt(14, 0), end: todayAt(14, 30))
+        try service.update(row, title: row.title, start: todayAt(14, 0), end: todayAt(16, 0), day: Date(), durationMinutes: 120)
+        XCTAssertEqual(row.durationMinutes, 120)
+        XCTAssertEqual(row.end, todayAt(16, 0))
+        XCTAssertEqual(try rows().count, 1, "updated in place, not duplicated")
+        // Planning it again (say to another day) keeps the remembered length.
+        let again = try service.planTask(taskUUID: "t", title: "OKRs", start: todayAt(15, 0), end: todayAt(17, 0))
+        XCTAssertEqual(again.clientUUID, row.clientUUID)
+        XCTAssertEqual(again.durationMinutes, 120)
+    }
+
+    func testANewLengthTravelsInTheSyncRecord() throws {
+        let row = try service.planTask(taskUUID: "t", title: "OKRs", start: todayAt(14, 0), end: todayAt(14, 30))
+        func record() throws -> SyncRecord {
+            let payload = try DataExportService(modelContext: store.context).buildPayload()
+            return try XCTUnwrap(try SyncRecordMapper.records(from: payload).first { $0.recordID == row.clientUUID })
+        }
+        let before = try record()
+        try service.update(row, title: row.title, start: todayAt(14, 0), end: todayAt(15, 45), day: Date(), durationMinutes: 105)
+        let after = try record()
+        XCTAssertNotEqual(before.contentHash, after.contentHash, "the new length is sent to the other device")
+        XCTAssertTrue(String(describing: after.json).contains("105"))
+    }
 }

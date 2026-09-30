@@ -12,13 +12,15 @@ final class PlannerDragCreateUITest: XCTestCase {
     /// Matches `PlannerGridMetrics.hourHeight` on iOS.
     private let hourHeight: CGFloat = 54
 
-    /// Step forward to Sunday, a day with nothing during working hours in the
+    /// Step forward to a Sunday with nothing during working hours in the
     /// seeded simulator, and return the grid's drag layer.
     private func openEmptyDay(_ app: XCUIApplication) throws -> XCUIElement {
         let next = app.buttons["Next day"].firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 10))
         let weekday = Calendar.current.component(.weekday, from: Date())
-        for _ in 0..<((8 - weekday) % 7 == 0 ? 7 : (8 - weekday) % 7) { next.tap() }
+        // The Sunday AFTER next: nothing is seeded there, and the other UI
+        // tests use this Sunday, so its hours stay empty run after run.
+        for _ in 0..<(((8 - weekday) % 7 == 0 ? 7 : (8 - weekday) % 7) + 7) { next.tap() }
         let empty = app.otherElements["Empty time"].firstMatch
         XCTAssertTrue(empty.waitForExistence(timeout: 10), "the grid's drag layer is on screen")
         sleep(1)   // let the scroll settle before aiming
@@ -65,6 +67,11 @@ final class PlannerDragCreateUITest: XCTestCase {
         tile.tap()
         XCTAssertTrue(app.textViews["planner.details.notes"].waitForExistence(timeout: 5), "the details sheet opens")
         keep("4-details-sheet", app)
+
+        // Put the simulator back, so the next run finds this time empty.
+        app.buttons["Delete block"].firstMatch.tap()
+        let confirm = app.buttons.matching(identifier: "Delete block").element(boundBy: 1)
+        if confirm.waitForExistence(timeout: 3) { confirm.tap() } else { app.buttons["Delete block"].firstMatch.tap() }
     }
 
     func testATapWithNoDragMakesADraftAndCancelWritesNothing() throws {

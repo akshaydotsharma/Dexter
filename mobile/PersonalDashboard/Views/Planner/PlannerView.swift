@@ -52,6 +52,10 @@ struct PlannerView: View {
     @State private var draftTitle = ""
     /// "Removed … · Undo", straight after a hide (#689).
     @State private var toast: PlannerToast?
+    /// iPhone: the To-plan panel, and whether a drag has tucked it away.
+    @State private var toPlanPanel = false
+    @State private var panelTucked = false
+    @Environment(\.plannerTaskDrag) private var taskDrag
 
     @AppStorage(PlannerSettings.Key.hiddenSources) private var hiddenRaw: String = ""
     @AppStorage(PlannerSettings.Key.workdayStartMinute) private var startMinute: Int = PlannerSettings.defaultStartMinute
@@ -187,7 +191,7 @@ struct PlannerView: View {
                     onMenu: { withAnimation(.easeOut(duration: 0.2)) { router.drawerOpen = true } }
                 ) {
                     TopBarIconButton(systemName: "tray", accessibilityLabel: "Tasks to plan") {
-                        sheet = .toPlan
+                        withAnimation(.easeOut(duration: 0.25)) { toPlanPanel = true }
                     }
                     TopBarIconButton(systemName: "plus", accessibilityLabel: "Add a block") {
                         sheet = .quickAdd("")
@@ -221,6 +225,8 @@ struct PlannerView: View {
                     }
                 }
             }
+            if toPlanPanel { toPlanPanelView(ctx) }
+            dragChip
             #else
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -238,7 +244,8 @@ struct PlannerView: View {
                 Rectangle().fill(Tokens.border).frame(width: 1)
                 PlannerInspector(
                     candidates: candidates(ctx),
-                    onPlan: { sheet = .plan($0.task.id) }
+                    onPlan: { sheet = .plan($0.task.id) },
+                    onDrop: { c, t in dropTask(c.task.id, title: c.task.title, at: t) }
                 )
                 .frame(width: 270)
             }
@@ -422,7 +429,13 @@ struct PlannerView: View {
         if let id = item.blockID {
             sheet = .edit(id)
         } else if case .taskDue = item.origin, let id = item.taskUUID {
-            sheet = .plan(id)
+            // A timed task opens its start and length with a Save; a task due
+            // on a day with no hour opens the day and slot picker.
+            if let s = item.start, let e = item.end {
+                sheet = .taskTime(taskID: id, start: s, end: e)
+            } else {
+                sheet = .plan(id)
+            }
         } else if case .event = item.origin {
             sheet = .event(item.id)
         }
@@ -451,7 +464,8 @@ struct PlannerView: View {
                 get: { draft?.isNaming == true && sheet == nil },
                 set: { shown in if !shown, draft?.isNaming == true, sheet == nil { resolveDraft() } }
             ),
-            quickCreate: { AnyView(quickCreate) }
+            quickCreate: { AnyView(quickCreate) },
+            onResize: { item, end in resized(item, to: end) }
         )
     }
 
@@ -472,6 +486,22 @@ struct PlannerView: View {
                     draft = nil
                 }
             )
+        }
+    }
+
+    /// A tile's bottom edge was dragged. A block keeps its start and gets the
+    /// new end; a timed task with no block becomes a plan block with it.
+    private func resized(_ item: PlannerItem, to end: Date) {
+        guard let start = item.start else { return }
+        if let id = item.blockID {
+            write {
+                if let row = try PlanBlockService.default().block(id: id) {
+                    try PlanBlockService.default().update(row, title: row.title, start: start, end: end,
+                                                          day: start, durationMinutes: PlannerEngine.minutes(from: start, to: end))
+                }
+            }
+        } else if case .taskDue = item.origin, let taskID = item.taskUUID {
+            write { try PlanBlockService.default().planTask(taskUUID: taskID, title: item.title, start: start, end: end) }
         }
     }
 
@@ -752,6 +782,21 @@ struct PlannerView: View {
             } else {
                 PlannerSheetScaffold(title: "Block not found") { EmptyView() }
             }
+        case .taskTime(let taskID, let start, let end):
+            PlannerBlockDetailsSheet(
+                mode: .planTask(title: ctx.tasks.first { $0.id == taskID }?.title ?? "Task", start: start, end: end),
+                onSave: { title, s, e, day, minutes, notes in
+                    write {
+                        let service = PlanBlockService.default()
+                        let row = (s != nil && e != nil)
+                            ? try service.planTask(taskUUID: taskID, title: title, start: s!, end: e!)
+                            : try service.planTask(taskUUID: taskID, title: title, toDay: day, durationMinutes: minutes)
+                        if !notes.isEmpty { try service.update(row, title: row.title, start: row.start, end: row.end, day: day, durationMinutes: row.durationMinutes, notes: notes) }
+                    }
+                },
+                onOpenTask: { openTask(taskID) },
+                onOtherOptions: { sheet = .plan(taskID) }
+            )
         case .newBlock(let start, let end, let title):
             PlannerBlockDetailsSheet(
                 mode: .create(start: start, end: end, title: title),
@@ -858,6 +903,100 @@ struct PlannerView: View {
         withAnimation { toast = nil }
     }
 
+    // MARK: Drag a task onto the grid (#687 fix)
+
+    /// Plan (or move) a task to a dropped slot. One live plan per task, so a
+    /// task that already has one is moved.
+    private func dropTask(_ taskID: String, title: String, at t: PlannerTaskDragCoordinator.Target) {
+        write { try PlanBlockService.default().planTask(taskUUID: taskID, title: title, start: t.start, end: t.end) }
+    }
+
+    #if os(iOS)
+    /// The To-plan list as a bottom panel rather than a sheet, so a row can be
+    /// dragged onto the grid: the panel slides down out of the way while the
+    /// row's recogniser keeps the finger.
+    private func toPlanPanelView(_ ctx: PlannerContext) -> some View {
+        let all = candidates(ctx)
+        return VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: Space.sm) {
+                Capsule().fill(Tokens.borderStrong).frame(width: 36, height: 4).frame(maxWidth: .infinity)
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("To plan").font(.edTitle).foregroundStyle(Tokens.ink)
+                        Text("Touch and hold a task, then drag it onto the grid.")
+                            .font(.edCaption).foregroundStyle(Tokens.muted)
+                    }
+                    Spacer()
+                    Button { withAnimation(.easeOut(duration: 0.25)) { toPlanPanel = false } } label: {
+                        Image(systemName: "xmark").font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Tokens.muted).frame(width: 32, height: 32).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
+                }
+                if all.isEmpty {
+                    Text("Every open task has a plan.").font(.edFootnote).foregroundStyle(Tokens.muted)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(all.enumerated()), id: \.element.id) { index, c in
+                                if index > 0 { Rectangle().fill(Tokens.divider).frame(height: 1) }
+                                PlannerToPlanRow(candidate: c) {
+                                    toPlanPanel = false
+                                    sheet = .plan(c.task.id)
+                                }
+                                .background(PlannerTaskDragSource(
+                                    payload: .init(taskID: c.task.id, title: c.task.title, minutes: c.estimateMinutes),
+                                    onBegin: { withAnimation(.easeOut(duration: 0.2)) { panelTucked = true } },
+                                    onEnd: { t in
+                                        if let t {
+                                            dropTask(c.task.id, title: c.task.title, at: t)
+                                            toPlanPanel = false
+                                        }
+                                        withAnimation(.easeOut(duration: 0.2)) { panelTucked = false }
+                                    }
+                                ))
+                            }
+                        }
+                        .plannerCard()
+                    }
+                    .frame(maxHeight: 330)
+                }
+            }
+            .padding(Space.lg)
+            .padding(.bottom, 80)
+            .background(Tokens.surface, in: UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22))
+            .shadowLg()
+            // Tucked: slid below the screen edge while a task is dragged.
+            .offset(y: panelTucked ? 520 : 0)
+            .accessibilityIdentifier("planner.toplan.panel")
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .transition(.move(edge: .bottom))
+    }
+
+    /// A chip under the finger while a task is dragged.
+    @ViewBuilder
+    private var dragChip: some View {
+        if let payload = taskDrag.payload, let p = taskDrag.pointer {
+            GeometryReader { geo in
+                let origin = geo.frame(in: .global).origin
+                Text(payload.title)
+                    .font(.edFootnoteStrong)
+                    .foregroundStyle(Tokens.paper)
+                    .lineLimit(1)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Tokens.accentTasks, in: Capsule())
+                    .shadowMd()
+                    .position(x: p.x - origin.x, y: p.y - origin.y - 36)
+                    .allowsHitTesting(false)
+            }
+            .ignoresSafeArea()
+        }
+    }
+    #endif
+
     /// Leave the Planner for the task the block places.
     private func openTask(_ uuid: String) {
         guard let id = UUID(uuidString: uuid) else { return }
@@ -902,7 +1041,11 @@ struct PlannerView: View {
             case "plan":
                 if let c = candidates(fresh).first { sheet = .plan(c.task.id) }
             case "toplan":
+                #if os(iOS)
+                toPlanPanel = true
+                #else
                 sheet = .toPlan
+                #endif
             case "draft":
                 // A named draft at the next free slot, as if dragged there.
                 let free = PlannerEngine.freeTime(on: fresh.day(selectedDay), settings: settings, visible: visible, now: fresh.now)
@@ -956,6 +1099,8 @@ enum PlannerSheetKind: Identifiable, Equatable {
     case placeTask(start: Date, end: Date)
     /// A calendar event's read-only details (the item id).
     case event(String)
+    /// A timed task with no plan block: its start and length, with a Save.
+    case taskTime(taskID: String, start: Date, end: Date)
 
     var id: String {
         switch self {
@@ -969,6 +1114,7 @@ enum PlannerSheetKind: Identifiable, Equatable {
         case .newBlock(let s, let e, _): return "new-\(s.timeIntervalSince1970)-\(e.timeIntervalSince1970)"
         case .placeTask(let s, _):       return "place-\(s.timeIntervalSince1970)"
         case .event(let id):             return "event-\(id)"
+        case .taskTime(let id, let s, _): return "tasktime-\(id)-\(s.timeIntervalSince1970)"
         }
     }
 }
@@ -1057,6 +1203,8 @@ struct PlannerToPlanRow: View {
 struct PlannerInspector: View {
     let candidates: [PlannerEngine.Candidate]
     let onPlan: (PlannerEngine.Candidate) -> Void
+    /// A row dragged onto the grid and released over a slot (#687 fix).
+    var onDrop: (PlannerEngine.Candidate, PlannerTaskDragCoordinator.Target) -> Void = { _, _ in }
 
     private struct Bucket: Identifiable {
         let title: String
@@ -1109,6 +1257,12 @@ struct PlannerInspector: View {
                                 .padding(.horizontal, 12).padding(.top, 8)
                             ForEach(g.items) { c in
                                 PlannerToPlanRow(candidate: c) { onPlan(c) }
+                                    // Drag the row onto the grid to plan it
+                                    // at a time; the Plan button still works.
+                                    .background(PlannerTaskDragSource(
+                                        payload: .init(taskID: c.task.id, title: c.task.title, minutes: c.estimateMinutes),
+                                        onEnd: { t in if let t { onDrop(c, t) } }
+                                    ))
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                                     .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                                     .paperBorder(Tokens.border, radius: Radius.md)
@@ -1120,7 +1274,7 @@ struct PlannerInspector: View {
                 }
             }
             Rectangle().fill(Tokens.border).frame(height: 1)
-            Text("Plan a task to a day with no hour, or into a free slot. Click empty time in the grid to add there.")
+            Text("Drag a task onto the grid to plan it at a time, or use Plan for a day or a slot.")
                 .font(.edCaption).foregroundStyle(Tokens.muted)
                 .padding(12)
         }

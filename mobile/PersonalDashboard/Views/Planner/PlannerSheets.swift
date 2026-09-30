@@ -9,6 +9,10 @@ struct PlannerSheetScaffold<Content: View>: View {
     var subtitle: String? = nil
     /// Open at full height on the iPhone (for a sheet that is mostly a list).
     var fullHeight: Bool = false
+    /// When set, the header shows Cancel and Save, so Save is always on
+    /// screen, even at the iPhone's half-height detent (#687 fix: the Save at
+    /// the bottom of the details sheet sat below the fold).
+    var onSave: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @ViewBuilder let content: Content
 
@@ -22,16 +26,29 @@ struct PlannerSheetScaffold<Content: View>: View {
                     }
                 }
                 Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold))
+                if let onSave {
+                    Button("Cancel") { dismiss() }
+                        .buttonStyle(.plain)
+                        .font(.edBody)
                         .foregroundStyle(Tokens.muted)
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("planner.sheet.cancel")
+                    Button("Save") { onSave(); dismiss() }
+                        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("planner.sheet.save")
+                } else {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Tokens.muted)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
+                    .keyboardShortcut(.cancelAction)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-                .keyboardShortcut(.cancelAction)
             }
             content
         }
@@ -49,7 +66,7 @@ struct PlannerSheetScaffold<Content: View>: View {
 
 /// Lengths offered for a task estimate.
 enum PlannerDurations {
-    static let options = [15, 30, 45, 60, 90, 120, 180]
+    static let options = [15, 30, 45, 60, 90, 120, 180, 240]
 }
 
 /// A small menu that shows a length and lets the user pick another.
@@ -222,6 +239,8 @@ struct PlannerPlanTaskSheet: View {
                 Spacer()
                 PlannerDurationMenu(minutes: $minutes)
             }
+            Text("Pick a day or a slot below to plan it with this length.")
+                .font(.edCaption).foregroundStyle(Tokens.muted)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Plan to a day").eyebrow()
                 PlannerFlow(spacing: 6) {
@@ -487,6 +506,9 @@ struct PlannerBlockDetailsSheet: View {
     enum Mode {
         case create(start: Date, end: Date, title: String)
         case edit(LocalPlanBlock)
+        /// A timed task with no plan block yet (#687 fix): Save creates its
+        /// plan block with the chosen start and length.
+        case planTask(title: String, start: Date, end: Date)
     }
 
     let mode: Mode
@@ -506,19 +528,26 @@ struct PlannerBlockDetailsSheet: View {
     @State private var confirmDelete = false
 
     private var isTask: Bool {
-        if case .edit(let b) = mode { return b.kindEnum == .task }
-        return false
+        switch mode {
+        case .edit(let b): return b.kindEnum == .task
+        case .planTask:    return true
+        case .create:      return false
+        }
     }
+
+    /// Other ways to plan the task (another day, a suggested slot).
+    var onOtherOptions: (() -> Void)? = nil
 
     private var heading: String {
         switch mode {
         case .create: return "New block"
         case .edit(let b): return b.kindEnum == .task ? "Planned task" : "Block"
+        case .planTask: return "Plan task"
         }
     }
 
     var body: some View {
-        PlannerSheetScaffold(title: heading) {
+        PlannerSheetScaffold(title: heading, onSave: save) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.md) {
                     if isTask {
@@ -543,8 +572,14 @@ struct PlannerBlockDetailsSheet: View {
                     Toggle("At a time", isOn: $timed).font(.edBody).tint(Tokens.accentTasks)
                     if timed {
                         DatePicker("Date", selection: dateBinding, displayedComponents: .date).font(.edBody)
-                        DatePicker("Start", selection: $start, displayedComponents: .hourAndMinute).font(.edBody)
-                        DatePicker("End", selection: $end, in: start..., displayedComponents: .hourAndMinute).font(.edBody)
+                        DatePicker("Start", selection: startBinding, displayedComponents: .hourAndMinute).font(.edBody)
+                        HStack {
+                            Text("Length").font(.edBody)
+                            Spacer()
+                            PlannerDurationMenu(minutes: lengthBinding)
+                                .accessibilityIdentifier("planner.details.length")
+                        }
+                        DatePicker("End", selection: $end, in: start.addingTimeInterval(15 * 60)..., displayedComponents: .hourAndMinute).font(.edBody)
                     } else {
                         DatePicker("Day", selection: $day, displayedComponents: .date).font(.edBody)
                         HStack {
@@ -562,13 +597,12 @@ struct PlannerBlockDetailsSheet: View {
                             .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                             .accessibilityIdentifier("planner.details.notes")
                     }
-                    Button {
-                        onSave(title, timed ? start : nil, timed ? max(end, start.addingTimeInterval(300)) : nil, timed ? Calendar.current.startOfDay(for: start) : day, minutes, notes)
-                        dismiss()
-                    } label: { Text("Save") }
-                    .buttonStyle(EdButtonStyle(kind: .primary, fullWidth: true))
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("planner.details.save")
+                    if let onOtherOptions {
+                        Button("Plan to another day or slot…") { dismiss(); onOtherOptions() }
+                            .buttonStyle(.plain)
+                            .font(.edFootnote)
+                            .foregroundStyle(Tokens.accentTasks)
+                    }
                     if let onDelete {
                         Button { confirmDelete = true } label: {
                             Text(isTask ? "Remove from plan" : "Delete block")
@@ -590,6 +624,28 @@ struct PlannerBlockDetailsSheet: View {
             }
         }
         .onAppear(perform: seed)
+    }
+
+    private func save() {
+        onSave(title, timed ? start : nil, timed ? max(end, start.addingTimeInterval(15 * 60)) : nil,
+               timed ? Calendar.current.startOfDay(for: start) : day, minutes, notes)
+    }
+
+    /// Moving the start keeps the length.
+    private var startBinding: Binding<Date> {
+        Binding(get: { start }, set: { s in
+            let length = end.timeIntervalSince(start)
+            start = s
+            end = s.addingTimeInterval(max(15 * 60, length))
+        })
+    }
+
+    /// The length menu sets the end.
+    private var lengthBinding: Binding<Int> {
+        Binding(
+            get: { max(15, PlannerEngine.minutes(from: start, to: end)) },
+            set: { m in end = start.addingTimeInterval(TimeInterval(m * 60)) }
+        )
     }
 
     /// The date picker moves start and end together, keeping their hours.
@@ -616,6 +672,13 @@ struct PlannerBlockDetailsSheet: View {
         guard !seeded else { return }
         seeded = true
         switch mode {
+        case .planTask(let t, let s, let e):
+            title = t
+            timed = true
+            start = s
+            end = e
+            day = Calendar.current.startOfDay(for: s)
+            minutes = PlannerEngine.minutes(from: s, to: e)
         case .create(let s, let e, let t):
             title = t
             timed = true
