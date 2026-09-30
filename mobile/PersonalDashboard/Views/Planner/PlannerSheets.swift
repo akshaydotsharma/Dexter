@@ -2,65 +2,160 @@ import SwiftUI
 
 // MARK: - Shared sheet chrome
 
-/// A titled sheet body with a close button, sized for macOS where a sheet has
-/// no intrinsic size (#474).
+/// The Planner's sheet chrome, in the Tasks editor's grammar (#687 round 6).
+///
+/// Mac: `TaskEditorSheet.macBody`'s header, Cancel · title · Save as plain text
+/// buttons over a hairline, on paper. iPhone: `TaskEditorSheet.iosBody`'s
+/// NavigationStack with an inline title and Cancel / Save in the bar.
 struct PlannerSheetScaffold<Content: View>: View {
     let title: String
     var subtitle: String? = nil
-    /// Open at full height on the iPhone (for a sheet that is mostly a list).
+    /// Open at full height on the iPhone (an editor, or a sheet that is mostly a list).
     var fullHeight: Bool = false
-    /// When set, the header shows Cancel and Save, so Save is always on
-    /// screen, even at the iPhone's half-height detent (#687 fix: the Save at
-    /// the bottom of the details sheet sat below the fold).
+    /// When set, the header shows Cancel and Save. Nil: a single Done.
     var onSave: (() -> Void)? = nil
+    var canSave: Bool = true
+    /// Mac width. The editors take the Tasks editor's 360; list sheets 440.
+    var width: CGFloat = 440
     @Environment(\.dismiss) private var dismiss
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.edTitle).foregroundStyle(Tokens.ink)
+        #if os(macOS)
+        VStack(spacing: 0) {
+            ZStack {
+                VStack(spacing: 1) {
+                    Text(title)
+                        .font(.edHeading)
+                        .foregroundStyle(Tokens.ink)
+                        .lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle).font(.edCaption).foregroundStyle(Tokens.muted).lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 64)
+                HStack {
+                    if onSave != nil {
+                        Button("Cancel") { dismiss() }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Tokens.muted)
+                            .keyboardShortcut(.cancelAction)
+                            .accessibilityIdentifier("planner.sheet.cancel")
+                    }
+                    Spacer()
+                    trailingButton
+                }
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
+
+            Rectangle().fill(Tokens.divider).frame(height: 0.5)
+
+            VStack(alignment: .leading, spacing: Space.md) {
+                content
+            }
+            .padding(Space.lg)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(width: width, height: 540)
+        .background(Tokens.paper)
+        #else
+        NavigationStack {
+            ZStack {
+                Tokens.paper.ignoresSafeArea()
+                VStack(alignment: .leading, spacing: Space.md) {
                     if let subtitle {
                         Text(subtitle).font(.edCaption).foregroundStyle(Tokens.muted)
                     }
+                    content
                 }
-                Spacer()
-                if let onSave {
-                    Button("Cancel") { dismiss() }
-                        .buttonStyle(.plain)
-                        .font(.edBody)
-                        .foregroundStyle(Tokens.muted)
-                        .keyboardShortcut(.cancelAction)
-                        .accessibilityIdentifier("planner.sheet.cancel")
-                    Button("Save") { onSave(); dismiss() }
-                        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
-                        .keyboardShortcut(.defaultAction)
-                        .accessibilityIdentifier("planner.sheet.save")
-                } else {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Tokens.muted)
-                            .frame(width: 32, height: 32)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close")
-                    .keyboardShortcut(.cancelAction)
-                }
+                .padding(.horizontal, Space.lg)
+                .padding(.top, Space.sm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            content
+            .navigationTitle(title)
+            .inlineNavigationTitle()
+            .toolbar {
+                if onSave != nil {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                            .foregroundStyle(Tokens.muted)
+                            .accessibilityIdentifier("planner.sheet.cancel")
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) { trailingButton }
+            }
         }
-        .padding(Space.lg)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Tokens.surface)
-        #if os(macOS)
-        .frame(width: 440, height: 560)
-        #else
         .presentationDragIndicator(.visible)
         .presentationDetents(fullHeight ? [.large] : [.medium, .large])
         #endif
+    }
+
+    @ViewBuilder
+    private var trailingButton: some View {
+        if let onSave {
+            Button("Save") { onSave(); dismiss() }
+                .buttonStyle(.plain)
+                .fontWeight(.semibold)
+                .foregroundStyle(canSave ? saveTint : Tokens.muted)
+                .disabled(!canSave)
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("planner.sheet.save")
+        } else {
+            Button("Done") { dismiss() }
+                .buttonStyle(.plain)
+                .fontWeight(.semibold)
+                .foregroundStyle(saveTint)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("planner.sheet.done")
+        }
+    }
+
+    /// The Tasks editor: accent on the Mac, ink in the iPhone bar.
+    private var saveTint: Color {
+        #if os(macOS)
+        Tokens.accentTasks
+        #else
+        Tokens.ink
+        #endif
+    }
+}
+
+/// One labelled group in a Planner editor: the eyebrow over a card, exactly as
+/// the Tasks editor draws "Date & Time" (Mac) and "Due date" (iPhone).
+struct PlannerFormSection<Content: View>: View {
+    let title: String?
+    @ViewBuilder let content: Content
+
+    init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            if let title { EdFormSectionHeader(title) }
+            EdFormGroup { content }
+        }
+    }
+}
+
+/// A row inside a form card: icon tile, label, trailing control.
+struct PlannerFormRow<Trailing: View>: View {
+    let symbol: String
+    let tint: Color
+    let label: String
+    @ViewBuilder let trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            EdIconTile(symbol, tint)
+            Text(label).font(.edBody).foregroundStyle(Tokens.ink)
+            Spacer(minLength: Space.sm)
+            trailing
+        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
     }
 }
 
@@ -127,46 +222,48 @@ struct PlannerSlotSheet: View {
     var body: some View {
         PlannerSheetScaffold(
             title: "\(PlannerStyle.shortDayFormatter.string(from: start)) · \(PlannerStyle.clockAP(start))",
-            subtitle: showsNewBlock ? "Add a block, or place a task at this time" : "Place a task at this time"
+            subtitle: showsNewBlock ? "Add a block, or place a task at this time" : "Place a task at this time",
+            fullHeight: true
         ) {
             if showsNewBlock {
-            VStack(alignment: .leading, spacing: Space.sm) {
-                Text("New block").eyebrow()
-                HStack(spacing: Space.sm) {
-                    TextField("Focus time 45m", text: $text)
-                        .font(.edBody)
-                        .textFieldStyle(.plain)
-                        .focused($focused)
-                        .onSubmit(addBlock)
-                        .padding(.horizontal, 10).padding(.vertical, 8)
-                        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                        .paperBorder(Tokens.borderStrong, radius: Radius.md, lineWidth: 1)
-                        .accessibilityLabel("Block title and length")
-                    Button("Add", action: addBlock)
-                        .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
-                        .disabled(!hasText)
-                        .opacity(hasText ? 1 : 0.5)
+                VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                    PlannerFormSection("New block") {
+                        HStack(spacing: Space.sm) {
+                            TextField("Focus time 45m", text: $text)
+                                .font(.edBody)
+                                .textFieldStyle(.plain)
+                                .focused($focused)
+                                .onSubmit(addBlock)
+                                .accessibilityLabel("Block title and length")
+                            Button("Add", action: addBlock)
+                                .buttonStyle(EdButtonStyle(kind: .primary, size: .sm))
+                                .disabled(!hasText)
+                                .opacity(hasText ? 1 : 0.5)
+                        }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm)
+                    }
+                    if let s = parsed.start, let e = parsed.end {
+                        Text(hasText ? "\(parsed.title) · \(PlannerStyle.range(s, e))" : "Type a title. Add a length like 15m or 1h; the default is 30m.")
+                            .font(.edCaption).foregroundStyle(Tokens.muted)
+                            .padding(.horizontal, Space.xs)
+                    }
                 }
-                if let s = parsed.start, let e = parsed.end {
-                    Text(hasText ? "\(parsed.title) · \(PlannerStyle.range(s, e))" : "Type a title. Add a length like 15m or 1h; the default is 30m.")
-                        .font(.edCaption).foregroundStyle(Tokens.muted)
-                }
-            }
             }
             if candidates.isEmpty {
                 Text("No open tasks to place.").font(.edFootnote).foregroundStyle(Tokens.muted)
-            }
-            if !candidates.isEmpty {
-                VStack(alignment: .leading, spacing: Space.sm) {
-                    Text("Place a task at \(PlannerStyle.clockAP(start))").eyebrow()
+            } else {
+                VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+                    EdFormSectionHeader("Place a task at \(PlannerStyle.clockAP(start))")
                     ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(candidates.prefix(12).enumerated()), id: \.element.id) { index, c in
-                                if index > 0 { Rectangle().fill(Tokens.divider).frame(height: 1) }
-                                taskRow(c)
+                        EdFormGroup {
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(candidates.prefix(12).enumerated()), id: \.element.id) { index, c in
+                                    if index > 0 { EdFormRowDivider() }
+                                    taskRow(c)
+                                }
                             }
                         }
-                        .plannerCard()
                     }
                 }
             }
@@ -233,43 +330,48 @@ struct PlannerPlanTaskSheet: View {
     @State private var seeded = false
 
     var body: some View {
-        PlannerSheetScaffold(title: "Plan a task", subtitle: task.title) {
-            HStack {
-                Text("Length").font(.edFootnote).foregroundStyle(Tokens.muted)
-                Spacer()
-                PlannerDurationMenu(minutes: $minutes)
-            }
-            Text("Pick a day or a slot below to plan it with this length.")
-                .font(.edCaption).foregroundStyle(Tokens.muted)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Plan to a day").eyebrow()
-                PlannerFlow(spacing: 6) {
-                    ForEach(days) { option in
-                        dayChip(option)
-                    }
-                }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Or pick a free slot").eyebrow()
-                let found = Array(slots(minutes).prefix(6))
-                if found.isEmpty {
-                    Text("No free slot of \(PlannerFormat.duration(minutes)) in the next seven days.")
-                        .font(.edCaption).foregroundStyle(Tokens.muted)
-                } else {
-                    PlannerFlow(spacing: 6) {
-                        ForEach(found, id: \.start) { slot in
-                            Button {
-                                onPlanSlot(slot)
-                                dismiss()
-                            } label: {
-                                Text(slotLabel(slot))
-                            }
-                            .buttonStyle(PlannerSmallButtonStyle())
+        PlannerSheetScaffold(title: "Plan a Task", subtitle: task.title) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    PlannerFormSection {
+                        PlannerFormRow(symbol: "hourglass", tint: Tokens.accentTasks, label: "Length") {
+                            PlannerDurationMenu(minutes: $minutes)
                         }
                     }
+                    PlannerFormSection("Plan to a day") {
+                        PlannerFlow(spacing: 6) {
+                            ForEach(days) { option in
+                                dayChip(option)
+                            }
+                        }
+                        .padding(Space.md)
+                    }
+                    PlannerFormSection("Or pick a free slot") {
+                        let found = Array(slots(minutes).prefix(6))
+                        Group {
+                            if found.isEmpty {
+                                Text("No free slot of \(PlannerFormat.duration(minutes)) in the next seven days.")
+                                    .font(.edCaption).foregroundStyle(Tokens.muted)
+                            } else {
+                                PlannerFlow(spacing: 6) {
+                                    ForEach(found, id: \.start) { slot in
+                                        Button {
+                                            onPlanSlot(slot)
+                                            dismiss()
+                                        } label: {
+                                            Text(slotLabel(slot))
+                                        }
+                                        .buttonStyle(PlannerSmallButtonStyle())
+                                    }
+                                }
+                            }
+                        }
+                        .padding(Space.md)
+                    }
+                    Text("Pick a day or a slot to plan it with this length.")
+                        .font(.edCaption).foregroundStyle(Tokens.muted)
                 }
             }
-            Spacer(minLength: 0)
         }
         .onAppear {
             guard !seeded else { return }
@@ -333,14 +435,15 @@ struct PlannerQuickAddSheet: View {
     @State private var formEnd = Date()
     @State private var formDay = Date()
     @State private var formMinutes = 30
+    @State private var formPanel: String?
     @State private var seeded = false
     @FocusState private var focused: Bool
 
     private var parsed: PlannerQuickAdd.Result { PlannerQuickAdd.parse(text, on: baseDay) }
 
     var body: some View {
-        PlannerSheetScaffold(title: "Add to \(PlannerStyle.weekdayFormatter.string(from: baseDay))") {
-            if showForm { form } else { line }
+        PlannerSheetScaffold(title: "Add to \(PlannerStyle.weekdayFormatter.string(from: baseDay))", fullHeight: showForm) {
+            if showForm { ScrollView { form.padding(.bottom, Space.md) } } else { line }
             Spacer(minLength: 0)
         }
         .onAppear(perform: seed)
@@ -375,29 +478,37 @@ struct PlannerQuickAddSheet: View {
 
     private var form: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
-                Text("Title").eyebrow()
+            PlannerFormSection("Title") {
                 TextField("Focus time", text: $formTitle)
                     .font(.edBody)
                     .textFieldStyle(.plain)
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-                    .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                    .padding(Space.md)
             }
-            Toggle("At a time", isOn: $formTimed)
-                .font(.edBody)
-                .tint(Tokens.accentTasks)
-            if formTimed {
-                DatePicker("Start", selection: $formStart)
-                    .font(.edBody)
-                DatePicker("End", selection: $formEnd, in: formStart...)
-                    .font(.edBody)
-            } else {
-                DatePicker("Day", selection: $formDay, displayedComponents: .date)
-                    .font(.edBody)
-                HStack {
-                    Text("Length").font(.edBody)
-                    Spacer()
-                    PlannerDurationMenu(minutes: $formMinutes)
+            PlannerFormSection("Date & Time") {
+                EdDateTimeField(
+                    date: formStartBinding,
+                    hasTime: $formTimed,
+                    timeLabel: "Start",
+                    tint: Tokens.accentTasks,
+                    drawsCard: false,
+                    openPanel: $formPanel
+                )
+                if formTimed {
+                    EdFormRowDivider()
+                    EdDateTimeField(
+                        date: $formEnd,
+                        showsDate: false,
+                        timeLabel: "End",
+                        timeIcon: "clock.badge.checkmark",
+                        tint: Tokens.accentTasks,
+                        drawsCard: false,
+                        openPanel: $formPanel
+                    )
+                } else {
+                    EdFormRowDivider()
+                    PlannerFormRow(symbol: "hourglass", tint: Tokens.accentTasks, label: "Length") {
+                        PlannerDurationMenu(minutes: $formMinutes)
+                    }
                 }
             }
             Button {
@@ -406,18 +517,22 @@ struct PlannerQuickAddSheet: View {
                     let mins = max(5, PlannerEngine.minutes(from: formStart, to: max(formEnd, formStart)))
                     onAdd(.init(title: title.isEmpty ? "Block" : title, day: Calendar.current.startOfDay(for: formStart), start: formStart, durationMinutes: mins))
                 } else {
-                    onAdd(.init(title: title.isEmpty ? "Block" : title, day: Calendar.current.startOfDay(for: formDay), start: nil, durationMinutes: formMinutes))
+                    onAdd(.init(title: title.isEmpty ? "Block" : title, day: Calendar.current.startOfDay(for: formStart), start: nil, durationMinutes: formMinutes))
                 }
                 dismiss()
             } label: { Text("Add block") }
             .buttonStyle(EdButtonStyle(kind: .primary, fullWidth: true))
             .keyboardShortcut(.defaultAction)
         }
-        .onChange(of: formStart) { old, new in
-            // Keep the length when the start moves.
-            let length = formEnd.timeIntervalSince(old)
-            formEnd = new.addingTimeInterval(max(300, length))
-        }
+    }
+
+    /// Moving the start keeps the length.
+    private var formStartBinding: Binding<Date> {
+        Binding(get: { formStart }, set: { new in
+            let length = max(300, formEnd.timeIntervalSince(formStart))
+            formStart = new
+            formEnd = new.addingTimeInterval(length)
+        })
     }
 
     private func seed() {
@@ -432,7 +547,7 @@ struct PlannerQuickAddSheet: View {
         let p = parsed
         formTitle = text.isEmpty ? "" : p.title
         let cal = Calendar.current
-        let base = cal.startOfDay(for: baseDay)
+        let base = cal.startOfDay(for: p.day)
         let start = p.start ?? PlannerEngine.roundUp(
             cal.isDateInToday(base) ? Date() : base.addingTimeInterval(TimeInterval(PlannerSettings.workday.startMinute * 60)),
             toMinutes: 15
@@ -498,10 +613,12 @@ struct PlannerQuickAddPreview: View {
 
 // MARK: - Block details
 
-/// The details of a Dexter block (#687 round 3): title, day, start, end and
-/// notes, plus Delete. Opens for a new draft ("More options") and for an
-/// existing block (click or tap its tile). A planned task shows its task title
-/// and a link to the task instead of an editable title.
+/// The details of a Dexter block (#687 round 3, rebuilt in round 6 on the
+/// Tasks editor's components): title and notes, then Date & Time as
+/// `EdDateTimeField` rows (the one date and time control in the app, #657)
+/// with the length, then the canonical `DeleteRowButton`. Opens for a new
+/// draft ("More options"), for an existing block (double click, or Edit in the
+/// quick view), and for a timed task that has no plan yet.
 struct PlannerBlockDetailsSheet: View {
     enum Mode {
         case create(start: Date, end: Date, title: String)
@@ -513,19 +630,23 @@ struct PlannerBlockDetailsSheet: View {
 
     let mode: Mode
     let onSave: (_ title: String, _ start: Date?, _ end: Date?, _ day: Date, _ minutes: Int, _ notes: String) -> Void
+    /// Delete, handed back to the Planner, which asks how (`PlannerDeletion`).
     var onDelete: (() -> Void)? = nil
     var onOpenTask: (() -> Void)? = nil
+    /// Other ways to plan the task (another day, a suggested slot).
+    var onOtherOptions: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
     @State private var timed = true
+    /// The day, and the start time when `timed`.
     @State private var start = Date()
     @State private var end = Date()
-    @State private var day = Date()
     @State private var minutes = 30
     @State private var notes = ""
     @State private var seeded = false
-    @State private var confirmDelete = false
+    /// One accordion for the Start and End fields (#657).
+    @State private var openPanel: String?
 
     private var isTask: Bool {
         switch mode {
@@ -535,67 +656,54 @@ struct PlannerBlockDetailsSheet: View {
         }
     }
 
-    /// Other ways to plan the task (another day, a suggested slot).
-    var onOtherOptions: (() -> Void)? = nil
-
     private var heading: String {
         switch mode {
-        case .create: return "New block"
-        case .edit(let b): return b.kindEnum == .task ? "Planned task" : "Block"
-        case .planTask: return "Plan task"
+        case .create: return "New Block"
+        case .edit(let b): return b.kindEnum == .task ? "Planned Task" : "Details"
+        case .planTask: return "Plan Task"
         }
     }
 
+    private var tint: Color { isTask ? Tokens.accentTasks : PlannerStyle.color(.manual) }
+
     var body: some View {
-        PlannerSheetScaffold(title: heading, onSave: save) {
+        PlannerSheetScaffold(title: heading, fullHeight: true, onSave: save, width: 360) {
             ScrollView {
-                VStack(alignment: .leading, spacing: Space.md) {
-                    if isTask {
-                        HStack {
-                            Text(title).font(.edHeading).foregroundStyle(Tokens.ink)
-                            Spacer()
-                            if let onOpenTask {
-                                Button("Open task") { dismiss(); onOpenTask() }
-                                    .buttonStyle(PlannerSmallButtonStyle())
-                            }
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    titleAndNotes
+                    PlannerFormSection("Date & Time") {
+                        EdDateTimeField(
+                            date: startBinding,
+                            hasTime: $timed,
+                            timeLabel: "Start",
+                            tint: Tokens.accentTasks,
+                            drawsCard: false,
+                            openPanel: $openPanel
+                        )
+                        if timed {
+                            EdFormRowDivider()
+                            EdDateTimeField(
+                                date: endBinding,
+                                showsDate: false,
+                                timeLabel: "End",
+                                timeIcon: "clock.badge.checkmark",
+                                tint: Tokens.accentTasks,
+                                drawsCard: false,
+                                openPanel: $openPanel
+                            )
                         }
-                    } else {
-                        field("Title") {
-                            TextField("Title", text: $title)
-                                .font(.edBody)
-                                .textFieldStyle(.plain)
-                                .padding(.horizontal, 10).padding(.vertical, 8)
-                                .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                                .accessibilityIdentifier("planner.details.title")
-                        }
-                    }
-                    Toggle("At a time", isOn: $timed).font(.edBody).tint(Tokens.accentTasks)
-                    if timed {
-                        DatePicker("Date", selection: dateBinding, displayedComponents: .date).font(.edBody)
-                        DatePicker("Start", selection: startBinding, displayedComponents: .hourAndMinute).font(.edBody)
-                        HStack {
-                            Text("Length").font(.edBody)
-                            Spacer()
-                            PlannerDurationMenu(minutes: lengthBinding)
+                        EdFormRowDivider()
+                        HStack(spacing: Space.md) {
+                            Image(systemName: "hourglass")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Tokens.accentTasks)
+                                .frame(width: 18)
+                            Text("Length").font(.edBody).foregroundStyle(Tokens.ink)
+                            Spacer(minLength: Space.sm)
+                            PlannerDurationMenu(minutes: timed ? lengthBinding : $minutes)
                                 .accessibilityIdentifier("planner.details.length")
                         }
-                        DatePicker("End", selection: $end, in: start.addingTimeInterval(15 * 60)..., displayedComponents: .hourAndMinute).font(.edBody)
-                    } else {
-                        DatePicker("Day", selection: $day, displayedComponents: .date).font(.edBody)
-                        HStack {
-                            Text("Length").font(.edBody)
-                            Spacer()
-                            PlannerDurationMenu(minutes: $minutes)
-                        }
-                    }
-                    field("Notes") {
-                        TextEditor(text: $notes)
-                            .font(.edBody)
-                            .scrollContentBackground(.hidden)
-                            .frame(minHeight: 90)
-                            .padding(6)
-                            .background(Tokens.paper2, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                            .accessibilityIdentifier("planner.details.notes")
+                        .padding(Space.md)
                     }
                     if let onOtherOptions {
                         Button("Plan to another day or slot…") { dismiss(); onOtherOptions() }
@@ -604,39 +712,128 @@ struct PlannerBlockDetailsSheet: View {
                             .foregroundStyle(Tokens.accentTasks)
                     }
                     if let onDelete {
-                        Button { confirmDelete = true } label: {
-                            Text(isTask ? "Remove from plan" : "Delete block")
+                        DeleteRowButton(title: isTask ? "Delete…" : "Delete block") {
+                            dismiss()
+                            onDelete()
                         }
-                        .buttonStyle(EdButtonStyle(kind: .danger, fullWidth: true))
-                        .confirmationDialog(isTask ? "Remove this task from the plan?" : "Delete this block?",
-                                            isPresented: $confirmDelete, titleVisibility: .visible) {
-                            Button(isTask ? "Remove from plan" : "Delete block", role: .destructive) {
-                                onDelete()
-                                dismiss()
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text(isTask ? "The task itself stays." : "It is removed from every device.")
-                        }
+                        .accessibilityIdentifier("planner.details.delete")
                     }
                 }
                 .padding(.bottom, Space.md)
             }
         }
         .onAppear(perform: seed)
+        .onChange(of: timed) { _, isTimed in
+            // Switching a time on gives the block its length from the start.
+            if isTimed { end = start.addingTimeInterval(TimeInterval(max(15, minutes) * 60)) }
+            else { minutes = max(15, PlannerEngine.minutes(from: start, to: end)) }
+        }
+    }
+
+    /// Title and notes: one group with no labels on the Mac, labelled cards on
+    /// the iPhone, as the Tasks editor draws them. A planned task shows its
+    /// task's title with a way to open the task, since the title is the task's.
+    @ViewBuilder
+    private var titleAndNotes: some View {
+        #if os(macOS)
+        EdFormGroup {
+            titleRow
+            EdFormRowDivider()
+            TextField(PlainFieldPlaceholder.title("Notes"), text: $notes, axis: .vertical)
+                .paperFieldOnMac()
+                .lineLimit(2...6)
+                .font(.edBody)
+                .foregroundStyle(Tokens.inkSoft)
+                .padding(.horizontal, Space.md)
+                .padding(.vertical, Space.sm)
+                .plainFieldPlaceholder("Notes", isVisible: notes.isEmpty, padding: Space.md)
+                .accessibilityIdentifier("planner.details.notes")
+        }
+        #else
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            Text(isTask ? "Task" : "Title").eyebrow()
+            titleRow
+                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                .paperBorder(Tokens.border, radius: Radius.md)
+        }
+        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
+            Text("Notes").eyebrow()
+            TextField("Optional notes", text: $notes, axis: .vertical)
+                .lineLimit(2...6)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .padding(Space.md)
+                .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+                .paperBorder(Tokens.border, radius: Radius.md)
+                .accessibilityIdentifier("planner.details.notes")
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var titleRow: some View {
+        if isTask {
+            HStack(spacing: Space.sm) {
+                Text(title)
+                    .font(.edBodyMedium)
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(2)
+                Spacer(minLength: Space.sm)
+                if let onOpenTask {
+                    Button("Open task") { dismiss(); onOpenTask() }
+                        .buttonStyle(.plain)
+                        .font(.edFootnote)
+                        .foregroundStyle(Tokens.accentTasks)
+                }
+            }
+            .padding(.horizontal, Space.md)
+            .padding(.vertical, Space.md)
+        } else {
+            #if os(macOS)
+            TextField(PlainFieldPlaceholder.title("Title"), text: $title, axis: .vertical)
+                .paperFieldOnMac()
+                .lineLimit(1...3)
+                .font(.edBodyMedium)
+                .foregroundStyle(Tokens.ink)
+                .padding(.horizontal, Space.md)
+                .padding(.vertical, Space.sm)
+                .plainFieldPlaceholder("Title", isVisible: title.isEmpty, padding: Space.md)
+                .accessibilityIdentifier("planner.details.title")
+            #else
+            TextField("What is this block for?", text: $title, axis: .vertical)
+                .lineLimit(1...3)
+                .font(.edBody)
+                .foregroundStyle(Tokens.ink)
+                .padding(Space.md)
+                .accessibilityIdentifier("planner.details.title")
+            #endif
+        }
     }
 
     private func save() {
+        let day = Calendar.current.startOfDay(for: start)
         onSave(title, timed ? start : nil, timed ? max(end, start.addingTimeInterval(15 * 60)) : nil,
-               timed ? Calendar.current.startOfDay(for: start) : day, minutes, notes)
+               day, timed ? PlannerEngine.minutes(from: start, to: end) : minutes, notes)
     }
 
-    /// Moving the start keeps the length.
+    /// Moving the start (its day or its time) keeps the length.
     private var startBinding: Binding<Date> {
         Binding(get: { start }, set: { s in
-            let length = end.timeIntervalSince(start)
+            let length = max(15 * 60, end.timeIntervalSince(start))
             start = s
-            end = s.addingTimeInterval(max(15 * 60, length))
+            end = s.addingTimeInterval(length)
+        })
+    }
+
+    /// The End row carries a time only; its day is the start's. An end at or
+    /// before the start means the next 15 minutes, never a negative block.
+    private var endBinding: Binding<Date> {
+        Binding(get: { end }, set: { e in
+            let cal = Calendar.current
+            let parts = cal.dateComponents([.hour, .minute], from: e)
+            var candidate = cal.date(bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0, of: start) ?? e
+            if candidate <= start { candidate = start.addingTimeInterval(15 * 60) }
+            end = candidate
         })
     }
 
@@ -648,50 +845,21 @@ struct PlannerBlockDetailsSheet: View {
         )
     }
 
-    /// The date picker moves start and end together, keeping their hours.
-    private var dateBinding: Binding<Date> {
-        Binding(
-            get: { start },
-            set: { newDay in
-                let cal = Calendar.current
-                let shift = cal.startOfDay(for: newDay).timeIntervalSince(cal.startOfDay(for: start))
-                start = start.addingTimeInterval(shift)
-                end = end.addingTimeInterval(shift)
-            }
-        )
-    }
-
-    private func field<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: Space.fieldLabelGap) {
-            Text(label).eyebrow()
-            content()
-        }
-    }
-
     private func seed() {
         guard !seeded else { return }
         seeded = true
         switch mode {
-        case .planTask(let t, let s, let e):
+        case .planTask(let t, let s, let e), .create(let s, let e, let t):
             title = t
             timed = true
             start = s
             end = e
-            day = Calendar.current.startOfDay(for: s)
-            minutes = PlannerEngine.minutes(from: s, to: e)
-        case .create(let s, let e, let t):
-            title = t
-            timed = true
-            start = s
-            end = e
-            day = Calendar.current.startOfDay(for: s)
             minutes = PlannerEngine.minutes(from: s, to: e)
         case .edit(let block):
             title = block.title
             timed = block.isTimed
             notes = block.notes
             let deviceDay = WallClock.deviceDay(from: block.day)
-            day = deviceDay
             minutes = block.durationMinutes
             let s = block.start ?? deviceDay.addingTimeInterval(TimeInterval(PlannerSettings.workday.startMinute * 60))
             start = s
@@ -702,9 +870,10 @@ struct PlannerBlockDetailsSheet: View {
 
 // MARK: - Calendar event
 
-/// A calendar event's details (#687 round 3), with Dexter-only actions (#689).
-/// The event itself stays read-only: Decline and Remove are Dexter records,
-/// the source calendar does not change, and the organiser is not told.
+/// A calendar event's details (#687 round 3), with Dexter-only actions (#689),
+/// in the Tasks editor's grouped rows (round 6). The event itself stays
+/// read-only: Decline and Remove are Dexter records, the source calendar does
+/// not change, and the organiser is not told.
 struct PlannerEventDetailsSheet: View {
     let event: PlannerEvent
     var onDecline: ((EventOverrideService.Scope) -> Void)? = nil
@@ -720,19 +889,46 @@ struct PlannerEventDetailsSheet: View {
     }
 
     var body: some View {
-        PlannerSheetScaffold(title: event.title, subtitle: event.source == .work ? "Work calendar" : "Personal calendar") {
+        PlannerSheetScaffold(title: "Event", fullHeight: true, width: 360) {
             ScrollView {
-                VStack(alignment: .leading, spacing: Space.md) {
-                    if event.decline != .none {
-                        Label(event.decline == .atSource ? "You declined this in your calendar" : "Declined in Dexter",
-                              systemImage: "xmark.circle")
-                            .font(.edFootnoteStrong)
-                            .foregroundStyle(Tokens.danger)
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    EdFormGroup {
+                        HStack(alignment: .top, spacing: Space.md) {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(PlannerStyle.color(event.source))
+                                .frame(width: 12, height: 12)
+                                .padding(.top, 5)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(event.title)
+                                    .font(.edBodyMedium)
+                                    .foregroundStyle(Tokens.ink)
+                                    .strikethrough(event.decline != .none, color: Tokens.muted)
+                                    .textSelection(.enabled)
+                                Text(event.source == .work ? "Work calendar" : "Personal calendar")
+                                    .font(.edCaption).foregroundStyle(Tokens.muted)
+                                if event.decline != .none {
+                                    Text(event.decline == .atSource ? "You declined this in your calendar" : "Declined in Dexter")
+                                        .font(.edCaption.weight(.medium))
+                                        .foregroundStyle(Tokens.danger)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(Space.md)
                     }
-                    row("Time", when)
-                    row("Calendar", event.calendarTitle)
-                    if !event.location.isEmpty { row("Location", event.location) }
-                    if !event.notes.isEmpty { row("Notes", event.notes) }
+                    PlannerFormSection("Details") {
+                        infoRow("clock", "Time", when)
+                        EdFormRowDivider()
+                        infoRow("calendar", "Calendar", event.calendarTitle)
+                        if !event.location.isEmpty {
+                            EdFormRowDivider()
+                            infoRow("mappin.and.ellipse", "Location", event.location)
+                        }
+                        if !event.notes.isEmpty {
+                            EdFormRowDivider()
+                            infoRow("text.alignleft", "Notes", event.notes)
+                        }
+                    }
                     actions
                     Text("Dexter only. The organiser is not told, and your calendar does not change.")
                         .font(.edCaption).foregroundStyle(Tokens.muted)
@@ -772,12 +968,10 @@ struct PlannerEventDetailsSheet: View {
                 EmptyView()
             }
             if onRemove != nil {
-                Button { ask(.remove) } label: { Text("Remove from Planner") }
-                    .buttonStyle(EdButtonStyle(kind: .danger, fullWidth: true))
+                DeleteRowButton(title: "Remove from Planner", systemImage: "eye.slash") { ask(.remove) }
                     .accessibilityIdentifier("planner.event.remove")
             }
         }
-        .padding(.top, 4)
     }
 
     private var dialogTitle: String {
@@ -802,10 +996,19 @@ struct PlannerEventDetailsSheet: View {
         return event.isAllDay ? "\(day), all day" : "\(day), \(PlannerStyle.range(event.start, event.end))"
     }
 
-    private func row(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label).eyebrow()
-            Text(value).font(.edBody).foregroundStyle(Tokens.ink).textSelection(.enabled)
+    private func infoRow(_ symbol: String, _ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: Space.md) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PlannerStyle.color(event.source))
+                .frame(width: 18)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label).font(.edBody).foregroundStyle(Tokens.ink)
+                Text(value).font(.edCaption).foregroundStyle(Tokens.inkSoft).textSelection(.enabled)
+            }
+            Spacer(minLength: 0)
         }
+        .padding(Space.md)
     }
 }

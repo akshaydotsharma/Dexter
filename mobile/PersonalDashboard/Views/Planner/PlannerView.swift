@@ -55,6 +55,19 @@ struct PlannerView: View {
     /// iPhone: the To-plan panel, and whether a drag has tucked it away.
     @State private var toPlanPanel = false
     @State private var panelTucked = false
+    /// The tile whose quick view is open (#687 round 6).
+    @State private var quickView: PlannerItem?
+    /// A tile waiting on the "how do you want to delete it" dialog.
+    @State private var pendingDelete: PlannerItem?
+    /// A repeating event waiting on "only this one, or the series".
+    @State private var pendingScope: PendingScope?
+    /// A To-plan task open in the Tasks section's own editor.
+    @State private var editingTodo: Todo?
+    /// A To-plan task waiting on its Delete confirmation.
+    @State private var pendingTaskDelete: PlannerTask?
+    /// Mac: the To-plan row a single click selected.
+    @State private var selectedToPlanID: String?
+    @State private var todosVM = TodosViewModel()
     @Environment(\.plannerTaskDrag) private var taskDrag
 
     @AppStorage(PlannerSettings.Key.hiddenSources) private var hiddenRaw: String = ""
@@ -132,7 +145,49 @@ struct PlannerView: View {
             now: now, settings: settings, visible: visible
         )
         return screen(context)
-            .environment(\.plannerEventActions, eventActions(context))
+            .environment(\.plannerTileActions, tileActions(context))
+            .confirmationDialog(
+                pendingDelete.map(PlannerDeletion.dialogTitle(for:)) ?? "",
+                isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+                titleVisibility: .visible,
+                presenting: pendingDelete
+            ) { item in
+                ForEach(PlannerDeletion.choices(for: item)) { choice in
+                    Button(choice.buttonTitle, role: choice.isDestructive ? .destructive : nil) {
+                        performDelete(choice, item)
+                    }
+                    .accessibilityIdentifier("planner.delete.\(choice.rawValue)")
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { item in
+                Text(PlannerDeletion.dialogMessage(for: item))
+            }
+            .confirmationDialog(
+                pendingScope?.title ?? "",
+                isPresented: Binding(get: { pendingScope != nil }, set: { if !$0 { pendingScope = nil } }),
+                titleVisibility: .visible,
+                presenting: pendingScope
+            ) { p in
+                Button("Only this event") { runScoped(p, .occurrence) }
+                    .accessibilityIdentifier("planner.series.only")
+                Button("All events in the series") { runScoped(p, .series) }
+                    .accessibilityIdentifier("planner.series.all")
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("This is a repeating event.")
+            }
+            .confirmationDialog(
+                pendingTaskDelete.map { "Delete “\($0.title)”?" } ?? "",
+                isPresented: Binding(get: { pendingTaskDelete != nil }, set: { if !$0 { pendingTaskDelete = nil } }),
+                titleVisibility: .visible,
+                presenting: pendingTaskDelete
+            ) { task in
+                Button("Delete the task", role: .destructive) { deleteTask(task.id) }
+                    .accessibilityIdentifier("planner.delete.deleteTask")
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The task is deleted from Tasks.")
+            }
             .overlay(alignment: .bottom) {
                 if let toast {
                     PlannerToastView(toast: toast) { undoToast(toast) }
@@ -157,6 +212,14 @@ struct PlannerView: View {
             .sheet(item: $sheet) { kind in
                 sheetView(kind, context: context)
             }
+            #if os(iOS)
+            // The Tasks section's own editor, for a To-plan row (#687 round 6).
+            .background {
+                Color.clear.sheet(item: $editingTodo) { todo in
+                    TaskEditorSheet(viewModel: todosVM, todo: todo, onDelete: { askDeleteTask(todo.id.uuidString) })
+                }
+            }
+            #endif
             .task(id: loadKey) { reloadEvents() }
             .task { await calendars.requestAccessIfNeeded() }
             .task {
@@ -225,6 +288,19 @@ struct PlannerView: View {
                     }
                 }
             }
+            // The quick view card, above the floating tab bar (#687 round 6).
+            if let item = quickView, draft?.isNaming != true, sheet == nil, !toPlanPanel {
+                VStack {
+                    Spacer(minLength: 0)
+                    quickViewCard(item, ctx: ctx)
+                        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.xl, style: .continuous))
+                        .paperBorder()
+                        .shadowLg()
+                        .padding(.horizontal, Space.md)
+                        .padding(.bottom, 92)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if toPlanPanel { toPlanPanelView(ctx) }
             dragChip
             #else
@@ -245,7 +321,24 @@ struct PlannerView: View {
                 PlannerInspector(
                     candidates: candidates(ctx),
                     onPlan: { sheet = .plan($0.task.id) },
-                    onDrop: { c, t in dropTask(c.task.id, title: c.task.title, at: t) }
+                    onDrop: { c, t in dropTask(c.task.id, title: c.task.title, at: t) },
+                    selectedID: selectedToPlanID,
+                    editingID: editingTodo?.id.uuidString,
+                    onSelect: { selectedToPlanID = $0.task.id },
+                    onOpen: { openTaskEditor($0.task) },
+                    onCommand: { cmd, c in runToPlan(cmd, c.task) },
+                    onCloseEditor: { editingTodo = nil },
+                    editor: { c in
+                        AnyView(Group {
+                            if let todo = editingTodo, todo.id.uuidString == c.task.id {
+                                TaskEditorSheet(
+                                    viewModel: todosVM, todo: todo,
+                                    onClose: { editingTodo = nil },
+                                    onDelete: { askDeleteTask(c.task.id) }
+                                )
+                            }
+                        })
+                    }
                 )
                 .frame(width: 270)
             }
@@ -282,7 +375,8 @@ struct PlannerView: View {
             settings: ctx.settings,
             bottomInset: bottomInset,
             onTapItem: tapped,
-            draft: draftHandlers
+            draft: draftHandlers,
+            onOpenItem: openItem
         )
         .frame(maxHeight: .infinity)
     }
@@ -424,8 +518,18 @@ struct PlannerView: View {
         }
     }
 
+    /// One click or tap on a tile: its quick view (#687 round 6).
     private func tapped(_ item: PlannerItem) {
         resolveDraft()
+        withAnimation(.easeOut(duration: 0.18)) { quickView = item }
+    }
+
+    /// A double click, Edit in the quick view, or a tap on an all-day pill:
+    /// the full editor. Closes the quick view first, so a double click never
+    /// leaves one behind.
+    private func openItem(_ item: PlannerItem) {
+        resolveDraft()
+        quickView = nil
         if let id = item.blockID {
             sheet = .edit(id)
         } else if case .taskDue = item.origin, let id = item.taskUUID {
@@ -447,10 +551,12 @@ struct PlannerView: View {
         PlannerDraftHandlers(
             draft: draft,
             onChange: { s, e in
+                quickView = nil
                 if draft?.isNaming == true { resolveDraft() }
                 draft = PlannerDraft(start: s, end: e, isNaming: false)
             },
             onCommit: { s, e in
+                quickView = nil
                 if draft?.isNaming == true {
                     // A click or tap away from a draft being named settles it
                     // and does not start a new one.
@@ -664,7 +770,8 @@ struct PlannerView: View {
                 settings: ctx.settings,
                 onOpenDay: { d in selectedDay = d; mode = .day },
                 onTapItem: tapped,
-                draft: draftHandlers
+                draft: draftHandlers,
+                onOpenItem: openItem
             )
         }
     }
@@ -776,7 +883,11 @@ struct PlannerView: View {
                     onSave: { title, start, end, day, minutes, notes in
                         write { try PlanBlockService.default().update(row, title: title, start: start, end: end, day: day, durationMinutes: minutes, notes: notes) }
                     },
-                    onDelete: { write { try PlanBlockService.default().delete(row) } },
+                    onDelete: {
+                        // The details sheet closes, then the Planner asks how.
+                        let item = ctx.day(WallClock.deviceDay(from: row.day)).all.first { $0.blockID == blockID }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { pendingDelete = item }
+                    },
                     onOpenTask: row.kindEnum == .task ? { openTask(row.taskUUID) } : nil
                 )
             } else {
@@ -793,6 +904,10 @@ struct PlannerView: View {
                             : try service.planTask(taskUUID: taskID, title: title, toDay: day, durationMinutes: minutes)
                         if !notes.isEmpty { try service.update(row, title: row.title, start: row.start, end: row.end, day: day, durationMinutes: row.durationMinutes, notes: notes) }
                     }
+                },
+                onDelete: {
+                    let item = ctx.day(start).timed.first { $0.taskUUID == taskID && !$0.isBlock }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { pendingDelete = item }
                 },
                 onOpenTask: { openTask(taskID) },
                 onOtherOptions: { sheet = .plan(taskID) }
@@ -869,15 +984,109 @@ struct PlannerView: View {
 
     // MARK: Hide and decline (#689)
 
-    private func eventActions(_ ctx: PlannerContext) -> PlannerEventActions {
+    private func eventFor(_ ctx: PlannerContext) -> (PlannerItem) -> PlannerEvent? {
         let byItemID = Dictionary(ctx.events.map { ("e-\($0.id)", $0) }, uniquingKeysWith: { a, _ in a })
-        return PlannerEventActions(
-            event: { byItemID[$0.id] },
-            decline: { ev, scope in declineEvent(ev, scope) },
-            undoDecline: { ev in undoDecline(ev) },
-            remove: { ev, scope in removeEvent(ev, scope) },
-            details: { item in sheet = .event(item.id) }
+        return { byItemID[$0.id] }
+    }
+
+    private func tileActions(_ ctx: PlannerContext) -> PlannerTileActions {
+        let event = eventFor(ctx)
+        return PlannerTileActions(
+            quickViewID: quickView?.id,
+            event: event,
+            run: { cmd, item in run(cmd, item, event: event(item)) },
+            dismissQuickView: { quickView = nil }
         )
+    }
+
+    /// Every tile command lands here: quick view, context menu, double click.
+    private func run(_ cmd: PlannerTileCommand, _ item: PlannerItem, event ev: PlannerEvent?) {
+        quickView = nil
+        switch cmd {
+        case .edit, .details:
+            openItem(item)
+        case .delete:
+            if !PlannerDeletion.choices(for: item).isEmpty { pendingDelete = item }
+        case .decline(let scope):
+            guard let ev else { return }
+            if let scope { declineEvent(ev, scope) }
+            else if ev.isRecurring { pendingScope = PendingScope(kind: .decline, event: ev) }
+            else { declineEvent(ev, .occurrence) }
+        case .undoDecline:
+            if let ev { undoDecline(ev) }
+        case .remove(let scope):
+            guard let ev else { return }
+            if let scope { removeEvent(ev, scope) }
+            else if ev.isRecurring { pendingScope = PendingScope(kind: .remove, event: ev) }
+            else { removeEvent(ev, .occurrence) }
+        }
+    }
+
+    private func runScoped(_ p: PendingScope, _ scope: EventOverrideService.Scope) {
+        switch p.kind {
+        case .decline: declineEvent(p.event, scope)
+        case .remove:  removeEvent(p.event, scope)
+        }
+        pendingScope = nil
+    }
+
+    private func performDelete(_ choice: PlannerDeleteChoice, _ item: PlannerItem) {
+        pendingDelete = nil
+        Task { @MainActor in
+            do {
+                try await PlannerDeletion.perform(choice, for: item, store: .shared)
+                writeError = nil
+            } catch {
+                writeError = "Couldn't delete that. \(error.localizedDescription)"
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func quickViewCard(_ item: PlannerItem, ctx: PlannerContext) -> some View {
+        let event = eventFor(ctx)(item)
+        PlannerQuickView(
+            item: item, event: event,
+            run: { run($0, item, event: event) },
+            onClose: { withAnimation(.easeOut(duration: 0.18)) { quickView = nil } }
+        )
+    }
+
+    // MARK: To-plan rows (#687 round 6)
+
+    /// The Tasks section's own editor for a To-plan task.
+    private func openTaskEditor(_ task: PlannerTask) {
+        guard let row = todos.first(where: { $0.clientUUID.uuidString == task.id }) else { return }
+        selectedToPlanID = task.id
+        #if os(iOS)
+        toPlanPanel = false
+        #endif
+        editingTodo = row.toDTO()
+    }
+
+    private func runToPlan(_ cmd: PlannerTileCommand, _ task: PlannerTask) {
+        switch cmd {
+        case .edit, .details: openTaskEditor(task)
+        case .delete: pendingTaskDelete = task
+        default: break
+        }
+    }
+
+    private func askDeleteTask(_ taskID: String) {
+        editingTodo = nil
+        if let task = tasks.first(where: { $0.id == taskID }) { pendingTaskDelete = task }
+    }
+
+    private func deleteTask(_ taskID: String) {
+        pendingTaskDelete = nil
+        Task { @MainActor in
+            do {
+                try await PlannerDeletion.deleteTask(taskID, store: .shared)
+                writeError = nil
+            } catch {
+                writeError = "Couldn't delete that task. \(error.localizedDescription)"
+            }
+        }
     }
 
     private func declineEvent(_ ev: PlannerEvent, _ scope: EventOverrideService.Scope) {
@@ -924,7 +1133,7 @@ struct PlannerView: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("To plan").font(.edTitle).foregroundStyle(Tokens.ink)
-                        Text("Touch and hold a task, then drag it onto the grid.")
+                        Text("Tap a task to edit it. Touch and hold to drag it onto the grid.")
                             .font(.edCaption).foregroundStyle(Tokens.muted)
                     }
                     Spacer()
@@ -960,7 +1169,8 @@ struct PlannerView: View {
                                             withAnimation(.easeOut(duration: 0.22)) { panelTucked = false }
                                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { taskDrag.finish() }
                                         }
-                                    }
+                                    },
+                                    onClick: { openTaskEditor(c.task) }
                                 ))
                                 .plannerLifted(taskDrag.payload?.taskID == c.task.id)
                             }
@@ -1059,6 +1269,16 @@ struct PlannerView: View {
                 let s = free.first?.start ?? PlannerEngine.roundUp(Date(), toMinutes: 15)
                 draftTitle = ProcessInfo.processInfo.environment["LAUNCH_PLANNER_TEXT"] ?? ""
                 draft = PlannerDraft(start: s, end: s.addingTimeInterval(90 * 60), isNaming: true)
+            case "quickview":
+                // The quick view of the first manual block today (or the tile titled LAUNCH_PLANNER_TEXT).
+                let want = ProcessInfo.processInfo.environment["LAUNCH_PLANNER_TEXT"] ?? ""
+                if let i = fresh.day(selectedDay).timed.first(where: { want.isEmpty ? $0.isBlock : $0.title.hasPrefix(want) }) {
+                    quickView = i
+                }
+            case "taskeditor":
+                // The Tasks editor for the first To-plan task: the reference the
+                // Planner's editors are matched against.
+                if let c = candidates(fresh).first { openTaskEditor(c.task) }
             case "details":
                 if let b = blockRows.first(where: { $0.kindEnum == .manual && $0.isTimed }) { sheet = .edit(b.clientUUID) }
             case "event":
@@ -1079,6 +1299,15 @@ struct PlannerView: View {
 }
 
 // MARK: - Supporting types
+
+/// A Decline or Remove on a repeating event, waiting on its scope.
+struct PendingScope: Identifiable {
+    enum Kind { case decline, remove }
+    let kind: Kind
+    let event: PlannerEvent
+    var id: String { "\(kind)-\(event.id)" }
+    var title: String { kind == .remove ? "Remove from Planner" : "Decline in Dexter" }
+}
 
 enum PlannerMode: String, Hashable {
     case day, week
@@ -1238,6 +1467,15 @@ struct PlannerInspector: View {
     @Environment(\.plannerTaskDrag) private var taskDrag
     /// A row dragged onto the grid and released over a slot (#687 fix).
     var onDrop: (PlannerEngine.Candidate, PlannerTaskDragCoordinator.Target) -> Void = { _, _ in }
+    /// #687 round 6: a single click selects a row, a double click opens the
+    /// Tasks section's editor anchored to it, right click gives Edit and Delete.
+    var selectedID: String? = nil
+    var editingID: String? = nil
+    var onSelect: (PlannerEngine.Candidate) -> Void = { _ in }
+    var onOpen: (PlannerEngine.Candidate) -> Void = { _ in }
+    var onCommand: (PlannerTileCommand, PlannerEngine.Candidate) -> Void = { _, _ in }
+    var onCloseEditor: () -> Void = {}
+    var editor: (PlannerEngine.Candidate) -> AnyView = { _ in AnyView(EmptyView()) }
 
     private struct Bucket: Identifiable {
         let title: String
@@ -1294,11 +1532,26 @@ struct PlannerInspector: View {
                                     // at a time; the Plan button still works.
                                     .background(PlannerTaskDragSource(
                                         payload: .init(c),
-                                        onEnd: { t in if let t { onDrop(c, t) } }
+                                        onEnd: { t in if let t { onDrop(c, t) } },
+                                        onClick: { onSelect(c) },
+                                        onDoubleClick: { onOpen(c) },
+                                        menuEntries: { PlannerTileMenu.toPlanEntries },
+                                        onCommand: { onCommand($0, c) }
                                     ))
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                                     .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-                                    .paperBorder(Tokens.border, radius: Radius.md)
+                                    .paperBorder(selectedID == c.task.id ? Tokens.accentTasks : Tokens.border, radius: Radius.md)
+                                    #if os(macOS)
+                                    .macAnchoredPopover(
+                                        isPresented: Binding(
+                                            get: { editingID == c.task.id },
+                                            set: { if !$0, editingID == c.task.id { onCloseEditor() } }
+                                        ),
+                                        preferredEdge: .minX
+                                    ) {
+                                        editor(c)
+                                    }
+                                    #endif
                                     .padding(.horizontal, 8)
                                     .plannerLifted(taskDrag.payload?.taskID == c.task.id)
                             }
@@ -1309,7 +1562,7 @@ struct PlannerInspector: View {
                 }
             }
             Rectangle().fill(Tokens.border).frame(height: 1)
-            Text("Drag a task onto the grid to plan it at a time, or use Plan for a day or a slot.")
+            Text("Double-click a task to edit it. Drag it onto the grid to plan it at a time, or use Plan for a day or a slot.")
                 .font(.edCaption).foregroundStyle(Tokens.muted)
                 .padding(12)
         }

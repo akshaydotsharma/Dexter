@@ -1371,6 +1371,12 @@ struct TaskEditorSheet: View {
     /// which is the case inside `MacAnchoredPopover`, where this content is hosted in
     /// an `NSHostingController` rather than presented by SwiftUI.
     var onClose: (() -> Void)? = nil
+    /// Offers Delete at the foot of the editor, for a presenter that owns the
+    /// confirmation (#687 round 6: the Planner's To-plan rows). Nil keeps the
+    /// editor exactly as the Tasks section has always shown it. The editor
+    /// closes first and then calls this, so the presenter's own dialog is not
+    /// stacked on a popover that is about to go away.
+    var onDelete: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String = ""
@@ -1771,6 +1777,7 @@ struct TaskEditorSheet: View {
                             }
                         }
                         ticketsBlock
+                        deleteRow
                     }
                     .padding(Space.lg)
                 }
@@ -2085,6 +2092,7 @@ struct TaskEditorSheet: View {
                         .padding(.vertical, Space.sm)
                     }
 
+                    deleteRow
                 }
                 .padding(Space.lg)
             }
@@ -2105,46 +2113,36 @@ struct TaskEditorSheet: View {
         title.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
-    /// Thin inset separator between rows within a grouped card.
-    private var macRowDivider: some View {
-        Rectangle()
-            .fill(Tokens.divider)
-            .frame(height: 0.5)
-            .padding(.leading, Space.md)
-    }
+    /// Thin inset separator between rows within a grouped card. The shared
+    /// `EdFormRowDivider` (#687 round 6), so the Planner's editors draw the same one.
+    private var macRowDivider: some View { EdFormRowDivider() }
 
     /// Gray eyebrow header above a grouped card (Reminders section header).
-    private func macSectionHeader(_ title: String) -> some View {
-        Text(title)
-            .eyebrow()
-            .padding(.horizontal, Space.xs)
-            .padding(.top, Space.xs)
-    }
+    private func macSectionHeader(_ title: String) -> some View { EdFormSectionHeader(title) }
 
     /// A rounded inset card grouping one or more rows, with a hairline border.
-    @ViewBuilder
     private func macGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
-        .paperBorder(Tokens.border, radius: Radius.md)
+        EdFormGroup { content() }
     }
 
     /// Small colored rounded tile carrying an SF Symbol — the signature
     /// Reminders row-icon affordance, tinted from the app's existing tokens.
     private func macIconTile(_ symbol: String, _ color: Color) -> some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(color)
-            .frame(width: 22, height: 22)
-            .overlay(
-                Image(systemName: symbol)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
-            )
+        EdIconTile(symbol, color)
     }
     #endif
+
+    /// The canonical Delete row, shown only when a presenter asked for it.
+    @ViewBuilder
+    private var deleteRow: some View {
+        if let onDelete, isEditing {
+            DeleteRowButton(title: "Delete task") {
+                closeEditor()
+                onDelete()
+            }
+            .accessibilityIdentifier("task.editor.delete")
+        }
+    }
 
     /// Close the editor, whichever way it was presented (#416).
     ///

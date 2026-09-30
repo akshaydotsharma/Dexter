@@ -44,6 +44,10 @@ final class PlannerTaskLengthUITest: XCTestCase {
         for _ in 0..<5 where !deck.isHittable { grid.swipeUp(velocity: .slow) }
         // Tap the upper part of the tile; the bottom edge is the resize strip.
         deck.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        // The tap opens the quick view (#687 round 6); Edit opens the sheet.
+        let edit = app.buttons["planner.quick.edit"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5))
+        edit.tap()
 
         let save = app.buttons["planner.sheet.save"]
         XCTAssertTrue(save.waitForExistence(timeout: 5), "Save is in the header, on screen at once")

@@ -43,13 +43,35 @@ final class PlannerDragToPlanUITest: XCTestCase {
         XCTAssertTrue(tile.label.contains("\(h12):15"), "it landed at the snapped drop time (\(tile.label))")
         keep("2-dropped-task", app)
 
-        // Put the simulator back: remove the plan again.
+        // Put the simulator back through the quick view's Delete, choosing
+        // "remove the plan" so the task itself stays (#687 round 6).
         tile.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        let remove = app.buttons["Remove from plan"].firstMatch
-        XCTAssertTrue(remove.waitForExistence(timeout: 5))
-        remove.tap()
-        let confirm = app.buttons.matching(identifier: "Remove from plan").element(boundBy: 1)
-        if confirm.waitForExistence(timeout: 3) { confirm.tap() } else { app.buttons["Remove from plan"].firstMatch.tap() }
+        let delete = app.buttons["planner.quick.delete"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), "a tap opens the quick view")
+        delete.tap()
+        let removePlan = app.buttons["planner.delete.removePlan"].firstMatch
+        XCTAssertTrue(removePlan.waitForExistence(timeout: 5), "a planned task offers remove the plan")
+        XCTAssertTrue(app.buttons["planner.delete.deleteTask"].exists, "and delete the task")
+        keep("3-planned-task-delete-choices", app)
+        removePlan.tap()
+        XCTAssertFalse(tile.waitForExistence(timeout: 3), "the plan is removed")
+    }
+
+    /// A tap on a To-plan row opens the Tasks section's own editor, and the
+    /// hold still lifts (the other tests here).
+    func testATapOnAToPlanRowOpensTheTaskEditor() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["LAUNCH_SECTION"] = "planner"
+        app.launch()
+        XCTAssertTrue(app.otherElements["Empty time"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["Tasks to plan"].firstMatch.tap()
+        let source = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH 'planner.toplan.drag.'")).firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        source.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
+        XCTAssertTrue(app.navigationBars["Edit task"].waitForExistence(timeout: 5), "the tap opens the Tasks editor")
+        XCTAssertTrue(app.buttons["task.editor.delete"].exists || app.buttons["Delete task"].exists, "with Delete at its foot")
+        keep("4-task-editor-from-to-plan", app)
+        app.buttons["Cancel"].firstMatch.tap()
     }
 
     /// Release over nothing (the day header): the card flies back and the

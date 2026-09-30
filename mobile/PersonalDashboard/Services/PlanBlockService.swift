@@ -175,6 +175,21 @@ struct PlanBlockService {
         try store.context.save()
     }
 
+    /// Soft-delete every live plan of a task, on any day (#687 round 6: the
+    /// task itself was deleted, so nothing may keep placing it).
+    func unplanAll(taskUUID: String) throws {
+        let rows = try store.context.fetch(FetchDescriptor<LocalPlanBlock>(
+            predicate: #Predicate { $0.taskUUID == taskUUID && $0.deletedAt == nil }
+        ))
+        guard !rows.isEmpty else { return }
+        let now = Date()
+        for row in rows {
+            row.deletedAt = now
+            row.updatedAt = now
+        }
+        try store.context.save()
+    }
+
     // MARK: Helpers
 
     private func livePlan(forTask taskUUID: String) throws -> LocalPlanBlock? {

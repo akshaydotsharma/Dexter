@@ -16,6 +16,9 @@ import SwiftUI
 struct DeleteRowButton: View {
     /// Label text, e.g. "Delete item", "Delete task".
     let title: String
+    /// The glyph beside the label. `trash` for a delete; the Planner's "Remove
+    /// from Planner" passes `eye.slash`, since it hides rather than destroys.
+    var systemImage: String = "trash"
     /// Invoked on tap, after the destructive haptic. Callers typically present a
     /// confirmation dialog here, or perform the delete directly for lightweight
     /// records.
@@ -27,7 +30,7 @@ struct DeleteRowButton: View {
             action()
         } label: {
             HStack(spacing: Space.sm) {
-                Image(systemName: "trash")
+                Image(systemName: systemImage)
                     .font(.system(size: 15, weight: .regular))
                 Text(title)
                     .font(.edBodyMedium)

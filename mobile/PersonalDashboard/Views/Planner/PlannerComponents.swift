@@ -293,7 +293,7 @@ struct PlannerMeterCard: View {
 struct PlannerAllDayRow: View {
     let items: [PlannerItem]
     let onTap: (PlannerItem) -> Void
-    @Environment(\.plannerEventActions) private var eventActions
+    @Environment(\.plannerTileActions) private var tileActions
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -310,7 +310,7 @@ struct PlannerAllDayRow: View {
                 ForEach(items) { item in
                     Button { onTap(item) } label: { pill(item) }
                         .buttonStyle(.plain)
-                        .plannerEventMenu(item, actions: eventActions)
+                        .plannerTileMenu(item, actions: tileActions)
                 }
             }
             // Take the offered width, so the flow measures its wrapped height

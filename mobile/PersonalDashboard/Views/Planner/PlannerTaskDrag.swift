@@ -287,10 +287,21 @@ struct PlannerTaskDragSource: View {
     var onBegin: () -> Void = {}
     /// Called with the landing slot; nil means the drag was cancelled.
     let onEnd: (PlannerTaskDragCoordinator.Target?) -> Void
+    /// A click that did not lift (#687 round 6). Mac: selects the row. iPhone: a
+    /// tap, which opens the task editor.
+    var onClick: () -> Void = {}
+    /// Mac: a double click, which opens the task editor.
+    var onDoubleClick: () -> Void = {}
+    /// Mac: the right-click menu.
+    var menuEntries: () -> [PlannerMenuEntry] = { [] }
+    var onCommand: (PlannerTileCommand) -> Void = { _ in }
     @Environment(\.plannerTaskDrag) private var coordinator
 
     var body: some View {
-        SourceRepresentable(payload: payload, coordinator: coordinator, onBegin: onBegin, onEnd: onEnd)
+        SourceRepresentable(
+            payload: payload, coordinator: coordinator, onBegin: onBegin, onEnd: onEnd,
+            onClick: onClick, onDoubleClick: onDoubleClick, menuEntries: menuEntries, onCommand: onCommand
+        )
     }
 }
 
@@ -309,6 +320,10 @@ final class PlannerTaskDragSourceView: NSView {
     weak var coordinator: PlannerTaskDragCoordinator?
     var onBegin: () -> Void = {}
     var onEnd: (PlannerTaskDragCoordinator.Target?) -> Void = { _ in }
+    var onClick: () -> Void = {}
+    var onDoubleClick: () -> Void = {}
+    var menuEntries: () -> [PlannerMenuEntry] = { [] }
+    var onCommand: (PlannerTileCommand) -> Void = { _ in }
     private var anchor: CGPoint?
     private(set) var isDragging = false
     /// The lifted card, while a row is picked up. Visible to tests.
@@ -352,7 +367,14 @@ final class PlannerTaskDragSourceView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         defer { anchor = nil }
-        guard isDragging, let coordinator else { return }
+        // A press that never moved 3pt is a click, never a lift (#687 round 6):
+        // one click selects, the second click of a double click opens the editor.
+        if !isDragging {
+            guard anchor != nil else { return }
+            if event.clickCount >= 2 { onDoubleClick() } else { onClick() }
+            return
+        }
+        guard let coordinator else { return }
         isDragging = false
         NSCursor.pop()
         if coordinator.isReturning { return }   // already cancelled with Esc
@@ -375,6 +397,12 @@ final class PlannerTaskDragSourceView: NSView {
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { cancelOperation(nil) } else { super.keyDown(with: event) }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let entries = menuEntries()
+        guard !entries.isEmpty else { return nil }
+        return PlannerNSMenu.build(entries, run: onCommand)
     }
 
     // MARK: The floating card
@@ -460,6 +488,10 @@ private struct SourceRepresentable: NSViewRepresentable {
     let coordinator: PlannerTaskDragCoordinator
     let onBegin: () -> Void
     let onEnd: (PlannerTaskDragCoordinator.Target?) -> Void
+    let onClick: () -> Void
+    let onDoubleClick: () -> Void
+    let menuEntries: () -> [PlannerMenuEntry]
+    let onCommand: (PlannerTileCommand) -> Void
 
     func makeNSView(context: Context) -> PlannerTaskDragSourceView {
         let v = PlannerTaskDragSourceView()
@@ -472,6 +504,10 @@ private struct SourceRepresentable: NSViewRepresentable {
         v.coordinator = coordinator
         v.onBegin = onBegin
         v.onEnd = onEnd
+        v.onClick = onClick
+        v.onDoubleClick = onDoubleClick
+        v.menuEntries = menuEntries
+        v.onCommand = onCommand
     }
 }
 #else
@@ -483,6 +519,10 @@ final class PlannerTaskDragSourceView: UIView {
     weak var coordinator: PlannerTaskDragCoordinator?
     var onBegin: () -> Void = {}
     var onEnd: (PlannerTaskDragCoordinator.Target?) -> Void = { _ in }
+    var onClick: () -> Void = {}
+    var onDoubleClick: () -> Void = {}
+    var menuEntries: () -> [PlannerMenuEntry] = { [] }
+    var onCommand: (PlannerTileCommand) -> Void = { _ in }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -490,6 +530,21 @@ final class PlannerTaskDragSourceView: UIView {
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(handle(_:)))
         hold.minimumPressDuration = 0.3
         addGestureRecognizer(hold)
+        // A tap opens the task (#687 round 6). It waits for the hold to fail, so
+        // a hold always lifts and never also opens the editor.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.require(toFail: hold)
+        addGestureRecognizer(tap)
+    }
+
+    /// The row's trailing Plan button. UIKit hit-tests this view under the
+    /// whole row, so a tap on the button would also reach the recogniser here;
+    /// the button keeps its own tap.
+    static let trailingButtonWidth: CGFloat = 76
+
+    @objc private func tapped(_ g: UITapGestureRecognizer) {
+        guard g.location(in: self).x < bounds.width - Self.trailingButtonWidth else { return }
+        onClick()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -523,6 +578,10 @@ private struct SourceRepresentable: UIViewRepresentable {
     let coordinator: PlannerTaskDragCoordinator
     let onBegin: () -> Void
     let onEnd: (PlannerTaskDragCoordinator.Target?) -> Void
+    let onClick: () -> Void
+    let onDoubleClick: () -> Void
+    let menuEntries: () -> [PlannerMenuEntry]
+    let onCommand: (PlannerTileCommand) -> Void
 
     func makeUIView(context: Context) -> PlannerTaskDragSourceView {
         let v = PlannerTaskDragSourceView()
@@ -535,6 +594,10 @@ private struct SourceRepresentable: UIViewRepresentable {
         v.coordinator = coordinator
         v.onBegin = onBegin
         v.onEnd = onEnd
+        v.onClick = onClick
+        v.onDoubleClick = onDoubleClick
+        v.menuEntries = menuEntries
+        v.onCommand = onCommand
         v.accessibilityIdentifier = "planner.toplan.drag.\(payload.title)"
     }
 }

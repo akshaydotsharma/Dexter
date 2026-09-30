@@ -101,9 +101,12 @@ struct PlannerDayColumn: View {
     let visible: Set<PlannerSource>
     let now: Date
     var hourHeight: CGFloat = PlannerGridMetrics.hourHeight
+    /// A single click or tap: the quick view.
     let onTapItem: (PlannerItem) -> Void
     let draft: PlannerDraftHandlers
-    @Environment(\.plannerEventActions) private var eventActions
+    /// A double click (Mac): the full editor.
+    var onOpenItem: (PlannerItem) -> Void = { _ in }
+    @Environment(\.plannerTileActions) private var tileActions
     @Environment(\.plannerTaskDrag) private var taskDrag
     /// The tile whose bottom edge is being dragged, and its live end.
     @State private var resize: (id: String, end: Date)?
@@ -159,6 +162,52 @@ struct PlannerDayColumn: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// One tile (#687 round 6). Mac: an AppKit layer reads the click count, so
+    /// one click opens the quick view anchored to the tile and a double click
+    /// opens the editor; right click gives the same menu. iPhone: a tap opens
+    /// the quick view card, and touch and hold gives the menu.
+    @ViewBuilder
+    private func tile(_ item: PlannerItem, inConflict: Bool, height: CGFloat, width: CGFloat, tileHeight: CGFloat) -> some View {
+        let face = PlannerTile(item: item, inConflict: inConflict, height: height)
+            .frame(width: width, height: tileHeight, alignment: .topLeading)
+        #if os(macOS)
+        face
+            .overlay {
+                PlannerTileClickLayer(
+                    label: item.title,
+                    onClick: { onTapItem(item) },
+                    onDoubleClick: { onOpenItem(item) },
+                    menuEntries: { tileActions?.menu(for: item) ?? [] },
+                    onCommand: { tileActions?.run($0, item) }
+                )
+            }
+            .macAnchoredPopover(
+                isPresented: Binding(
+                    get: { tileActions?.quickViewID == item.id },
+                    set: { shown in if !shown, tileActions?.quickViewID == item.id { tileActions?.dismissQuickView() } }
+                ),
+                // The Planner owns dismissal: a click outside closes it, a click
+                // on the tile itself does not, so a double click reaches the tile.
+                behavior: .applicationDefined,
+                preferredEdge: .maxX
+            ) {
+                PlannerQuickView(
+                    item: item,
+                    event: tileActions?.event(item),
+                    run: { tileActions?.run($0, item) },
+                    onClose: { tileActions?.dismissQuickView() }
+                )
+            }
+            .frame(width: width, height: tileHeight)
+        #else
+        Button { onTapItem(item) } label: { face }
+            .buttonStyle(.plain)
+            .plannerTileMenu(item, actions: tileActions)
+            .frame(width: width, height: tileHeight)
+            .accessibilityIdentifier("planner.tile.\(item.title)")
+        #endif
+    }
+
     var body: some View {
         let items = day.timed.filter { visible.contains($0.source) }
         let lanes = Dictionary(PlannerEngine.lanes(items).map { ($0.itemID, $0) }, uniquingKeysWith: { a, _ in a })
@@ -196,13 +245,7 @@ struct PlannerDayColumn: View {
                     // which put a long block's title in its middle.
                     let tileW = max(8, laneW - 3)
                     let tileH = max(PlannerGridMetrics.minTileHeight, g.height - 1)
-                    Button { onTapItem(item) } label: {
-                        PlannerTile(item: item, inConflict: lane?.inConflict ?? false, height: g.height - 1)
-                            .frame(width: tileW, height: tileH, alignment: .topLeading)
-                    }
-                    .buttonStyle(.plain)
-                    .plannerEventMenu(item, actions: eventActions)
-                    .frame(width: tileW, height: tileH)
+                    tile(item, inConflict: lane?.inConflict ?? false, height: g.height - 1, width: tileW, tileHeight: tileH)
                     .overlay(alignment: .bottom) {
                         if Self.isResizable(item) {
                             resizeHandle(item)
@@ -340,6 +383,7 @@ struct PlannerDayTimeGrid: View {
     var bottomInset: CGFloat = 0
     let onTapItem: (PlannerItem) -> Void
     let draft: PlannerDraftHandlers
+    var onOpenItem: (PlannerItem) -> Void = { _ in }
 
     @State private var topHour: Int?
 
@@ -347,7 +391,7 @@ struct PlannerDayTimeGrid: View {
         let allDay = day.allDay.filter { visible.contains($0.source) }
         VStack(spacing: 0) {
             if !allDay.isEmpty {
-                PlannerAllDayRow(items: allDay, onTap: onTapItem)
+                PlannerAllDayRow(items: allDay, onTap: onOpenItem)
                 Rectangle().fill(Tokens.border).frame(height: 1)
             }
             // `scrollPosition(id:)`, not a `ScrollViewReader`. On macOS a
@@ -357,7 +401,7 @@ struct PlannerDayTimeGrid: View {
             ScrollView {
                 HStack(alignment: .top, spacing: 0) {
                     PlannerHourRuler()
-                    PlannerDayColumn(day: day, visible: visible, now: now, onTapItem: onTapItem, draft: draft)
+                    PlannerDayColumn(day: day, visible: visible, now: now, onTapItem: onTapItem, draft: draft, onOpenItem: onOpenItem)
                         .background(alignment: .top) { PlannerHourLines() }
                         .overlay(alignment: .leading) { Rectangle().fill(Tokens.divider).frame(width: 1) }
                         .padding(.trailing, Space.sm)
@@ -389,7 +433,8 @@ struct PlannerWeekTimeGrid: View {
     let onOpenDay: (Date) -> Void
     let onTapItem: (PlannerItem) -> Void
     let draft: PlannerDraftHandlers
-    @Environment(\.plannerEventActions) private var eventActions
+    var onOpenItem: (PlannerItem) -> Void = { _ in }
+    @Environment(\.plannerTileActions) private var tileActions
 
     @State private var topHour: Int?
 
@@ -408,7 +453,7 @@ struct PlannerWeekTimeGrid: View {
                 HStack(alignment: .top, spacing: 0) {
                     PlannerHourRuler()
                     ForEach(columns) { col in
-                        PlannerDayColumn(day: col.day, visible: visible, now: now, onTapItem: onTapItem, draft: draft)
+                        PlannerDayColumn(day: col.day, visible: visible, now: now, onTapItem: onTapItem, draft: draft, onOpenItem: onOpenItem)
                             .frame(maxWidth: .infinity)
                             .overlay(alignment: .leading) { Rectangle().fill(Tokens.divider).frame(width: 1) }
                     }
@@ -450,11 +495,11 @@ struct PlannerWeekTimeGrid: View {
             .buttonStyle(.plain)
             .help("Open \(PlannerStyle.weekdayFormatter.string(from: col.day.day))")
             ForEach(allDay.prefix(2)) { item in
-                Button { onTapItem(item) } label: {
+                Button { onOpenItem(item) } label: {
                     PlannerTile(item: item, height: 18).frame(height: 18)
                 }
                 .buttonStyle(.plain)
-                .plannerEventMenu(item, actions: eventActions)
+                .plannerTileMenu(item, actions: tileActions)
             }
             if allDay.count > 2 {
                 Text("+\(allDay.count - 2) more").font(.edCaption).foregroundStyle(Tokens.muted)

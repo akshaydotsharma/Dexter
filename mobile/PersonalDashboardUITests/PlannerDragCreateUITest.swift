@@ -63,15 +63,28 @@ final class PlannerDragCreateUITest: XCTestCase {
         XCTAssertTrue(tile.waitForExistence(timeout: 5), "the new block is a tile on the grid")
         keep("3-saved-tile", app)
 
-        // Tap the tile: the details sheet opens with a notes field.
-        tile.tap()
-        XCTAssertTrue(app.textViews["planner.details.notes"].waitForExistence(timeout: 5), "the details sheet opens")
-        keep("4-details-sheet", app)
+        // Tap the tile: its quick view (#687 round 6), with Edit and Delete.
+        tile.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        let edit = app.buttons["planner.quick.edit"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5), "a tap opens the quick view")
+        XCTAssertTrue(app.buttons["planner.quick.delete"].exists, "with Delete beside Edit")
+        keep("4-quick-view", app)
 
-        // Put the simulator back, so the next run finds this time empty.
-        app.buttons["Delete block"].firstMatch.tap()
-        let confirm = app.buttons.matching(identifier: "Delete block").element(boundBy: 1)
-        if confirm.waitForExistence(timeout: 3) { confirm.tap() } else { app.buttons["Delete block"].firstMatch.tap() }
+        // Edit: the details sheet, on the Tasks editor's components.
+        edit.tap()
+        let notes = app.descendants(matching: .any)["planner.details.notes"].firstMatch
+        XCTAssertTrue(notes.waitForExistence(timeout: 5), "Edit opens the details sheet")
+        XCTAssertTrue(app.buttons["Start"].exists, "the start is an EdDateTimeField row")
+        keep("5-details-sheet", app)
+
+        // Delete from the sheet, confirm, and the tile is gone. This also puts
+        // the simulator back, so the next run finds this time empty.
+        app.buttons["planner.details.delete"].tap()
+        let confirm = app.buttons["planner.delete.deleteBlock"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Delete asks first")
+        keep("6-delete-confirm", app)
+        confirm.tap()
+        XCTAssertFalse(tile.waitForExistence(timeout: 3), "the block is deleted")
     }
 
     func testATapWithNoDragMakesADraftAndCancelWritesNothing() throws {
