@@ -3,12 +3,16 @@ import AppKit
 import SwiftUI
 @testable import DexterMac
 
-/// Drag a To-plan task onto the grid (#687 fix), driven through AppKit
-/// mouse events on the real source view, over the REAL hosted day columns.
+/// Pick up a To-plan row and drop it on the grid (#687 rounds 4 and 5),
+/// driven through AppKit mouse events on the REAL inspector row, over the
+/// REAL hosted day columns, in one window.
 @MainActor
 final class PlannerTaskDragTests: XCTestCase {
 
     private let hour: CGFloat = 50
+    private let columnWidth: CGFloat = 200
+
+    private final class Flipped: NSView { override var isFlipped: Bool { true } }
 
     private func mouse(_ type: NSEvent.EventType, at point: CGPoint, windowNumber: Int) -> NSEvent {
         NSEvent.mouseEvent(
@@ -21,14 +25,20 @@ final class PlannerTaskDragTests: XCTestCase {
 
     private struct Harness {
         let window: NSWindow
-        let host: NSView
-        let source: PlannerTaskDragSourceView
+        let grid: NSView
+        let inspector: NSView
         let coordinator: PlannerTaskDragCoordinator
+        let source: PlannerTaskDragSourceView
+        var wn: Int { window.windowNumber }
     }
 
-    /// Two day columns side by side (a Week grid in miniature), a To-plan row
-    /// source in the same window, and a test coordinator.
-    private func harness(days: [Date], minutes: Int, landed: @escaping (PlannerTaskDragCoordinator.Target?) -> Void) -> Harness {
+    private func candidate(_ id: String, _ title: String, minutes: Int) -> PlannerEngine.Candidate {
+        PlannerEngine.Candidate(task: PlannerTask(id: id, title: title, priority: .p1, due: nil, completed: false),
+                                estimateMinutes: minutes, overdueDays: 0)
+    }
+
+    /// Day columns on the left, the real To-plan inspector on the right.
+    private func harness(days: [Date], minutes: Int, dropped: @escaping (PlannerEngine.Candidate, PlannerTaskDragCoordinator.Target) -> Void) throws -> Harness {
         let coordinator = PlannerTaskDragCoordinator()
         let handlers = PlannerDraftHandlers(
             draft: nil, onChange: { _, _ in }, onCommit: { _, _ in },
@@ -40,7 +50,7 @@ final class PlannerTaskDragTests: XCTestCase {
             durationMinutes: 60, origin: .event(calendarID: "c"), taskUUID: nil,
             priority: .none, overdueDays: 0, completed: false
         )
-        let hour = self.hour
+        let hour = self.hour, columnWidth = self.columnWidth
         let columns = HStack(spacing: 0) {
             ForEach(Array(days.enumerated()), id: \.offset) { i, d in
                 PlannerDayColumn(
@@ -48,100 +58,192 @@ final class PlannerTaskDragTests: XCTestCase {
                     visible: Set(PlannerSource.allCases), now: d, hourHeight: hour,
                     onTapItem: { _ in }, draft: handlers
                 )
-                .frame(width: 200, height: hour * 24)
+                .frame(width: columnWidth, height: hour * 24)
             }
         }
         .environment(\.plannerTaskDrag, coordinator)
-        let host = NSHostingView(rootView: columns)
-        host.frame = CGRect(x: 0, y: 0, width: CGFloat(days.count) * 200, height: hour * 24)
-        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
-        window.contentView = host
-        host.layoutSubtreeIfNeeded()
+        let gridHost = NSHostingView(rootView: columns)
+        gridHost.frame = CGRect(x: 0, y: 0, width: CGFloat(days.count) * columnWidth, height: hour * 24)
 
-        let source = PlannerTaskDragSourceView(frame: CGRect(x: 0, y: 0, width: 200, height: 40))
-        source.payload = .init(taskID: "t-okrs", title: "Draft OKRs", minutes: minutes)
-        source.coordinator = coordinator
-        source.onEnd = landed
-        return Harness(window: window, host: host, source: source, coordinator: coordinator)
+        let list = [candidate("t-okrs", "Draft OKRs", minutes: minutes), candidate("t-bali", "Book flights", minutes: 30)]
+        let inspector = PlannerInspector(candidates: list, onPlan: { _ in }, onDrop: dropped)
+            .frame(width: 270, height: 600)
+            .environment(\.plannerTaskDrag, coordinator)
+        let inspectorHost = NSHostingView(rootView: inspector)
+        inspectorHost.frame = CGRect(x: gridHost.frame.maxX + 40, y: 0, width: 270, height: 600)
+
+        let root = Flipped(frame: CGRect(x: 0, y: 0, width: inspectorHost.frame.maxX, height: hour * 24))
+        root.addSubview(gridHost)
+        root.addSubview(inspectorHost)
+        let window = NSWindow(contentRect: root.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = root
+        root.layoutSubtreeIfNeeded()
+        let sources = inspectorHost.allSubviews(of: PlannerTaskDragSourceView.self)
+        XCTAssertEqual(sources.count, 2, "each To-plan row has a pick-up view")
+        let source = try XCTUnwrap(sources.first { $0.payload?.taskID == "t-okrs" })
+        return Harness(window: window, grid: gridHost, inspector: inspectorHost, coordinator: coordinator, source: source)
     }
 
-    /// Window point (origin bottom left) for a column x and a grid y.
-    private func windowPoint(_ h: Harness, x: CGFloat, gridY: CGFloat) -> CGPoint {
-        CGPoint(x: x, y: h.host.bounds.height - gridY)
+    /// Window point for a grid y in the column at `columnIndex`.
+    private func gridPoint(_ h: Harness, column: Int = 0, x: CGFloat = 100, gridY: CGFloat) -> CGPoint {
+        h.grid.convert(CGPoint(x: CGFloat(column) * columnWidth + x, y: gridY), to: nil)
+    }
+
+    /// When `PLANNER_TEST_SHOTS` names a folder, write what the window and
+    /// the floating card show at this moment into one PNG, for review.
+    private func saveMidDragShot(_ h: Harness, card: NSWindow, name: String) {
+        guard let dir = ProcessInfo.processInfo.environment["PLANNER_TEST_SHOTS"],
+              let root = h.window.contentView, let cardView = card.contentView else { return }
+        settle(0.3)
+        root.layoutSubtreeIfNeeded()
+        func bitmap(_ v: NSView) -> NSBitmapImageRep? {
+            guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return nil }
+            v.cacheDisplay(in: v.bounds, to: rep)
+            return rep
+        }
+        guard let base = bitmap(root), let top = bitmap(cardView) else { return }
+        let size = root.bounds.size
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.windowBackgroundColor.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        base.draw(in: NSRect(origin: .zero, size: size))
+        // The card's frame in the window's space.
+        let inWindow = h.window.convertFromScreen(card.frame)
+        top.draw(in: inWindow)
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
     }
 
     private func y(_ hh: Int, _ mm: Int) -> CGFloat { CGFloat(hh * 60 + mm) / 60 * hour }
 
-    func testDraggingOverTheGridShowsTheSlotAndADropPlansIt() throws {
+    /// Spin the run loop, for the fly-back animation to finish.
+    private func settle(_ seconds: TimeInterval = 0.5) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// The row BELOW the lifted one, in the inspector's space. When the
+    /// lifted row leaves the list, the list closes the gap and this moves up.
+    private func nextRowY(_ h: Harness) -> CGFloat {
+        settle(0.35)   // SwiftUI applies the observed change, then animates the gap closed
+        h.inspector.layoutSubtreeIfNeeded()
+        let next = h.inspector.allSubviews(of: PlannerTaskDragSourceView.self).first { $0.payload?.taskID == "t-bali" }!
+        return next.convert(next.bounds, to: h.inspector).minY
+    }
+
+    func testPickUpFollowsTheCursorLeavesTheListAndDropPlans() throws {
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_790_000_000))
-        var landed: [PlannerTaskDragCoordinator.Target?] = []
-        let h = harness(days: [day], minutes: 45) { landed.append($0) }
-        let wn = h.window.windowNumber
+        var dropped: [(String, PlannerTaskDragCoordinator.Target)] = []
+        let h = try harness(days: [day], minutes: 45) { c, t in dropped.append((c.task.id, t)) }
+        let press = h.source.convert(CGPoint(x: 40, y: 12), to: nil)
+        let restingY = nextRowY(h)
 
-        // Every day column registered a drop zone.
-        XCTAssertNotNil(h.coordinator.resolve(windowPoint(h, x: 100, gridY: y(9, 0)), window: nil, minutes: 30))
+        h.source.mouseDown(with: mouse(.leftMouseDown, at: press, windowNumber: h.wn))
+        XCTAssertNil(h.source.floatingCard, "a press alone lifts nothing")
 
-        h.source.mouseDown(with: mouse(.leftMouseDown, at: CGPoint(x: -300, y: 20), windowNumber: wn))
-        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: CGPoint(x: -250, y: 60), windowNumber: wn))
-        XCTAssertEqual(h.coordinator.payload?.taskID, "t-okrs", "the drag has started")
-        XCTAssertNil(h.coordinator.target, "not over the grid yet")
+        // 3 points: picked up at once.
+        let lift = CGPoint(x: press.x - 3, y: press.y)
+        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: lift, windowNumber: h.wn))
+        let card = try XCTUnwrap(h.source.floatingCard, "the row is lifted into a floating card")
+        XCTAssertTrue(card.isVisible)
+        XCTAssertTrue(card.ignoresMouseEvents, "the card never takes a click")
+        XCTAssertEqual(h.coordinator.payload?.taskID, "t-okrs")
+        let liftedY = nextRowY(h)
+        XCTAssertLessThan(liftedY, restingY - 30, "the lifted row leaves the list and the gap closes (\(restingY) -> \(liftedY))")
 
-        // Over 2:10 PM, which is on top of a calendar tile: still a valid slot.
-        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: windowPoint(h, x: 100, gridY: y(14, 10)), windowNumber: wn))
-        XCTAssertEqual(h.coordinator.target?.start, day.addingTimeInterval(14 * 3600), "the ghost snaps to 2:00")
-        XCTAssertEqual(h.coordinator.target?.end, day.addingTimeInterval(14 * 3600 + 45 * 60), "for the task's 45 minutes")
+        // It follows the cursor, keeping the grab offset.
+        let before = card.frame.origin
+        let mid = CGPoint(x: lift.x - 60, y: lift.y - 30)   // over the gap between the grid and the list
+        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: mid, windowNumber: h.wn))
+        XCTAssertEqual(card.frame.origin.x - before.x, -60, accuracy: 0.5)
+        XCTAssertEqual(card.frame.origin.y - before.y, -30, accuracy: 0.5)
+        XCTAssertNil(h.coordinator.target, "not over a column yet")
 
-        h.source.mouseUp(with: mouse(.leftMouseUp, at: windowPoint(h, x: 100, gridY: y(16, 20)), windowNumber: wn))
-        XCTAssertEqual(landed.count, 1)
-        XCTAssertEqual(landed.first??.start, day.addingTimeInterval(16 * 3600 + 15 * 60), "released at 4:20, lands at 4:15")
+        // Over 2:10 PM, on top of a calendar tile: a valid slot, the ghost at 2:00.
+        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: gridPoint(h, gridY: y(14, 10)), windowNumber: h.wn))
+        XCTAssertEqual(h.coordinator.target?.start, day.addingTimeInterval(14 * 3600))
+        XCTAssertEqual(h.coordinator.target?.end, day.addingTimeInterval(14 * 3600 + 45 * 60), "the task's 45 minutes")
+        saveMidDragShot(h, card: card, name: "mac-mid-drag")
+
+        h.source.mouseUp(with: mouse(.leftMouseUp, at: gridPoint(h, gridY: y(16, 20)), windowNumber: h.wn))
+        XCTAssertEqual(dropped.count, 1)
+        XCTAssertEqual(dropped.first?.0, "t-okrs")
+        XCTAssertEqual(dropped.first?.1.start, day.addingTimeInterval(16 * 3600 + 15 * 60), "released at 4:20, lands at 4:15")
         XCTAssertNil(h.coordinator.payload, "the drag is over")
+        settle(0.3)
+        XCTAssertFalse(card.isVisible, "the card is gone after the drop")
         h.window.contentView = nil
     }
 
-    func testADropOnTheSecondColumnLandsOnThatDay() {
+    func testReleasingOffTheGridFliesTheCardBackAndTheRowReturns() throws {
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_790_000_000))
-        let next = Calendar.current.date(byAdding: .day, value: 1, to: day)!
-        var landed: [PlannerTaskDragCoordinator.Target?] = []
-        let h = harness(days: [day, next], minutes: 30) { landed.append($0) }
-        let wn = h.window.windowNumber
-        XCTAssertEqual(h.host.zonesForTests().count, 2, "one drop zone per column")
-        h.source.mouseDown(with: mouse(.leftMouseDown, at: CGPoint(x: -300, y: 20), windowNumber: wn))
-        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: windowPoint(h, x: 300, gridY: y(9, 0)), windowNumber: wn))
-        h.source.mouseUp(with: mouse(.leftMouseUp, at: windowPoint(h, x: 300, gridY: y(9, 0)), windowNumber: wn))
-        XCTAssertEqual(landed.first??.dayStart, next)
-        XCTAssertEqual(landed.first??.start, next.addingTimeInterval(9 * 3600))
+        var dropped = 0
+        let h = try harness(days: [day], minutes: 30) { _, _ in dropped += 1 }
+        let press = h.source.convert(CGPoint(x: 40, y: 12), to: nil)
+        let restingY = nextRowY(h)
+        h.source.mouseDown(with: mouse(.leftMouseDown, at: press, windowNumber: h.wn))
+        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: CGPoint(x: press.x - 50, y: press.y - 40), windowNumber: h.wn))
+        let card = try XCTUnwrap(h.source.floatingCard)
+        let home = card.frame.offsetBy(dx: 50, dy: 40)
+        h.source.mouseUp(with: mouse(.leftMouseUp, at: CGPoint(x: press.x - 50, y: press.y - 40), windowNumber: h.wn))
+        XCTAssertTrue(h.coordinator.isReturning, "a miss flies back")
+        XCTAssertNotNil(h.coordinator.payload, "the row stays off the list until the card lands back")
+        settle()
+        XCTAssertEqual(card.frame.origin.x, home.origin.x, accuracy: 1, "the card flew back to the row's slot")
+        XCTAssertEqual(card.frame.origin.y, home.origin.y, accuracy: 1)
+        XCTAssertNil(h.coordinator.payload)
+        XCTAssertEqual(nextRowY(h), restingY, accuracy: 1, "the row is back on the list")
+        XCTAssertEqual(dropped, 0, "nothing was planned")
         h.window.contentView = nil
     }
 
-    func testReleasingOutsideTheGridCancels() {
+    func testEscCancelsMidDrag() throws {
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_790_000_000))
-        var landed: [PlannerTaskDragCoordinator.Target?] = []
-        let h = harness(days: [day], minutes: 30) { landed.append($0) }
-        let wn = h.window.windowNumber
-        h.source.mouseDown(with: mouse(.leftMouseDown, at: CGPoint(x: -300, y: 20), windowNumber: wn))
-        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: windowPoint(h, x: 100, gridY: y(10, 0)), windowNumber: wn))
-        h.source.mouseUp(with: mouse(.leftMouseUp, at: CGPoint(x: -400, y: 20), windowNumber: wn))
-        XCTAssertEqual(landed.count, 1)
-        XCTAssertNil(landed.first!, "no slot under the pointer: nothing is planned")
+        var dropped = 0
+        let h = try harness(days: [day], minutes: 30) { _, _ in dropped += 1 }
+        let press = h.source.convert(CGPoint(x: 40, y: 12), to: nil)
+        h.source.mouseDown(with: mouse(.leftMouseDown, at: press, windowNumber: h.wn))
+        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: gridPoint(h, gridY: y(10, 0)), windowNumber: h.wn))
+        XCTAssertNotNil(h.coordinator.target, "over a slot")
+        h.source.cancelOperation(nil)                       // Esc
+        h.source.mouseUp(with: mouse(.leftMouseUp, at: gridPoint(h, gridY: y(10, 0)), windowNumber: h.wn))
+        settle()
+        XCTAssertEqual(dropped, 0, "Esc wins even though the pointer is over a slot")
         XCTAssertNil(h.coordinator.payload)
         h.window.contentView = nil
     }
 
-    func testAClickWithoutADragDoesNotStartOne() {
+    func testADropOnTheSecondColumnLandsOnThatDay() throws {
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_790_000_000))
-        var landed: [PlannerTaskDragCoordinator.Target?] = []
-        let h = harness(days: [day], minutes: 30) { landed.append($0) }
-        let wn = h.window.windowNumber
-        h.source.mouseDown(with: mouse(.leftMouseDown, at: CGPoint(x: 10, y: 10), windowNumber: wn))
-        h.source.mouseUp(with: mouse(.leftMouseUp, at: CGPoint(x: 11, y: 10), windowNumber: wn))
-        XCTAssertTrue(landed.isEmpty)
+        let next = Calendar.current.date(byAdding: .day, value: 1, to: day)!
+        var dropped: [PlannerTaskDragCoordinator.Target] = []
+        let h = try harness(days: [day, next], minutes: 30) { _, t in dropped.append(t) }
+        let press = h.source.convert(CGPoint(x: 40, y: 12), to: nil)
+        h.source.mouseDown(with: mouse(.leftMouseDown, at: press, windowNumber: h.wn))
+        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: gridPoint(h, column: 1, gridY: y(9, 0)), windowNumber: h.wn))
+        h.source.mouseUp(with: mouse(.leftMouseUp, at: gridPoint(h, column: 1, gridY: y(9, 0)), windowNumber: h.wn))
+        XCTAssertEqual(dropped.first?.dayStart, next)
+        XCTAssertEqual(dropped.first?.start, next.addingTimeInterval(9 * 3600))
+        h.window.contentView = nil
+    }
+
+    func testAClickWithoutAMoveLiftsNothing() throws {
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_790_000_000))
+        let h = try harness(days: [day], minutes: 30) { _, _ in }
+        let press = h.source.convert(CGPoint(x: 40, y: 12), to: nil)
+        h.source.mouseDown(with: mouse(.leftMouseDown, at: press, windowNumber: h.wn))
+        h.source.mouseDragged(with: mouse(.leftMouseDragged, at: CGPoint(x: press.x + 1, y: press.y), windowNumber: h.wn))
+        h.source.mouseUp(with: mouse(.leftMouseUp, at: CGPoint(x: press.x + 1, y: press.y), windowNumber: h.wn))
+        XCTAssertNil(h.source.floatingCard)
         XCTAssertNil(h.coordinator.payload)
         h.window.contentView = nil
     }
 }
 
 private extension NSView {
-    func zonesForTests() -> [PlannerDropZoneView] {
-        subviews.flatMap { ($0 as? PlannerDropZoneView).map { [$0] } ?? [] + $0.zonesForTests() }
+    func allSubviews<T: NSView>(of type: T.Type) -> [T] {
+        subviews.flatMap { sub -> [T] in ((sub as? T).map { [$0] } ?? []) + sub.allSubviews(of: type) }
     }
 }

@@ -25,6 +25,9 @@ final class PlannerTaskDragCoordinator {
         let taskID: String
         let title: String
         let minutes: Int
+        /// The row's second line ("Due Fri · 30m"), for the lifted card.
+        var meta: String = ""
+        var priority: TaskPriority = .none
     }
 
     struct Target: Equatable {
@@ -33,42 +36,73 @@ final class PlannerTaskDragCoordinator {
         let end: Date
     }
 
-    /// The task being dragged, or nil.
+    /// The task being carried, or nil. While set, its row is OFF the list.
     private(set) var payload: Payload?
     /// Where it would land if released now, or nil (over nothing).
     private(set) var target: Target?
-    /// The pointer in window space, for the chip that follows the finger.
+    /// The pointer in window space.
     private(set) var pointer: CGPoint?
+    /// The row's frame in window space when it was picked up, and where in
+    /// the row it was grabbed, so the card keeps that offset and can fly back.
+    private(set) var sourceFrame: CGRect?
+    private(set) var grabOffset: CGSize = .zero
+    /// True between a cancelled release and the end of the fly-back.
+    private(set) var isReturning = false
 
     @ObservationIgnored private var zones = NSHashTable<PlannerDropZoneView>.weakObjects()
 
     func register(_ zone: PlannerDropZoneView) { zones.add(zone) }
 
-    func begin(_ payload: Payload) {
+    func begin(_ payload: Payload, sourceFrame: CGRect? = nil, grabbedAt: CGPoint? = nil) {
         self.payload = payload
+        self.sourceFrame = sourceFrame
+        if let f = sourceFrame, let g = grabbedAt {
+            grabOffset = CGSize(width: g.x - f.minX, height: g.y - f.minY)
+        } else {
+            grabOffset = .zero
+        }
         target = nil
+        isReturning = false
     }
 
     /// Move to a point in the window's coordinate space.
     func move(toWindowPoint p: CGPoint, in window: AnyObject?) {
+        guard payload != nil, !isReturning else { return }
         pointer = p
-        guard let payload else { return }
-        target = resolve(p, window: window, minutes: payload.minutes)
+        target = resolve(p, window: window, minutes: payload!.minutes)
     }
 
-    /// End the drag. Returns where it landed, or nil for a cancel.
+    /// Release. Over a slot: returns it and the drag is over. Anywhere else:
+    /// returns nil and the drag goes into its fly-back; the caller animates
+    /// the card to `sourceFrame` and then calls `finish()`, which is when the
+    /// row reappears in the list.
     @discardableResult
     func end(atWindowPoint p: CGPoint?, in window: AnyObject?) -> (Payload, Target)? {
-        defer { payload = nil; target = nil; pointer = nil }
         guard let payload else { return nil }
-        guard let p, let t = resolve(p, window: window, minutes: payload.minutes) else { return nil }
-        return (payload, t)
+        if let p, let t = resolve(p, window: window, minutes: payload.minutes) {
+            finish()
+            return (payload, t)
+        }
+        target = nil
+        isReturning = true
+        return nil
     }
 
+    /// Esc, or a gesture the system took away: fly back, as for a miss.
     func cancel() {
+        guard payload != nil else { return }
+        target = nil
+        isReturning = true
+    }
+
+    /// The fly-back is over: the row is back on the list.
+    func finish() {
         payload = nil
         target = nil
         pointer = nil
+        sourceFrame = nil
+        grabOffset = .zero
+        isReturning = false
     }
 
     /// The zone under a window point, and the snapped range there.
@@ -80,6 +114,41 @@ final class PlannerTaskDragCoordinator {
             return Target(dayStart: zone.dayStart, start: d.start, end: d.end)
         }
         return nil
+    }
+}
+
+/// The lifted copy of a To-plan row: the same card look, raised, with a shadow.
+struct PlannerDragCard: View {
+    let payload: PlannerTaskDragCoordinator.Payload
+    /// Over a day column: the card fades toward the ghost tile, which reads
+    /// as landing.
+    var overSlot: Bool = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(PlannerStyle.priorityColor(payload.priority)).frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(payload.title)
+                    .font(.edSubheadline.weight(.medium))
+                    .foregroundStyle(Tokens.ink)
+                    .lineLimit(1)
+                Text(payload.meta.isEmpty ? PlannerFormat.duration(payload.minutes) : payload.meta)
+                    .font(.edCaption)
+                    .foregroundStyle(Tokens.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.trailing, 10).padding(.vertical, 8)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .paperBorder(Tokens.border, radius: Radius.md)
+        .shadow(color: .black.opacity(0.22), radius: 12, y: 6)
+        .scaleEffect(overSlot ? 0.9 : 1.03)
+        .opacity(overSlot ? 0.55 : 1)
+        .animation(.easeOut(duration: 0.15), value: overSlot)
+        .allowsHitTesting(false)
+        .accessibilityIdentifier("planner.drag.card")
     }
 }
 
@@ -226,6 +295,15 @@ struct PlannerTaskDragSource: View {
 }
 
 #if os(macOS)
+/// The Mac row. Mouse down plus a 3pt move PICKS THE ROW UP: a floating copy
+/// follows the cursor everywhere (over the inspector, the gap and the grid),
+/// keeping the grab offset, and the row leaves the list. Release over a day
+/// column plans the task; release anywhere else, or Esc, flies the card back
+/// and the row returns.
+///
+/// The card is a borderless, mouse-transparent child window, because it must
+/// draw above every column of the split view, which a view inside the
+/// inspector cannot do.
 final class PlannerTaskDragSourceView: NSView {
     var payload: PlannerTaskDragCoordinator.Payload?
     weak var coordinator: PlannerTaskDragCoordinator?
@@ -233,26 +311,43 @@ final class PlannerTaskDragSourceView: NSView {
     var onEnd: (PlannerTaskDragCoordinator.Target?) -> Void = { _ in }
     private var anchor: CGPoint?
     private(set) var isDragging = false
+    /// The lifted card, while a row is picked up. Visible to tests.
+    private(set) var floatingCard: NSWindow?
+    private var cardHost: NSHostingView<PlannerDragCard>?
+    private var rowScreenRect: CGRect = .zero
+    private var grabInScreen: CGSize = .zero
+
+    /// Room around the card for its shadow.
+    static let cardInset: CGFloat = 16
+    static let pickUpDistance: CGFloat = 3
 
     override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
 
     override func mouseDown(with event: NSEvent) {
         anchor = event.locationInWindow
         isDragging = false
+        // First responder so Esc reaches `cancelOperation` during the drag.
+        window?.makeFirstResponder(self)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let a = anchor, let payload, let coordinator else { return }
         let p = event.locationInWindow
-        if !isDragging, PlannerDragGeometry.isDrag(from: a, to: p) {
+        if !isDragging {
+            guard hypot(p.x - a.x, p.y - a.y) >= Self.pickUpDistance else { return }
             isDragging = true
-            coordinator.begin(payload)
+            let rowInWindow = convert(bounds, to: nil)
+            coordinator.begin(payload, sourceFrame: rowInWindow, grabbedAt: a)
+            liftCard(rowInWindow: rowInWindow, grabbedAt: a)
             NSCursor.closedHand.push()
             onBegin()
         }
-        if isDragging { coordinator.move(toWindowPoint: p, in: window) }
+        guard !coordinator.isReturning else { return }
+        coordinator.move(toWindowPoint: p, in: window)
+        moveCard(toWindowPoint: p)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -260,8 +355,103 @@ final class PlannerTaskDragSourceView: NSView {
         guard isDragging, let coordinator else { return }
         isDragging = false
         NSCursor.pop()
-        let landed = coordinator.end(atWindowPoint: event.locationInWindow, in: window)
-        onEnd(landed?.1)
+        if coordinator.isReturning { return }   // already cancelled with Esc
+        if let landed = coordinator.end(atWindowPoint: event.locationInWindow, in: window) {
+            dropCard()
+            onEnd(landed.1)
+        } else {
+            returnCard()
+            onEnd(nil)
+        }
+    }
+
+    /// Esc during a drag: fly the card back.
+    override func cancelOperation(_ sender: Any?) {
+        guard isDragging, let coordinator else { return }
+        coordinator.cancel()
+        returnCard()
+        onEnd(nil)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { cancelOperation(nil) } else { super.keyDown(with: event) }
+    }
+
+    // MARK: The floating card
+
+    private func screenPoint(_ windowPoint: CGPoint) -> CGPoint {
+        window?.convertPoint(toScreen: windowPoint) ?? windowPoint
+    }
+
+    private func liftCard(rowInWindow: CGRect, grabbedAt a: CGPoint) {
+        guard let payload else { return }
+        let origin = screenPoint(rowInWindow.origin)
+        rowScreenRect = CGRect(origin: origin, size: rowInWindow.size)
+        let grab = screenPoint(a)
+        grabInScreen = CGSize(width: grab.x - origin.x, height: grab.y - origin.y)
+
+        let inset = Self.cardInset
+        let host = NSHostingView(rootView: PlannerDragCard(payload: payload))
+        host.frame = CGRect(x: inset, y: inset, width: rowInWindow.width, height: rowInWindow.height)
+        let content = NSView(frame: rowScreenRect.insetBy(dx: -inset, dy: -inset))
+        content.addSubview(host)
+        let card = NSWindow(
+            contentRect: rowScreenRect.insetBy(dx: -inset, dy: -inset),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        card.isOpaque = false
+        card.backgroundColor = .clear
+        card.hasShadow = false
+        card.ignoresMouseEvents = true
+        card.level = .floating
+        card.isReleasedWhenClosed = false
+        card.contentView = content
+        window?.addChildWindow(card, ordered: .above)
+        card.orderFront(nil)
+        floatingCard = card
+        cardHost = host
+    }
+
+    /// Keep the grab offset: the card's row origin sits at pointer - offset.
+    private func moveCard(toWindowPoint p: CGPoint) {
+        guard let card = floatingCard, let payload else { return }
+        let s = screenPoint(p)
+        let inset = Self.cardInset
+        card.setFrameOrigin(CGPoint(x: s.x - grabInScreen.width - inset, y: s.y - grabInScreen.height - inset))
+        cardHost?.rootView = PlannerDragCard(payload: payload, overSlot: coordinator?.target != nil)
+    }
+
+    /// Dropped on a slot: the card fades into the ghost tile, which becomes the block.
+    private func dropCard() {
+        guard let card = floatingCard else { return }
+        floatingCard = nil
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            card.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            card.parent?.removeChildWindow(card)
+            card.orderOut(nil)
+            _ = self
+        })
+    }
+
+    /// Missed, or Esc: the card flies back to the row's slot, then the row
+    /// returns to the list.
+    private func returnCard() {
+        let coordinator = self.coordinator
+        guard let card = floatingCard else { coordinator?.finish(); return }
+        let inset = Self.cardInset
+        let home = rowScreenRect.insetBy(dx: -inset, dy: -inset)
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            card.animator().setFrame(home, display: true)
+        }, completionHandler: { [weak self] in
+            card.parent?.removeChildWindow(card)
+            card.orderOut(nil)
+            self?.floatingCard = nil
+            coordinator?.finish()
+        })
     }
 }
 
@@ -285,6 +475,9 @@ private struct SourceRepresentable: NSViewRepresentable {
     }
 }
 #else
+/// The iPhone row: hold (0.3 s), and the row lifts out of the panel. The
+/// panel slides away, a copy of the row follows the finger (drawn by
+/// `PlannerView`), and release drops it on a slot or flies it back.
 final class PlannerTaskDragSourceView: UIView {
     var payload: PlannerTaskDragCoordinator.Payload?
     weak var coordinator: PlannerTaskDragCoordinator?
@@ -308,7 +501,7 @@ final class PlannerTaskDragSourceView: UIView {
         case .began:
             guard let payload else { return }
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            coordinator.begin(payload)
+            coordinator.begin(payload, sourceFrame: convert(bounds, to: nil), grabbedAt: p)
             coordinator.move(toWindowPoint: p, in: window)
             onBegin()
         case .changed:

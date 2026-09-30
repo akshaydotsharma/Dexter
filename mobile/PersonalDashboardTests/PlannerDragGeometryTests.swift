@@ -127,4 +127,31 @@ final class PlannerDragGeometryTests: XCTestCase {
     func testADropNeverHasLessThanFifteenMinutes() {
         XCTAssertEqual(G.dropRange(atY: y(9, 0), hourHeight: h, length: 0).minutes, 15)
     }
+
+    // MARK: - Resize hysteresis (#687 round 5)
+
+    func testTheEndHoldsNearTheHalfWayLine() {
+        // 10:00 to 10:15; the half-way line to 10:30 is 7.5 minutes past 10:15.
+        // At 8 minutes (0.5pt past the line) the shown 10:15 holds...
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 615, deltaY: 8, hourHeight: h, previous: 615), 615)
+        // ...and only moves once the pointer is 3pt past it.
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 615, deltaY: 11, hourHeight: h, previous: 615), 630)
+        // Coming back, 10:30 holds until the pointer is 3pt the other side.
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 615, deltaY: 6, hourHeight: h, previous: 630), 630)
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 615, deltaY: 4, hourHeight: h, previous: 630), 615)
+    }
+
+    func testAJitteringPointerAtTheLineDoesNotFlicker() {
+        var shown = 615
+        var seen = Set<Int>()
+        for d in [7.0, 8.0, 7.4, 8.2, 7.6, 8.1, 7.9] {
+            shown = G.resizedEnd(start: 600, originalEnd: 615, deltaY: d, hourHeight: h, previous: shown)
+            seen.insert(shown)
+        }
+        XCTAssertEqual(seen, [615])
+    }
+
+    func testAFastMoveStillJumpsSeveralSteps() {
+        XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 615, deltaY: 60, hourHeight: h, previous: 615), 675)
+    }
 }

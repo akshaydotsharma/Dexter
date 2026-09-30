@@ -51,4 +51,28 @@ final class PlannerDragToPlanUITest: XCTestCase {
         let confirm = app.buttons.matching(identifier: "Remove from plan").element(boundBy: 1)
         if confirm.waitForExistence(timeout: 3) { confirm.tap() } else { app.buttons["Remove from plan"].firstMatch.tap() }
     }
+
+    /// Release over nothing (the day header): the card flies back and the
+    /// row is on the list again, and nothing is planned.
+    func testAMissReturnsTheRowToTheList() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["LAUNCH_SECTION"] = "planner"
+        app.launch()
+        XCTAssertTrue(app.otherElements["Empty time"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["Tasks to plan"].firstMatch.tap()
+        let title = "Book flights for Bali"
+        let source = app.otherElements["planner.toplan.drag.\(title)"].firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        let header = app.staticTexts["30 September"].firstMatch.exists
+            ? app.staticTexts["30 September"].firstMatch
+            : app.buttons["Day"].firstMatch
+        let from = source.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
+        from.press(forDuration: 0.6, thenDragTo: header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.3)
+        sleep(1)
+        XCTAssertTrue(source.waitForExistence(timeout: 3) && source.frame.height > 10, "the row is back on the list")
+        let planned = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        XCTAssertFalse(planned.exists, "nothing was planned")
+        keep("3-miss-row-back", app)
+    }
 }

@@ -83,10 +83,22 @@ enum PlannerDragGeometry {
     /// The end snaps to the nearest quarter hour of the day, is never less than
     /// 15 minutes after the start (even when the start is off the grid, say
     /// 9:05), and never runs past midnight. Minutes are after the day's start.
-    static func resizedEnd(start: Int, originalEnd: Int, deltaY: CGFloat, hourHeight: CGFloat, step: Int = step) -> Int {
+    ///
+    /// `previous` is the end shown a moment ago. With it, the end only moves
+    /// to another quarter hour once the pointer is `hysteresis` points past
+    /// the half-way line between the two, so a hand resting near the line
+    /// does not make the tile flicker between them (#687 round 5).
+    static func resizedEnd(
+        start: Int, originalEnd: Int, deltaY: CGFloat, hourHeight: CGFloat,
+        previous: Int? = nil, hysteresis: CGFloat = 3, step: Int = step
+    ) -> Int {
         guard hourHeight > 0 else { return max(originalEnd, start + step) }
         let raw = Double(originalEnd) + Double(deltaY / hourHeight) * 60
-        let snapped = nearestStep(raw, step: step)
+        var snapped = nearestStep(raw, step: step)
+        if let previous, snapped != previous {
+            let margin = Double(hysteresis / hourHeight) * 60
+            if abs(raw - Double(previous)) < Double(step) / 2 + margin { snapped = previous }
+        }
         return min(dayMinutes, max(start + step, snapped))
     }
 

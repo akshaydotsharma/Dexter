@@ -122,7 +122,10 @@ struct PlannerDayColumn: View {
         let start = PlannerDragGeometry.minutes(of: item.start!, dayStart: dayStart)
         let originalEnd = PlannerDragGeometry.minutes(of: item.end!, dayStart: dayStart)
         func end(for delta: CGFloat) -> Date {
-            let m = PlannerDragGeometry.resizedEnd(start: start, originalEnd: originalEnd, deltaY: delta, hourHeight: hourHeight)
+            // The end shown a moment ago, for the snap's hysteresis.
+            let shown = resize?.id == item.id ? resize.map { PlannerDragGeometry.minutes(of: $0.end, dayStart: dayStart) } : nil
+            let m = PlannerDragGeometry.resizedEnd(start: start, originalEnd: originalEnd, deltaY: delta,
+                                                   hourHeight: hourHeight, previous: shown)
             return dayStart.addingTimeInterval(TimeInterval(m * 60))
         }
         return ZStack(alignment: .bottom) {

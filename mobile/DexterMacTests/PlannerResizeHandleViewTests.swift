@@ -109,6 +109,58 @@ final class PlannerResizeHandleViewTests: XCTestCase {
     }
 }
 
+/// The resize must not jitter (#687 round 5). The tile grows under a live
+/// resize, which MOVES the handle; a pointer that stays still must keep
+/// reporting the same end, however many times the layout runs in between.
+@MainActor
+final class PlannerResizeStabilityTests: XCTestCase {
+    private let hour: CGFloat = 60   // one point per minute
+
+    private func mouse(_ type: NSEvent.EventType, at point: CGPoint, windowNumber: Int) -> NSEvent {
+        NSEvent.mouseEvent(
+            with: type, location: point, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1
+        )!
+    }
+
+    /// A flipped container, like the grid column the handle lives in.
+    private final class Flipped: NSView { override var isFlipped: Bool { true } }
+
+    /// The handle sits on the tile's bottom edge, so a live resize MOVES it.
+    /// With the pointer held still, the distance it reports must not change
+    /// when it moves. Before the round 5 fix it measured in its own space, so
+    /// every move fed back into the distance: 9, then -6, then 9, then -6.
+    func testAStillPointerReportsTheSameDistanceWhileTheHandleMoves() {
+        let container = Flipped(frame: CGRect(x: 0, y: 0, width: 300, height: 1440))
+        let window = NSWindow(contentRect: container.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = container
+        // The handle of a 10:00-10:15 tile at 60pt/h: its strip at y = 615.
+        let handle = PlannerResizeHandleView(frame: CGRect(x: 0, y: 615, width: 300, height: 6))
+        container.addSubview(handle)
+        var reported: [CGFloat] = []
+        handle.onChange = { reported.append($0) }
+
+        func windowPoint(gridY: CGFloat) -> CGPoint { container.convert(CGPoint(x: 50, y: gridY), to: nil) }
+        let wn = window.windowNumber
+        handle.mouseDown(with: mouse(.leftMouseDown, at: windowPoint(gridY: 618), windowNumber: wn))
+
+        // Pointer moves 9 points down and then stays still. After each report
+        // the tile re-lays out to the snapped end, which moves the handle.
+        var ends: [Int] = []
+        for _ in 0..<6 {
+            handle.mouseDragged(with: mouse(.leftMouseDragged, at: windowPoint(gridY: 627), windowNumber: wn))
+            let end = PlannerDragGeometry.resizedEnd(start: 600, originalEnd: 615, deltaY: reported.last ?? 0, hourHeight: hour)
+            ends.append(end)
+            handle.setFrameOrigin(CGPoint(x: 0, y: CGFloat(end)))   // the strip follows the tile's new bottom
+        }
+        XCTAssertEqual(Set(reported), [9], "the distance is measured from where the pointer went down, not from the moving handle: \(reported)")
+        XCTAssertEqual(Set(ends).count, 1, "one end while the pointer is still: \(ends)")
+        window.contentView = nil
+    }
+}
+
 private extension NSView {
     func allSubviews<T: NSView>(of type: T.Type) -> [T] {
         subviews.flatMap { sub -> [T] in ((sub as? T).map { [$0] } ?? []) + sub.allSubviews(of: type) }

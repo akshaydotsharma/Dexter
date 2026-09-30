@@ -947,16 +947,22 @@ struct PlannerView: View {
                                     sheet = .plan(c.task.id)
                                 }
                                 .background(PlannerTaskDragSource(
-                                    payload: .init(taskID: c.task.id, title: c.task.title, minutes: c.estimateMinutes),
+                                    payload: .init(c),
                                     onBegin: { withAnimation(.easeOut(duration: 0.2)) { panelTucked = true } },
                                     onEnd: { t in
                                         if let t {
                                             dropTask(c.task.id, title: c.task.title, at: t)
                                             toPlanPanel = false
+                                            panelTucked = false
+                                        } else {
+                                            // Missed: the panel comes back, the card flies
+                                            // to the row's slot, and then the row returns.
+                                            withAnimation(.easeOut(duration: 0.22)) { panelTucked = false }
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { taskDrag.finish() }
                                         }
-                                        withAnimation(.easeOut(duration: 0.2)) { panelTucked = false }
                                     }
                                 ))
+                                .plannerLifted(taskDrag.payload?.taskID == c.task.id)
                             }
                         }
                         .plannerCard()
@@ -976,23 +982,24 @@ struct PlannerView: View {
         .transition(.move(edge: .bottom))
     }
 
-    /// A chip under the finger while a task is dragged.
+    /// The lifted row under the finger, at the offset it was grabbed. On a
+    /// miss it flies back to the row's slot.
     @ViewBuilder
     private var dragChip: some View {
-        if let payload = taskDrag.payload, let p = taskDrag.pointer {
+        if let payload = taskDrag.payload, let frame = taskDrag.sourceFrame {
             GeometryReader { geo in
                 let origin = geo.frame(in: .global).origin
-                Text(payload.title)
-                    .font(.edFootnoteStrong)
-                    .foregroundStyle(Tokens.paper)
-                    .lineLimit(1)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(Tokens.accentTasks, in: Capsule())
-                    .shadowMd()
-                    .position(x: p.x - origin.x, y: p.y - origin.y - 36)
-                    .allowsHitTesting(false)
+                let p = taskDrag.pointer ?? CGPoint(x: frame.minX + taskDrag.grabOffset.width, y: frame.minY + taskDrag.grabOffset.height)
+                // Card origin = pointer - grab offset, except on the way back.
+                let x = taskDrag.isReturning ? frame.minX : p.x - taskDrag.grabOffset.width
+                let y = taskDrag.isReturning ? frame.minY : p.y - taskDrag.grabOffset.height
+                PlannerDragCard(payload: payload, overSlot: taskDrag.target != nil)
+                    .frame(width: frame.width, height: frame.height)
+                    .position(x: x - origin.x + frame.width / 2, y: y - origin.y + frame.height / 2)
+                    .animation(taskDrag.isReturning ? .easeOut(duration: 0.22) : nil, value: taskDrag.isReturning)
             }
             .ignoresSafeArea()
+            .allowsHitTesting(false)
         }
     }
     #endif
@@ -1184,7 +1191,10 @@ struct PlannerToPlanRow: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var meta: String {
+    private var meta: String { Self.meta(candidate) }
+
+    /// The row's second line, also shown on the lifted card while dragged.
+    static func meta(_ candidate: PlannerEngine.Candidate) -> String {
         let length = PlannerFormat.duration(candidate.estimateMinutes)
         if candidate.overdueDays > 0 {
             return "\(candidate.overdueDays == 1 ? "1 day" : "\(candidate.overdueDays) days") overdue · \(length)"
@@ -1199,10 +1209,33 @@ struct PlannerToPlanRow: View {
     }
 }
 
+extension View {
+    /// A lifted To-plan row leaves the list: it collapses to nothing and the
+    /// list closes the gap. It is collapsed, not removed, because the row's
+    /// own pointer view is the one tracking the drag; removing it from the
+    /// window would end the drag (AppKit) or cancel the hold (UIKit).
+    func plannerLifted(_ lifted: Bool) -> some View {
+        self
+            .frame(height: lifted ? 0 : nil, alignment: .top)
+            .opacity(lifted ? 0 : 1)
+            .clipped()
+            .accessibilityHidden(lifted)
+    }
+}
+
+extension PlannerTaskDragCoordinator.Payload {
+    /// The drag payload for a To-plan row.
+    init(_ c: PlannerEngine.Candidate) {
+        self.init(taskID: c.task.id, title: c.task.title, minutes: c.estimateMinutes,
+                  meta: PlannerToPlanRow.meta(c), priority: c.task.priority)
+    }
+}
+
 /// The macOS "To plan" column.
 struct PlannerInspector: View {
     let candidates: [PlannerEngine.Candidate]
     let onPlan: (PlannerEngine.Candidate) -> Void
+    @Environment(\.plannerTaskDrag) private var taskDrag
     /// A row dragged onto the grid and released over a slot (#687 fix).
     var onDrop: (PlannerEngine.Candidate, PlannerTaskDragCoordinator.Target) -> Void = { _, _ in }
 
@@ -1260,17 +1293,19 @@ struct PlannerInspector: View {
                                     // Drag the row onto the grid to plan it
                                     // at a time; the Plan button still works.
                                     .background(PlannerTaskDragSource(
-                                        payload: .init(taskID: c.task.id, title: c.task.title, minutes: c.estimateMinutes),
+                                        payload: .init(c),
                                         onEnd: { t in if let t { onDrop(c, t) } }
                                     ))
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                                     .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                                     .paperBorder(Tokens.border, radius: Radius.md)
                                     .padding(.horizontal, 8)
+                                    .plannerLifted(taskDrag.payload?.taskID == c.task.id)
                             }
                         }
                     }
                     .padding(.bottom, 12)
+                    .animation(.easeOut(duration: 0.2), value: taskDrag.payload?.taskID)
                 }
             }
             Rectangle().fill(Tokens.border).frame(height: 1)

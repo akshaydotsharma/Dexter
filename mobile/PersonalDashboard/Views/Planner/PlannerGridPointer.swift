@@ -226,6 +226,7 @@ struct PlannerResizeHandle: View {
 final class PlannerResizeHandleView: NSView {
     var onChange: ((CGFloat) -> Void)?
     var onCommit: ((CGFloat) -> Void)?
+    /// Where the pointer went down, in WINDOW space (#687 round 5).
     private(set) var anchorY: CGFloat?
 
     override var isFlipped: Bool { true }
@@ -235,26 +236,33 @@ final class PlannerResizeHandleView: NSView {
         addCursorRect(bounds, cursor: .resizeUpDown)
     }
 
-    /// With a window, window space converted to this view (flipped, so y grows
-    /// down). Without one (headless tests), `locationInWindow` is view space.
-    func localPoint(for event: NSEvent) -> CGPoint {
-        guard window != nil else { return event.locationInWindow }
-        return convert(event.locationInWindow, from: nil)
+    /// The drag distance, downward positive, measured in WINDOW space.
+    ///
+    /// Never in this view's own space. This strip sits on the tile's bottom
+    /// edge, and a live resize grows the tile, so the strip MOVES under a
+    /// still pointer. Measured in its own space, each move fed back into the
+    /// distance: a pointer held 9pt down reported 9, then -6, then 9, and the
+    /// end flipped between 10:30 and 10:15 for as long as the mouse was held
+    /// (#687 round 5, `PlannerResizeStabilityTests`). The window does not move.
+    func dragDistance(from anchor: CGFloat, to event: NSEvent) -> CGFloat {
+        // A window's y grows upward. Without a window (headless tests) the
+        // point is already in this flipped view's space, where y grows down.
+        window != nil ? anchor - event.locationInWindow.y : event.locationInWindow.y - anchor
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        anchorY = localPoint(for: event).y
+        anchorY = event.locationInWindow.y
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let a = anchorY else { return }
-        onChange?(localPoint(for: event).y - a)
+        onChange?(dragDistance(from: a, to: event))
     }
 
     override func mouseUp(with event: NSEvent) {
         guard let a = anchorY else { return }
-        let delta = localPoint(for: event).y - a
+        let delta = dragDistance(from: a, to: event)
         anchorY = nil
         onCommit?(delta)
     }
