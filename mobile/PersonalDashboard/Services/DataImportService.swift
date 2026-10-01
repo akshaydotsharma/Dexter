@@ -1022,6 +1022,7 @@ final class DataImportService {
                     source: dto.source,
                     isVerified: dto.isVerified,
                     notes: dto.notes,
+                    isHighProteinPerCalorie: dto.isHighProteinPerCalorie ?? false,
                     useCount: dto.useCount,
                     lastUsedAt: dto.lastUsedAt,
                     isArchived: dto.isArchived,

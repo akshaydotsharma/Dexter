@@ -552,6 +552,7 @@ struct FoodItemPickerSheet: View {
                             .font(.edCaption)
                             .foregroundStyle(Tokens.muted)
                             .monospacedDigit()
+                        proteinDensityLine(item)
                     }
 
                     Spacer(minLength: 0)
@@ -561,7 +562,9 @@ struct FoodItemPickerSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(item.displayName)
+            .accessibilityLabel(item.isHighProteinPerCalorie
+                                ? "\(item.displayName), high protein per calorie"
+                                : item.displayName)
             .accessibilityValue(picked ? "In the meal" : "Not in the meal")
             .accessibilityHint(picked ? "Removes it from the meal" : "Adds one usual serving to the meal")
 
@@ -588,6 +591,30 @@ struct FoodItemPickerSheet: View {
             },
         ])
         #endif
+    }
+
+    /// The protein density, and the badge when the user marked the item
+    /// (#690). On a line of its own under the serving line, because appending
+    /// it there pushed a phone-width row onto three wrapped lines.
+    ///
+    /// Drawn only when there is something to say: an item with no calories has
+    /// no ratio, and an unmarked one has no badge, so a row with neither keeps
+    /// its two lines.
+    @ViewBuilder
+    private func proteinDensityLine(_ item: LocalFoodItem) -> some View {
+        let ratio = MealFormat.proteinPer100Kcal(item.nutrientsAtBasePortion)
+        if item.isHighProteinPerCalorie || ratio != nil {
+            HStack(spacing: Space.sm) {
+                if item.isHighProteinPerCalorie { HighProteinChip() }
+                if let ratio {
+                    Text(ratio)
+                        .font(.edCaption)
+                        .foregroundStyle(item.isHighProteinPerCalorie ? Tokens.accentMeals : Tokens.mutedSoft)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.top, 2)
+        }
     }
 
     private func pickGlyph(_ picked: Bool) -> some View {

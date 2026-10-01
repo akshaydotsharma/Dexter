@@ -260,6 +260,12 @@ struct MealDetailSheet: View {
     /// is closed, which is what `sheet(item:)` reads.
     @State private var editorTarget: FoodItemEditorTarget?
 
+    /// True when a dish on this meal was read off a saved item the user marked
+    /// high protein per calorie (#690). Read once on load, through the
+    /// `saved:<uuid>` id the dish already carries; the meal holds no link of
+    /// its own to the library, and gains none here.
+    @State private var hasMarkedSavedItem = false
+
     /// Whether the meal-type picker is showing (#629).
     @State private var typePickerOpen = false
 
@@ -765,7 +771,11 @@ struct MealDetailSheet: View {
 
     private var totalsSection: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            Text("Meal total").eyebrow()
+            HStack(spacing: Space.sm) {
+                Text("Meal total").eyebrow()
+                Spacer(minLength: 0)
+                if hasMarkedSavedItem { HighProteinChip() }
+            }
             VStack(spacing: 0) {
                 ForEach(Nutrient.allCases) { nutrient in
                     HStack {
@@ -788,6 +798,29 @@ struct MealDetailSheet: View {
                     }
                     .padding(.horizontal, Space.md)
                     .padding(.vertical, 6)
+                }
+                // Protein density (#690). Derived from the two rows above it,
+                // so it sits under them behind a rule rather than among them,
+                // and it is hidden for a meal with no calories to divide by.
+                if let density = MealFormat.proteinPer100Kcal(meal.nutrients) {
+                    Rectangle()
+                        .fill(Tokens.divider)
+                        .frame(height: 0.5)
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.xs)
+                    HStack {
+                        Text("Protein per 100 kcal")
+                            .font(.edFootnote)
+                            .foregroundStyle(Tokens.inkSoft)
+                        Spacer(minLength: Space.sm)
+                        Text(density)
+                            .font(.edFootnoteStrong)
+                            .foregroundStyle(hasMarkedSavedItem ? Tokens.accentMeals : Tokens.ink)
+                            .monospacedDigit()
+                    }
+                    .padding(.horizontal, Space.md)
+                    .padding(.vertical, 6)
+                    .accessibilityElement(children: .combine)
                 }
             }
             .padding(.vertical, Space.xs)
@@ -883,6 +916,23 @@ struct MealDetailSheet: View {
         itemDrafts = meal.items.map(MealItemDraft.init)
         for nutrient in Nutrient.allCases {
             overrideValues[nutrient] = MealItemDraft.string(meal.nutrients[nutrient])
+        }
+        hasMarkedSavedItem = Self.hasMarkedSavedItem(meal.items)
+    }
+
+    /// Whether any dish names, by its `saved:<uuid>` source id, a library row
+    /// the user marked high protein per calorie (#690). A deleted row, or a
+    /// dish from any other source, simply does not count.
+    private static func hasMarkedSavedItem(_ items: [MealItemEntry]) -> Bool {
+        let prefix = "saved:"
+        let ids = items.compactMap { item -> String? in
+            guard let id = item.sourceID, id.hasPrefix(prefix) else { return nil }
+            return String(id.dropFirst(prefix.count))
+        }
+        guard !ids.isEmpty else { return false }
+        let library = FoodItemService.default()
+        return ids.contains { id in
+            (try? library.item(clientUUID: id))?.isHighProteinPerCalorie == true
         }
     }
 

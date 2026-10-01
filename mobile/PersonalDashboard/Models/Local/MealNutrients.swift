@@ -82,6 +82,22 @@ struct MealNutrients: Codable, Equatable, Hashable, Sendable {
         Nutrient.allCases.contains { self[$0] < 0 }
     }
 
+    /// Grams of protein for every 100 kcal (#690), or nil when there are no
+    /// calories to divide by.
+    ///
+    /// The ONE place this ratio is worked out. The meal sheet, the saved item
+    /// rows and the item editor all read it, so no two surfaces can print a
+    /// different figure for the same food. A ratio is the same at every
+    /// portion, so a caller can pass the nutrients at any scale.
+    ///
+    /// Nil rather than zero at zero calories: water or black coffee has no
+    /// meaningful protein density, and "0 g / 100 kcal" would read as a bad
+    /// score rather than as "not applicable".
+    var proteinPer100Kcal: Double? {
+        guard calories > 0, proteinG >= 0 else { return nil }
+        return proteinG / calories * 100
+    }
+
     /// Add two sets of values, nutrient by nutrient. Used to total a day.
     static func + (lhs: MealNutrients, rhs: MealNutrients) -> MealNutrients {
         var out = MealNutrients()

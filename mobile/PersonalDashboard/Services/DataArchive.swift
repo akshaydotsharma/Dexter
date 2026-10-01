@@ -886,6 +886,13 @@ enum DataArchive {
         var source: String = "manual"
         var isVerified: Bool = false
         var notes: String? = nil
+        /// #690. OPTIONAL on purpose, unlike its neighbours: an archive or a
+        /// peer written before the flag existed carries no key for it, and an
+        /// optional decodes that as nil (read back as false) rather than
+        /// failing the row. On the sync path an absent key is also preserved
+        /// from the local row by `preservingFieldsAbsentHere`, so an older
+        /// peer cannot clear a flag it has never heard of.
+        var isHighProteinPerCalorie: Bool? = nil
         var useCount: Int = 0
         var lastUsedAt: Date? = nil
         var isArchived: Bool = false
