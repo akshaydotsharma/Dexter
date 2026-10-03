@@ -602,7 +602,7 @@ struct FoodItemPickerSheet: View {
     /// its two lines.
     @ViewBuilder
     private func proteinDensityLine(_ item: LocalFoodItem) -> some View {
-        let ratio = MealFormat.proteinPer100Kcal(item.nutrientsAtBasePortion)
+        let ratio = MealFormat.proteinPer100KcalLabelled(item.nutrientsAtBasePortion)
         if item.isHighProteinPerCalorie || ratio != nil {
             HStack(spacing: Space.sm) {
                 if item.isHighProteinPerCalorie { HighProteinChip() }

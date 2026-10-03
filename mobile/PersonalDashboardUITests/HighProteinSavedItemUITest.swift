@@ -26,13 +26,13 @@ final class HighProteinSavedItemUITest: XCTestCase {
         else { throw XCTSkip("No meal row found on the opening day.") }
         row.tap()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 6), "The meal detail sheet did not open.")
-        let density = app.staticTexts["Protein per 100 kcal"]
+        let density = app.staticTexts["Protein density"]
         var attempts = 0
         while !density.isHittable, attempts < 6 {
             app.swipeUp()
             attempts += 1
         }
-        XCTAssertTrue(density.exists, "The meal sheet shows protein per 100 kcal.")
+        XCTAssertTrue(density.exists, "The meal sheet shows protein density.")
         attach(app, name: "01-meal-detail-density")
         app.buttons["Done"].tap()
 

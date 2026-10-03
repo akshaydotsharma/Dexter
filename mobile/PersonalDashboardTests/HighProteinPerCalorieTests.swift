@@ -20,7 +20,8 @@ final class HighProteinPerCalorieTests: XCTestCase {
         let yogurt = MealNutrients(calories: 148, proteinG: 15)
         let ratio = try XCTUnwrap(yogurt.proteinPer100Kcal)
         XCTAssertEqual(ratio, 10.135, accuracy: 0.001)
-        XCTAssertEqual(MealFormat.proteinPer100Kcal(yogurt), "10.1 g / 100 kcal")
+        XCTAssertEqual(MealFormat.proteinPer100Kcal(yogurt), "10.1g/100kcal")
+        XCTAssertEqual(MealFormat.proteinPer100KcalLabelled(yogurt), "Protein: 10.1g/100kcal")
     }
 
     func testRatioIsTheSameAtEveryPortion() {

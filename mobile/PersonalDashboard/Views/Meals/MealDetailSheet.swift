@@ -809,7 +809,7 @@ struct MealDetailSheet: View {
                         .padding(.horizontal, Space.md)
                         .padding(.vertical, Space.xs)
                     HStack {
-                        Text("Protein per 100 kcal")
+                        Text("Protein density")
                             .font(.edFootnote)
                             .foregroundStyle(Tokens.inkSoft)
                         Spacer(minLength: Space.sm)

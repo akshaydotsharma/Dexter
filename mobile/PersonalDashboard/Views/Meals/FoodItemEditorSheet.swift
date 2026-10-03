@@ -598,7 +598,7 @@ struct FoodItemEditorSheet: View {
     }
 
     private var highProteinCaption: String {
-        if let ratio = MealFormat.proteinPer100Kcal(typedNutrients) {
+        if let ratio = MealFormat.proteinPer100KcalLabelled(typedNutrients) {
             return "\(ratio). Marked items carry a badge in the picker."
         }
         return "Add the calories to see protein per 100 kcal. Marked items carry a badge in the picker."

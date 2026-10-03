@@ -91,7 +91,7 @@ struct MealNutrients: Codable, Equatable, Hashable, Sendable {
     /// portion, so a caller can pass the nutrients at any scale.
     ///
     /// Nil rather than zero at zero calories: water or black coffee has no
-    /// meaningful protein density, and "0 g / 100 kcal" would read as a bad
+    /// meaningful protein density, and "0g/100kcal" would read as a bad
     /// score rather than as "not applicable".
     var proteinPer100Kcal: Double? {
         guard calories > 0, proteinG >= 0 else { return nil }
