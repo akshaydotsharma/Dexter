@@ -529,6 +529,8 @@ struct AssistantContextBuilder {
                 item.calories, item.proteinG, item.carbsG, item.fatG,
                 item.fibreG, item.sugarG, item.sodiumMg, item.satFatG
             ].map(Self.compact).joined(separator: "/")
+            // #690. Only on marked rows, so an unmarked library costs nothing.
+            if item.isHighProteinPerCalorie { out += " · marked high protein per calorie" }
         }
         return out
     }

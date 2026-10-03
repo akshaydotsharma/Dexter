@@ -104,6 +104,11 @@ struct FoodItemWrite {
 
     /// Anything the eight columns cannot hold.
     var notes: String? = nil
+
+    /// The user's "high protein per calorie" mark (#690). nil leaves an
+    /// existing row's mark alone, because an importer has no opinion on it and
+    /// a refresh of the numbers must not clear a judgement the user made.
+    var isHighProteinPerCalorie: Bool? = nil
 }
 
 /// CRUD over `LocalFoodItem`, the library of items you keep so you never have
@@ -171,6 +176,7 @@ struct FoodItemService {
         source: String = FoodItemSource.manual,
         isVerified: Bool = false,
         notes: String? = nil,
+        isHighProteinPerCalorie: Bool? = nil,
         clientUUID: String? = nil
     ) throws -> LocalFoodItem {
         let checked = try validate(
@@ -194,6 +200,10 @@ struct FoodItemService {
             existing.source                 = source
             existing.isVerified             = isVerified
             existing.notes                  = notes?.trimmedNonEmptyFoodField
+            // nil leaves the user's mark alone on a retry (#690).
+            if let isHighProteinPerCalorie {
+                existing.isHighProteinPerCalorie = isHighProteinPerCalorie
+            }
             existing.updatedAt              = Date()
             try save()
             return existing
@@ -219,7 +229,8 @@ struct FoodItemService {
             externalID: externalID?.trimmedNonEmptyFoodField,
             source: source,
             isVerified: isVerified,
-            notes: notes?.trimmedNonEmptyFoodField
+            notes: notes?.trimmedNonEmptyFoodField,
+            isHighProteinPerCalorie: isHighProteinPerCalorie ?? false
         )
         store.context.insert(row)
         try save()
@@ -267,7 +278,8 @@ struct FoodItemService {
         source: String? = nil,
         isVerified: Bool? = nil,
         notes: String? = nil,
-        isArchived: Bool? = nil
+        isArchived: Bool? = nil,
+        isHighProteinPerCalorie: Bool? = nil
     ) throws {
         // Validate against the row as it WOULD be, not as it is, so a call that
         // moves two fields at once cannot be judged against a half-applied
@@ -320,6 +332,9 @@ struct FoodItemService {
         }
         if let isArchived {
             item.isArchived = isArchived
+        }
+        if let isHighProteinPerCalorie {
+            item.isHighProteinPerCalorie = isHighProteinPerCalorie
         }
         item.updatedAt = Date()
         try save()
@@ -549,7 +564,8 @@ struct FoodItemService {
                 externalID: write.externalID,
                 source: write.source,
                 isVerified: write.isVerified,
-                notes: write.notes
+                notes: write.notes,
+                isHighProteinPerCalorie: write.isHighProteinPerCalorie
             )
         }
 
@@ -565,6 +581,9 @@ struct FoodItemService {
         row.source                 = write.source
         row.isVerified             = row.isVerified || write.isVerified
         row.notes                  = resolve(write.notes, keeping: row.notes)
+        if let mark = write.isHighProteinPerCalorie {
+            row.isHighProteinPerCalorie = mark
+        }
         row.updatedAt              = Date()
         try save()
         return row

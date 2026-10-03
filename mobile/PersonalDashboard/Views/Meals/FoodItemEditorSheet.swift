@@ -140,6 +140,10 @@ struct FoodItemEditorSheet: View {
     @State private var unresolvedPortion: String = ""
 
     @State private var isArchived = false
+    /// The user's "high protein per calorie" mark (#690). Loaded from the row
+    /// and always sent on save, because this form knows the state of its own
+    /// toggle and "leave it alone" is never what it means.
+    @State private var isHighProteinPerCalorie = false
     @State private var showingMinor = false
     @State private var unitPickerOpen = false
     @State private var errorMessage: String?
@@ -157,9 +161,11 @@ struct FoodItemEditorSheet: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: Space.lg) {
                             if let provenance { provenanceBlock(provenance) }
+                            if isHighProteinPerCalorie { highProteinHeader }
                             nameSection
                             portionSection
                             numbersSection
+                            highProteinSection
                             barcodeSection
                             notesSection
                             if case .existing = target { archiveSection }
@@ -534,6 +540,70 @@ struct FoodItemEditorSheet: View {
         }
     }
 
+    // MARK: - High protein per calorie (#690)
+
+    /// The typed eight as numbers, for the live ratio. Read the same way
+    /// `save()` reads them, so the figure on screen is the one that is stored.
+    private var typedNutrients: MealNutrients {
+        var out = MealNutrients.zero
+        for nutrient in Nutrient.allCases {
+            out[nutrient] = MealItemDraft.number(values[nutrient] ?? "")
+        }
+        return out
+    }
+
+    /// The cue at the top of the form, so a marked item says so before
+    /// anything is scrolled. The same chip the picker row draws.
+    private var highProteinHeader: some View {
+        HighProteinChip()
+            .transition(.opacity)
+    }
+
+    /// The mark, with the figure it is a judgement about printed beside it.
+    ///
+    /// The ratio is shown whether or not the box is ticked: it is the evidence
+    /// the user decides on, and it updates as the numbers above are typed. The
+    /// app does not tick the box itself, because where "high" starts is the
+    /// user's line to draw.
+    private var highProteinSection: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.15)) { isHighProteinPerCalorie.toggle() }
+        } label: {
+            HStack(alignment: .top, spacing: Space.md) {
+                Image(systemName: isHighProteinPerCalorie ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(isHighProteinPerCalorie ? Tokens.accentMeals : Tokens.mutedSoft)
+                    .frame(width: 22, height: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("High protein per calorie")
+                        .font(.edBody)
+                        .foregroundStyle(Tokens.ink)
+                    Text(highProteinCaption)
+                        .font(.edCaption)
+                        .foregroundStyle(Tokens.muted)
+                        .monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(Space.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+            .paperBorder(Tokens.border, radius: Radius.lg)
+            .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("High protein per calorie")
+        .accessibilityValue(isHighProteinPerCalorie ? "Marked" : "Not marked")
+    }
+
+    private var highProteinCaption: String {
+        if let ratio = MealFormat.proteinPer100KcalLabelled(typedNutrients) {
+            return "\(ratio). Marked items carry a badge in the picker."
+        }
+        return "Add the calories to see protein per 100 kcal. Marked items carry a badge in the picker."
+    }
+
     // MARK: - Archive
 
     /// Retire the item without taking its numbers away.
@@ -677,6 +747,7 @@ struct FoodItemEditorSheet: View {
         externalSource = item.externalSource
         externalID = item.externalID
         isArchived = item.isArchived
+        isHighProteinPerCalorie = item.isHighProteinPerCalorie
         // Read off the eight columns rather than through the service's own
         // `nutrientsAtBase`, which is private to that file. Eight assignments
         // rather than a loop for the reason `applyNutrients` gives: a SwiftData
@@ -805,7 +876,8 @@ struct FoodItemEditorSheet: View {
                     // here as it does on a create. See the note on the type.
                     isVerified: true,
                     notes: notes,
-                    isArchived: isArchived
+                    isArchived: isArchived,
+                    isHighProteinPerCalorie: isHighProteinPerCalorie
                 )
                 row = item
 
@@ -839,7 +911,8 @@ struct FoodItemEditorSheet: View {
                     externalID: externalID ?? "",
                     source: sourceConstant,
                     isVerified: true,
-                    notes: notes
+                    notes: notes,
+                    isHighProteinPerCalorie: isHighProteinPerCalorie
                 )
             )
         }
@@ -856,7 +929,8 @@ struct FoodItemEditorSheet: View {
             externalID: externalID,
             source: sourceConstant,
             isVerified: true,
-            notes: notes
+            notes: notes,
+            isHighProteinPerCalorie: isHighProteinPerCalorie
         )
     }
 

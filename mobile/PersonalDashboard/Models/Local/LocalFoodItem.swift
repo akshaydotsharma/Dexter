@@ -139,6 +139,20 @@ final class LocalFoodItem {
     /// Anything the label says that the eight columns cannot hold. Nil normally.
     var notes: String?
 
+    /// The user marked this item as a good protein-per-calorie choice (#690).
+    ///
+    /// A judgement the user makes, not a figure the app derives. The ratio
+    /// itself is computed on every read through
+    /// `MealNutrients.proteinPer100Kcal`, so it never goes stale against an
+    /// edited label. What counts as "high" is personal (a cutting week and a
+    /// maintenance week draw the line in different places), so the app does
+    /// not draw it for him.
+    ///
+    /// ⚠️ The default sits on the DECLARATION. An init-only default is
+    /// invisible to the SwiftData migration, and every existing install would
+    /// fail to bootstrap its container (#555).
+    var isHighProteinPerCalorie: Bool = false
+
     // MARK: - Ordering the picker
 
     /// How many times this item has been logged. The picker sorts on it, so the
@@ -192,6 +206,7 @@ final class LocalFoodItem {
         source: String = FoodItemSource.manual,
         isVerified: Bool = false,
         notes: String? = nil,
+        isHighProteinPerCalorie: Bool = false,
         useCount: Int = 0,
         lastUsedAt: Date? = nil,
         isArchived: Bool = false,
@@ -220,6 +235,7 @@ final class LocalFoodItem {
         self.source = source
         self.isVerified = isVerified
         self.notes = notes
+        self.isHighProteinPerCalorie = isHighProteinPerCalorie
         self.useCount = useCount
         self.lastUsedAt = lastUsedAt
         self.isArchived = isArchived
@@ -280,6 +296,10 @@ extension LocalFoodItem {
     /// The nutrients at `defaultPortionQuantity`, which is what the picker
     /// shows before anything is typed.
     var defaultNutrients: MealNutrients { nutrients(for: defaultPortionQuantity) }
+
+    /// The eight at the base portion, unscaled. Grams of protein per 100 kcal
+    /// is a ratio, so it is the same at every portion and is read off this.
+    var nutrientsAtBasePortion: MealNutrients { nutrients(for: basePortionQuantity) }
 
     /// This item, at `quantity`, as the value type a meal actually stores.
     ///

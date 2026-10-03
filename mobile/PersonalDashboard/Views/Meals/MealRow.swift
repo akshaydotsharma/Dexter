@@ -33,6 +33,16 @@ struct MealFlagChip: View {
     }
 }
 
+/// The cue a saved item carries when the user marked it as high protein per
+/// calorie (#690). One component so the picker row, the editor header and the
+/// meal sheet draw the same chip.
+struct HighProteinChip: View {
+    var body: some View {
+        MealFlagChip("High protein", systemImage: "bolt.fill", tint: Tokens.accentMeals)
+            .accessibilityLabel("Marked high protein per calorie")
+    }
+}
+
 /// One logged meal in the day's list (#543, breakdown added in #560).
 ///
 /// The row carries the description, the time, the calories, the full nutrient

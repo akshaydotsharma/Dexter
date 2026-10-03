@@ -185,6 +185,24 @@ enum MealFormat {
         String(format: "%.0f", value.rounded())
     }
 
+    /// Protein density value as printed everywhere it appears (#690):
+    /// "12.4g/100kcal". Nil when the ratio is undefined (no calories), so
+    /// the caller hides the line instead of printing a zero.
+    ///
+    /// One decimal, unlike `grams`: the useful range is roughly 2 to 25, and
+    /// a whole number would put 9.6 and 10.4 on the same rung.
+    static func proteinPer100Kcal(_ nutrients: MealNutrients) -> String? {
+        guard let ratio = nutrients.proteinPer100Kcal else { return nil }
+        return String(format: "%.1fg/100kcal", ratio)
+    }
+
+    /// The same figure with its name, "Protein: 12.4g/100kcal", for places
+    /// with no row label of their own, so a reader knows what the unit
+    /// measures. Nil when the ratio is undefined.
+    static func proteinPer100KcalLabelled(_ nutrients: MealNutrients) -> String? {
+        proteinPer100Kcal(nutrients).map { "Protein: \($0)" }
+    }
+
     /// One nutrient's value with its unit, e.g. "72 g" or "1,900 mg".
     static func value(
         _ value: Double,

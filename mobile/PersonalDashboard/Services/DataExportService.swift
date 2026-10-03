@@ -816,6 +816,7 @@ final class DataExportService {
             source: item.source,
             isVerified: item.isVerified,
             notes: item.notes,
+            isHighProteinPerCalorie: item.isHighProteinPerCalorie,
             useCount: item.useCount,
             lastUsedAt: item.lastUsedAt,
             isArchived: item.isArchived,
