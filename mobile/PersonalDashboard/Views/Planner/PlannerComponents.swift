@@ -293,7 +293,21 @@ struct PlannerMeterCard: View {
 struct PlannerAllDayRow: View {
     let items: [PlannerItem]
     let onTap: (PlannerItem) -> Void
+    /// iPhone (#693): the length a task pill takes on the grid when dragged.
+    /// Nil leaves every pill a plain button.
+    var dragMinutes: ((PlannerItem) -> Int)? = nil
+    /// iPhone (#693): a task pill was dropped on a slot of the grid.
+    var onDropTask: (PlannerItem, PlannerTaskDragCoordinator.Target) -> Void = { _, _ in }
     @Environment(\.plannerTileActions) private var tileActions
+    @Environment(\.plannerTaskDrag) private var taskDrag
+
+    /// Only a Dexter task with no hour can be dragged onto the grid: a task
+    /// due on the day, an overdue task, or a task planned to the day with no
+    /// hour. Calendar all-day events and manual blocks stay where they are.
+    static func isDraggable(_ item: PlannerItem) -> Bool {
+        guard !item.isFixed, !item.occupiesTime, !item.completed else { return false }
+        return item.source == .task && item.taskUUID != nil
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -308,9 +322,15 @@ struct PlannerAllDayRow: View {
                 .padding(.top, 2)
             PlannerFlow(spacing: 4) {
                 ForEach(items) { item in
-                    Button { onTap(item) } label: { pill(item) }
-                        .buttonStyle(.plain)
-                        .plannerTileMenu(item, actions: tileActions)
+                    #if os(iOS)
+                    if let dragMinutes, Self.isDraggable(item), let taskID = item.taskUUID {
+                        draggablePill(item, taskID: taskID, minutes: dragMinutes(item))
+                    } else {
+                        button(item)
+                    }
+                    #else
+                    button(item)
+                    #endif
                 }
             }
             // Take the offered width, so the flow measures its wrapped height
@@ -320,6 +340,54 @@ struct PlannerAllDayRow: View {
         .padding(.vertical, 6)
         .padding(.trailing, Space.sm)
     }
+
+    private func button(_ item: PlannerItem) -> some View {
+        Button { onTap(item) } label: { pill(item) }
+            .buttonStyle(.plain)
+            .plannerTileMenu(item, actions: tileActions)
+    }
+
+    #if os(iOS)
+    /// A task pill that lifts (#693): tap opens the task, touch and hold lifts
+    /// it, and the same coordinator as a To-plan row carries it over the grid,
+    /// with the same card, ghost tile, snapping and fly-back. The hold
+    /// replaces the pill's context menu; Edit and Delete stay one tap away.
+    private func draggablePill(_ item: PlannerItem, taskID: String, minutes: Int) -> some View {
+        let payload = PlannerTaskDragCoordinator.Payload(
+            taskID: taskID, title: item.title, minutes: minutes,
+            meta: [note(item) ?? item.detail, PlannerFormat.duration(minutes)].joined(separator: " · "),
+            priority: item.priority
+        )
+        let lifted = taskDrag.payload?.taskID == taskID
+        return pill(item)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel([item.title, note(item)].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityHint("Touch and hold, then drag onto the grid to give it a time.")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("planner.allday.\(item.title)")
+            .accessibilityAction { onTap(item) }
+            .overlay {
+                PlannerTaskDragSource(
+                    payload: payload,
+                    onEnd: { target in
+                        if let target {
+                            onDropTask(item, target)
+                        } else {
+                            // Missed: the card flies back to the pill, then
+                            // the pill shows again.
+                            let drag = taskDrag
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { drag.finish() }
+                        }
+                    },
+                    onClick: { onTap(item) },
+                    tapExclusionWidth: 0,
+                    identifier: "planner.allday.drag.\(item.title)"
+                )
+            }
+            // While it is carried, its place in the row stays, empty.
+            .opacity(lifted ? 0 : 1)
+    }
+    #endif
 
     /// The same tile as the grid (#687 round 2): stripe plus a light tint of
     /// the source colour. Overdue is state, so it is a danger ring and a red note.

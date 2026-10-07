@@ -117,4 +117,40 @@ enum PlannerDragGeometry {
     static func dropRange(atY y: CGFloat, hourHeight: CGFloat, length: Int, step: Int = step) -> Range {
         tapRange(atY: y, hourHeight: hourHeight, length: max(step, min(length, dayMinutes)), step: step)
     }
+
+    /// The length an All Day task takes when it is dragged onto the grid
+    /// (#693): a block planned to the day with no hour keeps its own length;
+    /// a task due on a day takes the length it was last planned for, else
+    /// `fallback`. Never less than one step.
+    static func allDayTaskLength(itemMinutes: Int, remembered: Int?, fallback: Int = 30, step: Int = step) -> Int {
+        let m = itemMinutes > 0 ? itemMinutes : (remembered ?? fallback)
+        return max(step, min(m, dayMinutes))
+    }
+
+    // MARK: Move a tile (#693)
+
+    /// The new start of a tile picked up and dragged by `deltaY` points. The
+    /// length never changes.
+    ///
+    /// - A drag shorter than `dragThreshold` leaves the start as it is, even
+    ///   an off-grid one (9:05), so a hold released in place changes nothing.
+    /// - Otherwise the start snaps to the nearest quarter hour of the day,
+    ///   with the same hysteresis as `resizedEnd`, so a finger resting near
+    ///   the half-way line does not make the tile flicker.
+    /// - The tile stays inside the day: never before 0:00, and its end never
+    ///   after 24:00.
+    static func movedStart(
+        start: Int, length: Int, deltaY: CGFloat, hourHeight: CGFloat,
+        previous: Int? = nil, hysteresis: CGFloat = 3, step: Int = step
+    ) -> Int {
+        guard hourHeight > 0, abs(deltaY) >= dragThreshold else { return start }
+        let raw = Double(start) + Double(deltaY / hourHeight) * 60
+        var snapped = nearestStep(raw, step: step)
+        if let previous, snapped != previous {
+            let margin = Double(hysteresis / hourHeight) * 60
+            if abs(raw - Double(previous)) < Double(step) / 2 + margin { snapped = previous }
+        }
+        let latest = max(0, dayMinutes - max(0, length))
+        return min(latest, max(0, snapped))
+    }
 }
