@@ -295,12 +295,18 @@ struct PlannerTaskDragSource: View {
     /// Mac: the right-click menu.
     var menuEntries: () -> [PlannerMenuEntry] = { [] }
     var onCommand: (PlannerTileCommand) -> Void = { _ in }
+    /// iPhone: the trailing width a tap ignores, for a row's own button. An
+    /// All Day pill (#693) has none.
+    var tapExclusionWidth: CGFloat = 76
+    /// The view's accessibility identifier; nil names it after the To-plan row.
+    var identifier: String? = nil
     @Environment(\.plannerTaskDrag) private var coordinator
 
     var body: some View {
         SourceRepresentable(
             payload: payload, coordinator: coordinator, onBegin: onBegin, onEnd: onEnd,
-            onClick: onClick, onDoubleClick: onDoubleClick, menuEntries: menuEntries, onCommand: onCommand
+            onClick: onClick, onDoubleClick: onDoubleClick, menuEntries: menuEntries, onCommand: onCommand,
+            tapExclusionWidth: tapExclusionWidth, identifier: identifier
         )
     }
 }
@@ -492,6 +498,8 @@ private struct SourceRepresentable: NSViewRepresentable {
     let onDoubleClick: () -> Void
     let menuEntries: () -> [PlannerMenuEntry]
     let onCommand: (PlannerTileCommand) -> Void
+    var tapExclusionWidth: CGFloat = 0
+    var identifier: String? = nil
 
     func makeNSView(context: Context) -> PlannerTaskDragSourceView {
         let v = PlannerTaskDragSourceView()
@@ -523,6 +531,8 @@ final class PlannerTaskDragSourceView: UIView {
     var onDoubleClick: () -> Void = {}
     var menuEntries: () -> [PlannerMenuEntry] = { [] }
     var onCommand: (PlannerTileCommand) -> Void = { _ in }
+    /// The trailing width a tap ignores (the To-plan row's Plan button).
+    var tapExclusionWidth: CGFloat = PlannerTaskDragSourceView.trailingButtonWidth
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -543,7 +553,7 @@ final class PlannerTaskDragSourceView: UIView {
     static let trailingButtonWidth: CGFloat = 76
 
     @objc private func tapped(_ g: UITapGestureRecognizer) {
-        guard g.location(in: self).x < bounds.width - Self.trailingButtonWidth else { return }
+        guard g.location(in: self).x < bounds.width - tapExclusionWidth else { return }
         onClick()
     }
 
@@ -582,6 +592,8 @@ private struct SourceRepresentable: UIViewRepresentable {
     let onDoubleClick: () -> Void
     let menuEntries: () -> [PlannerMenuEntry]
     let onCommand: (PlannerTileCommand) -> Void
+    let tapExclusionWidth: CGFloat
+    let identifier: String?
 
     func makeUIView(context: Context) -> PlannerTaskDragSourceView {
         let v = PlannerTaskDragSourceView()
@@ -598,7 +610,8 @@ private struct SourceRepresentable: UIViewRepresentable {
         v.onDoubleClick = onDoubleClick
         v.menuEntries = menuEntries
         v.onCommand = onCommand
-        v.accessibilityIdentifier = "planner.toplan.drag.\(payload.title)"
+        v.tapExclusionWidth = tapExclusionWidth
+        v.accessibilityIdentifier = identifier ?? "planner.toplan.drag.\(payload.title)"
     }
 }
 #endif

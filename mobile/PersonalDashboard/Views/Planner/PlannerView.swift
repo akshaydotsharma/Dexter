@@ -571,8 +571,50 @@ struct PlannerView: View {
                 set: { shown in if !shown, draft?.isNaming == true, sheet == nil { resolveDraft() } }
             ),
             quickCreate: { AnyView(quickCreate) },
-            onResize: { item, end in resized(item, to: end) }
+            onResize: { item, end in resized(item, to: end) },
+            onMove: { item, start, end in moved(item, start: start, end: end) },
+            onMoveBegin: {
+                if draft?.isNaming == true { resolveDraft() }
+                withAnimation(.easeOut(duration: 0.18)) { quickView = nil }
+            },
+            allDayTaskMinutes: allDayTaskMinutes,
+            onDropAllDayTask: { item, t in
+                guard let id = item.taskUUID else { return }
+                quickView = nil
+                dropTask(id, title: item.title, at: t)
+            }
         )
+    }
+
+    /// iPhone only (#693): the Mac's All Day pills keep their click and menu.
+    private var allDayTaskMinutes: ((PlannerItem) -> Int)? {
+        #if os(iOS)
+        let remembered = estimates(blocks)
+        return { item in
+            PlannerDragGeometry.allDayTaskLength(
+                itemMinutes: item.isBlock ? item.durationMinutes : 0,
+                remembered: item.taskUUID.flatMap { remembered[$0] }
+            )
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    /// A tile was picked up and moved (#693): the same length at a new start.
+    /// A block keeps its title; a timed task with no block becomes a plan
+    /// block at the new time, as a resize does.
+    private func moved(_ item: PlannerItem, start: Date, end: Date) {
+        if let id = item.blockID {
+            write {
+                if let row = try PlanBlockService.default().block(id: id) {
+                    try PlanBlockService.default().update(row, title: row.title, start: start, end: end,
+                                                          day: start, durationMinutes: PlannerEngine.minutes(from: start, to: end))
+                }
+            }
+        } else if case .taskDue = item.origin, let taskID = item.taskUUID {
+            write { try PlanBlockService.default().planTask(taskUUID: taskID, title: item.title, start: start, end: end) }
+        }
     }
 
     @ViewBuilder
@@ -1199,13 +1241,16 @@ struct PlannerView: View {
         if let payload = taskDrag.payload, let frame = taskDrag.sourceFrame {
             GeometryReader { geo in
                 let origin = geo.frame(in: .global).origin
+                // An All Day pill (#693) is far smaller than a To-plan row;
+                // the card keeps a readable size either way.
+                let size = CGSize(width: max(frame.width, 220), height: max(frame.height, 46))
                 let p = taskDrag.pointer ?? CGPoint(x: frame.minX + taskDrag.grabOffset.width, y: frame.minY + taskDrag.grabOffset.height)
                 // Card origin = pointer - grab offset, except on the way back.
                 let x = taskDrag.isReturning ? frame.minX : p.x - taskDrag.grabOffset.width
                 let y = taskDrag.isReturning ? frame.minY : p.y - taskDrag.grabOffset.height
                 PlannerDragCard(payload: payload, overSlot: taskDrag.target != nil)
-                    .frame(width: frame.width, height: frame.height)
-                    .position(x: x - origin.x + frame.width / 2, y: y - origin.y + frame.height / 2)
+                    .frame(width: size.width, height: size.height)
+                    .position(x: x - origin.x + size.width / 2, y: y - origin.y + size.height / 2)
                     .animation(taskDrag.isReturning ? .easeOut(duration: 0.22) : nil, value: taskDrag.isReturning)
             }
             .ignoresSafeArea()

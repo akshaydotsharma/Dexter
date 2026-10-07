@@ -110,6 +110,8 @@ struct PlannerDayColumn: View {
     @Environment(\.plannerTaskDrag) private var taskDrag
     /// The tile whose bottom edge is being dragged, and its live end.
     @State private var resize: (id: String, end: Date)?
+    /// iPhone (#693): the tile picked up and moved, and its live start.
+    @State private var move: (id: String, start: Date)?
 
     /// Dexter owns manual blocks and task tiles, so those resize. Calendar
     /// events are read-only and get no handle.
@@ -118,6 +120,29 @@ struct PlannerDayColumn: View {
         if item.isBlock { return true }
         if case .taskDue = item.origin { return true }
         return false
+    }
+
+    /// Dexter tiles also MOVE (#693), by the same rule as resize: a manual
+    /// block or a task tile, never a calendar event.
+    static func isMovable(_ item: PlannerItem) -> Bool { isResizable(item) }
+
+    /// The start a tile dragged by `delta` points lands on. Its own start,
+    /// to the second, when the drag is too short to count.
+    private func movedStart(_ item: PlannerItem, delta: CGFloat) -> Date {
+        let dayStart = day.day
+        let start = PlannerDragGeometry.minutes(of: item.start!, dayStart: dayStart)
+        let length = PlannerDragGeometry.minutes(of: item.end!, dayStart: dayStart) - start
+        // The start shown a moment ago, for the snap's hysteresis.
+        let shown = move?.id == item.id ? move.map { PlannerDragGeometry.minutes(of: $0.start, dayStart: dayStart) } : nil
+        let m = PlannerDragGeometry.movedStart(start: start, length: length, deltaY: delta,
+                                               hourHeight: hourHeight, previous: shown)
+        return m == start ? item.start! : dayStart.addingTimeInterval(TimeInterval(m * 60))
+    }
+
+    /// Write a move: the same length at the new start.
+    private func commitMove(_ item: PlannerItem, to start: Date) {
+        guard start != item.start, let s = item.start, let e = item.end else { return }
+        draft.onMove(item, start, start.addingTimeInterval(e.timeIntervalSince(s)))
     }
 
     private func resizeHandle(_ item: PlannerItem) -> some View {
@@ -200,11 +225,41 @@ struct PlannerDayColumn: View {
             }
             .frame(width: width, height: tileHeight)
         #else
-        Button { onTapItem(item) } label: { face }
-            .buttonStyle(.plain)
-            .plannerTileMenu(item, actions: tileActions)
-            .frame(width: width, height: tileHeight)
-            .accessibilityIdentifier("planner.tile.\(item.title)")
+        if Self.isMovable(item) {
+            // A Dexter tile (#693): one UIKit layer owns tap (quick view) and
+            // touch and hold (lift and move). The hold replaces the context
+            // menu here; Edit and Delete are on the quick view a tap opens.
+            face
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("planner.tile.\(item.title)")
+                .accessibilityAction { onTapItem(item) }
+                .accessibilityAction(named: "Move 15 minutes earlier") {
+                    commitMove(item, to: movedStart(item, delta: -hourHeight / 4))
+                }
+                .accessibilityAction(named: "Move 15 minutes later") {
+                    commitMove(item, to: movedStart(item, delta: hourHeight / 4))
+                }
+                .overlay {
+                    PlannerTileMoveLayer(
+                        identifier: "planner.move.\(item.title)",
+                        onTap: { onTapItem(item) },
+                        onChange: { delta in move = (item.id, movedStart(item, delta: delta)) },
+                        onCommit: { delta in
+                            let start = movedStart(item, delta: delta)
+                            move = nil
+                            commitMove(item, to: start)
+                        },
+                        onBegin: { draft.onMoveBegin() }
+                    )
+                }
+                .frame(width: width, height: tileHeight)
+        } else {
+            Button { onTapItem(item) } label: { face }
+                .buttonStyle(.plain)
+                .plannerTileMenu(item, actions: tileActions)
+                .frame(width: width, height: tileHeight)
+                .accessibilityIdentifier("planner.tile.\(item.title)")
+        }
         #endif
     }
 
@@ -231,10 +286,15 @@ struct PlannerDayColumn: View {
                     }
                 )
                 ForEach(items) { item in
-                    // While its edge is dragged, a tile shows the new end live.
-                    let end = resize?.id == item.id ? resize!.end : item.end!
+                    // While its edge is dragged, a tile shows the new end live;
+                    // while it is moved (#693), its new start, same length.
+                    let moving = move?.id == item.id
+                    let start = moving ? move!.start : item.start!
+                    let end = moving
+                        ? move!.start.addingTimeInterval(item.end!.timeIntervalSince(item.start!))
+                        : (resize?.id == item.id ? resize!.end : item.end!)
                     let g = PlannerEngine.tileGeometry(
-                        start: item.start!, end: end, dayStart: day.day,
+                        start: start, end: end, dayStart: day.day,
                         hourHeight: hourHeight, minHeight: PlannerGridMetrics.minTileHeight
                     )
                     let lane = lanes[item.id]
@@ -252,8 +312,8 @@ struct PlannerDayColumn: View {
                         }
                     }
                     .overlay(alignment: .bottomTrailing) {
-                        if resize?.id == item.id {
-                            Text(PlannerStyle.range(item.start!, end))
+                        if resize?.id == item.id || moving {
+                            Text(PlannerStyle.range(start, end))
                                 .font(.system(size: 10, weight: .semibold))
                                 .monospacedDigit()
                                 .foregroundStyle(Tokens.paper)
@@ -263,6 +323,11 @@ struct PlannerDayColumn: View {
                                 .allowsHitTesting(false)
                         }
                     }
+                    // Lifted: a little larger, with a shadow, above its neighbours.
+                    .scaleEffect(moving ? 1.03 : 1, anchor: .center)
+                    .shadow(color: .black.opacity(moving ? 0.22 : 0), radius: moving ? 10 : 0, y: moving ? 5 : 0)
+                    .animation(.easeOut(duration: 0.15), value: moving)
+                    .zIndex(moving ? 1 : 0)
                     .offset(x: laneW * CGFloat(lane?.index ?? 0) + 1, y: g.y)
                 }
                 if let payload = taskDrag.payload, let t = taskDrag.target, t.dayStart == day.day {
@@ -391,7 +456,11 @@ struct PlannerDayTimeGrid: View {
         let allDay = day.allDay.filter { visible.contains($0.source) }
         VStack(spacing: 0) {
             if !allDay.isEmpty {
-                PlannerAllDayRow(items: allDay, onTap: onOpenItem)
+                PlannerAllDayRow(
+                    items: allDay, onTap: onOpenItem,
+                    dragMinutes: draft.allDayTaskMinutes,
+                    onDropTask: draft.onDropAllDayTask
+                )
                 Rectangle().fill(Tokens.border).frame(height: 1)
             }
             // `scrollPosition(id:)`, not a `ScrollViewReader`. On macOS a
@@ -532,6 +601,15 @@ struct PlannerDraftHandlers {
     var quickCreate: () -> AnyView
     /// A Dexter tile's bottom edge was dragged to a new end (#687 fix).
     var onResize: (PlannerItem, Date) -> Void = { _, _ in }
+    /// A Dexter tile was picked up and moved to a new start and end (#693).
+    var onMove: (PlannerItem, Date, Date) -> Void = { _, _, _ in }
+    /// A tile was just lifted (#693).
+    var onMoveBegin: () -> Void = {}
+    /// iPhone (#693): the length an All Day task takes on the grid. Nil keeps
+    /// the All Day row's pills as plain buttons.
+    var allDayTaskMinutes: ((PlannerItem) -> Int)? = nil
+    /// iPhone (#693): an All Day task was dropped on a slot.
+    var onDropAllDayTask: (PlannerItem, PlannerTaskDragCoordinator.Target) -> Void = { _, _ in }
 }
 
 /// The translucent draft tile, with its live time range.

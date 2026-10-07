@@ -154,4 +154,48 @@ final class PlannerDragGeometryTests: XCTestCase {
     func testAFastMoveStillJumpsSeveralSteps() {
         XCTAssertEqual(G.resizedEnd(start: 600, originalEnd: 615, deltaY: 60, hourHeight: h, previous: 615), 675)
     }
+
+    // MARK: - Move a tile (#693)
+
+    func testAMoveKeepsTheLengthAndSnapsTheStart() {
+        // 9:00, dragged 150pt down at one point per minute: 11:30.
+        XCTAssertEqual(G.movedStart(start: 540, length: 60, deltaY: 150, hourHeight: h), 690)
+        // 9:00 dragged up 47pt: 8:13 rounds to 8:15.
+        XCTAssertEqual(G.movedStart(start: 540, length: 60, deltaY: -47, hourHeight: h), 495)
+    }
+
+    func testAMoveOnTheRealGridScale() {
+        // 54pt per hour on the iPhone: 2.5 hours is 135pt.
+        XCTAssertEqual(G.movedStart(start: 9 * 60, length: 30, deltaY: 135, hourHeight: 54), 11 * 60 + 30)
+    }
+
+    func testAHoldReleasedInPlaceChangesNothingEvenOffTheGrid() {
+        XCTAssertEqual(G.movedStart(start: 545, length: 30, deltaY: 0, hourHeight: h), 545)
+        XCTAssertEqual(G.movedStart(start: 545, length: 30, deltaY: 3, hourHeight: h), 545)
+        // Past the threshold an off-grid start lands on the grid.
+        XCTAssertEqual(G.movedStart(start: 545, length: 30, deltaY: 20, hourHeight: h), 570)
+    }
+
+    func testAMoveStaysInsideTheDay() {
+        XCTAssertEqual(G.movedStart(start: 60, length: 30, deltaY: -500, hourHeight: h), 0)
+        // A 90 minute tile can start no later than 22:30.
+        XCTAssertEqual(G.movedStart(start: 1200, length: 90, deltaY: 900, hourHeight: h), 1350)
+        XCTAssertEqual(G.movedStart(start: 0, length: 2000, deltaY: 300, hourHeight: h), 0)
+    }
+
+    func testAMoveHoldsNearTheHalfWayLine() {
+        // From 10:00, 8 minutes down is 0.5pt past the line to 10:15: holds.
+        XCTAssertEqual(G.movedStart(start: 600, length: 30, deltaY: 8, hourHeight: h, previous: 600), 600)
+        XCTAssertEqual(G.movedStart(start: 600, length: 30, deltaY: 11, hourHeight: h, previous: 600), 615)
+        XCTAssertEqual(G.movedStart(start: 600, length: 30, deltaY: 6, hourHeight: h, previous: 615), 615)
+    }
+
+    // MARK: - All Day task length (#693)
+
+    func testAnAllDayTaskTakesItsRememberedLengthOrThirtyMinutes() {
+        XCTAssertEqual(G.allDayTaskLength(itemMinutes: 0, remembered: nil), 30)
+        XCTAssertEqual(G.allDayTaskLength(itemMinutes: 0, remembered: 75), 75)
+        XCTAssertEqual(G.allDayTaskLength(itemMinutes: 45, remembered: 75), 45, "a day-only block keeps its own length")
+        XCTAssertEqual(G.allDayTaskLength(itemMinutes: 0, remembered: 5), 15, "never under one step")
+    }
 }
