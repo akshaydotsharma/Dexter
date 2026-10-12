@@ -1049,6 +1049,9 @@ struct PlannerView: View {
             openItem(item)
         case .delete:
             if !PlannerDeletion.choices(for: item).isEmpty { pendingDelete = item }
+        case .toggleComplete:
+            guard PlannerTileMenu.canComplete(item), let taskID = item.taskUUID else { return }
+            setCompleted(taskID, !item.completed)
         case .decline(let scope):
             guard let ev else { return }
             if let scope { declineEvent(ev, scope) }
@@ -1110,7 +1113,24 @@ struct PlannerView: View {
         switch cmd {
         case .edit, .details: openTaskEditor(task)
         case .delete: pendingTaskDelete = task
+        case .toggleComplete: setCompleted(task.id, !task.completed)
         default: break
+        }
+    }
+
+    /// Mark complete or incomplete (#695), through the Tasks section's own
+    /// write. The `@Query` on tasks redraws the tile at once. Completing a
+    /// recurring occurrence then runs the recurring pass, so its next one is
+    /// on the Planner now rather than at the next launch.
+    private func setCompleted(_ taskID: String, _ completed: Bool) {
+        Task { @MainActor in
+            do {
+                try await PlannerCompletion.set(taskID, completed: completed, store: .shared)
+                writeError = nil
+                if completed { await RecurringTaskCoordinator.shared.runPass() }
+            } catch {
+                writeError = "Couldn't update that task. \(error.localizedDescription)"
+            }
         }
     }
 
@@ -1580,7 +1600,7 @@ struct PlannerInspector: View {
                                         onEnd: { t in if let t { onDrop(c, t) } },
                                         onClick: { onSelect(c) },
                                         onDoubleClick: { onOpen(c) },
-                                        menuEntries: { PlannerTileMenu.toPlanEntries },
+                                        menuEntries: { PlannerTileMenu.toPlanEntries(for: c.task) },
                                         onCommand: { onCommand($0, c) }
                                     ))
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))

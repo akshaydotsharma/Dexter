@@ -396,14 +396,14 @@ struct PlannerAllDayRow: View {
         return HStack(spacing: 5) {
             Rectangle().fill(c).frame(width: 3)
             if item.source == .task {
-                Image(systemName: "circle")
+                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(c)
             }
             Text(item.title)
                 .font(.edCaption.weight(.medium))
                 .foregroundStyle(Tokens.ink)
-                .strikethrough(item.isDeclined, color: Tokens.muted)
+                .strikethrough(item.isDeclined || item.completed, color: Tokens.muted)
                 .lineLimit(1)
             if let note = note(item) {
                 Text(note)
@@ -421,8 +421,8 @@ struct PlannerAllDayRow: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(Tokens.danger, lineWidth: 1.2)
             }
         }
-        .opacity(item.isDeclined ? 0.45 : 1)
-        .accessibilityLabel([item.title, item.isDeclined ? "declined" : nil, note(item)].compactMap { $0 }.joined(separator: ", "))
+        .opacity(item.isDeclined ? 0.45 : (item.completed ? 0.6 : 1))
+        .accessibilityLabel([item.title, item.isDeclined ? "declined" : nil, item.completed ? "completed" : nil, note(item)].compactMap { $0 }.joined(separator: ", "))
     }
 
     private func note(_ item: PlannerItem) -> String? {

@@ -87,6 +87,7 @@ struct PlannerTile: View {
         if let s = item.start, let e = item.end { parts.append(PlannerStyle.range(s, e)) }
         parts.append(item.detail)
         if item.isDeclined { parts.append("declined") }
+        if item.completed { parts.append("completed") }
         if inConflict { parts.append("overlaps another item") }
         return parts.joined(separator: ", ")
     }

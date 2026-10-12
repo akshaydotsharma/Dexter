@@ -293,8 +293,11 @@ enum PlannerEngine {
         }
 
         // Tasks, by due date. A task already placed on this day shows as its
-        // block only.
-        for task in tasks where !task.completed {
+        // block only. A task completed on its due day stays on that day, dimmed
+        // and struck through like a completed block, so a completion made from
+        // the Planner can be seen and undone there (#695). A completed task is
+        // never carried forward as overdue.
+        for task in tasks {
             guard let due = task.due, !plannedTaskIDsToday.contains(task.id) else { continue }
             let hasHour = TaskDueTime.isSet(on: due, calendar: calendar)
             let dueDay = calendar.startOfDay(for: due)
@@ -309,17 +312,17 @@ enum PlannerEngine {
                         source: .task, start: due, end: max(end, due),
                         durationMinutes: minutes(from: due, to: max(end, due)),
                         origin: .taskDue, taskUUID: task.id, priority: task.priority,
-                        overdueDays: 0, completed: false
+                        overdueDays: 0, completed: task.completed
                     ))
                 } else {
                     allDay.append(PlannerItem(
                         id: "d-\(task.id)", title: task.title, detail: "Task\(prio) · due today",
                         source: .task, start: nil, end: nil, durationMinutes: 0,
                         origin: .taskDue, taskUUID: task.id, priority: task.priority,
-                        overdueDays: 0, completed: false
+                        overdueDays: 0, completed: task.completed
                     ))
                 }
-            } else if isToday, dueDay < dayStart, TaskDueTime.overdueAfter(due, calendar: calendar) <= now {
+            } else if !task.completed, isToday, dueDay < dayStart, TaskDueTime.overdueAfter(due, calendar: calendar) <= now {
                 let late = calendar.dateComponents([.day], from: dueDay, to: dayStart).day ?? 1
                 allDay.append(PlannerItem(
                     id: "d-\(task.id)", title: task.title,
