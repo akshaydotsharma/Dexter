@@ -1497,6 +1497,10 @@ struct PlannerContext {
 struct PlannerToPlanRow: View {
     let candidate: PlannerEngine.Candidate
     let onPlan: () -> Void
+    /// Mac (#695): the row's click layer is an OVERLAY, so a click on the
+    /// title reaches it. The Plan button is then drawn by `planButtonOverlay`
+    /// above that layer; here it only holds its place.
+    var hidesPlanButton = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1512,12 +1516,19 @@ struct PlannerToPlanRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
-            Button("Plan", action: onPlan)
-                .buttonStyle(PlannerSmallButtonStyle())
-                .accessibilityLabel("Plan \(candidate.task.title)")
+            Self.planButton(candidate, onPlan: onPlan)
+                .opacity(hidesPlanButton ? 0 : 1)
+                .allowsHitTesting(!hidesPlanButton)
+                .accessibilityHidden(hidesPlanButton)
         }
         .padding(.trailing, 10).padding(.vertical, 8)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    static func planButton(_ candidate: PlannerEngine.Candidate, onPlan: @escaping () -> Void) -> some View {
+        Button("Plan", action: onPlan)
+            .buttonStyle(PlannerSmallButtonStyle())
+            .accessibilityLabel("Plan \(candidate.task.title)")
     }
 
     private var meta: String { Self.meta(candidate) }
@@ -1633,10 +1644,13 @@ struct PlannerInspector: View {
                             Text(g.title).eyebrow(g.late ? Tokens.danger : Tokens.muted)
                                 .padding(.horizontal, 12).padding(.top, 8)
                             ForEach(g.items) { c in
-                                PlannerToPlanRow(candidate: c) { onPlan(c) }
+                                PlannerToPlanRow(candidate: c, onPlan: { onPlan(c) }, hidesPlanButton: true)
                                     // Drag the row onto the grid to plan it
-                                    // at a time; the Plan button still works.
-                                    .background(PlannerTaskDragSource(
+                                    // at a time. An OVERLAY, not a background
+                                    // (#695 round 3): as a background it only
+                                    // got clicks where the row draws nothing,
+                                    // so a click on the title did nothing.
+                                    .overlay(PlannerTaskDragSource(
                                         payload: .init(c),
                                         onEnd: { t in if let t { onDrop(c, t) } },
                                         onClick: { onSelect(c); onQuickView(c) },
@@ -1644,6 +1658,12 @@ struct PlannerInspector: View {
                                         menuEntries: { PlannerTileMenu.toPlanEntries(for: c.task) },
                                         onCommand: { onCommand($0, c) }
                                     ))
+                                    // The Plan button above the click layer, in
+                                    // the place the row keeps for it.
+                                    .overlay(alignment: .trailing) {
+                                        PlannerToPlanRow.planButton(c) { onPlan(c) }
+                                            .padding(.trailing, 10)
+                                    }
                                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                                     .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
                                     .paperBorder(selectedID == c.task.id ? Tokens.accentTasks : Tokens.border, radius: Radius.md)

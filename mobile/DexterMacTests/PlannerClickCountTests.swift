@@ -137,6 +137,82 @@ final class PlannerClickCountTests: XCTestCase {
         h.window.contentView = nil
     }
 
+    // MARK: - Clicks over the TEXT (#695 round 3)
+
+    /// Hit-test from the window's content view at a point, then deliver a
+    /// double click to whatever the hit test returns, as AppKit would.
+    @discardableResult
+    private func doubleClick(at windowPoint: CGPoint, in window: NSWindow) -> NSView? {
+        guard let content = window.contentView else { return nil }
+        // `hitTest` takes a point in the SUPERVIEW's coordinates.
+        guard let hit = content.hitTest(content.superview?.convert(windowPoint, from: nil) ?? windowPoint) else { return nil }
+        for count in 1...2 {
+            hit.mouseDown(with: mouse(.leftMouseDown, at: windowPoint, windowNumber: window.windowNumber, clicks: count))
+            hit.mouseUp(with: mouse(.leftMouseUp, at: windowPoint, windowNumber: window.windowNumber, clicks: count))
+        }
+        return hit
+    }
+
+    func testADoubleClickOnATileTitleOpensItsQuickView() throws {
+        let state = State()
+        let h = try tileHarness(state)
+        // Over the title text: the stripe is 3pt and the text column is
+        // padded 5pt, so (14, 7) is on the first glyphs of "Focus".
+        let title = h.click.convert(CGPoint(x: 14, y: 7), to: nil)
+        let hit = doubleClick(at: title, in: h.window)
+        XCTAssertTrue(hit is PlannerTileClickView, "a click on the title reaches the click layer, got \(String(describing: hit))")
+        XCTAssertEqual(state.quickViewID, "b-focus")
+        XCTAssertNil(state.editorID)
+        h.window.contentView = nil
+    }
+
+    func testADoubleClickOnAPillTitleOpensItsQuickView() throws {
+        let state = State()
+        let pill = PlannerItem(
+            id: "d-bank", title: "Call the bank", detail: "Task · due today", source: .task,
+            start: nil, end: nil, durationMinutes: 0, origin: .taskDue, taskUUID: "t-bank",
+            priority: .none, overdueDays: 0, completed: false
+        )
+        let actions = PlannerTileActions(quickViewID: nil, event: { _ in nil }, run: { _, _ in }, dismissQuickView: {})
+        let row = PlannerAllDayRow(items: [pill], onTap: { state.select($0.id) })
+            .environment(\.plannerTileActions, actions)
+            .frame(width: 400, height: 40)
+        let host = NSHostingView(rootView: row)
+        host.frame = CGRect(x: 0, y: 0, width: 400, height: 40)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        let layer = try XCTUnwrap(host.allSubviews(of: PlannerTileClickView.self).first)
+        // Glyph at ~8pt, text from ~20pt: aim at the text.
+        for x: CGFloat in [10, 30, 50] {
+            state.log.removeAll(); state.quickViewID = nil
+            let p = layer.convert(CGPoint(x: x, y: layer.bounds.midY), to: nil)
+            let hit = doubleClick(at: p, in: window)
+            XCTAssertTrue(hit is PlannerTileClickView, "x=\(x): a click on the pill's glyph or text reaches the click layer, got \(String(describing: hit))")
+            XCTAssertEqual(state.quickViewID, "d-bank", "x=\(x)")
+        }
+        window.contentView = nil
+    }
+
+    func testADoubleClickOnAToPlanRowTitleOpensItsQuickView() throws {
+        let state = State()
+        let h = try rowHarness(state)
+        // The row's title starts after the 3pt priority stripe and 8pt gap.
+        for x: CGFloat in [16, 40, 80] {
+            state.log.removeAll(); state.quickViewID = nil
+            let p = h.source.convert(CGPoint(x: x, y: 12), to: nil)
+            let hit = doubleClick(at: p, in: h.window)
+            XCTAssertTrue(hit is PlannerTaskDragSourceView, "x=\(x): a click on the row's title reaches the row, got \(String(describing: hit))")
+            XCTAssertEqual(state.quickViewID, "t-okrs", "x=\(x)")
+        }
+        // The Plan button sits ABOVE the click layer, so it keeps its click.
+        let content = try XCTUnwrap(h.window.contentView)
+        let plan = h.source.convert(CGPoint(x: h.source.bounds.maxX - 35, y: h.source.bounds.midY), to: nil)
+        let planHit = content.hitTest(content.superview?.convert(plan, from: nil) ?? plan)
+        XCTAssertFalse(planHit is PlannerTaskDragSourceView, "a click on Plan reaches the button, not the row's click layer")
+        h.window.contentView = nil
+    }
+
     // MARK: - All Day pills
 
     func testOneOrTwoClicksOnAnAllDayPillOpenItsQuickView() throws {
