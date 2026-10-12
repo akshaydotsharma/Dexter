@@ -203,6 +203,10 @@ struct PlannerQuickView: View {
     let event: PlannerEvent?
     let run: (PlannerTileCommand) -> Void
     let onClose: () -> Void
+    /// A To-plan task has no day or time on the Planner yet: its row's own
+    /// second line replaces "when", and the source line says it is unplanned.
+    var whenOverride: String? = nil
+    var sourceOverride: String? = nil
 
     private var canDelete: Bool { !PlannerDeletion.choices(for: item).isEmpty }
 
@@ -282,6 +286,7 @@ struct PlannerQuickView: View {
     }
 
     private var when: String {
+        if let whenOverride { return whenOverride }
         let day = PlannerStyle.weekdayFormatter.string(from: item.start ?? Date())
             + " " + PlannerStyle.dayMonthFormatter.string(from: item.start ?? Date())
         if let s = item.start, let e = item.end { return "\(day) · \(PlannerStyle.range(s, e))" }
@@ -289,11 +294,17 @@ struct PlannerQuickView: View {
     }
 
     private var sourceLine: String {
+        if let sourceOverride { return sourceOverride }
         if let ev = event {
             return "\(ev.source == .work ? "Work" : "Personal") calendar · \(ev.calendarTitle)"
         }
         if item.isBlock {
             return item.taskUUID?.isEmpty == false ? "Planned task · \(PlannerFormat.duration(item.durationMinutes))" : "Dexter block"
+        }
+        // An All Day task pill has no hour (#695).
+        if item.start == nil {
+            if item.overdueDays > 0 { return item.overdueDays == 1 ? "Task · 1 day overdue" : "Task · \(item.overdueDays) days overdue" }
+            return "Task · due today, no time"
         }
         return "Task due at this time"
     }
@@ -320,10 +331,13 @@ struct PlannerQuickView: View {
 ///
 /// Stacked `onTapGesture(count: 2)` / `onTapGesture` makes a single click wait
 /// for the double-click interval and is not reachable from a test. Here a
-/// click-count-1 release opens the quick view at once, and the second click of
-/// a double click (count 2) opens the editor, which closes the quick view. The
-/// quick view is an `.applicationDefined` popover that never closes on a click
-/// on its own anchor, so the second click always arrives here.
+/// click-count-1 release calls `onClick` at once and a count-2 release calls
+/// `onDoubleClick`. Since #695 the Planner wires BOTH to the quick view: the
+/// first click on any item shows its options, and a double click lands on the
+/// same card instead of skipping to the editor. Edit is one click away in it.
+/// `acceptsFirstMouse` makes the first click count even when the window is
+/// not key. The quick view is an `.applicationDefined` popover that never
+/// closes on a click on its own anchor, so the second click arrives here.
 final class PlannerTileClickView: NSView {
     var onClick: () -> Void = {}
     var onDoubleClick: () -> Void = {}
@@ -382,6 +396,43 @@ enum PlannerNSMenu {
             menu.addItem(item)
         }
         return menu
+    }
+}
+
+extension View {
+    /// One Mac model for every Planner item (#695): grid tiles, All Day pills
+    /// and the week view's all-day tiles. Any click, single or double, opens
+    /// the item's quick view anchored to it; right click gives its menu.
+    func plannerMacClickTarget(_ item: PlannerItem, actions: PlannerTileActions?,
+                               preferredEdge: NSRectEdge = .maxX,
+                               onClick: @escaping () -> Void) -> some View {
+        self
+            .overlay {
+                PlannerTileClickLayer(
+                    label: item.title,
+                    onClick: onClick,
+                    onDoubleClick: onClick,
+                    menuEntries: { actions?.menu(for: item) ?? [] },
+                    onCommand: { actions?.run($0, item) }
+                )
+            }
+            .macAnchoredPopover(
+                isPresented: Binding(
+                    get: { actions?.quickViewID == item.id },
+                    set: { shown in if !shown, actions?.quickViewID == item.id { actions?.dismissQuickView() } }
+                ),
+                // The Planner owns dismissal: a click outside closes it, a click
+                // on the item itself does not, so a double click reaches it.
+                behavior: .applicationDefined,
+                preferredEdge: preferredEdge
+            ) {
+                PlannerQuickView(
+                    item: item,
+                    event: actions?.event(item),
+                    run: { actions?.run($0, item) },
+                    onClose: { actions?.dismissQuickView() }
+                )
+            }
     }
 }
 

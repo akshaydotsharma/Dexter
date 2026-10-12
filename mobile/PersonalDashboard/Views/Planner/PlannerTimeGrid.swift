@@ -197,33 +197,10 @@ struct PlannerDayColumn: View {
         let face = PlannerTile(item: item, inConflict: inConflict, height: height)
             .frame(width: width, height: tileHeight, alignment: .topLeading)
         #if os(macOS)
+        // Single AND double click open the quick view (#695): no select step,
+        // and a double click never skips past the options to the editor.
         face
-            .overlay {
-                PlannerTileClickLayer(
-                    label: item.title,
-                    onClick: { onTapItem(item) },
-                    onDoubleClick: { onOpenItem(item) },
-                    menuEntries: { tileActions?.menu(for: item) ?? [] },
-                    onCommand: { tileActions?.run($0, item) }
-                )
-            }
-            .macAnchoredPopover(
-                isPresented: Binding(
-                    get: { tileActions?.quickViewID == item.id },
-                    set: { shown in if !shown, tileActions?.quickViewID == item.id { tileActions?.dismissQuickView() } }
-                ),
-                // The Planner owns dismissal: a click outside closes it, a click
-                // on the tile itself does not, so a double click reaches the tile.
-                behavior: .applicationDefined,
-                preferredEdge: .maxX
-            ) {
-                PlannerQuickView(
-                    item: item,
-                    event: tileActions?.event(item),
-                    run: { tileActions?.run($0, item) },
-                    onClose: { tileActions?.dismissQuickView() }
-                )
-            }
+            .plannerMacClickTarget(item, actions: tileActions) { onTapItem(item) }
             .frame(width: width, height: tileHeight)
         #else
         if Self.isMovable(item) {
@@ -453,12 +430,22 @@ struct PlannerDayTimeGrid: View {
 
     @State private var topHour: Int?
 
+    private var pillTap: (PlannerItem) -> Void {
+        #if os(macOS)
+        onTapItem
+        #else
+        onOpenItem
+        #endif
+    }
+
     var body: some View {
         let allDay = day.allDay.filter { visible.contains($0.source) }
         VStack(spacing: 0) {
             if !allDay.isEmpty {
                 PlannerAllDayRow(
-                    items: allDay, onTap: onOpenItem,
+                    // Mac: a pill opens its quick view like a tile (#695).
+                    // iPhone: a tap opens the task, unchanged.
+                    items: allDay, onTap: pillTap,
                     dragMinutes: draft.allDayTaskMinutes,
                     onDropTask: draft.onDropAllDayTask
                 )
@@ -565,11 +552,16 @@ struct PlannerWeekTimeGrid: View {
             .buttonStyle(.plain)
             .help("Open \(PlannerStyle.weekdayFormatter.string(from: col.day.day))")
             ForEach(allDay.prefix(2)) { item in
+                #if os(macOS)
+                PlannerTile(item: item, height: 18).frame(height: 18)
+                    .plannerMacClickTarget(item, actions: tileActions) { onTapItem(item) }
+                #else
                 Button { onOpenItem(item) } label: {
                     PlannerTile(item: item, height: 18).frame(height: 18)
                 }
                 .buttonStyle(.plain)
                 .plannerTileMenu(item, actions: tileActions)
+                #endif
             }
             if allDay.count > 2 {
                 Text("+\(allDay.count - 2) more").font(.edCaption).foregroundStyle(Tokens.muted)

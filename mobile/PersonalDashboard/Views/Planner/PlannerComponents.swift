@@ -341,10 +341,19 @@ struct PlannerAllDayRow: View {
         .padding(.trailing, Space.sm)
     }
 
+    @ViewBuilder
     private func button(_ item: PlannerItem) -> some View {
+        #if os(macOS)
+        // The same click layer as a grid tile (#695): the first click counts
+        // in a window that is not key, and single or double click both open
+        // the quick view anchored to the pill.
+        pill(item)
+            .plannerMacClickTarget(item, actions: tileActions, preferredEdge: .maxY) { onTap(item) }
+        #else
         Button { onTap(item) } label: { pill(item) }
             .buttonStyle(.plain)
             .plannerTileMenu(item, actions: tileActions)
+        #endif
     }
 
     #if os(iOS)

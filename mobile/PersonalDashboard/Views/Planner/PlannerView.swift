@@ -324,8 +324,14 @@ struct PlannerView: View {
                     onDrop: { c, t in dropTask(c.task.id, title: c.task.title, at: t) },
                     selectedID: selectedToPlanID,
                     editingID: editingTodo?.id.uuidString,
+                    quickViewID: quickView?.id,
                     onSelect: { selectedToPlanID = $0.task.id },
-                    onOpen: { openTaskEditor($0.task) },
+                    onQuickView: { c in
+                        resolveDraft()
+                        withAnimation(.easeOut(duration: 0.18)) { quickView = toPlanItem(c) }
+                    },
+                    onCloseQuickView: { quickView = nil },
+                    quickView: { c in AnyView(toPlanQuickView(c)) },
                     onCommand: { cmd, c in runToPlan(cmd, c.task) },
                     onCloseEditor: { editingTodo = nil },
                     editor: { c in
@@ -1109,6 +1115,35 @@ struct PlannerView: View {
         editingTodo = row.toDTO()
     }
 
+    /// The quick view's id for a To-plan row. It shares `quickView` with the
+    /// tiles, so every path that closes a tile's quick view closes this too.
+    static func toPlanQuickID(_ taskID: String) -> String { "p-\(taskID)" }
+
+    /// A To-plan task as a quick view item: a task with no time on the Planner.
+    private func toPlanItem(_ c: PlannerEngine.Candidate) -> PlannerItem {
+        PlannerItem(
+            id: Self.toPlanQuickID(c.task.id), title: c.task.title, detail: "", source: .task,
+            start: nil, end: nil, durationMinutes: c.estimateMinutes, origin: .taskDue,
+            taskUUID: c.task.id, priority: c.task.priority, overdueDays: c.overdueDays,
+            completed: c.task.completed
+        )
+    }
+
+    /// The To-plan row's quick view: its commands go to the Tasks editor and
+    /// the task delete, the same as its right-click menu.
+    private func toPlanQuickView(_ c: PlannerEngine.Candidate) -> some View {
+        PlannerQuickView(
+            item: toPlanItem(c), event: nil,
+            run: { cmd in
+                quickView = nil
+                runToPlan(cmd, c.task)
+            },
+            onClose: { withAnimation(.easeOut(duration: 0.18)) { quickView = nil } },
+            whenOverride: PlannerToPlanRow.meta(c),
+            sourceOverride: "Task · not planned yet"
+        )
+    }
+
     private func runToPlan(_ cmd: PlannerTileCommand, _ task: PlannerTask) {
         switch cmd {
         case .edit, .details: openTaskEditor(task)
@@ -1532,12 +1567,18 @@ struct PlannerInspector: View {
     @Environment(\.plannerTaskDrag) private var taskDrag
     /// A row dragged onto the grid and released over a slot (#687 fix).
     var onDrop: (PlannerEngine.Candidate, PlannerTaskDragCoordinator.Target) -> Void = { _, _ in }
-    /// #687 round 6: a single click selects a row, a double click opens the
-    /// Tasks section's editor anchored to it, right click gives Edit and Delete.
+    /// #695: any click on a row, single or double, selects it AND opens its
+    /// quick view anchored to it (Mark complete, Edit, Delete), the same model
+    /// as a tile. The selection is only a highlight; nothing waits on it.
+    /// Edit in the quick view opens the Tasks section's editor; right click
+    /// gives the same commands.
     var selectedID: String? = nil
     var editingID: String? = nil
+    var quickViewID: String? = nil
     var onSelect: (PlannerEngine.Candidate) -> Void = { _ in }
-    var onOpen: (PlannerEngine.Candidate) -> Void = { _ in }
+    var onQuickView: (PlannerEngine.Candidate) -> Void = { _ in }
+    var onCloseQuickView: () -> Void = {}
+    var quickView: (PlannerEngine.Candidate) -> AnyView = { _ in AnyView(EmptyView()) }
     var onCommand: (PlannerTileCommand, PlannerEngine.Candidate) -> Void = { _, _ in }
     var onCloseEditor: () -> Void = {}
     var editor: (PlannerEngine.Candidate) -> AnyView = { _ in AnyView(EmptyView()) }
@@ -1598,8 +1639,8 @@ struct PlannerInspector: View {
                                     .background(PlannerTaskDragSource(
                                         payload: .init(c),
                                         onEnd: { t in if let t { onDrop(c, t) } },
-                                        onClick: { onSelect(c) },
-                                        onDoubleClick: { onOpen(c) },
+                                        onClick: { onSelect(c); onQuickView(c) },
+                                        onDoubleClick: { onSelect(c); onQuickView(c) },
                                         menuEntries: { PlannerTileMenu.toPlanEntries(for: c.task) },
                                         onCommand: { onCommand($0, c) }
                                     ))
@@ -1616,6 +1657,18 @@ struct PlannerInspector: View {
                                     ) {
                                         editor(c)
                                     }
+                                    .macAnchoredPopover(
+                                        isPresented: Binding(
+                                            get: { quickViewID == PlannerView.toPlanQuickID(c.task.id) },
+                                            set: { if !$0, quickViewID == PlannerView.toPlanQuickID(c.task.id) { onCloseQuickView() } }
+                                        ),
+                                        // Like a tile: a click on the row itself never
+                                        // closes it, so a double click reaches the row.
+                                        behavior: .applicationDefined,
+                                        preferredEdge: .minX
+                                    ) {
+                                        quickView(c)
+                                    }
                                     #endif
                                     .padding(.horizontal, 8)
                                     .plannerLifted(taskDrag.payload?.taskID == c.task.id)
@@ -1627,7 +1680,7 @@ struct PlannerInspector: View {
                 }
             }
             Rectangle().fill(Tokens.border).frame(height: 1)
-            Text("Double-click a task to edit it. Drag it onto the grid to plan it at a time, or use Plan for a day or a slot.")
+            Text("Click a task for its options. Drag it onto the grid to plan it at a time, or use Plan for a day or a slot.")
                 .font(.edCaption).foregroundStyle(Tokens.muted)
                 .padding(12)
         }
