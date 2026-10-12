@@ -123,9 +123,33 @@ struct PlannerDayColumn: View {
         return false
     }
 
-    /// Dexter tiles also MOVE (#693), by the same rule as resize: a manual
-    /// block or a task tile, never a calendar event.
-    static func isMovable(_ item: PlannerItem) -> Bool { isResizable(item) }
+    /// Tiles that MOVE: a manual block or a task tile (#693), and since #697 a
+    /// timed calendar event too, which moves in Dexter only (the calendar never
+    /// changes). An event still never resizes.
+    ///
+    /// `event` is the event behind the tile, when there is one. An event cut
+    /// at midnight (it starts the day before, or runs into the next) does not
+    /// move: its tile shows only part of it, so the tile's length is not the
+    /// event's length.
+    static func isMovable(_ item: PlannerItem, event: PlannerEvent? = nil) -> Bool {
+        if isResizable(item) { return true }
+        guard case .event = item.origin, item.occupiesTime, let ev = event, !ev.isAllDay,
+              ev.start == item.start, ev.end == item.end else { return false }
+        return true
+    }
+
+    /// What a tile reports while it is dragged to a new time (#693, #697).
+    private func moveHandlers(_ item: PlannerItem) -> PlannerTileMoveHandlers {
+        PlannerTileMoveHandlers(
+            onBegin: { draft.onMoveBegin() },
+            onChange: { delta in move = (item.id, movedStart(item, delta: delta)) },
+            onCommit: { delta in
+                let start = movedStart(item, delta: delta)
+                move = nil
+                commitMove(item, to: start)
+            }
+        )
+    }
 
     /// The start a tile dragged by `delta` points lands on. Its own start,
     /// to the second, when the drag is too short to count.
@@ -196,17 +220,20 @@ struct PlannerDayColumn: View {
     private func tile(_ item: PlannerItem, inConflict: Bool, height: CGFloat, width: CGFloat, tileHeight: CGFloat) -> some View {
         let face = PlannerTile(item: item, inConflict: inConflict, height: height)
             .frame(width: width, height: tileHeight, alignment: .topLeading)
+        let movable = Self.isMovable(item, event: tileActions?.event(item))
         #if os(macOS)
         // Single AND double click open the quick view (#695): no select step,
-        // and a double click never skips past the options to the editor.
+        // and a double click never skips past the options to the editor. A
+        // drag on the body moves the tile (#697).
         face
-            .plannerMacClickTarget(item, actions: tileActions) { onTapItem(item) }
+            .plannerMacClickTarget(item, actions: tileActions, move: movable ? moveHandlers(item) : nil) { onTapItem(item) }
             .frame(width: width, height: tileHeight)
         #else
-        if Self.isMovable(item) {
-            // A Dexter tile (#693): one UIKit layer owns tap (quick view) and
-            // touch and hold (lift and move). The hold replaces the context
-            // menu here; Edit and Delete are on the quick view a tap opens.
+        if movable {
+            // A Dexter tile (#693) or a timed event (#697): one UIKit layer
+            // owns tap (quick view) and touch and hold (lift and move). The
+            // hold replaces the context menu here; every command is on the
+            // quick view a tap opens.
             face
                 .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier("planner.tile.\(item.title)")
@@ -218,16 +245,13 @@ struct PlannerDayColumn: View {
                     commitMove(item, to: movedStart(item, delta: hourHeight / 4))
                 }
                 .overlay {
+                    let h = moveHandlers(item)
                     PlannerTileMoveLayer(
                         identifier: "planner.move.\(item.title)",
                         onTap: { onTapItem(item) },
-                        onChange: { delta in move = (item.id, movedStart(item, delta: delta)) },
-                        onCommit: { delta in
-                            let start = movedStart(item, delta: delta)
-                            move = nil
-                            commitMove(item, to: start)
-                        },
-                        onBegin: { draft.onMoveBegin() }
+                        onChange: h.onChange,
+                        onCommit: h.onCommit,
+                        onBegin: h.onBegin
                     )
                 }
                 .frame(width: width, height: tileHeight)
@@ -263,6 +287,21 @@ struct PlannerDayColumn: View {
                         draft.onCommit(d.start, d.end)
                     }
                 )
+                // #697: while a tile is moved, a faint ghost holds its
+                // ORIGINAL slot, under the moving tile, so it is clear where
+                // it came from. Gone on commit or cancel; never on a resize.
+                if let m = move, let item = items.first(where: { $0.id == m.id }),
+                   let s = item.start, let e = item.end {
+                    let g = PlannerEngine.tileGeometry(
+                        start: s, end: e, dayStart: day.day,
+                        hourHeight: hourHeight, minHeight: PlannerGridMetrics.minTileHeight
+                    )
+                    let lane = lanes[item.id]
+                    let laneW = w / CGFloat(max(1, lane?.count ?? 1))
+                    PlannerMoveGhost(item: item, height: g.height - 1)
+                        .frame(width: max(8, laneW - 3), height: max(PlannerGridMetrics.minTileHeight, g.height - 1))
+                        .offset(x: laneW * CGFloat(lane?.index ?? 0) + 1, y: g.y)
+                }
                 ForEach(items) { item in
                     // While its edge is dragged, a tile shows the new end live;
                     // while it is moved (#693), its new start, same length.
@@ -345,6 +384,37 @@ struct PlannerDayColumn: View {
             }
         }
         .frame(height: hourHeight * 24)
+    }
+}
+
+// MARK: - Move ghost (#697)
+
+/// Where a tile sat before it was picked up: the same frame at the original
+/// time, a light wash of its source colour, a dashed edge and the original
+/// time range. Never takes a touch or a click.
+struct PlannerMoveGhost: View {
+    let item: PlannerItem
+    var height: CGFloat
+
+    var body: some View {
+        let c = PlannerStyle.color(item.source)
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 5, style: .continuous).fill(c.opacity(0.08))
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .strokeBorder(c.opacity(0.55), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            if height >= 18, let s = item.start, let e = item.end {
+                Text(PlannerStyle.range(s, e))
+                    .font(.system(size: 9.5, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.muted)
+                    .lineLimit(1)
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Original time of \(item.title)")
+        .accessibilityIdentifier("planner.ghost.\(item.title)")
     }
 }
 

@@ -1104,7 +1104,8 @@ final class DataImportService {
                     appliesToSeries: dto.appliesToSeries ?? false,
                     createdAt: dto.createdAt,
                     updatedAt: dto.updatedAt,
-                    deletedAt: dto.deletedAt
+                    deletedAt: dto.deletedAt,
+                    movedStart: dto.movedStart
                 ))
             }
 

@@ -116,7 +116,7 @@ struct PlannerSettingsView: View {
 
     private func overrideRow(_ o: LocalEventOverride) -> some View {
         HStack(spacing: Space.sm) {
-            Image(systemName: o.actionEnum == .hidden ? "eye.slash" : "xmark.circle")
+            Image(systemName: Self.symbol(o.actionEnum))
                 .foregroundStyle(Tokens.muted)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 1) {
@@ -135,8 +135,22 @@ struct PlannerSettingsView: View {
         .padding(.horizontal, Space.md).padding(.vertical, Space.sm)
     }
 
+    private static func symbol(_ a: EventOverrideAction) -> String {
+        switch a {
+        case .hidden: return "eye.slash"
+        case .declined: return "xmark.circle"
+        case .moved: return "clock.arrow.circlepath"
+        }
+    }
+
     private func overrideDetail(_ o: LocalEventOverride) -> String {
-        let what = o.actionEnum == .hidden ? "Hidden" : "Declined"
+        let what: String
+        switch o.actionEnum {
+        case .hidden: what = "Hidden"
+        case .declined: what = "Declined"
+        // #697: `eventStart` is where it was moved to.
+        case .moved: what = "Moved in Dexter to"
+        }
         let when: String
         if o.appliesToSeries {
             when = "every occurrence"

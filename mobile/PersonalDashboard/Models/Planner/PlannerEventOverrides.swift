@@ -7,6 +7,8 @@ struct EventOverrideRule: Equatable, Sendable {
     /// Nil: every occurrence (or the one non-repeating event).
     let occurrenceStart: Date?
     let action: EventOverrideAction
+    /// #697: a `moved` rule's new start. Nil for every other action.
+    var movedStart: Date? = nil
 
     func matches(_ event: PlannerEvent) -> Bool {
         guard !eventKey.isEmpty, eventKey == event.eventKey else { return false }
@@ -36,16 +38,28 @@ enum PlannerDeclineState: String, Equatable, Sendable {
 /// - Hidden wins over declined.
 /// - An event declined at the source stays declined whatever Dexter says; an
 ///   Undo in Dexter cannot un-decline what the calendar says.
+/// - A `moved` rule (#697) shows the event at its new start with its own
+///   length, and records the calendar's start in `movedFrom`. The row id and
+///   `occurrenceDate` do not change, so every other rule still matches it and
+///   the meter, free time and conflicts all see the moved time. A timed event
+///   only: an all-day event has no hour to move.
 enum PlannerEventOverrides {
     static func apply(_ events: [PlannerEvent], rules: [EventOverrideRule]) -> [PlannerEvent] {
         guard !rules.isEmpty else { return events }
         let hidden = rules.filter { $0.action == .hidden }
         let declined = rules.filter { $0.action == .declined }
+        let moved = rules.filter { $0.action == .moved && $0.movedStart != nil }
         return events.compactMap { ev in
             if hidden.contains(where: { $0.matches(ev) }) { return nil }
             var out = ev
             if out.decline == .none, declined.contains(where: { $0.matches(ev) }) {
                 out.decline = .inDexter
+            }
+            if !ev.isAllDay, let rule = moved.first(where: { $0.matches(ev) }), let to = rule.movedStart,
+               abs(to.timeIntervalSince(ev.start)) >= 1 {
+                out.start = to
+                out.end = to.addingTimeInterval(ev.end.timeIntervalSince(ev.start))
+                out.movedFrom = ev.start
             }
             return out
         }

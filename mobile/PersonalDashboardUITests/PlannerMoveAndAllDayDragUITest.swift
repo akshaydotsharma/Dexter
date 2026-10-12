@@ -207,4 +207,48 @@ final class PlannerMoveAndAllDayDragUITest: XCTestCase {
         XCTAssertTrue(app.buttons["planner.quick.edit"].waitForExistence(timeout: 5), "a tap opens the quick view")
         keep("8-tap-opens-quick-view", app)
     }
+
+    // MARK: Move a calendar event in Dexter only (#697)
+
+    /// Needs a timed calendar event "Exec review" 3:30 to 4:30 PM today in the
+    /// simulator's calendar. The calendar itself never changes; Reset in the
+    /// quick view puts the event back at its calendar time.
+    func testHoldAndDragMovesACalendarEventAndResetPutsItBack() throws {
+        let app = launch()
+        let ev = tile(app, "Exec review")
+        XCTAssertTrue(ev.waitForExistence(timeout: 5), "the seeded event is on today's grid")
+        bringIntoView(app) { ev.frame.midY }
+        XCTAssertTrue(ev.label.contains("3:30 - 4:30 PM"), ev.label)
+
+        let from = ev.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        from.press(forDuration: 0.6, thenDragTo: from.withOffset(CGVector(dx: 0, dy: hourHeight)),
+                   withVelocity: .slow, thenHoldForDuration: 0.4)
+        let moved = tile(app, "Exec review")
+        waitForLabel(moved, contains: "4:30 - 5:30 PM")
+        keep("9-event-moved-in-dexter", app)
+
+        bringIntoView(app) { moved.frame.midY }
+        moved.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+        let note = app.staticTexts["planner.quick.movednote"].firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 5), "the quick view says it was moved in Dexter")
+        XCTAssertTrue(note.label.contains("3:30 - 4:30 PM"), note.label)
+        keep("10-event-quick-view-moved", app)
+        app.buttons["planner.quick.resetmove"].firstMatch.tap()
+        waitForLabel(tile(app, "Exec review"), contains: "3:30 - 4:30 PM")
+    }
+
+    /// #697: the hold now makes the scroll pan wait for it to fail. A swipe
+    /// that STARTS on a tile must still scroll the grid and move nothing.
+    func testASwipeThatStartsOnATileStillScrollsTheGrid() throws {
+        let app = launch()
+        let block = tile(app, "Standup notes")
+        XCTAssertTrue(block.waitForExistence(timeout: 5))
+        bringIntoView(app) { block.frame.midY }
+        let before = block.frame.midY
+        let from = block.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        from.press(forDuration: 0.02, thenDragTo: from.withOffset(CGVector(dx: 0, dy: -120)), withVelocity: .fast, thenHoldForDuration: 0.2)
+        sleep(1)
+        XCTAssertLessThan(tile(app, "Standup notes").frame.midY, before - 60, "the grid scrolled")
+        XCTAssertTrue(tile(app, "Standup notes").label.contains("9 - 10 AM"), "and the block did not move")
+    }
 }

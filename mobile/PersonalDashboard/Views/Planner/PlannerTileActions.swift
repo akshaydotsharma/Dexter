@@ -21,6 +21,8 @@ enum PlannerTileCommand: Equatable {
     case remove(EventOverrideService.Scope?)
     /// Mark the Dexter task behind the tile complete, or reopen it (#695).
     case toggleComplete
+    /// Put an event Dexter shows moved back at its calendar time (#697).
+    case resetMove
 }
 
 /// One line of a tile's context menu, as data, so the iPhone's SwiftUI menu
@@ -57,6 +59,10 @@ enum PlannerTileMenu {
                 out.append(scoped("Decline in Dexter", "xmark.circle", ev) { .decline($0) })
             }
             out.append(scoped("Remove from Planner", "eye.slash", ev) { .remove($0) })
+            if ev.isMovedInDexter {
+                out.append(.divider)
+                out.append(.init(title: "Reset to calendar time", systemImage: "clock.arrow.circlepath", command: .resetMove))
+            }
             return out
         }
         var out: [PlannerMenuEntry] = []
@@ -265,6 +271,20 @@ struct PlannerQuickView: View {
                             .font(.edCaption.weight(.medium))
                             .foregroundStyle(Tokens.danger)
                     }
+                    if let ev = event, let from = ev.movedFrom {
+                        // #697: moved in Dexter only; the calendar keeps its time.
+                        Text("Moved in Dexter · calendar time \(PlannerStyle.range(from, from.addingTimeInterval(ev.end.timeIntervalSince(ev.start))))")
+                            .font(.edCaption.weight(.medium))
+                            .foregroundStyle(Tokens.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("planner.quick.movednote")
+                        Button("Reset to calendar time") { run(.resetMove) }
+                            .buttonStyle(.plain)
+                            .font(.edCaption.weight(.semibold))
+                            .foregroundStyle(Tokens.accentTasks)
+                            .padding(.top, 1)
+                            .accessibilityIdentifier("planner.quick.resetmove")
+                    }
                     if let ev = event, !ev.location.isEmpty {
                         Label(ev.location, systemImage: "mappin.and.ellipse")
                             .font(.edCaption)
@@ -324,6 +344,17 @@ struct PlannerQuickView: View {
     }
 }
 
+// MARK: - Move handlers
+
+/// What a tile reports while its body is dragged to a new time (#697): the
+/// distance in points, downward positive. The caller snaps it with
+/// `PlannerDragGeometry.movedStart`.
+struct PlannerTileMoveHandlers {
+    var onBegin: () -> Void
+    var onChange: (CGFloat) -> Void
+    var onCommit: (CGFloat) -> Void
+}
+
 // MARK: - Mac click handling
 
 #if os(macOS)
@@ -338,6 +369,13 @@ struct PlannerQuickView: View {
 /// `acceptsFirstMouse` makes the first click count even when the window is
 /// not key. The quick view is an `.applicationDefined` popover that never
 /// closes on a click on its own anchor, so the second click arrives here.
+///
+/// A drag on the body MOVES the tile (#697), when the tile can move: a press
+/// that travels `PlannerDragGeometry.dragThreshold` points or more is a move
+/// and never a click. The distance is measured in WINDOW space, because the
+/// tile (and this view) follows the pointer while it is dragged; measured in
+/// this view's own space the distance would feed back into itself, the
+/// #687 round 5 resize flicker.
 final class PlannerTileClickView: NSView {
     var onClick: () -> Void = {}
     var onDoubleClick: () -> Void = {}
@@ -345,15 +383,54 @@ final class PlannerTileClickView: NSView {
     var menuEntries: () -> [PlannerMenuEntry] = { [] }
     var onCommand: (PlannerTileCommand) -> Void = { _ in }
     var label = ""
+    /// Nil: the tile does not move, and a drag does nothing.
+    var move: PlannerTileMoveHandlers?
+
+    /// Where the press went down, in window space.
+    private(set) var anchor: CGPoint?
+    private(set) var isMoving = false
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func mouseDown(with event: NSEvent) {}
+    /// The drag distance, downward positive. A window's y grows upward;
+    /// without a window (headless tests) the point is already in this flipped
+    /// view's space, where y grows down. The same rule as the resize strip.
+    func dragDistance(from anchor: CGPoint, to event: NSEvent) -> CGFloat {
+        window != nil ? anchor.y - event.locationInWindow.y : event.locationInWindow.y - anchor.y
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        anchor = event.locationInWindow
+        isMoving = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let anchor, let move else { return }
+        if !isMoving {
+            guard PlannerDragGeometry.isDrag(from: anchor, to: event.locationInWindow) else { return }
+            isMoving = true
+            NSCursor.closedHand.push()
+            move.onBegin()
+        }
+        move.onChange(dragDistance(from: anchor, to: event))
+    }
 
     override func mouseUp(with event: NSEvent) {
+        let start = anchor
+        anchor = nil
+        if isMoving {
+            isMoving = false
+            NSCursor.pop()
+            if let start, let move { move.onCommit(dragDistance(from: start, to: event)) }
+            return
+        }
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         if event.clickCount >= 2 { onDoubleClick() } else { onClick() }
+    }
+
+    override func resetCursorRects() {
+        if move != nil { addCursorRect(bounds, cursor: .openHand) }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -405,6 +482,7 @@ extension View {
     /// the item's quick view anchored to it; right click gives its menu.
     func plannerMacClickTarget(_ item: PlannerItem, actions: PlannerTileActions?,
                                preferredEdge: NSRectEdge = .maxX,
+                               move: PlannerTileMoveHandlers? = nil,
                                onClick: @escaping () -> Void) -> some View {
         self
             .overlay {
@@ -413,7 +491,8 @@ extension View {
                     onClick: onClick,
                     onDoubleClick: onClick,
                     menuEntries: { actions?.menu(for: item) ?? [] },
-                    onCommand: { actions?.run($0, item) }
+                    onCommand: { actions?.run($0, item) },
+                    move: move
                 )
             }
             .macAnchoredPopover(
@@ -442,6 +521,7 @@ struct PlannerTileClickLayer: NSViewRepresentable {
     let onDoubleClick: () -> Void
     let menuEntries: () -> [PlannerMenuEntry]
     let onCommand: (PlannerTileCommand) -> Void
+    var move: PlannerTileMoveHandlers? = nil
 
     func makeNSView(context: Context) -> PlannerTileClickView {
         let v = PlannerTileClickView()
@@ -455,6 +535,9 @@ struct PlannerTileClickLayer: NSViewRepresentable {
         v.onDoubleClick = onDoubleClick
         v.menuEntries = menuEntries
         v.onCommand = onCommand
+        let hadMove = v.move != nil
+        v.move = move
+        if hadMove != (move != nil) { v.window?.invalidateCursorRects(for: v) }
         v.setAccessibilityIdentifier("planner.tile.\(label)")
     }
 }

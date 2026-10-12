@@ -3,7 +3,7 @@ import SwiftData
 import CryptoKit
 
 /// A Dexter-only decision about a calendar event (#689): hide it from the
-/// Planner, or treat it as declined.
+/// Planner, treat it as declined, or (#697) show it at another time.
 ///
 /// Dexter never writes to a calendar, so this row is the whole of the
 /// decision. The organiser is not told and the source calendar does not
@@ -42,6 +42,10 @@ final class LocalEventOverride {
 
     /// Saved for the restore list, because the event may no longer load.
     var title: String = ""
+    /// The event's start, for the restore list. For a `moved` row (#697) it is
+    /// the start the event was moved TO, the same value as `movedStart`: this
+    /// column already round-trips through a peer on an older build, so the
+    /// move survives one that never heard of `movedStart`.
     var eventStart: Date = Date(timeIntervalSince1970: 0)
     var calendarTitle: String = ""
     /// True when the decision covers every occurrence of a repeating event,
@@ -54,6 +58,11 @@ final class LocalEventOverride {
     /// Set by Undo and by Restore. A later decision revives the same row.
     var deletedAt: Date? = nil
 
+    /// #697, additive: where a `moved` event now starts, in Dexter only. The
+    /// event keeps its own length. Nil on every other action. The default sits
+    /// on the declaration (#555).
+    var movedStart: Date? = nil
+
     init(
         clientUUID: String,
         eventKey: String,
@@ -65,7 +74,8 @@ final class LocalEventOverride {
         appliesToSeries: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        movedStart: Date? = nil
     ) {
         self.clientUUID = clientUUID
         self.eventKey = eventKey
@@ -78,19 +88,56 @@ final class LocalEventOverride {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deletedAt = deletedAt
+        self.movedStart = movedStart
     }
 
-    var actionEnum: EventOverrideAction { EventOverrideAction(rawValue: action) ?? .hidden }
+    /// A `moved` row is told apart by its key prefix as well as its action,
+    /// because a peer on an older build rewrites an action it does not know
+    /// to `hidden` (#697). See `EventOverrideMove`.
+    var actionEnum: EventOverrideAction {
+        if EventOverrideMove.isMovedKey(eventKey) { return .moved }
+        return EventOverrideAction(rawValue: action) ?? .hidden
+    }
 
     /// The value the engine reads.
     var rule: EventOverrideRule {
-        EventOverrideRule(id: clientUUID, eventKey: eventKey, occurrenceStart: occurrenceStart, action: actionEnum)
+        let a = actionEnum
+        if a == .moved {
+            return EventOverrideRule(
+                id: clientUUID, eventKey: EventOverrideMove.realKey(eventKey),
+                occurrenceStart: occurrenceStart, action: .moved,
+                movedStart: movedStart ?? eventStart
+            )
+        }
+        return EventOverrideRule(id: clientUUID, eventKey: eventKey, occurrenceStart: occurrenceStart, action: a)
     }
 }
 
 enum EventOverrideAction: String, Codable, Sendable {
     case hidden
     case declined
+    /// #697: shown at another time, in Dexter only. One occurrence at a time.
+    case moved
+}
+
+/// How a move is stored so a peer on an older build can neither hide the
+/// event nor lose the move (#697).
+///
+/// An older build maps an action it does not know to `hidden` and drops
+/// columns it does not know (`project_peer_upsert_nulls_unknown_fields`), and
+/// then broadcasts its copy back. So a moved row stores its key as
+/// `moved:<key>`. An older build compares that key with real event keys,
+/// finds no match, and the row does nothing there. This build reads the
+/// prefix as `moved` whatever the action says, and reads the new start from
+/// `movedStart`, or from `eventStart` when an older peer dropped `movedStart`.
+enum EventOverrideMove {
+    static let prefix = "moved:"
+
+    static func storedKey(_ key: String) -> String { prefix + key }
+    static func isMovedKey(_ key: String) -> Bool { key.hasPrefix(prefix) }
+    static func realKey(_ key: String) -> String {
+        isMovedKey(key) ? String(key.dropFirst(prefix.count)) : key
+    }
 }
 
 /// Builds the one id a decision can have.
