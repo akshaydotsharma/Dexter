@@ -43,8 +43,9 @@ struct PlannerEvent: Identifiable, Equatable, Sendable {
     let calendarTitle: String
     /// `.work` or `.personal`, decided by the calendar's tag.
     let source: PlannerSource
-    let start: Date
-    let end: Date
+    /// `var` for the override gate: a Dexter-only move (#697) changes these.
+    var start: Date
+    var end: Date
     let isAllDay: Bool
     /// The event's notes, for the read-only details sheet (#687 round 3).
     var notes: String = ""
@@ -58,6 +59,11 @@ struct PlannerEvent: Identifiable, Equatable, Sendable {
     var isRecurring: Bool = false
     /// Declined at the source, declined in Dexter, or neither (#689).
     var decline: PlannerDeclineState = .none
+    /// #697: the calendar's own start, when Dexter shows the event moved.
+    /// Nil when it is at its calendar time.
+    var movedFrom: Date? = nil
+
+    var isMovedInDexter: Bool { movedFrom != nil }
 }
 
 /// A `LocalPlanBlock`, as a value.

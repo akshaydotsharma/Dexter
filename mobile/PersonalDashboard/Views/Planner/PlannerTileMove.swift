@@ -35,22 +35,30 @@ struct PlannerTileMoveLayer: View {
     }
 }
 
-final class PlannerTileMoveView: UIView {
+final class PlannerTileMoveView: UIView, UIGestureRecognizerDelegate {
     var onTap: (() -> Void)?
     var onBegin: (() -> Void)?
     var onChange: ((CGFloat) -> Void)?
     var onCommit: ((CGFloat) -> Void)?
     private var anchorY: CGFloat?
     private weak var pausedScroll: UIScrollView?
+    private(set) var hold: UILongPressGestureRecognizer!
 
     static let holdDuration: TimeInterval = 0.3
+    /// How far a finger may drift during the hold before it counts as a
+    /// scroll (#697). UIKit's default is 10pt, which a resting thumb on a
+    /// 120 Hz screen can cross while it waits; a little more keeps the hold.
+    static let allowableMovement: CGFloat = 16
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
         hold.minimumPressDuration = Self.holdDuration
+        hold.allowableMovement = Self.allowableMovement
+        hold.delegate = self
         addGestureRecognizer(hold)
+        self.hold = hold
         // A tap waits for the hold to fail, so a hold never also opens the
         // quick view. A short tap fails the hold on touch-up, so it is not
         // delayed.
@@ -63,11 +71,35 @@ final class PlannerTileMoveView: UIView {
 
     @objc private func handleTap() { onTap?() }
 
+    // MARK: Arbitration (#697)
+
+    /// The hold must not run beside anything else. In particular not beside
+    /// the grid's scroll pan, which on a real finger can begin first and
+    /// carry the touch off as a scroll.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        false
+    }
+
+    /// For a touch that starts on a tile, the scroll pan (and any other pan or
+    /// hold above the tile, such as SwiftUI's own) waits until the hold has
+    /// failed. The hold fails at once when the finger moves more than
+    /// `allowableMovement` or lifts, so a swipe that starts on a tile still
+    /// scrolls; only a finger held still for 0.3 s keeps the tile. Without
+    /// this, the order in which UIKit hands the touch to the recognisers
+    /// decides, and that order is not the same on a device as in a test.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        guard g === hold, other.view !== self else { return false }
+        let wait = other is UIPanGestureRecognizer || other is UILongPressGestureRecognizer
+        if wait { PlannerMoveLog.line("hold blocks \(type(of: other)) on \(other.view.map { String(describing: type(of: $0)) } ?? "nil")") }
+        return wait
+    }
+
     @objc private func handleHold(_ g: UILongPressGestureRecognizer) {
         // Window space: the tile moves under the finger while it is dragged,
         // so a distance measured in this view's own space would feed back
         // into itself (the #687 round 5 resize flicker).
         let y = g.location(in: nil).y
+        PlannerMoveLog.line("hold state=\(g.state.rawValue) y=\(Int(y))")
         switch g.state {
         case .began:
             anchorY = y
@@ -75,6 +107,8 @@ final class PlannerTileMoveView: UIView {
             if let scroll = enclosingScrollView() {
                 scroll.panGestureRecognizer.isEnabled = false
                 pausedScroll = scroll
+            } else {
+                PlannerMoveLog.line("no enclosing scroll view")
             }
             onBegin?()
             onChange?(0)
@@ -106,6 +140,16 @@ final class PlannerTileMoveView: UIView {
             v = current.superview
         }
         return nil
+    }
+}
+
+/// Device evidence for the tile move (#697): `devicectl process launch
+/// --console` streams stderr, so a hold on the phone prints which recogniser
+/// won. One line per state change, only while a finger is on a tile.
+enum PlannerMoveLog {
+    static func line(_ s: String) {
+        let text = "PlannerMove: \(s)\n"
+        FileHandle.standardError.write(Data(text.utf8))
     }
 }
 

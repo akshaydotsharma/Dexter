@@ -747,7 +747,8 @@ final class DataExportService {
             clientUUID: o.clientUUID, eventKey: o.eventKey, occurrenceStart: o.occurrenceStart,
             action: o.action, title: o.title, eventStart: o.eventStart, calendarTitle: o.calendarTitle,
             appliesToSeries: o.appliesToSeries,
-            createdAt: o.createdAt, updatedAt: o.updatedAt, deletedAt: o.deletedAt
+            createdAt: o.createdAt, updatedAt: o.updatedAt, deletedAt: o.deletedAt,
+            movedStart: o.movedStart
         )
     }
 

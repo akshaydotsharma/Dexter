@@ -977,6 +977,8 @@ enum DataArchive {
         var createdAt: Date = Date()
         var updatedAt: Date = Date()
         var deletedAt: Date? = nil
+        /// #697, optional: absent from archives and peers that predate moves.
+        var movedStart: Date? = nil
     }
 
     /// Every model this archive format carries, used for the manifest's claimed

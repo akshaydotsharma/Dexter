@@ -609,7 +609,8 @@ struct PlannerView: View {
 
     /// A tile was picked up and moved (#693): the same length at a new start.
     /// A block keeps its title; a timed task with no block becomes a plan
-    /// block at the new time, as a resize does.
+    /// block at the new time, as a resize does; a calendar event gets a
+    /// Dexter-only move (#697).
     private func moved(_ item: PlannerItem, start: Date, end: Date) {
         if let id = item.blockID {
             write {
@@ -620,6 +621,12 @@ struct PlannerView: View {
             }
         } else if case .taskDue = item.origin, let taskID = item.taskUUID {
             write { try PlanBlockService.default().planTask(taskUUID: taskID, title: item.title, start: start, end: end) }
+        } else if case .event = item.origin {
+            // #697: a calendar event moves in Dexter only. Through the same
+            // gate as the grid, so `ev` carries its calendar start.
+            let shown = PlannerEventOverrides.apply(events, rules: overrideRules)
+            guard let ev = shown.first(where: { "e-\($0.id)" == item.id }) else { return }
+            write { _ = try EventOverrideService.default().move(ev, to: start) }
         }
     }
 
@@ -1065,6 +1072,8 @@ struct PlannerView: View {
             else { declineEvent(ev, .occurrence) }
         case .undoDecline:
             if let ev { undoDecline(ev) }
+        case .resetMove:
+            if let ev { write { try EventOverrideService.default().resetMove(for: ev) } }
         case .remove(let scope):
             guard let ev else { return }
             if let scope { removeEvent(ev, scope) }
