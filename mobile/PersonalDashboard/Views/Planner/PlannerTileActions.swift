@@ -19,6 +19,8 @@ enum PlannerTileCommand: Equatable {
     case undoDecline
     /// Remove from the Planner. Nil scope: ask when the event repeats.
     case remove(EventOverrideService.Scope?)
+    /// Mark the Dexter task behind the tile complete, or reopen it (#695).
+    case toggleComplete
 }
 
 /// One line of a tile's context menu, as data, so the iPhone's SwiftUI menu
@@ -57,7 +59,9 @@ enum PlannerTileMenu {
             out.append(scoped("Remove from Planner", "eye.slash", ev) { .remove($0) })
             return out
         }
-        var out: [PlannerMenuEntry] = [.init(title: "Edit…", systemImage: "pencil", command: .edit)]
+        var out: [PlannerMenuEntry] = []
+        if let complete = completeEntry(for: item) { out.append(complete) }
+        out.append(.init(title: "Edit…", systemImage: "pencil", command: .edit))
         if !PlannerDeletion.choices(for: item).isEmpty {
             out.append(.divider)
             out.append(.init(title: "Delete…", systemImage: "trash", command: .delete, isDestructive: true))
@@ -65,12 +69,33 @@ enum PlannerTileMenu {
         return out
     }
 
-    /// A To-plan row: the task itself, so Edit and Delete.
-    static let toPlanEntries: [PlannerMenuEntry] = [
-        .init(title: "Edit…", systemImage: "pencil", command: .edit),
-        .divider,
-        .init(title: "Delete…", systemImage: "trash", command: .delete, isDestructive: true),
-    ]
+    /// A To-plan row: the task itself, so Mark complete, Edit and Delete.
+    static func toPlanEntries(for task: PlannerTask) -> [PlannerMenuEntry] {
+        [
+            completeEntry(completed: task.completed),
+            .init(title: "Edit…", systemImage: "pencil", command: .edit),
+            .divider,
+            .init(title: "Delete…", systemImage: "trash", command: .delete, isDestructive: true),
+        ]
+    }
+
+    /// True when a tile stands for a Dexter task, so it can be completed: a
+    /// timed or all-day task, or a planned task block. Never a calendar event
+    /// or a manual block with no task (#695).
+    static func canComplete(_ item: PlannerItem) -> Bool {
+        !item.isFixed && !(item.taskUUID ?? "").isEmpty
+    }
+
+    /// The menu line, and the quick view button, for a task's completion.
+    static func completeEntry(for item: PlannerItem) -> PlannerMenuEntry? {
+        canComplete(item) ? completeEntry(completed: item.completed) : nil
+    }
+
+    static func completeEntry(completed: Bool) -> PlannerMenuEntry {
+        completed
+            ? .init(title: "Mark incomplete", systemImage: "arrow.uturn.backward.circle", command: .toggleComplete)
+            : .init(title: "Mark complete", systemImage: "checkmark.circle", command: .toggleComplete)
+    }
 
     private static func scoped(_ title: String, _ image: String, _ ev: PlannerEvent,
                                _ make: (EventOverrideService.Scope) -> PlannerTileCommand) -> PlannerMenuEntry {
@@ -178,6 +203,10 @@ struct PlannerQuickView: View {
     let event: PlannerEvent?
     let run: (PlannerTileCommand) -> Void
     let onClose: () -> Void
+    /// A To-plan task has no day or time on the Planner yet: its row's own
+    /// second line replaces "when", and the source line says it is unplanned.
+    var whenOverride: String? = nil
+    var sourceOverride: String? = nil
 
     private var canDelete: Bool { !PlannerDeletion.choices(for: item).isEmpty }
 
@@ -199,6 +228,11 @@ struct PlannerQuickView: View {
                         iconButton("eye.slash", "Remove from Planner", id: "remove") { run(.remove(nil)) }
                     }
                 } else {
+                    if let complete = PlannerTileMenu.completeEntry(for: item) {
+                        iconButton(complete.systemImage ?? "checkmark.circle", complete.title, id: "complete") {
+                            run(.toggleComplete)
+                        }
+                    }
                     iconButton("pencil", "Edit", id: "edit") { run(.edit) }
                     if canDelete {
                         iconButton("trash", "Delete", id: "delete") { run(.delete) }
@@ -252,6 +286,7 @@ struct PlannerQuickView: View {
     }
 
     private var when: String {
+        if let whenOverride { return whenOverride }
         let day = PlannerStyle.weekdayFormatter.string(from: item.start ?? Date())
             + " " + PlannerStyle.dayMonthFormatter.string(from: item.start ?? Date())
         if let s = item.start, let e = item.end { return "\(day) · \(PlannerStyle.range(s, e))" }
@@ -259,11 +294,17 @@ struct PlannerQuickView: View {
     }
 
     private var sourceLine: String {
+        if let sourceOverride { return sourceOverride }
         if let ev = event {
             return "\(ev.source == .work ? "Work" : "Personal") calendar · \(ev.calendarTitle)"
         }
         if item.isBlock {
             return item.taskUUID?.isEmpty == false ? "Planned task · \(PlannerFormat.duration(item.durationMinutes))" : "Dexter block"
+        }
+        // An All Day task pill has no hour (#695).
+        if item.start == nil {
+            if item.overdueDays > 0 { return item.overdueDays == 1 ? "Task · 1 day overdue" : "Task · \(item.overdueDays) days overdue" }
+            return "Task · due today, no time"
         }
         return "Task due at this time"
     }
@@ -290,10 +331,13 @@ struct PlannerQuickView: View {
 ///
 /// Stacked `onTapGesture(count: 2)` / `onTapGesture` makes a single click wait
 /// for the double-click interval and is not reachable from a test. Here a
-/// click-count-1 release opens the quick view at once, and the second click of
-/// a double click (count 2) opens the editor, which closes the quick view. The
-/// quick view is an `.applicationDefined` popover that never closes on a click
-/// on its own anchor, so the second click always arrives here.
+/// click-count-1 release calls `onClick` at once and a count-2 release calls
+/// `onDoubleClick`. Since #695 the Planner wires BOTH to the quick view: the
+/// first click on any item shows its options, and a double click lands on the
+/// same card instead of skipping to the editor. Edit is one click away in it.
+/// `acceptsFirstMouse` makes the first click count even when the window is
+/// not key. The quick view is an `.applicationDefined` popover that never
+/// closes on a click on its own anchor, so the second click arrives here.
 final class PlannerTileClickView: NSView {
     var onClick: () -> Void = {}
     var onDoubleClick: () -> Void = {}
@@ -352,6 +396,43 @@ enum PlannerNSMenu {
             menu.addItem(item)
         }
         return menu
+    }
+}
+
+extension View {
+    /// One Mac model for every Planner item (#695): grid tiles, All Day pills
+    /// and the week view's all-day tiles. Any click, single or double, opens
+    /// the item's quick view anchored to it; right click gives its menu.
+    func plannerMacClickTarget(_ item: PlannerItem, actions: PlannerTileActions?,
+                               preferredEdge: NSRectEdge = .maxX,
+                               onClick: @escaping () -> Void) -> some View {
+        self
+            .overlay {
+                PlannerTileClickLayer(
+                    label: item.title,
+                    onClick: onClick,
+                    onDoubleClick: onClick,
+                    menuEntries: { actions?.menu(for: item) ?? [] },
+                    onCommand: { actions?.run($0, item) }
+                )
+            }
+            .macAnchoredPopover(
+                isPresented: Binding(
+                    get: { actions?.quickViewID == item.id },
+                    set: { shown in if !shown, actions?.quickViewID == item.id { actions?.dismissQuickView() } }
+                ),
+                // The Planner owns dismissal: a click outside closes it, a click
+                // on the item itself does not, so a double click reaches it.
+                behavior: .applicationDefined,
+                preferredEdge: preferredEdge
+            ) {
+                PlannerQuickView(
+                    item: item,
+                    event: actions?.event(item),
+                    run: { actions?.run($0, item) },
+                    onClose: { actions?.dismissQuickView() }
+                )
+            }
     }
 }
 

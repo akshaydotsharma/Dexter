@@ -341,10 +341,19 @@ struct PlannerAllDayRow: View {
         .padding(.trailing, Space.sm)
     }
 
+    @ViewBuilder
     private func button(_ item: PlannerItem) -> some View {
+        #if os(macOS)
+        // The same click layer as a grid tile (#695): the first click counts
+        // in a window that is not key, and single or double click both open
+        // the quick view anchored to the pill.
+        pill(item)
+            .plannerMacClickTarget(item, actions: tileActions, preferredEdge: .maxY) { onTap(item) }
+        #else
         Button { onTap(item) } label: { pill(item) }
             .buttonStyle(.plain)
             .plannerTileMenu(item, actions: tileActions)
+        #endif
     }
 
     #if os(iOS)
@@ -396,14 +405,14 @@ struct PlannerAllDayRow: View {
         return HStack(spacing: 5) {
             Rectangle().fill(c).frame(width: 3)
             if item.source == .task {
-                Image(systemName: "circle")
+                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(c)
             }
             Text(item.title)
                 .font(.edCaption.weight(.medium))
                 .foregroundStyle(Tokens.ink)
-                .strikethrough(item.isDeclined, color: Tokens.muted)
+                .strikethrough(item.isDeclined || item.completed, color: Tokens.muted)
                 .lineLimit(1)
             if let note = note(item) {
                 Text(note)
@@ -421,8 +430,8 @@ struct PlannerAllDayRow: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(Tokens.danger, lineWidth: 1.2)
             }
         }
-        .opacity(item.isDeclined ? 0.45 : 1)
-        .accessibilityLabel([item.title, item.isDeclined ? "declined" : nil, note(item)].compactMap { $0 }.joined(separator: ", "))
+        .opacity(item.isDeclined ? 0.45 : (item.completed ? 0.6 : 1))
+        .accessibilityLabel([item.title, item.isDeclined ? "declined" : nil, item.completed ? "completed" : nil, note(item)].compactMap { $0 }.joined(separator: ", "))
     }
 
     private func note(_ item: PlannerItem) -> String? {
