@@ -713,6 +713,7 @@ struct PlannerDraftTile: View {
 struct PlannerQuickCreate: View {
     let draft: PlannerDraft
     @Binding var title: String
+    @Binding var addAsTask: Bool
     let onSave: () -> Void
     let onCancel: () -> Void
     let onMoreOptions: () -> Void
@@ -754,6 +755,7 @@ struct PlannerQuickCreate: View {
                     .opacity(canSave ? 1 : 0.5)
                     .keyboardShortcut(.defaultAction)
             }
+            PlannerAddAsTaskToggle(isOn: $addAsTask)
             HStack(spacing: 14) {
                 Button("More options", action: onMoreOptions)
                 Button("Place a task here", action: onPlaceTask)

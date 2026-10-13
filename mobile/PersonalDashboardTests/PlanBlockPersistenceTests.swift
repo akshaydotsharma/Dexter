@@ -27,6 +27,10 @@ final class PlanBlockPersistenceTests: XCTestCase {
         try store.context.fetch(FetchDescriptor<LocalPlanBlock>())
     }
 
+    private func taskRows() throws -> [LocalTodo] {
+        try store.context.fetch(FetchDescriptor<LocalTodo>())
+    }
+
     private func todayAt(_ h: Int, _ m: Int) -> Date {
         Calendar.current.startOfDay(for: Date()).addingTimeInterval(TimeInterval((h * 60 + m) * 60))
     }
@@ -61,6 +65,171 @@ final class PlanBlockPersistenceTests: XCTestCase {
         XCTAssertFalse(row.isTimed)
         XCTAssertEqual(row.durationMinutes, 120)
         XCTAssertTrue(WallClock.isDayAnchored(row.day))
+    }
+
+    func testOptInCreatesOneLinkedTaskWithoutDeadline() throws {
+        let start = todayAt(10, 0)
+        let end = todayAt(11, 0)
+        let block = try service.addManual(title: "  Write proposal  ", start: start, end: end, notes: "Outline", addAsTask: true)
+        let tasks = try store.context.fetch(FetchDescriptor<LocalTodo>())
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(try rows().count, 1)
+        XCTAssertEqual(block.kindEnum, .task)
+        XCTAssertEqual(block.taskUUID, tasks[0].clientUUID.uuidString)
+        XCTAssertEqual(block.title, tasks[0].title)
+        XCTAssertEqual(tasks[0].todoDescription, "Outline")
+        XCTAssertNil(tasks[0].dueDate)
+        XCTAssertEqual(block.start, start)
+        XCTAssertEqual(block.end, end)
+    }
+
+    func testDayOnlyOptInKeepsPlannedDayAndLength() throws {
+        let day = Calendar.current.date(byAdding: .day, value: 2, to: Date())!
+        let block = try service.addManual(title: "Review budget", day: day, durationMinutes: 75, addAsTask: true)
+        let tasks = try store.context.fetch(FetchDescriptor<LocalTodo>())
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertNil(tasks[0].dueDate)
+        XCTAssertEqual(block.taskUUID, tasks[0].clientUUID.uuidString)
+        XCTAssertEqual(block.day, WallClock.dayAnchor(from: day))
+        XCTAssertNil(block.start)
+        XCTAssertEqual(block.durationMinutes, 75)
+    }
+
+    func testDefaultCreateRemainsPlannerOnly() throws {
+        let block = try service.addManual(title: "Focus", start: todayAt(10, 0), end: todayAt(11, 0))
+        XCTAssertEqual(block.kindEnum, .manual)
+        XCTAssertTrue(block.taskUUID.isEmpty)
+        XCTAssertTrue(try store.context.fetch(FetchDescriptor<LocalTodo>()).isEmpty)
+    }
+
+    func testTaskOptionRoundTripRetainsTaskIdentityAndMetadata() throws {
+        let start = todayAt(10, 0)
+        let end = todayAt(11, 0)
+        let block = try service.addManual(title: "Review plan", start: start, end: end, notes: "Planner note")
+        try service.update(block, title: block.title, start: start, end: end, day: start,
+                           durationMinutes: 60, notes: block.notes, addAsTask: true)
+        let task = try XCTUnwrap(taskRows().first)
+        let id = task.clientUUID
+        task.title = "Task edit"
+        task.todoDescription = "Task-only note"
+        task.priority = 2
+        task.completed = true
+        task.dueDate = Calendar.current.date(byAdding: .day, value: 3, to: start)
+        task.remindMe = true
+        try store.context.save()
+
+        try service.update(block, title: task.title, start: start, end: end, day: start,
+                           durationMinutes: 60, notes: block.notes, addAsTask: false)
+        XCTAssertEqual(block.kindEnum, .manual)
+        XCTAssertEqual(block.taskUUID, id.uuidString)
+        XCTAssertEqual(block.title, "Task edit")
+        XCTAssertNotNil(task.deletedAt)
+        XCTAssertTrue(task.completed)
+        XCTAssertEqual(task.todoDescription, "Task-only note")
+
+        try service.update(block, title: "Hidden edit", start: nil, end: nil, day: start,
+                           durationMinutes: 90, notes: "Changed planner note", addAsTask: false)
+        try service.update(block, title: "Hidden edit", start: nil, end: nil, day: start,
+                           durationMinutes: 90, notes: block.notes, addAsTask: true)
+        XCTAssertEqual(block.kindEnum, .task)
+        XCTAssertNil(task.deletedAt)
+        XCTAssertEqual(task.title, "Hidden edit")
+        XCTAssertEqual(task.todoDescription, "Task-only note")
+        XCTAssertEqual(task.priority, 2)
+        XCTAssertTrue(task.completed)
+        XCTAssertNotNil(task.dueDate)
+        XCTAssertTrue(task.remindMe)
+        XCTAssertEqual(block.durationMinutes, 90)
+        XCTAssertNil(block.start)
+
+        try service.update(block, title: "Hidden edit", start: nil, end: nil, day: start,
+                           durationMinutes: 90, addAsTask: false)
+        try service.update(block, title: "Hidden edit", start: nil, end: nil, day: start,
+                           durationMinutes: 90, addAsTask: true)
+        XCTAssertEqual(try taskRows().count, 1)
+        XCTAssertEqual(task.clientUUID, id)
+        XCTAssertEqual(try rows().count, 1)
+    }
+
+    func testToggleChangesEveryLiveBlockButNotDeletedHistory() throws {
+        let first = try service.addManual(title: "Write report", start: todayAt(9, 0), end: todayAt(10, 0), addAsTask: true)
+        let uuid = first.taskUUID
+        let second = LocalPlanBlock(kind: .task, title: first.title, day: first.day,
+                                    start: todayAt(13, 0), end: todayAt(14, 0), taskUUID: uuid)
+        let deleted = LocalPlanBlock(kind: .task, title: "Old plan", day: first.day,
+                                     taskUUID: uuid, deletedAt: Date())
+        store.context.insert(second)
+        store.context.insert(deleted)
+        try store.context.save()
+
+        try service.update(first, title: first.title, start: first.start, end: first.end,
+                           day: todayAt(9, 0), durationMinutes: 60, addAsTask: false)
+        XCTAssertEqual(first.kindEnum, .manual)
+        XCTAssertEqual(second.kindEnum, .manual)
+        XCTAssertEqual(deleted.kindEnum, .task)
+        XCTAssertEqual(second.start, todayAt(13, 0))
+        XCTAssertNotNil(try taskRows().first?.deletedAt)
+
+        try service.update(first, title: "Morning draft", start: first.start, end: first.end,
+                           day: todayAt(9, 0), durationMinutes: 60, addAsTask: false)
+        try service.update(second, title: "Afternoon draft", start: second.start, end: second.end,
+                           day: todayAt(13, 0), durationMinutes: 60, addAsTask: false)
+        XCTAssertEqual(first.title, "Morning draft", "saving one hidden block must not rename another")
+        XCTAssertEqual(second.title, "Afternoon draft")
+
+        try service.update(second, title: second.title, start: second.start, end: second.end,
+                           day: todayAt(13, 0), durationMinutes: 60, addAsTask: true)
+        XCTAssertEqual(first.kindEnum, .task)
+        XCTAssertEqual(second.kindEnum, .task)
+        XCTAssertEqual(deleted.kindEnum, .task)
+        XCTAssertNil(try taskRows().first?.deletedAt)
+        XCTAssertEqual(try taskRows().count, 1)
+    }
+
+    func testDueOnlyTaskCanBecomeManualPlanWithoutLosingTaskRecord() throws {
+        let task = LocalTodo(title: "Due task", dueDate: todayAt(17, 0))
+        store.context.insert(task)
+        try store.context.save()
+        let row = try service.saveTaskTime(taskUUID: task.clientUUID.uuidString, title: task.title,
+                                           start: todayAt(10, 0), end: todayAt(11, 0),
+                                           day: Date(), durationMinutes: 60, notes: "Plan note", addAsTask: false)
+        XCTAssertEqual(row.kindEnum, .manual)
+        XCTAssertEqual(row.taskUUID, task.clientUUID.uuidString)
+        XCTAssertNotNil(task.deletedAt)
+        XCTAssertEqual(task.dueDate, todayAt(17, 0))
+        XCTAssertEqual(try rows().count, 1)
+    }
+
+    func testHiddenLinkedBlockStaysOneManualTileWithCompletion() throws {
+        let start = todayAt(10, 0)
+        let end = todayAt(11, 0)
+        let block = try service.addManual(title: "Finish report", start: start, end: end, addAsTask: true)
+        let task = try XCTUnwrap(taskRows().first)
+        task.completed = true
+        task.dueDate = todayAt(17, 0)
+        try store.context.save()
+
+        func day(includeTask: Bool) -> PlannerDay {
+            let snapshot = PlannerBlock(id: block.clientUUID, kind: block.kindEnum, title: block.title,
+                                        day: WallClock.deviceDay(from: block.day), start: block.start,
+                                        end: block.end, durationMinutes: block.durationMinutes,
+                                        taskUUID: block.taskUUID, completed: task.completed)
+            let tasks = includeTask ? [PlannerTask(id: task.clientUUID.uuidString, title: task.title,
+                                                   priority: .none, due: task.dueDate, completed: task.completed)] : []
+            return PlannerEngine.day(start, events: [], blocks: [snapshot], tasks: tasks, now: start)
+        }
+
+        XCTAssertEqual(day(includeTask: true).all.count, 1, "a task plan suppresses its due tile")
+        try service.update(block, title: task.title, start: start, end: end, day: start,
+                           durationMinutes: 60, addAsTask: false)
+        let hidden = day(includeTask: false).all
+        XCTAssertEqual(hidden.count, 1)
+        XCTAssertEqual(hidden.first?.source, .manual)
+        XCTAssertNil(hidden.first?.taskUUID, "a hidden task is not actionable from the manual tile")
+        XCTAssertEqual(hidden.first?.completed, true)
+        try service.update(block, title: block.title, start: start, end: end, day: start,
+                           durationMinutes: 60, addAsTask: true)
+        XCTAssertEqual(day(includeTask: true).all.count, 1)
     }
 
     func testFillPlacesEveryTaskInOneSave() throws {
