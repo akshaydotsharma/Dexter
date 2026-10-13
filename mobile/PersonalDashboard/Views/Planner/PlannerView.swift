@@ -29,6 +29,9 @@ struct PlannerView: View {
     @Query(filter: #Predicate<LocalTodo> { $0.deletedAt == nil })
     private var todos: [LocalTodo]
 
+    /// Retained task rows keep a hidden planner item's completion state.
+    @Query private var retainedTodos: [LocalTodo]
+
     @Query(filter: #Predicate<LocalPlanBlock> { $0.deletedAt == nil })
     private var blockRows: [LocalPlanBlock]
 
@@ -46,10 +49,12 @@ struct PlannerView: View {
     @State private var sheet: PlannerSheetKind?
     @State private var writeError: String?
     @State private var inlineText = ""
+    @State private var inlineAddAsTask = false
     @State private var launchSheetConsumed = false
     /// The block being made on the grid, and its title while it is named.
     @State private var draft: PlannerDraft?
     @State private var draftTitle = ""
+    @State private var draftAddAsTask = false
     /// "Removed … · Undo", straight after a hide (#689).
     @State private var toast: PlannerToast?
     /// iPhone: the To-plan panel, and whether a drag has tucked it away.
@@ -98,12 +103,14 @@ struct PlannerView: View {
     }
 
     private var blocks: [PlannerBlock] {
-        blockRows.map {
+        let retained = Dictionary(retainedTodos.map { ($0.clientUUID.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+        return blockRows.map {
             PlannerBlock(
                 id: $0.clientUUID, kind: $0.kindEnum, title: $0.title,
                 day: WallClock.deviceDay(from: $0.day),
                 start: $0.start, end: $0.end,
-                durationMinutes: $0.durationMinutes, taskUUID: $0.taskUUID
+                durationMinutes: $0.durationMinutes, taskUUID: $0.taskUUID,
+                completed: retained[$0.taskUUID]?.completed ?? false
             )
         }
     }
@@ -559,6 +566,7 @@ struct PlannerView: View {
             onChange: { s, e in
                 quickView = nil
                 if draft?.isNaming == true { resolveDraft() }
+                draftAddAsTask = false
                 draft = PlannerDraft(start: s, end: e, isNaming: false)
             },
             onCommit: { s, e in
@@ -570,6 +578,7 @@ struct PlannerView: View {
                     return
                 }
                 draftTitle = ""
+                draftAddAsTask = false
                 draft = PlannerDraft(start: s, end: e, isNaming: true)
             },
             popoverPresented: Binding(
@@ -636,11 +645,13 @@ struct PlannerView: View {
             PlannerQuickCreate(
                 draft: d,
                 title: $draftTitle,
+                addAsTask: $draftAddAsTask,
                 onSave: saveDraft,
                 onCancel: discardDraft,
                 onMoreOptions: {
-                    sheet = .newBlock(start: d.start, end: d.end, title: draftTitle)
+                    sheet = .newBlock(start: d.start, end: d.end, title: draftTitle, addAsTask: draftAddAsTask)
                     draft = nil
+                    draftAddAsTask = false
                 },
                 onPlaceTask: {
                     sheet = .placeTask(start: d.start, end: d.end)
@@ -671,14 +682,16 @@ struct PlannerView: View {
         guard let d = draft else { return }
         let t = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        write { _ = try PlanBlockService.default().addManual(title: t, start: d.start, end: d.end) }
+        guard write({ _ = try PlanBlockService.default().addManual(title: t, start: d.start, end: d.end, addAsTask: draftAddAsTask) }) else { return }
         draft = nil
         draftTitle = ""
+        draftAddAsTask = false
     }
 
     private func discardDraft() {
         draft = nil
         draftTitle = ""
+        draftAddAsTask = false
     }
 
     /// Click or tap away: a titled draft is saved, an untitled one is dropped
@@ -866,7 +879,8 @@ struct PlannerView: View {
     private func inlineQuickAdd() -> some View {
         let trimmed = inlineText.trimmingCharacters(in: .whitespaces)
         let parsed = PlannerQuickAdd.parse(inlineText, on: selectedDay)
-        return HStack(spacing: 8) {
+        return VStack(alignment: .leading, spacing: 5) {
+          HStack(spacing: 8) {
             Image(systemName: "plus").foregroundStyle(Tokens.muted)
             TextField("Add a block: Call bank 3:30pm 15m", text: $inlineText)
                 .textFieldStyle(.plain)
@@ -881,16 +895,20 @@ struct PlannerView: View {
                 Button("Add") { addInline(parsed) }
                     .buttonStyle(PlannerSmallButtonStyle(filled: true, tint: Tokens.ink))
             }
+          }
+          PlannerAddAsTaskToggle(isOn: $inlineAddAsTask)
+              .padding(.leading, 12)
         }
         .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
-        .background(Tokens.surface, in: Capsule())
-        .overlay(Capsule().stroke(Tokens.borderStrong, lineWidth: 1))
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: Radius.md))
+        .paperBorder(Tokens.borderStrong, radius: Radius.md, lineWidth: 1)
     }
 
     private func addInline(_ parsed: PlannerQuickAdd.Result) {
         guard !inlineText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        write { try PlanBlockService.default().add(parsed) }
+        guard write({ try PlanBlockService.default().add(parsed, addAsTask: inlineAddAsTask) }) else { return }
         inlineText = ""
+        inlineAddAsTask = false
     }
     #endif
 
@@ -913,7 +931,7 @@ struct PlannerView: View {
             PlannerSlotSheet(
                 start: start,
                 candidates: candidates(ctx),
-                onAddBlock: { parsed in write { try PlanBlockService.default().add(parsed) } },
+                onAddBlock: { parsed, addAsTask in write { try PlanBlockService.default().add(parsed, addAsTask: addAsTask) } },
                 onPlaceTask: { c, s, e in
                     write { try PlanBlockService.default().planTask(taskUUID: c.task.id, title: c.task.title, start: s, end: e) }
                 }
@@ -928,16 +946,17 @@ struct PlannerView: View {
             PlannerQuickAddSheet(
                 baseDay: selectedDay,
                 gapsOn: { openTime(on: $0, ctx: ctx) },
-                onAdd: { parsed in write { try PlanBlockService.default().add(parsed) } },
+                onAdd: { parsed, addAsTask in write { try PlanBlockService.default().add(parsed, addAsTask: addAsTask) } },
                 initialText: text
             )
         case .edit(let blockID):
             if let row = blockRows.first(where: { $0.clientUUID == blockID }) {
                 PlannerBlockDetailsSheet(
                     mode: .edit(row),
-                    onSave: { title, start, end, day, minutes, notes in
-                        write { try PlanBlockService.default().update(row, title: title, start: start, end: end, day: day, durationMinutes: minutes, notes: notes) }
+                    onSave: { title, start, end, day, minutes, notes, addAsTask in
+                        write { try PlanBlockService.default().update(row, title: title, start: start, end: end, day: day, durationMinutes: minutes, notes: notes, addAsTask: addAsTask) }
                     },
+                    currentTaskTitle: todos.first { $0.clientUUID.uuidString == row.taskUUID }?.title,
                     onDelete: {
                         // The details sheet closes, then the Planner asks how.
                         let item = ctx.day(WallClock.deviceDay(from: row.day)).all.first { $0.blockID == blockID }
@@ -951,13 +970,12 @@ struct PlannerView: View {
         case .taskTime(let taskID, let start, let end):
             PlannerBlockDetailsSheet(
                 mode: .planTask(title: ctx.tasks.first { $0.id == taskID }?.title ?? "Task", start: start, end: end),
-                onSave: { title, s, e, day, minutes, notes in
+                onSave: { title, s, e, day, minutes, notes, addAsTask in
                     write {
-                        let service = PlanBlockService.default()
-                        let row = (s != nil && e != nil)
-                            ? try service.planTask(taskUUID: taskID, title: title, start: s!, end: e!)
-                            : try service.planTask(taskUUID: taskID, title: title, toDay: day, durationMinutes: minutes)
-                        if !notes.isEmpty { try service.update(row, title: row.title, start: row.start, end: row.end, day: day, durationMinutes: row.durationMinutes, notes: notes) }
+                        _ = try PlanBlockService.default().saveTaskTime(
+                            taskUUID: taskID, title: title, start: s, end: e,
+                            day: day, durationMinutes: minutes, notes: notes, addAsTask: addAsTask
+                        )
                     }
                 },
                 onDelete: {
@@ -967,24 +985,25 @@ struct PlannerView: View {
                 onOpenTask: { openTask(taskID) },
                 onOtherOptions: { sheet = .plan(taskID) }
             )
-        case .newBlock(let start, let end, let title):
+        case .newBlock(let start, let end, let title, let initialAddAsTask):
             PlannerBlockDetailsSheet(
                 mode: .create(start: start, end: end, title: title),
-                onSave: { title, s, e, day, minutes, notes in
+                onSave: { title, s, e, day, minutes, notes, addAsTask in
                     write {
                         if let s, let e {
-                            _ = try PlanBlockService.default().addManual(title: title, start: s, end: e, notes: notes)
+                            _ = try PlanBlockService.default().addManual(title: title, start: s, end: e, notes: notes, addAsTask: addAsTask)
                         } else {
-                            _ = try PlanBlockService.default().addManual(title: title, day: day, durationMinutes: minutes, notes: notes)
+                            _ = try PlanBlockService.default().addManual(title: title, day: day, durationMinutes: minutes, notes: notes, addAsTask: addAsTask)
                         }
                     }
-                }
+                },
+                initialAddAsTask: initialAddAsTask
             )
         case .placeTask(let start, let end):
             PlannerSlotSheet(
                 start: start,
                 candidates: candidates(ctx),
-                onAddBlock: { _ in },
+                onAddBlock: { _, _ in false },
                 onPlaceTask: { c, s, e in
                     write { try PlanBlockService.default().planTask(taskUUID: c.task.id, title: c.task.title, start: s, end: e) }
                 },
@@ -1332,12 +1351,15 @@ struct PlannerView: View {
 
     // MARK: Writes
 
-    private func write(_ body: () throws -> Void) {
+    @discardableResult
+    private func write(_ body: () throws -> Void) -> Bool {
         do {
             try body()
             writeError = nil
+            return true
         } catch {
             writeError = "Couldn't save that change. \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -1439,7 +1461,7 @@ enum PlannerSheetKind: Identifiable, Equatable {
     case toPlan
     case settings
     /// "More options" on a draft: the details sheet for a new block.
-    case newBlock(start: Date, end: Date, title: String)
+    case newBlock(start: Date, end: Date, title: String, addAsTask: Bool)
     /// "Place a task here" on a draft.
     case placeTask(start: Date, end: Date)
     /// A calendar event's read-only details (the item id).
@@ -1456,7 +1478,7 @@ enum PlannerSheetKind: Identifiable, Equatable {
         case .fixes(let d):    return "fixes-\(d.timeIntervalSince1970)"
         case .toPlan:          return "toplan"
         case .settings:        return "settings"
-        case .newBlock(let s, let e, _): return "new-\(s.timeIntervalSince1970)-\(e.timeIntervalSince1970)"
+        case .newBlock(let s, let e, _, _): return "new-\(s.timeIntervalSince1970)-\(e.timeIntervalSince1970)"
         case .placeTask(let s, _):       return "place-\(s.timeIntervalSince1970)"
         case .event(let id):             return "event-\(id)"
         case .taskTime(let id, let s, _): return "tasktime-\(id)-\(s.timeIntervalSince1970)"

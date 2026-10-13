@@ -77,6 +77,8 @@ struct PlannerBlock: Identifiable, Equatable, Sendable {
     let end: Date?
     let durationMinutes: Int
     let taskUUID: String
+    /// Snapshot of a retained task, including one hidden from Tasks.
+    var completed: Bool = false
 
     var isTimed: Bool { start != nil && end != nil }
 }
@@ -273,7 +275,7 @@ enum PlannerEngine {
         // Plan blocks.
         var plannedTaskIDsToday = Set<String>()
         for block in blocks where calendar.isDate(block.day, inSameDayAs: dayStart) {
-            let task = block.taskUUID.isEmpty ? nil : tasksByID[block.taskUUID]
+            let task = block.kind == .task ? tasksByID[block.taskUUID] : nil
             if block.kind == .task, !block.taskUUID.isEmpty { plannedTaskIDsToday.insert(block.taskUUID) }
             let source: PlannerSource = block.kind == .task ? .task : .manual
             let priority = task?.priority ?? .none
@@ -292,8 +294,8 @@ enum PlannerEngine {
                 start: block.start, end: block.end,
                 durationMinutes: block.isTimed ? minutes(from: block.start!, to: block.end!) : block.durationMinutes,
                 origin: .block(block.id),
-                taskUUID: block.taskUUID.isEmpty ? nil : block.taskUUID,
-                priority: priority, overdueDays: 0, completed: task?.completed ?? false
+                taskUUID: block.kind == .task && !block.taskUUID.isEmpty ? block.taskUUID : nil,
+                priority: priority, overdueDays: 0, completed: task?.completed ?? block.completed
             )
             if block.isTimed { timed.append(item) } else { allDay.append(item) }
         }

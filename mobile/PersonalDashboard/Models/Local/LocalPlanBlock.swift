@@ -65,7 +65,8 @@ final class LocalPlanBlock {
     /// day-only block it is the estimate the capacity meter counts.
     var durationMinutes: Int = 30
 
-    /// `LocalTodo.clientUUID.uuidString` for a `task` block, "" otherwise.
+    /// `LocalTodo.clientUUID.uuidString` for a visible task block or a manual
+    /// block whose task was hidden from Tasks. "" if never linked to a task.
     var taskUUID: String = ""
 
     /// Free text from the details sheet (#687 round 3). Additive, with the

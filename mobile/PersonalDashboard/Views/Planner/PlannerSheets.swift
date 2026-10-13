@@ -13,7 +13,7 @@ struct PlannerSheetScaffold<Content: View>: View {
     /// Open at full height on the iPhone (an editor, or a sheet that is mostly a list).
     var fullHeight: Bool = false
     /// When set, the header shows Cancel and Save. Nil: a single Done.
-    var onSave: (() -> Void)? = nil
+    var onSave: (() -> Bool)? = nil
     var canSave: Bool = true
     /// Mac width. The editors take the Tasks editor's 360; list sheets 440.
     var width: CGFloat = 440
@@ -94,7 +94,7 @@ struct PlannerSheetScaffold<Content: View>: View {
     @ViewBuilder
     private var trailingButton: some View {
         if let onSave {
-            Button("Save") { onSave(); dismiss() }
+            Button("Save") { if onSave() { dismiss() } }
                 .buttonStyle(.plain)
                 .fontWeight(.semibold)
                 .foregroundStyle(canSave ? saveTint : Tokens.muted)
@@ -189,13 +189,39 @@ struct PlannerDurationMenu: View {
 
 // MARK: - Add at a time
 
+/// One opt-in control shared by every new-block entry path.
+struct PlannerAddAsTaskToggle: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button { isOn.toggle() } label: {
+            HStack(spacing: Space.sm) {
+                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(isOn ? Tokens.accentTasks : Tokens.muted)
+                    .font(.system(size: 19))
+                Text("Also add as task")
+                    .font(.edBody)
+                    .foregroundStyle(Tokens.ink)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Also add as task")
+        .accessibilityValue(isOn ? "Checked" : "Unchecked")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .accessibilityIdentifier("planner.addAsTask")
+    }
+}
+
 /// What a tap on empty grid space opens (#687 round 2): the tapped time,
 /// snapped to 15 minutes, with two ways to use it. Add a manual block from one
 /// line of text, or place a task from the To-plan list at that time.
 struct PlannerSlotSheet: View {
     let start: Date
     let candidates: [PlannerEngine.Candidate]
-    let onAddBlock: (PlannerQuickAdd.Result) -> Void
+    let onAddBlock: (PlannerQuickAdd.Result, Bool) -> Bool
     let onPlaceTask: (PlannerEngine.Candidate, Date, Date) -> Void
     /// The length a placed task starts with: the draft's, when the sheet opens
     /// from "Place a task here" (#687 round 3).
@@ -204,6 +230,7 @@ struct PlannerSlotSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
+    @State private var addAsTask = false
     @State private var lengths: [String: Int] = [:]
     @FocusState private var focused: Bool
 
@@ -243,6 +270,7 @@ struct PlannerSlotSheet: View {
                         .padding(.horizontal, Space.md)
                         .padding(.vertical, Space.sm)
                     }
+                    PlannerAddAsTaskToggle(isOn: $addAsTask)
                     if let s = parsed.start, let e = parsed.end {
                         Text(hasText ? "\(parsed.title) · \(PlannerStyle.range(s, e))" : "Type a title. Add a length like 15m or 1h; the default is 30m.")
                             .font(.edCaption).foregroundStyle(Tokens.muted)
@@ -300,8 +328,7 @@ struct PlannerSlotSheet: View {
 
     private func addBlock() {
         guard hasText else { return }
-        onAddBlock(parsed)
-        dismiss()
+        if onAddBlock(parsed, addAsTask) { dismiss() }
     }
 }
 
@@ -423,11 +450,12 @@ struct PlannerQuickAddSheet: View {
     let baseDay: Date
     /// Open time on a day, for the "it overlaps something" line.
     let gapsOn: (Date) -> [DateInterval]
-    let onAdd: (PlannerQuickAdd.Result) -> Void
+    let onAdd: (PlannerQuickAdd.Result, Bool) -> Bool
     var initialText: String = ""
 
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
+    @State private var addAsTask = false
     @State private var showForm = false
     @State private var formTitle = ""
     @State private var formTimed = true
@@ -461,6 +489,7 @@ struct PlannerQuickAddSheet: View {
                 .paperBorder(Tokens.borderStrong, radius: Radius.md, lineWidth: 1)
                 .accessibilityLabel("Block, in one line")
             PlannerQuickAddPreview(parsed: parsed, hasText: !text.trimmingCharacters(in: .whitespaces).isEmpty, gaps: gapsOn(parsed.day))
+            PlannerAddAsTaskToggle(isOn: $addAsTask)
             Button(action: addLine) { Text("Add block") }
                 .buttonStyle(EdButtonStyle(kind: .primary, fullWidth: true))
                 .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -511,13 +540,14 @@ struct PlannerQuickAddSheet: View {
                     }
                 }
             }
+            PlannerAddAsTaskToggle(isOn: $addAsTask)
             Button {
                 let title = formTitle.trimmingCharacters(in: .whitespaces)
                 if formTimed {
                     let mins = max(5, PlannerEngine.minutes(from: formStart, to: max(formEnd, formStart)))
-                    onAdd(.init(title: title.isEmpty ? "Block" : title, day: Calendar.current.startOfDay(for: formStart), start: formStart, durationMinutes: mins))
+                    guard onAdd(.init(title: title.isEmpty ? "Block" : title, day: Calendar.current.startOfDay(for: formStart), start: formStart, durationMinutes: mins), addAsTask) else { return }
                 } else {
-                    onAdd(.init(title: title.isEmpty ? "Block" : title, day: Calendar.current.startOfDay(for: formStart), start: nil, durationMinutes: formMinutes))
+                    guard onAdd(.init(title: title.isEmpty ? "Block" : title, day: Calendar.current.startOfDay(for: formStart), start: nil, durationMinutes: formMinutes), addAsTask) else { return }
                 }
                 dismiss()
             } label: { Text("Add block") }
@@ -561,8 +591,7 @@ struct PlannerQuickAddSheet: View {
 
     private func addLine() {
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        onAdd(parsed)
-        dismiss()
+        if onAdd(parsed, addAsTask) { dismiss() }
     }
 }
 
@@ -629,7 +658,9 @@ struct PlannerBlockDetailsSheet: View {
     }
 
     let mode: Mode
-    let onSave: (_ title: String, _ start: Date?, _ end: Date?, _ day: Date, _ minutes: Int, _ notes: String) -> Void
+    let onSave: (_ title: String, _ start: Date?, _ end: Date?, _ day: Date, _ minutes: Int, _ notes: String, _ addAsTask: Bool) -> Bool
+    var initialAddAsTask = false
+    var currentTaskTitle: String? = nil
     /// Delete, handed back to the Planner, which asks how (`PlannerDeletion`).
     var onDelete: (() -> Void)? = nil
     var onOpenTask: (() -> Void)? = nil
@@ -644,14 +675,15 @@ struct PlannerBlockDetailsSheet: View {
     @State private var end = Date()
     @State private var minutes = 30
     @State private var notes = ""
+    @State private var addAsTask = false
     @State private var seeded = false
     /// One accordion for the Start and End fields (#657).
     @State private var openPanel: String?
 
     private var isTask: Bool {
         switch mode {
-        case .edit(let b): return b.kindEnum == .task
-        case .planTask:    return true
+        case .edit(let block): return block.kindEnum == .task && addAsTask
+        case .planTask: return addAsTask
         case .create:      return false
         }
     }
@@ -659,7 +691,7 @@ struct PlannerBlockDetailsSheet: View {
     private var heading: String {
         switch mode {
         case .create: return "New Block"
-        case .edit(let b): return b.kindEnum == .task ? "Planned Task" : "Details"
+        case .edit: return addAsTask ? "Planned Task" : "Details"
         case .planTask: return "Plan Task"
         }
     }
@@ -671,6 +703,7 @@ struct PlannerBlockDetailsSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     titleAndNotes
+                    PlannerAddAsTaskToggle(isOn: $addAsTask)
                     PlannerFormSection("Date & Time") {
                         EdDateTimeField(
                             date: startBinding,
@@ -779,7 +812,7 @@ struct PlannerBlockDetailsSheet: View {
                     .foregroundStyle(Tokens.ink)
                     .lineLimit(2)
                 Spacer(minLength: Space.sm)
-                if let onOpenTask {
+                if isTask, let onOpenTask {
                     Button("Open task") { dismiss(); onOpenTask() }
                         .buttonStyle(.plain)
                         .font(.edFootnote)
@@ -810,10 +843,10 @@ struct PlannerBlockDetailsSheet: View {
         }
     }
 
-    private func save() {
+    private func save() -> Bool {
         let day = Calendar.current.startOfDay(for: start)
-        onSave(title, timed ? start : nil, timed ? max(end, start.addingTimeInterval(15 * 60)) : nil,
-               day, timed ? PlannerEngine.minutes(from: start, to: end) : minutes, notes)
+        return onSave(title, timed ? start : nil, timed ? max(end, start.addingTimeInterval(15 * 60)) : nil,
+                      day, timed ? PlannerEngine.minutes(from: start, to: end) : minutes, notes, addAsTask)
     }
 
     /// Moving the start (its day or its time) keeps the length.
@@ -855,8 +888,11 @@ struct PlannerBlockDetailsSheet: View {
             start = s
             end = e
             minutes = PlannerEngine.minutes(from: s, to: e)
+            if case .create = mode { addAsTask = initialAddAsTask }
+            if case .planTask = mode { addAsTask = true }
         case .edit(let block):
-            title = block.title
+            title = currentTaskTitle ?? block.title
+            addAsTask = block.kindEnum == .task
             timed = block.isTimed
             notes = block.notes
             let deviceDay = WallClock.deviceDay(from: block.day)
