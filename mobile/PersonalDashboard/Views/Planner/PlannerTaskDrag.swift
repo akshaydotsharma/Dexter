@@ -49,11 +49,73 @@ final class PlannerTaskDragCoordinator {
     /// True between a cancelled release and the end of the fly-back.
     private(set) var isReturning = false
 
+    private(set) var scheduledItem: PlannerItem?
+    private(set) var overToPlan = false
+    @ObservationIgnored private var pickupMinute: Double = 0
+    @ObservationIgnored private var originalDay: Date?
+
+    /// A scheduled tile keeps the position where it was grabbed. Resolving
+    /// the pointer itself as the start would change the hour on a horizontal move.
+    func beginScheduled(_ item: PlannerItem, at point: CGPoint, in window: AnyObject?) {
+        finish()
+        guard let start = item.start, let end = item.end,
+              let zone = zones.allObjects.first(where: { !$0.isToPlan && !$0.isDateOnly && $0.localPoint(forWindowPoint: point, in: window) != nil }),
+              let local = zone.localPoint(forWindowPoint: point, in: window) else { return }
+        scheduledItem = item
+        originalDay = zone.dayStart
+        pickupMinute = Double(local.y / zone.hourHeight) * 60
+        payload = Payload(taskID: item.taskUUID ?? item.id, title: item.title,
+                          minutes: PlannerEngine.minutes(from: start, to: end), priority: item.priority)
+    }
+
+    func moveScheduled(to point: CGPoint, in window: AnyObject?) {
+        guard let item = scheduledItem, let start = item.start, let end = item.end,
+              let originalDay else { return }
+        pointer = point
+        overToPlan = item.taskUUID != nil && !item.completed && zones.allObjects.contains {
+            $0.isToPlan && $0.localPoint(forWindowPoint: point, in: window) != nil
+        }
+        guard !overToPlan,
+              let zone = zones.allObjects.sorted { $0.isDateOnly && !$1.isDateOnly }.first(where: { !$0.isToPlan && $0.localPoint(forWindowPoint: point, in: window) != nil }),
+              let local = zone.localPoint(forWindowPoint: point, in: window) else {
+            target = nil
+            return
+        }
+        if zone.isDateOnly {
+            let calendar = Calendar.current
+            let time = calendar.dateComponents([.hour, .minute, .second], from: start)
+            let next = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0,
+                                     second: time.second ?? 0, of: zone.dayStart) ?? zone.dayStart
+            target = Target(dayStart: zone.dayStart, start: next, end: next.addingTimeInterval(end.timeIntervalSince(start)))
+            return
+        }
+        let originalMinute = PlannerDragGeometry.minutes(of: start, dayStart: originalDay)
+        let delta = (Double(local.y / zone.hourHeight) * 60 - pickupMinute) / 60 * Double(zone.hourHeight)
+        let previous = target.flatMap { $0.dayStart == zone.dayStart ? PlannerDragGeometry.minutes(of: $0.start, dayStart: zone.dayStart) : nil }
+        let minute = PlannerDragGeometry.movedStart(start: originalMinute,
+            length: PlannerEngine.minutes(from: start, to: end), deltaY: CGFloat(delta),
+            hourHeight: zone.hourHeight, previous: previous)
+        let next: Date
+        if minute == originalMinute {
+            if zone.dayStart == originalDay {
+                next = start
+            } else {
+                let time = Calendar.current.dateComponents([.hour, .minute, .second], from: start)
+                next = Calendar.current.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0,
+                                             second: time.second ?? 0, of: zone.dayStart) ?? zone.dayStart
+            }
+        } else {
+            next = zone.dayStart.addingTimeInterval(TimeInterval(minute * 60))
+        }
+        target = Target(dayStart: zone.dayStart, start: next, end: next.addingTimeInterval(end.timeIntervalSince(start)))
+    }
+
     @ObservationIgnored private var zones = NSHashTable<PlannerDropZoneView>.weakObjects()
 
     func register(_ zone: PlannerDropZoneView) { zones.add(zone) }
 
     func begin(_ payload: Payload, sourceFrame: CGRect? = nil, grabbedAt: CGPoint? = nil) {
+        finish()
         self.payload = payload
         self.sourceFrame = sourceFrame
         if let f = sourceFrame, let g = grabbedAt {
@@ -97,6 +159,9 @@ final class PlannerTaskDragCoordinator {
 
     /// The fly-back is over: the row is back on the list.
     func finish() {
+        scheduledItem = nil
+        originalDay = nil
+        overToPlan = false
         payload = nil
         target = nil
         pointer = nil
@@ -107,7 +172,7 @@ final class PlannerTaskDragCoordinator {
 
     /// The zone under a window point, and the snapped range there.
     func resolve(_ windowPoint: CGPoint, window: AnyObject?, minutes: Int) -> Target? {
-        for zone in zones.allObjects {
+        for zone in zones.allObjects where !zone.isToPlan && !zone.isDateOnly {
             guard let local = zone.localPoint(forWindowPoint: windowPoint, in: window) else { continue }
             let r = PlannerDragGeometry.dropRange(atY: local.y, hourHeight: zone.hourHeight, length: minutes)
             let d = PlannerDragGeometry.dates(r, dayStart: zone.dayStart)
@@ -171,6 +236,8 @@ extension EnvironmentValues {
 /// over it.
 #if os(macOS)
 final class PlannerDropZoneView: NSView {
+    var isToPlan = false
+    var isDateOnly = false
     var dayStart = Date()
     var hourHeight: CGFloat = PlannerGridMetrics.hourHeight
     weak var coordinator: PlannerTaskDragCoordinator?
@@ -196,6 +263,8 @@ final class PlannerDropZoneView: NSView {
 private struct DropZoneRepresentable: NSViewRepresentable {
     let dayStart: Date
     let hourHeight: CGFloat
+    let isToPlan: Bool
+    let isDateOnly: Bool
     let coordinator: PlannerTaskDragCoordinator
 
     func makeNSView(context: Context) -> PlannerDropZoneView {
@@ -205,6 +274,8 @@ private struct DropZoneRepresentable: NSViewRepresentable {
     }
     func updateNSView(_ v: PlannerDropZoneView, context: Context) { update(v) }
     private func update(_ v: PlannerDropZoneView) {
+        v.isDateOnly = isDateOnly
+        v.isToPlan = isToPlan
         v.dayStart = dayStart
         v.hourHeight = hourHeight
         if v.coordinator !== coordinator {
@@ -215,6 +286,8 @@ private struct DropZoneRepresentable: NSViewRepresentable {
 }
 #else
 final class PlannerDropZoneView: UIView {
+    var isToPlan = false
+    var isDateOnly = false
     var dayStart = Date()
     var hourHeight: CGFloat = PlannerGridMetrics.hourHeight
     weak var coordinator: PlannerTaskDragCoordinator?
@@ -245,6 +318,8 @@ final class PlannerDropZoneView: UIView {
 private struct DropZoneRepresentable: UIViewRepresentable {
     let dayStart: Date
     let hourHeight: CGFloat
+    let isToPlan: Bool
+    let isDateOnly: Bool
     let coordinator: PlannerTaskDragCoordinator
 
     func makeUIView(context: Context) -> PlannerDropZoneView {
@@ -255,6 +330,8 @@ private struct DropZoneRepresentable: UIViewRepresentable {
     }
     func updateUIView(_ v: PlannerDropZoneView, context: Context) { update(v) }
     private func update(_ v: PlannerDropZoneView) {
+        v.isDateOnly = isDateOnly
+        v.isToPlan = isToPlan
         v.dayStart = dayStart
         v.hourHeight = hourHeight
         if v.coordinator !== coordinator {
@@ -266,12 +343,14 @@ private struct DropZoneRepresentable: UIViewRepresentable {
 #endif
 
 struct PlannerDropZone: View {
-    let dayStart: Date
-    let hourHeight: CGFloat
+    var dayStart: Date = .distantPast
+    var hourHeight: CGFloat = PlannerGridMetrics.hourHeight
+    var isToPlan = false
+    var isDateOnly = false
     @Environment(\.plannerTaskDrag) private var coordinator
 
     var body: some View {
-        DropZoneRepresentable(dayStart: dayStart, hourHeight: hourHeight, coordinator: coordinator)
+        DropZoneRepresentable(dayStart: dayStart, hourHeight: hourHeight, isToPlan: isToPlan, isDateOnly: isDateOnly, coordinator: coordinator)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -650,5 +729,41 @@ struct PlannerTaskGhost: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Drop \(title) at \(PlannerStyle.range(start, end))")
         .accessibilityIdentifier("planner.drop.ghost")
+    }
+}
+
+/// Nearby dates remain reachable while dragging in the single-day layout.
+/// Releasing on a date keeps the clock time; the grid still chooses a time.
+struct PlannerMoveDestinations: View {
+    let item: PlannerItem
+    @Environment(\.plannerTaskDrag) private var coordinator
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach([-1, 1], id: \.self) { offset in
+                if let start = item.start,
+                   let day = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: start)) {
+                    Text(PlannerStyle.shortDayFormatter.string(from: day))
+                        .font(.edCaption.weight(.semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 14)
+                        .background(coordinator.target?.dayStart == day ? Tokens.accentTasks.opacity(0.18) : Tokens.surface, in: Capsule())
+                        .background(PlannerDropZone(dayStart: day, isDateOnly: true))
+                        .accessibilityLabel("Move to \(PlannerStyle.shortDayFormatter.string(from: day)), same time")
+                }
+            }
+            if item.taskUUID != nil, !item.completed {
+                Text("To plan")
+                    .font(.edCaption.weight(.semibold))
+                    .padding(.horizontal, 14).padding(.vertical, 14)
+                    .background(coordinator.overToPlan ? Tokens.accentTasks.opacity(0.18) : Tokens.surface, in: Capsule())
+                    .background(PlannerDropZone(isToPlan: true))
+                    .accessibilityLabel("To plan, clear date and time")
+            }
+        }
+        .foregroundStyle(Tokens.accentTasks)
+        .padding(6)
+        .background(Tokens.surface2, in: Capsule())
+        .allowsHitTesting(false)
+        .accessibilityIdentifier("planner.move.destinations")
     }
 }

@@ -353,6 +353,10 @@ struct PlannerTileMoveHandlers {
     var onBegin: () -> Void
     var onChange: (CGFloat) -> Void
     var onCommit: (CGFloat) -> Void
+    var onPointerBegin: ((CGPoint, AnyObject?) -> Void)? = nil
+    var onPointerChange: ((CGPoint, AnyObject?) -> Void)? = nil
+    var onPointerCommit: ((CGPoint, AnyObject?) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
 }
 
 // MARK: - Mac click handling
@@ -401,6 +405,7 @@ final class PlannerTileClickView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         anchor = event.locationInWindow
         isMoving = false
     }
@@ -412,22 +417,37 @@ final class PlannerTileClickView: NSView {
             isMoving = true
             NSCursor.closedHand.push()
             move.onBegin()
+            move.onPointerBegin?(anchor, window)
         }
-        move.onChange(dragDistance(from: anchor, to: event))
+        if let change = move.onPointerChange { change(event.locationInWindow, window) }
+        else { move.onChange(dragDistance(from: anchor, to: event)) }
     }
 
     override func mouseUp(with event: NSEvent) {
-        let start = anchor
+        guard let start = anchor else { return }
         anchor = nil
         if isMoving {
             isMoving = false
             NSCursor.pop()
-            if let start, let move { move.onCommit(dragDistance(from: start, to: event)) }
+            if let move {
+                if let commit = move.onPointerCommit { commit(event.locationInWindow, window) }
+                else { move.onCommit(dragDistance(from: start, to: event)) }
+            }
             return
         }
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         if event.clickCount >= 2 { onDoubleClick() } else { onClick() }
     }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard isMoving else { return }
+        isMoving = false
+        anchor = nil
+        NSCursor.pop()
+        move?.onCancel?()
+    }
+
+    override var acceptsFirstResponder: Bool { true }
 
     override func resetCursorRects() {
         if move != nil { addCursorRect(bounds, cursor: .openHand) }

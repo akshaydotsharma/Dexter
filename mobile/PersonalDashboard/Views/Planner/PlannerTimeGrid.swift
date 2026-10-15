@@ -147,6 +147,29 @@ struct PlannerDayColumn: View {
                 let start = movedStart(item, delta: delta)
                 move = nil
                 commitMove(item, to: start)
+            },
+            onPointerBegin: { point, window in
+                taskDrag.beginScheduled(item, at: point, in: window)
+                move = (item.id, item.start!)
+            },
+            onPointerChange: { point, window in
+                taskDrag.moveScheduled(to: point, in: window)
+                // Keep the source view alive to receive release. Other day
+                // columns draw the destination through the shared coordinator.
+                move = (item.id, taskDrag.target?.dayStart == day.day ? taskDrag.target!.start : item.start!)
+            },
+            onPointerCommit: { point, window in
+                taskDrag.moveScheduled(to: point, in: window)
+                let target = taskDrag.target
+                let toPlan = taskDrag.overToPlan
+                taskDrag.finish()
+                move = nil
+                if toPlan { draft.onUnplan(item) }
+                else if let target { commitMove(item, to: target.start) }
+            },
+            onCancel: {
+                taskDrag.finish()
+                move = nil
             }
         )
     }
@@ -251,7 +274,11 @@ struct PlannerDayColumn: View {
                         onTap: { onTapItem(item) },
                         onChange: h.onChange,
                         onCommit: h.onCommit,
-                        onBegin: h.onBegin
+                        onBegin: h.onBegin,
+                        onPointerBegin: h.onPointerBegin,
+                        onPointerChange: h.onPointerChange,
+                        onPointerCommit: h.onPointerCommit,
+                        onCancel: h.onCancel
                     )
                 }
                 .frame(width: width, height: tileHeight)
@@ -341,13 +368,15 @@ struct PlannerDayColumn: View {
                         }
                     }
                     // Lifted: a little larger, with a shadow, above its neighbours.
+                    .opacity(moving && (taskDrag.overToPlan || (taskDrag.target != nil && taskDrag.target?.dayStart != day.day)) ? 0.25 : 1)
                     .scaleEffect(moving ? 1.03 : 1, anchor: .center)
                     .shadow(color: .black.opacity(moving ? 0.22 : 0), radius: moving ? 10 : 0, y: moving ? 5 : 0)
                     .animation(.easeOut(duration: 0.15), value: moving)
                     .zIndex(moving ? 1 : 0)
                     .offset(x: laneW * CGFloat(lane?.index ?? 0) + 1, y: g.y)
                 }
-                if let payload = taskDrag.payload, let t = taskDrag.target, t.dayStart == day.day {
+                if let payload = taskDrag.payload, let t = taskDrag.target, t.dayStart == day.day,
+                   (taskDrag.scheduledItem == nil || taskDrag.scheduledItem?.id != move?.id) {
                     let g = PlannerEngine.tileGeometry(
                         start: t.start, end: t.end, dayStart: day.day,
                         hourHeight: hourHeight, minHeight: PlannerGridMetrics.minTileHeight
@@ -668,6 +697,7 @@ struct PlannerDraftHandlers {
     var onMove: (PlannerItem, Date, Date) -> Void = { _, _, _ in }
     /// A tile was just lifted (#693).
     var onMoveBegin: () -> Void = {}
+    var onUnplan: (PlannerItem) -> Void = { _ in }
     /// iPhone (#693): the length an All Day task takes on the grid. Nil keeps
     /// the All Day row's pills as plain buttons.
     var allDayTaskMinutes: ((PlannerItem) -> Int)? = nil
