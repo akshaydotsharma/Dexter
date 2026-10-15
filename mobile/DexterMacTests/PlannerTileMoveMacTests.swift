@@ -38,11 +38,15 @@ final class PlannerTileMoveMacTests: XCTestCase {
         var moves: [(id: String, start: Date, end: Date)] = []
         var clicks: [String] = []
         var begins = 0
+        var returned: [String] = []
     }
 
     private struct Harness {
         let window: NSWindow
         let host: NSView
+        let nextDay: PlannerDropZoneView
+        let toPlan: PlannerDropZoneView
+        let coordinator: PlannerTaskDragCoordinator
         func layer(_ title: String) -> PlannerTileClickView? {
             host.moveTestSubviews(of: PlannerTileClickView.self).first { $0.label == title }
         }
@@ -67,22 +71,36 @@ final class PlannerTileMoveMacTests: XCTestCase {
             draft: nil, onChange: { _, _ in }, onCommit: { _, _ in },
             popoverPresented: .constant(false), quickCreate: { AnyView(EmptyView()) },
             onMove: { i, s, e in log.moves.append((i.id, s, e)) },
-            onMoveBegin: { log.begins += 1 }
+            onMoveBegin: { log.begins += 1 },
+            onUnplan: { log.returned.append($0.id) }
         )
         let actions = PlannerTileActions(quickViewID: nil, event: { events[$0.id] }, run: { _, _ in }, dismissQuickView: {})
+        let coordinator = PlannerTaskDragCoordinator()
         let column = PlannerDayColumn(
             day: PlannerDay(day: dayStart, allDay: [], timed: [overnight, block, task, meeting]),
             visible: Set(PlannerSource.allCases), now: dayStart, hourHeight: hour,
             onTapItem: { log.clicks.append($0.id) }, draft: handlers
         )
         .environment(\.plannerTileActions, actions)
+        .environment(\.plannerTaskDrag, coordinator)
         .frame(width: 300, height: hour * 24)
         let host = NSHostingView(rootView: column)
         host.frame = CGRect(x: 0, y: 0, width: 300, height: hour * 24)
-        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
-        window.contentView = host
+        let root = NSView(frame: CGRect(x: 0, y: 0, width: 800, height: hour * 24))
+        root.addSubview(host)
+        let nextDay = PlannerDropZoneView(frame: CGRect(x: 320, y: 0, width: 200, height: hour * 24))
+        nextDay.dayStart = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
+        nextDay.hourHeight = hour
+        nextDay.coordinator = coordinator
+        root.addSubview(nextDay)
+        let toPlan = PlannerDropZoneView(frame: CGRect(x: 550, y: 0, width: 240, height: hour * 24))
+        toPlan.isToPlan = true
+        toPlan.coordinator = coordinator
+        root.addSubview(toPlan)
+        let window = NSWindow(contentRect: root.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = root
         host.layoutSubtreeIfNeeded()
-        return Harness(window: window, host: host)
+        return Harness(window: window, host: host, nextDay: nextDay, toPlan: toPlan, coordinator: coordinator)
     }
 
     /// Press on the layer's body, drag DOWN by `dy` points (negative is up)
@@ -252,6 +270,108 @@ final class PlannerTileMoveMacTests: XCTestCase {
         // The log does not write the move back, so the tile returns to 10.
         // What must be gone is the ghost: 12 to 14 is empty again.
         XCTAssertEqual(inkedPixels(h, from: 12.2, to: 13.8), 0, "no ghost and no lifted tile after the commit")
+        h.window.contentView = nil
+    }
+
+    func testHorizontalDragMovesToNextDateAtSameTimeFromDeepInsideTile() throws {
+        let log = Log()
+        let actual = harness(log)
+        let layer = try XCTUnwrap(actual.layer("Focus"))
+        let p = layer.convert(CGPoint(x: 40, y: 60), to: nil)
+        let q = CGPoint(x: actual.nextDay.convert(CGPoint(x: 50, y: 0), to: nil).x, y: p.y)
+        layer.mouseDown(with: mouse(.leftMouseDown, at: p, windowNumber: actual.wn))
+        layer.mouseDragged(with: mouse(.leftMouseDragged, at: q, windowNumber: actual.wn))
+        layer.mouseUp(with: mouse(.leftMouseUp, at: q, windowNumber: actual.wn))
+        XCTAssertEqual(log.moves.count, 1)
+        XCTAssertEqual(log.moves.first?.start, Calendar.current.date(byAdding: .day, value: 1, to: at(10)))
+        XCTAssertEqual(log.moves.first?.end, Calendar.current.date(byAdding: .day, value: 1, to: at(12)))
+        XCTAssertNil(actual.coordinator.scheduledItem)
+        actual.window.contentView = nil
+    }
+
+    func testTaskCanReturnToPlanAndInvalidReleaseDoesNotMoveIt() throws {
+        let log = Log()
+        let actual = harness(log)
+        let layer = try XCTUnwrap(actual.layer("Call"))
+        let p = layer.convert(CGPoint(x: 40, y: 8), to: nil)
+        let q = actual.toPlan.convert(CGPoint(x: 40, y: 80), to: nil)
+        layer.mouseDown(with: mouse(.leftMouseDown, at: p, windowNumber: actual.wn))
+        layer.mouseDragged(with: mouse(.leftMouseDragged, at: q, windowNumber: actual.wn))
+        XCTAssertTrue(actual.coordinator.overToPlan)
+        layer.mouseUp(with: mouse(.leftMouseUp, at: q, windowNumber: actual.wn))
+        XCTAssertEqual(log.returned, ["Call"])
+        XCTAssertTrue(log.moves.isEmpty)
+        layer.mouseDown(with: mouse(.leftMouseDown, at: p, windowNumber: actual.wn))
+        let outside = CGPoint(x: -50, y: p.y - 100)
+        layer.mouseDragged(with: mouse(.leftMouseDragged, at: outside, windowNumber: actual.wn))
+        layer.mouseUp(with: mouse(.leftMouseUp, at: outside, windowNumber: actual.wn))
+        XCTAssertTrue(log.moves.isEmpty)
+        XCTAssertNil(actual.coordinator.scheduledItem)
+        actual.window.contentView = nil
+    }
+
+    func testDateDestinationBarKeepsTimeAndEscapeCancels() throws {
+        let log = Log()
+        let h = harness(log)
+        let layer = try XCTUnwrap(h.layer("Call"))
+        let task = item("Call", .taskDue, .task, 14, 14.5, task: "t1")
+        let bar = NSHostingView(rootView: PlannerMoveDestinations(item: task).environment(\.plannerTaskDrag, h.coordinator))
+        bar.frame = CGRect(x: 320, y: 500, width: 450, height: 80)
+        h.window.contentView?.addSubview(bar)
+        bar.layoutSubtreeIfNeeded()
+        let zone = try XCTUnwrap(bar.moveTestSubviews(of: PlannerDropZoneView.self).first {
+            $0.isDateOnly && $0.dayStart > dayStart
+        })
+        let p = layer.convert(CGPoint(x: 40, y: 8), to: nil)
+        let q = zone.convert(CGPoint(x: zone.bounds.midX, y: zone.bounds.midY), to: nil)
+        layer.mouseDown(with: mouse(.leftMouseDown, at: p, windowNumber: h.wn))
+        layer.mouseDragged(with: mouse(.leftMouseDragged, at: q, windowNumber: h.wn))
+        XCTAssertEqual(h.coordinator.target?.start, Calendar.current.date(byAdding: .day, value: 1, to: at(14)))
+        layer.cancelOperation(nil)
+        layer.mouseUp(with: mouse(.leftMouseUp, at: p, windowNumber: h.wn))
+        XCTAssertTrue(log.clicks.isEmpty)
+        XCTAssertTrue(log.moves.isEmpty)
+        XCTAssertNil(h.coordinator.scheduledItem)
+        h.window.contentView = nil
+    }
+
+    func testNoOpAndHorizontalMoveKeepSecondsAndExactDuration() throws {
+        let h = harness(Log())
+        let layer = try XCTUnwrap(h.layer("Call"))
+        let start = at(14).addingTimeInterval(23)
+        let task = PlannerItem(id: "seconds", title: "Precise", detail: "", source: .task,
+            start: start, end: start.addingTimeInterval(1807), durationMinutes: 30,
+            origin: .taskDue, taskUUID: "t1", priority: .none, overdueDays: 0, completed: false)
+        let p = layer.convert(CGPoint(x: 40, y: 8), to: nil)
+        h.coordinator.beginScheduled(task, at: p, in: h.window)
+        h.coordinator.moveScheduled(to: p, in: h.window)
+        XCTAssertEqual(h.coordinator.target?.start, start)
+        let q = CGPoint(x: h.nextDay.convert(CGPoint(x: 40, y: 0), to: nil).x, y: p.y)
+        h.coordinator.moveScheduled(to: q, in: h.window)
+        XCTAssertEqual(h.coordinator.target?.start, Calendar.current.date(byAdding: .day, value: 1, to: start))
+        XCTAssertEqual(h.coordinator.target!.end.timeIntervalSince(h.coordinator.target!.start), 1807)
+        h.coordinator.finish()
+        h.window.contentView = nil
+    }
+
+    func testRealEmptyToPlanInspectorAcceptsAScheduledTask() throws {
+        let log = Log()
+        let h = harness(log)
+        h.toPlan.removeFromSuperview()
+        let inspector = NSHostingView(rootView: PlannerInspector(candidates: [], onPlan: { _ in })
+            .environment(\.plannerTaskDrag, h.coordinator))
+        inspector.frame = CGRect(x: 550, y: 0, width: 240, height: 1200)
+        h.window.contentView?.addSubview(inspector)
+        inspector.layoutSubtreeIfNeeded()
+        let zone = try XCTUnwrap(inspector.moveTestSubviews(of: PlannerDropZoneView.self).first { $0.isToPlan })
+        let layer = try XCTUnwrap(h.layer("Call"))
+        let p = layer.convert(CGPoint(x: 40, y: 8), to: nil)
+        let q = zone.convert(CGPoint(x: zone.bounds.midX, y: zone.bounds.midY), to: nil)
+        layer.mouseDown(with: mouse(.leftMouseDown, at: p, windowNumber: h.wn))
+        layer.mouseDragged(with: mouse(.leftMouseDragged, at: q, windowNumber: h.wn))
+        layer.mouseUp(with: mouse(.leftMouseUp, at: q, windowNumber: h.wn))
+        XCTAssertEqual(log.returned, ["Call"])
+        XCTAssertTrue(log.moves.isEmpty)
         h.window.contentView = nil
     }
 

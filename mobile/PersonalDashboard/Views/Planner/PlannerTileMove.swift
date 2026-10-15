@@ -28,10 +28,15 @@ struct PlannerTileMoveLayer: View {
     /// The final distance. 0 for a hold released in place or cancelled.
     let onCommit: (CGFloat) -> Void
     var onBegin: () -> Void = {}
+    var onPointerBegin: ((CGPoint, AnyObject?) -> Void)? = nil
+    var onPointerChange: ((CGPoint, AnyObject?) -> Void)? = nil
+    var onPointerCommit: ((CGPoint, AnyObject?) -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
 
     var body: some View {
         MoveRepresentable(identifier: identifier, onTap: onTap, onBegin: onBegin,
-                          onChange: onChange, onCommit: onCommit)
+                          onChange: onChange, onCommit: onCommit, onPointerBegin: onPointerBegin,
+                          onPointerChange: onPointerChange, onPointerCommit: onPointerCommit, onCancel: onCancel)
     }
 }
 
@@ -40,6 +45,10 @@ final class PlannerTileMoveView: UIView, UIGestureRecognizerDelegate {
     var onBegin: (() -> Void)?
     var onChange: ((CGFloat) -> Void)?
     var onCommit: ((CGFloat) -> Void)?
+    var onPointerBegin: ((CGPoint, AnyObject?) -> Void)?
+    var onPointerChange: ((CGPoint, AnyObject?) -> Void)?
+    var onPointerCommit: ((CGPoint, AnyObject?) -> Void)?
+    var onCancel: (() -> Void)?
     private var anchorY: CGFloat?
     private weak var pausedScroll: UIScrollView?
     private(set) var hold: UILongPressGestureRecognizer!
@@ -111,17 +120,20 @@ final class PlannerTileMoveView: UIView, UIGestureRecognizerDelegate {
                 PlannerMoveLog.line("no enclosing scroll view")
             }
             onBegin?()
-            onChange?(0)
+            onPointerBegin?(g.location(in: nil), window)
+            if onPointerChange == nil { onChange?(0) }
         case .changed:
-            if let a = anchorY { onChange?(y - a) }
+            if let change = onPointerChange { change(g.location(in: nil), window) }
+            else if let a = anchorY { onChange?(y - a) }
         case .ended:
             guard let a = anchorY else { return }
             finish()
-            onCommit?(y - a)
+            if let commit = onPointerCommit { commit(g.location(in: nil), window) }
+            else { onCommit?(y - a) }
         case .cancelled, .failed:
             guard anchorY != nil else { return }
             finish()
-            onCommit?(0)
+            if let onCancel { onCancel() } else { onCommit?(0) }
         default:
             break
         }
@@ -159,6 +171,10 @@ private struct MoveRepresentable: UIViewRepresentable {
     let onBegin: () -> Void
     let onChange: (CGFloat) -> Void
     let onCommit: (CGFloat) -> Void
+    let onPointerBegin: ((CGPoint, AnyObject?) -> Void)?
+    let onPointerChange: ((CGPoint, AnyObject?) -> Void)?
+    let onPointerCommit: ((CGPoint, AnyObject?) -> Void)?
+    let onCancel: (() -> Void)?
 
     func makeUIView(context: Context) -> PlannerTileMoveView {
         let v = PlannerTileMoveView()
@@ -173,6 +189,10 @@ private struct MoveRepresentable: UIViewRepresentable {
         v.onBegin = onBegin
         v.onChange = onChange
         v.onCommit = onCommit
+        v.onPointerBegin = onPointerBegin
+        v.onPointerChange = onPointerChange
+        v.onPointerCommit = onPointerCommit
+        v.onCancel = onCancel
         v.accessibilityIdentifier = identifier
     }
 }

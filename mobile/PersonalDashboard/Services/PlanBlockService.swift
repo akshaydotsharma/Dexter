@@ -336,6 +336,42 @@ struct PlanBlockService {
         try store.context.save()
     }
 
+    /// Returning a scheduled task to To plan clears both its placement and
+    /// its deadline. Save the task and all plan tombstones together, so the
+    /// due-date fallback cannot immediately put it back on the grid.
+    func returnToPlan(taskUUID: String, blockID: String? = nil) throws {
+        guard let task = try linkedTask(for: taskUUID), task.deletedAt == nil, !task.completed else { return }
+        let rows = try store.context.fetch(FetchDescriptor<LocalPlanBlock>(
+            predicate: #Predicate { $0.taskUUID == taskUUID && $0.deletedAt == nil }
+        ))
+        let activeRows = rows.filter { $0.day >= WallClock.todayAnchor() || $0.clientUUID == blockID }
+        let previousPlans = activeRows.map { ($0, $0.deletedAt, $0.updatedAt) }
+        let due = task.dueDate, remindMe = task.remindMe, cleared = task.reminderClearedAt, updated = task.updatedAt
+        let now = Date()
+        task.dueDate = nil
+        task.remindMe = false
+        task.reminderClearedAt = nil
+        task.updatedAt = now
+        for row in activeRows {
+            row.deletedAt = now
+            row.updatedAt = now
+        }
+        do {
+            try store.context.save()
+        } catch {
+            task.dueDate = due
+            task.remindMe = remindMe
+            task.reminderClearedAt = cleared
+            task.updatedAt = updated
+            for (row, deletedAt, updatedAt) in previousPlans {
+                row.deletedAt = deletedAt
+                row.updatedAt = updatedAt
+            }
+            throw error
+        }
+        Task { await TaskReminderScheduler.reconcile(store: store) }
+    }
+
     // MARK: Helpers
 
     private func livePlan(forTask taskUUID: String) throws -> LocalPlanBlock? {

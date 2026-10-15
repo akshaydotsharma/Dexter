@@ -77,6 +77,14 @@ final class PlannerTaskDragTests: XCTestCase {
         root.addSubview(inspectorHost)
         let window = NSWindow(contentRect: root.frame, styleMask: [.borderless], backing: .buffered, defer: true)
         window.contentView = root
+        // The full-day harness is taller than the display. Keep its top rows
+        // on screen: AppKit otherwise allows the initial child card above the
+        // display, then clamps its next move to the screen's upper edge.
+        // That window correction is not a drag distance.
+        if let screen = NSScreen.main {
+            window.setFrameOrigin(CGPoint(x: screen.visibleFrame.minX + 100,
+                                          y: screen.visibleFrame.maxY - root.frame.height - 120))
+        }
         root.layoutSubtreeIfNeeded()
         let sources = inspectorHost.allSubviews(of: PlannerTaskDragSourceView.self)
         XCTAssertEqual(sources.count, 2, "each To-plan row has a pick-up view")

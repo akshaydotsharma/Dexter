@@ -211,6 +211,17 @@ struct PlannerView: View {
                         }
                 }
             }
+            .overlay(alignment: .bottom) {
+                if let item = taskDrag.scheduledItem {
+                    PlannerMoveDestinations(item: item)
+                        .padding(.horizontal, 16)
+                        #if os(iOS)
+                        .padding(.bottom, 96)
+                        #else
+                        .padding(.bottom, 16)
+                        #endif
+                }
+            }
             .activeSection(.planner)
             .macSectionChrome("Planner") { macToolbar }
             #if os(macOS)
@@ -591,6 +602,10 @@ struct PlannerView: View {
             onMoveBegin: {
                 if draft?.isNaming == true { resolveDraft() }
                 withAnimation(.easeOut(duration: 0.18)) { quickView = nil }
+            },
+            onUnplan: { item in
+                guard let id = item.taskUUID else { return }
+                write { try PlanBlockService.default().returnToPlan(taskUUID: id, blockID: item.blockID) }
             },
             allDayTaskMinutes: allDayTaskMinutes,
             onDropAllDayTask: { item, t in
@@ -1736,7 +1751,16 @@ struct PlannerInspector: View {
                 .padding(12)
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Tokens.surface2)
+        .background(taskDrag.overToPlan ? Tokens.accentTasks.opacity(0.12) : Tokens.surface2)
+        .background(PlannerDropZone(isToPlan: true))
+        .overlay(alignment: .bottom) {
+            if let item = taskDrag.scheduledItem, item.taskUUID != nil, !item.completed {
+                Text("Drop here to clear the task date and time")
+                    .font(.edCaption).foregroundStyle(Tokens.accentTasks)
+                    .padding(12).background(Tokens.surface)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 

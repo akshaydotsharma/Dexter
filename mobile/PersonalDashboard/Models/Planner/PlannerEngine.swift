@@ -273,10 +273,18 @@ enum PlannerEngine {
         }
 
         // Plan blocks.
-        var plannedTaskIDsToday = Set<String>()
+        // A plan supersedes the deadline fallback across dates, including
+        // after the planned day passes. A plan older than both today and a
+        // newly assigned deadline remains history, not a current placement.
+        let todayStart = calendar.startOfDay(for: now)
+        var suppressedDueTaskIDs = Set(blocks.filter {
+            guard $0.kind == .task else { return false }
+            let dueDay = tasksByID[$0.taskUUID]?.due.map { calendar.startOfDay(for: $0) } ?? todayStart
+            return $0.day >= min(todayStart, dueDay)
+        }.map(\.taskUUID))
         for block in blocks where calendar.isDate(block.day, inSameDayAs: dayStart) {
             let task = block.kind == .task ? tasksByID[block.taskUUID] : nil
-            if block.kind == .task, !block.taskUUID.isEmpty { plannedTaskIDsToday.insert(block.taskUUID) }
+            if block.kind == .task, !block.taskUUID.isEmpty { suppressedDueTaskIDs.insert(block.taskUUID) }
             let source: PlannerSource = block.kind == .task ? .task : .manual
             let priority = task?.priority ?? .none
             let title = task?.title ?? block.title
@@ -300,13 +308,13 @@ enum PlannerEngine {
             if block.isTimed { timed.append(item) } else { allDay.append(item) }
         }
 
-        // Tasks, by due date. A task already placed on this day shows as its
+        // Tasks, by due date. A task with a current plan shows as its
         // block only. A task completed on its due day stays on that day, dimmed
         // and struck through like a completed block, so a completion made from
         // the Planner can be seen and undone there (#695). A completed task is
         // never carried forward as overdue.
         for task in tasks {
-            guard let due = task.due, !plannedTaskIDsToday.contains(task.id) else { continue }
+            guard let due = task.due, !suppressedDueTaskIDs.contains(task.id) else { continue }
             let hasHour = TaskDueTime.isSet(on: due, calendar: calendar)
             let dueDay = calendar.startOfDay(for: due)
             if dueDay == dayStart {
